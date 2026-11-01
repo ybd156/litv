@@ -7,9 +7,11 @@ plugins {
     id("org.jetbrains.kotlin.android")
 }
 
-// 签名口令从 local.properties 读（不进版本库）。
-// 没有配置时回落到仓库内自签 keystore，保证 clone 下来就能出可安装的包。
-// 真要发布请换成自己的 keystore 并妥善保管——丢了就无法覆盖升级。
+// 签名口令从 local.properties 读（本地覆盖用）；没配置就用仓库内的自签 keystore。
+//
+// ⚠️ 这个 keystore 是随仓库分发的（CI 要用它出包），口令是公开的。
+// 它的作用只是"让包能装、且后续版本能覆盖升级"，**不构成任何安全边界**。
+// 真要发布到商店请换成自己的 keystore 且不要提交。
 val localProps = Properties().apply {
     val f = rootProject.file("local.properties")
     if (f.exists()) f.inputStream().use { load(it) }
@@ -23,9 +25,19 @@ android {
     signingConfigs {
         create("litv") {
             storeFile = rootProject.file(prop("LITV_STORE_FILE", "keystore/litv-release.jks"))
-            storePassword = prop("LITV_STORE_PASSWORD", "litv123456")
+            storePassword = prop("LITV_STORE_PASSWORD", "LITV156980")
             keyAlias = prop("LITV_KEY_ALIAS", "litv")
-            keyPassword = prop("LITV_KEY_PASSWORD", "litv123456")
+            keyPassword = prop("LITV_KEY_PASSWORD", "LITV156980")
+
+            // 三种签名方案全开：
+            //   v1 (JAR signing) —— Android 6 及以下必须，老盒子靠它
+            //   v2 (APK Signature Scheme v2) —— Android 7+ 的主力
+            //   v3 —— Android 9+，支持密钥轮换
+            // 电视是 Android 9，v3 能生效；但 v1/v2 不能关，否则老设备装不上。
+            enableV1Signing = true
+            enableV2Signing = true
+            enableV3Signing = true
+            enableV4Signing = false // v4 只用于增量安装，侧载用不到
         }
     }
 
@@ -36,7 +48,7 @@ android {
         minSdk = 21
         targetSdk = 35
         versionCode = 1
-        versionName = "1.0.0"
+        versionName = "0.0.1"
 
         // 注意：abiFilters 与 splits.abi 互斥（AGP 会报冲突）。
         // 这里只用 splits 声明 ABI，debug 包同理生效。

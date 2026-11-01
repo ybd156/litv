@@ -25,7 +25,6 @@ android/local.properties
 android/.idea/
 *.iml
 android/app/src/main/jniLibs/
-android/keystore/
 
 # iOS
 ios/build/

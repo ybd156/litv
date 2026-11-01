@@ -1,0 +1,236 @@
+name: Release
+
+# =============================================================================
+# 一键出三端安装包并发布到 Releases。
+#
+# 产物：
+#   LITV-<ver>-tv-armv7.apk    ← 安卓电视/盒子（32 位，Android 9 用这个）
+#   LITV-<ver>-arm64.apk       ← 64 位设备（新电视、手机）
+#   litv_x86_<ver>.fpk         ← 飞牛 NAS（N100 等 x86）
+#   litv_arm_<ver>.fpk         ← 飞牛 NAS（ARM 机型）
+#   LITV-<ver>-unsigned.ipa    ← iOS（未签名，自己用 Sideloadly 签）
+#
+# 触发：手动 workflow_dispatch，或推 v* tag。
+# =============================================================================
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "版本号（留空用仓库里的 0.0.1）"
+        required: false
+        default: ""
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+env:
+  DEFAULT_VERSION: "0.0.1"
+
+jobs:
+  # ---------------------------------------------------------------- Android
+  android:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 准备 JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: 确认 Android SDK 组件
+        run: |
+          echo "ANDROID_HOME=$ANDROID_HOME"
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null 2>&1 || true
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
+            "platforms;android-35" "build-tools;35.0.0" >/dev/null 2>&1 || true
+          ls "$ANDROID_HOME/platforms" || true
+
+      - name: 构建 APK（release，已签名）
+        working-directory: android
+        run: |
+          # keystore 随仓库分发，口令写在 build.gradle.kts 的默认值里，
+          # CI 不需要任何 secret。
+          ./gradlew --no-daemon assembleRelease
+
+      - name: 校验签名方案（必须 v1+v2+v3 全 true）
+        run: |
+          APK=android/app/build/outputs/apk/release/app-armeabi-v7a-release.apk
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify -v "$APK" | tee /tmp/sig.txt
+          for v in v1 v2 v3; do
+            grep -q "Verified using $v scheme.*: true" /tmp/sig.txt \
+              || { echo "❌ $v 签名缺失"; exit 1; }
+          done
+          echo "✅ v1+v2+v3 签名齐全"
+
+      - name: 收集 APK
+        run: |
+          mkdir -p out
+          V="${{ github.event.inputs.version || env.DEFAULT_VERSION }}"
+          cp android/app/build/outputs/apk/release/app-armeabi-v7a-release.apk "out/LITV-${V}-tv-armv7.apk"
+          cp android/app/build/outputs/apk/release/app-arm64-v8a-release.apk  "out/LITV-${V}-arm64.apk"
+          ls -lh out/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android-apk
+          path: out/*.apk
+
+  # ---------------------------------------------------------------- fnOS fpk
+  fpk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.23"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: 构建管理台
+        working-directory: admin
+        run: |
+          npm install --no-audit --no-fund
+          npm run build
+
+      - name: 下载 fnpack
+        run: |
+          curl -fsSL -o /tmp/fnpack https://static2.fnnas.com/fnpack/fnpack-1.2.3-linux-amd64
+          chmod +x /tmp/fnpack
+          mkdir -p ~/.local/bin && cp /tmp/fnpack ~/.local/bin/fnpack
+          ~/.local/bin/fnpack --help | head -3
+
+      - name: 打 fpk（x86 + arm）
+        run: |
+          cd packaging/fnos
+          chmod +x build.sh
+          ./build.sh --arch x86
+          ./build.sh --arch arm
+          ls -lh dist/
+
+      - name: 收集 fpk
+        run: |
+          mkdir -p out
+          V="${{ github.event.inputs.version || env.DEFAULT_VERSION }}"
+          cp packaging/fnos/dist/litv_x86_v*.fpk "out/litv_x86_${V}.fpk"
+          cp packaging/fnos/dist/litv_arm_v*.fpk "out/litv_arm_${V}.fpk"
+          ls -lh out/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fnos-fpk
+          path: out/*.fpk
+
+  # ---------------------------------------------------------------- iOS ipa
+  ios:
+    runs-on: macos-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装工具
+        run: brew install xcodegen
+
+      - name: 生成工程 + 装 Pod
+        working-directory: ios
+        run: |
+          xcodegen generate
+          pod install --repo-update 2>&1 | tail -10
+
+      - name: 编译（不签名）
+        working-directory: ios
+        run: |
+          # ⚠️ pipefail 不能少：否则 xcodebuild 失败会被 tail 的退出码盖掉，
+          #    表现为"构建成功但 ipa 里没有主二进制"（踩过）。
+          set -o pipefail
+          xcodebuild \
+            -workspace LITV.xcworkspace \
+            -scheme LITV \
+            -sdk iphoneos \
+            -configuration Release \
+            -derivedDataPath build \
+            -destination 'generic/platform=iOS' \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGN_ENTITLEMENTS="" \
+            build 2>&1 | tail -60
+
+      - name: 打包未签名 ipa
+        working-directory: ios
+        run: |
+          APP="build/Build/Products/Release-iphoneos/LITV.app"
+          test -d "$APP" || { echo "没找到 LITV.app"; exit 1; }
+          # 主二进制必须存在——防"假成功"（构建失败但产物目录是空的）
+          test -f "$APP/LITV" || { echo "LITV.app 里没有主二进制，构建其实失败了"; exit 1; }
+          rm -rf Payload LITV-unsigned.ipa
+          mkdir -p Payload
+          cp -R "$APP" Payload/
+          rm -rf Payload/LITV.app/_CodeSignature Payload/LITV.app/embedded.mobileprovision
+          zip -qry LITV-unsigned.ipa Payload
+          ls -lh LITV-unsigned.ipa
+
+      - name: 收集 ipa
+        run: |
+          mkdir -p out
+          V="${{ github.event.inputs.version || env.DEFAULT_VERSION }}"
+          cp ios/LITV-unsigned.ipa "out/LITV-${V}-unsigned.ipa"
+          ls -lh out/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ios-ipa
+          path: out/*.ipa
+
+  # ---------------------------------------------------------------- 发 Release
+  release:
+    needs: [android, fpk, ios]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 下载全部产物
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: 整理文件
+        run: |
+          mkdir -p out
+          find artifacts -type f \( -name "*.apk" -o -name "*.fpk" -o -name "*.ipa" \) -exec cp {} out/ \;
+          ls -lh out/
+
+      - name: 生成 sha256
+        run: |
+          cd out
+          sha256sum * > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: 发布 Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          V="${{ github.event.inputs.version || env.DEFAULT_VERSION }}"
+          TAG="v${V}"
+
+          # 已存在就先删（允许重跑覆盖）
+          gh release delete "$TAG" --yes --cleanup-tag 2>/dev/null || true
+
+          # 发布说明放仓库文件里，不在 YAML 里写 heredoc
+          # （YAML 块标量不允许顶格内容，heredoc 会把它截断）
+          gh release create "$TAG" out/* \
+            --title "LITV ${V}" \
+            --notes-file docs/release-notes.md
+
+      - name: 打印 Release 地址
+        run: echo "https://github.com/${{ github.repository }}/releases/tag/v${{ github.event.inputs.version || env.DEFAULT_VERSION }}"

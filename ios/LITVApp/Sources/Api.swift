@@ -78,12 +78,18 @@ struct ApiClient {
         return obj ?? [:]
     }
 
-    func register(deviceKey: String, name: String, code: String?) async throws -> RegisterResult {
+    /// 注册设备。
+    ///
+    /// model 由调用方传进来，而不是这里读 UIDevice.current：
+    /// Swift 6 里 UIDevice.current 是 @MainActor 隔离的，
+    /// 在这个非隔离的 async 方法里直接读会报
+    /// "expression is 'async' but is not marked with 'await'"。
+    func register(deviceKey: String, name: String, model: String, code: String?) async throws -> RegisterResult {
         var body: [String: Any] = [
             "device_key": deviceKey,
             "name": name,
             "platform": "ios",
-            "model": UIDevice.current.model,
+            "model": model,
         ]
         if let code = code, !code.isEmpty { body["code"] = code }
         guard let req = request("/api/v1/device/register", method: "POST", body: body) else {

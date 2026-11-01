@@ -1,5 +1,6 @@
 import Foundation
 import SwiftUI
+import UIKit
 
 /// 全局状态。用 ObservableObject 而不是 TCA/Redux：
 /// 这个 App 的状态很浅（频道列表 + 当前设备），引框架是负担。
@@ -54,8 +55,10 @@ final class Session: ObservableObject {
     /// 注册设备。返回 true 表示已直接绑定，false 表示待管理员批准。
     func register(code: String?) async -> Bool {
         do {
+            // Session 是 @MainActor，在这里读 UIDevice 是安全的
             let r = try await api.register(deviceKey: deviceKey,
                                            name: deviceName.isEmpty ? "iPhone" : deviceName,
+                                           model: UIDevice.current.model,
                                            code: code)
             token = r.token
             UserDefaults.standard.set(r.token, forKey: "token")

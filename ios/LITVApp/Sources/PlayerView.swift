@@ -132,7 +132,8 @@ struct PlayerView: View {
             player = p
             loading = false
 
-            session.api.heartbeat(channelId: channel.id)
+            // heartbeat 是 async 的，必须 await——Swift 里 async 函数不能"发了不管"
+            await session.api.heartbeat(channelId: channel.id)
             programs = (try? await session.api.epg(channelId: channel.id)) ?? []
         } catch {
             errorText = error.localizedDescription

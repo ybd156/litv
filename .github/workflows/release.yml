@@ -52,12 +52,19 @@ jobs:
             "platforms;android-35" "build-tools;35.0.0" >/dev/null 2>&1 || true
           ls "$ANDROID_HOME/platforms" || true
 
+      - name: 安装 Gradle 8.7
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.7"
+
       - name: 构建 APK（release，已签名）
         working-directory: android
         run: |
+          # 注意：仓库里的 ./gradlew 是给 WSL 用的本地 shim（硬编码本地路径），
+          # CI 上不能直接用。这里用 setup-gradle 装的 gradle 命令。
           # keystore 随仓库分发，口令写在 build.gradle.kts 的默认值里，
           # CI 不需要任何 secret。
-          ./gradlew --no-daemon assembleRelease
+          gradle --no-daemon assembleRelease
 
       - name: 校验签名方案（必须 v1+v2+v3 全 true）
         run: |

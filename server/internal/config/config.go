@@ -26,6 +26,7 @@ type Config struct {
 	Remux     Remux     `yaml:"remux"`
 	Record    Record    `yaml:"record"`
 	Alert     Alert     `yaml:"alert"`
+	DLNA      DLNA      `yaml:"dlna"`
 	Log       Log       `yaml:"log"`
 }
 
@@ -136,6 +137,16 @@ type Alert struct {
 	MinIntervalMin int `yaml:"min_interval_minutes"`
 }
 
+// DLNA 局域网发现配置。
+//
+// 让电视自带的播放器 / Kodi / 音箱不用装我们的 App 就能直接放直播。
+type DLNA struct {
+	Enabled      bool   `yaml:"enabled"`
+	FriendlyName string `yaml:"friendly_name"`
+	// AdvertiseIP 手动指定对外 IP；空则自动探测第一个非回环 IPv4
+	AdvertiseIP string `yaml:"advertise_ip"`
+}
+
 // Log 日志配置。
 type Log struct {
 	Level string `yaml:"level"`
@@ -194,6 +205,7 @@ func Default() *Config {
 		},
 		Record: Record{Enabled: true},
 		Alert:  Alert{Enabled: false, MinIntervalMin: 30},
+		DLNA:   DLNA{Enabled: false, FriendlyName: "LITV 直播"},
 		Log: Log{Level: "info", MaxMB: 10},
 	}
 }

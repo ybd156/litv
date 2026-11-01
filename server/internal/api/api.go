@@ -26,6 +26,7 @@ import (
 	"github.com/litv/litv/server/internal/alert"
 	"github.com/litv/litv/server/internal/auth"
 	"github.com/litv/litv/server/internal/config"
+	"github.com/litv/litv/server/internal/dlna"
 	"github.com/litv/litv/server/internal/record"
 	"github.com/litv/litv/server/internal/remote"
 	"github.com/litv/litv/server/internal/remux"
@@ -44,6 +45,7 @@ type API struct {
 	rx      *remux.Manager
 	rec     *record.Manager
 	alert   *alert.Notifier
+	dlna    *dlna.Server
 	signer  *auth.Signer
 	startAt time.Time
 	version string
@@ -73,6 +75,12 @@ func (a *API) SetRecord(m *record.Manager) { a.rec = m }
 
 // SetAlert 注入告警通知器。
 func (a *API) SetAlert(n *alert.Notifier) { a.alert = n }
+
+// SetDLNA 注入 DLNA 服务（同时把路由挂到 /dlna/*）。
+func (a *API) SetDLNA(s *dlna.Server) { a.dlna = s }
+
+// DLNASource 返回 DLNA 需要的数据源适配器。
+func (a *API) DLNASource() dlna.ChannelSource { return dlnaSource{a: a} }
 
 // ctxKey 避免 context key 冲突。
 type ctxKey int
@@ -201,6 +209,15 @@ func (a *API) Handler(viaGateway bool) http.Handler {
 	r.Get("/live/{id}/remux.m3u8", a.liveRemuxPlaylist)
 	r.Get("/live/{id}/remux/{seg}", a.liveRemuxSegment)
 	r.Get("/live/{id}/seg", a.liveSegment)
+
+	// ---- DLNA（局域网设备发现与浏览，不需要我们的 App）----
+	//
+	// 注意：chi 的 Mount 不会剥掉挂载前缀，子路由拿到的还是 /dlna/xxx。
+	// 所以这里必须显式 StripPrefix，否则内部按 /desc.xml 注册的处理器永远匹配不上
+	// （表现是所有 /dlna/* 返回 404）。
+	if a.dlna != nil {
+		r.Mount("/dlna", http.StripPrefix("/dlna", a.dlna.Handler()))
+	}
 
 	return r
 }

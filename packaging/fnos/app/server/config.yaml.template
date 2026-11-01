@@ -103,3 +103,10 @@ alert:
   webhook_url: ""
   chat_id: ""
   min_interval_minutes: 30
+
+# DLNA：让电视自带播放器 / Kodi / 音箱不用装 App 就能放直播
+# 注意：需要宿主网络能收发 1900 组播（fnOS 原生安装没问题，Docker 需 --network host）
+dlna:
+  enabled: false
+  friendly_name: "LITV 直播"
+  advertise_ip: ""   # 留空自动探测第一个非回环 IPv4

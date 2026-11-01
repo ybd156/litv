@@ -30,11 +30,13 @@ bash build/test/timeshift-test.sh # 时移录制与回看（4 项）
 bash build/test/remux-test.sh     # 裸 TS → HLS 转封装（7 项）
 bash build/test/record-test.sh    # 录制中心含调度器（9 项）
 bash build/test/alert-test.sh     # 源失效告警含 webhook（8 项）
+bash build/test/web-test.sh       # Web 端播放经网关取流（7 项）
+bash build/test/dlna-test.sh      # DLNA 发现/浏览/播放（14 项）
 bash build/test/smoke.sh          # 服务端 API 冒烟
 packaging/fnos/tools/smoke-test.sh dist/litv_x86_v1.0.0.fpk   # fpk 生命周期（39 项）
 ```
 
-全部通过（56 项断言 + 遥控/冒烟/打包三套）。
+全部通过（77 项断言 + 遥控/冒烟 + 打包 39 项）。
 
 ### 已实现的功能梯队
 
@@ -50,11 +52,12 @@ packaging/fnos/tools/smoke-test.sh dist/litv_x86_v1.0.0.fpk   # fpk 生命周期
 - ✅ 跨端续播（`watch_progress`，客厅看一半去卧室接着看）
 - ✅ 播放质量统计（起播耗时/P90/卡顿率/失败率，客户端上报）
 
-**第三梯队（进行中）**
-- ✅ 多语言（fnOS i18n 中英双语已备）
+**第三梯队（已完成）**
+- ✅ 多语言（fnOS i18n 中英双语）
 - ✅ 裸 TS → HLS 转封装（`internal/remux`，顺带解决 iOS 播不了裸 TS）
-- ✅ 源失效告警（`internal/alert`，整台挂掉时推 Telegram / 自定义 webhook，30 分钟内去重）
-- ⏳ Web 端直接看 / DLNA 投屏
+- ✅ 源失效告警（`internal/alert`，Telegram / 自定义 webhook，30 分钟内去重）
+- ✅ Web 端直接看（管理台「直播预览」页，hls.js）
+- ✅ DLNA 投屏（`internal/dlna`，SSDP 发现 + ContentDirectory 浏览，电视自带播放器可直接放）
 
 ---
 

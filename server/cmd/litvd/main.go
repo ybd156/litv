@@ -25,6 +25,7 @@ import (
 	"github.com/litv/litv/server/internal/alert"
 	"github.com/litv/litv/server/internal/api"
 	"github.com/litv/litv/server/internal/config"
+	"github.com/litv/litv/server/internal/dlna"
 	"github.com/litv/litv/server/internal/probe"
 	"github.com/litv/litv/server/internal/record"
 	"github.com/litv/litv/server/internal/remux"
@@ -121,6 +122,19 @@ func main() {
 			slog.Warn("转封装已配置但 ffmpeg 不可用，iOS/仅 HLS 的播放器将无法播放裸 TS 源",
 				"ffmpeg", cfg.Transcode.FFmpeg)
 		}
+	}
+
+	// DLNA 的创建要放在 rootHandler 之前：
+	// rootHandler 在服务器构造时就把路由建好了，之后再 SetDLNA 是挂不上去的
+	// （表现就是 /dlna/* 全部 404）。
+	var dlnaSrv *dlna.Server
+	if cfg.DLNA.Enabled {
+		dlnaSrv = dlna.New(dlna.Options{
+			HTTPPort:     cfg.Server.Port,
+			FriendlyName: cfg.DLNA.FriendlyName,
+			AdvertiseIP:  cfg.DLNA.AdvertiseIP,
+		}, a.DLNASource())
+		a.SetDLNA(dlnaSrv)
 	}
 
 	// 静态资源（管理台）挂在同一路由下：先走 API，未命中再落静态文件。
@@ -231,6 +245,11 @@ func main() {
 		go recMgr.Run(ctx)
 	}
 
+	// DLNA 的 SSDP 应答需要 ctx，放到这里启动
+	if dlnaSrv != nil {
+		go dlnaSrv.Run(ctx)
+	}
+
 	// ---- 后台任务 ----
 	// 0) 告警通知（源失效时主动推）
 	notifier := alert.New(alert.Options{
@@ -315,7 +334,17 @@ func main() {
 }
 
 func isAPIPath(p string) bool {
-	return len(p) >= 5 && (p[:5] == "/api/" || p[:6] == "/live/")
+	if len(p) >= 5 && p[:5] == "/api/" {
+		return true
+	}
+	if len(p) >= 6 && p[:6] == "/live/" {
+		return true
+	}
+	// DLNA 的 desc.xml / cds/control 等
+	if len(p) >= 6 && p[:6] == "/dlna/" {
+		return true
+	}
+	return false
 }
 
 func setupLogger() {

@@ -1,12 +1,38 @@
 #!/usr/bin/env bash
 # 遥控通道验证：电视端连 WS 待命 → 手机端发指令 → 电视端收到
+#
+# 自带服务端，不依赖外部环境（之前的版本假设 19551 已有服务在跑，
+# 被别的测试 pkill 掉就失败了）。
 set -uo pipefail
 
 PORT=19551
 W=/tmp/litv-rc
 BASE="http://127.0.0.1:$PORT"
 GWURL="http://localhost/app/litv/api/v1"
+BIN=${BIN:-/tmp/litvd}
 G="curl -sS --unix-socket $W/app.sock -H X-Trim-Userid:1000 -H X-Trim-Username:admin -H X-Trim-Isadmin:true"
+
+# 起一个干净的服务端
+pkill -x litvd 2>/dev/null; sleep 0.5
+rm -rf "$W"; mkdir -p "$W/cache"
+cat > "$W/config.yaml" <<EOF
+server:
+  host: "127.0.0.1"
+  port: $PORT
+  gateway_socket: "$W/app.sock"
+  prefix: "/app/litv"
+database:
+  path: "$W/litv.db"
+auth:
+  secret: "rc-secret"
+stream:
+  cache_dir: "$W/cache"
+probe:
+  enabled: false
+EOF
+setsid nohup "$BIN" -config "$W/config.yaml" > "$W/run.log" 2>&1 < /dev/null &
+sleep 2
+curl -sS -o /dev/null "http://127.0.0.1:$PORT/api/v1/health" || { echo "服务端没起来"; exit 1; }
 
 # 每次都建全新设备，避免 device_key 重复导致拿不到 token
 SUF=$(date +%s)

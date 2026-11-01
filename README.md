@@ -14,12 +14,35 @@
 
 | 模块 | 状态 | 说明 |
 |---|---|---|
-| 服务端 `litvd` | ✅ 可运行 | 双入口（网关 Unix Socket + TCP）、源解析、频道编排、EPG、设备绑定、流扇出 |
+| 服务端 `litvd` | ✅ 可运行 | 双入口、源解析、频道编排、EPG、设备绑定、流扇出、源探测、遥控中转 |
 | 管理台 Web | ✅ 可构建 | Vue 3 + Vite + Naive UI，深色主题，部署在 `/app/litv/` 子路径 |
-| fnOS 打包 | ✅ 已出包 | `packaging/fnos/dist/litv_{x86,arm,all}_v1.0.0.fpk` |
-| Android TV | 🚧 待开发 | 参数与交互规格已从 5 个 APK 逆向提炼完毕，见 `docs/research/03-apk-re.md` |
-| Android 手机 | 🚧 待开发 | 与 TV 同 codebase，触摸手势层 |
-| iOS | 🚧 待开发 | xtool + libmpv 路线，风险已评估 |
+| fnOS 打包 | ✅ 已出包 | `packaging/fnos/dist/litv_{x86,arm,all}_v1.0.0.fpk`，生命周期冒烟 39/39 |
+| Android TV | ✅ 已出包 | 四内核、自适应渲染档、完整遥控器交互、EPG 面板、线路/分组切换 |
+| Android 手机 | ✅ 同一 APK | 触摸手势播放、分组 chip、收藏、遥控器 |
+| iOS | 🚧 进行中 | CI 交叉编译流程已就绪；xtool 在 WSL 编译受网络影响 |
+
+### 已验证的测试
+
+```bash
+bash build/test/e2e.sh          # 终端链路端到端（20 项）
+bash build/test/remote-test.sh  # 遥控通道（WS 中转）
+bash build/test/smoke.sh        # 服务端 API 冒烟
+packaging/fnos/tools/smoke-test.sh dist/litv_x86_v1.0.0.fpk   # fpk 生命周期（39 项）
+```
+
+`e2e.sh` 覆盖：注册 → 待批准 → 批准 → bootstrap → EPG → 播放地址 → 拉流 →
+篡改签名被拒 → 收藏 → 心跳 → 线路列表 → 不泄露上游地址 → 吊销失效。
+
+### 已实现的功能梯队
+
+**第一梯队**
+- ✅ 多源自动择优（`internal/probe` 定期探测，`BestStream` 按健康度+延迟自动选）
+- ✅ 终端远程配置（管理台改参数 → 电视下次刷新生效）
+- ✅ 手机当遥控（WebSocket 中转，跨网段可用，电视不开端口）
+- ⏳ 回看 / 时移（需录制基础设施，未开始）
+
+**第二梯队**：EPG 智能匹配 ✅（归一化 + 数字编号匹配）、录制/跨端续播/统计 ⏳
+**第三梯队**：多语言（fnOS i18n 已备）✅、Web 播放/DLNA/告警 ⏳
 
 ---
 

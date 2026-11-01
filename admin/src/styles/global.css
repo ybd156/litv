@@ -1,0 +1,139 @@
+:root {
+  color-scheme: dark;
+  --litv-bg: #0d1216;
+  --litv-panel: #151d23;
+  --litv-border: #1f2a32;
+  --litv-text: #e6edf2;
+  --litv-muted: #7f8f9b;
+  --litv-brand: #1fa2c0;
+  --litv-brand-soft: rgba(31, 162, 192, 0.14);
+  --litv-danger: #e4635c;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--litv-bg);
+  color: var(--litv-text);
+  font-family: 'PingFang SC', 'Microsoft YaHei', 'Hiragino Sans GB', system-ui, -apple-system,
+    'Segoe UI', Roboto, sans-serif;
+  font-size: 14px;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+a {
+  color: var(--litv-brand);
+  text-decoration: none;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(140, 160, 175, 0.28);
+  border-radius: 6px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(160, 185, 200, 0.45);
+  background-clip: content-box;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* 通用小工具类，避免每个页面重复写 */
+.mono {
+  font-family: 'JetBrains Mono', 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+  font-size: 12.5px;
+}
+
+.muted {
+  color: var(--litv-muted);
+}
+
+.ellipsis {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.card-panel {
+  background: var(--litv-panel);
+  border: 1px solid var(--litv-border);
+  border-radius: 14px;
+}
+
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 14px;
+}
+
+.toolbar .spacer {
+  flex: 1 1 auto;
+}
+
+.hint-text {
+  font-size: 12.5px;
+  color: var(--litv-muted);
+  line-height: 1.6;
+}
+
+.logo-thumb {
+  width: 38px;
+  height: 38px;
+  border-radius: 8px;
+  object-fit: cover;
+  background: #10171d;
+  border: 1px solid var(--litv-border);
+  display: block;
+}
+
+.logo-fallback {
+  width: 38px;
+  height: 38px;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #10171d;
+  border: 1px solid var(--litv-border);
+  color: #4d5b66;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+/* 拖拽排序的视觉反馈 */
+tr.drag-over > td {
+  box-shadow: inset 0 2px 0 var(--litv-brand);
+}
+tr.dragging {
+  opacity: 0.45;
+}
+.drag-handle {
+  cursor: grab;
+  color: #4f5f6b;
+  display: inline-flex;
+}
+.drag-handle:active {
+  cursor: grabbing;
+}
+
+.n-data-table .n-data-table-td {
+  vertical-align: middle;
+}

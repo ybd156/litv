@@ -1,0 +1,39 @@
+[
+    {
+        "stepTitle": "${install.stepTitle}",
+        "items": [
+            {
+                "type": "tips",
+                "helpText": "${install.helpText}"
+            },
+            {
+                "type": "text",
+                "field": "wizard_port",
+                "label": "${install.portLabel}",
+                "initValue": "9527",
+                "placeholder": "${install.portPlaceholder}",
+                "rules": [
+                    { "required": true, "message": "${install.portRequiredMsg}" },
+                    { "pattern": "^[0-9]+$", "message": "${install.portPatternMsg}" }
+                ]
+            },
+            {
+                "type": "password",
+                "field": "wizard_admin_password",
+                "label": "${install.passwordLabel}",
+                "initValue": "",
+                "placeholder": "${install.passwordPlaceholder}",
+                "rules": [
+                    { "min": 8, "max": 64, "message": "${install.passwordLengthMsg}" }
+                ]
+            },
+            {
+                "type": "text",
+                "field": "wizard_data_path",
+                "label": "${install.dataDirLabel}",
+                "initValue": "",
+                "placeholder": "${install.dataDirPlaceholder}"
+            }
+        ]
+    }
+]

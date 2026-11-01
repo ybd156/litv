@@ -1,0 +1,37 @@
+[
+    {
+        "stepTitle": "${config.stepTitle}",
+        "items": [
+            {
+                "type": "tips",
+                "helpText": "${config.helpText}"
+            },
+            {
+                "type": "text",
+                "field": "wizard_port",
+                "label": "${config.portLabel}",
+                "initValue": "",
+                "placeholder": "${config.portPlaceholder}",
+                "rules": [
+                    { "pattern": "^[0-9]*$", "message": "${config.portPatternMsg}" }
+                ]
+            },
+            {
+                "type": "password",
+                "field": "wizard_admin_password",
+                "label": "${config.passwordLabel}",
+                "initValue": "",
+                "placeholder": "${config.passwordPlaceholder}",
+                "rules": [
+                    { "min": 0, "max": 64, "message": "${config.passwordLengthMsg}" }
+                ]
+            },
+            {
+                "type": "switch",
+                "field": "wizard_transcode_enabled",
+                "label": "${config.transcodeLabel}",
+                "helpText": "${config.transcodeHelp}"
+            }
+        ]
+    }
+]

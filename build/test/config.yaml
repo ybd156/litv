@@ -1,0 +1,13 @@
+server:
+  host: "127.0.0.1"
+  port: 19527
+  gateway_socket: "/tmp/litv-test/app.sock"
+  prefix: "/app/litv"
+database:
+  path: "/tmp/litv-test/litv.db"
+auth:
+  secret: "test-secret-please-change"
+  admin_password: "test123"
+stream:
+  cache_dir: "/tmp/litv-test/cache"
+  max_concurrent: 50

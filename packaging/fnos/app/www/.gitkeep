@@ -1,0 +1,2 @@
+# 占位文件：构建时 build.sh 会把管理台静态文件（web/dist 或 admin/dist）拷到这里，
+# 服务端从 $TRIM_APPDEST/www 提供静态资源。

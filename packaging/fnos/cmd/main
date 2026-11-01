@@ -1,0 +1,500 @@
+#!/bin/bash
+# =============================================================================
+# LITV (litv) —— 飞牛 fnOS 生命周期主脚本
+#
+# 用法: cmd/main {start|stop|restart|reload|status|watchdog}
+#
+# 退出码约定（官方《应用框架》）：
+#   0 = 成功 / status 表示"运行中"
+#   1 = 失败
+#   3 = status 表示"未运行"
+#
+# 为什么不用 set -e：
+#   这个脚本里大量清理动作（rm -f 旧 socket、chmod、kill 已死进程）本来就允许失败，
+#   set -e 会在第一次非零返回时中断，导致"停不干净 / 起不来也报不出原因"。
+#   所有关键分支都显式判断并返回码，容错比早停更重要。
+#
+# 设计要点（踩坑对照表）：
+#   1. 启动前必须 rm -f 旧 app.sock —— 进程被 SIGKILL 后 socket 文件会残留，
+#      第二次 bind 直接 EADDRINUSE，表现为"应用中心点启动没反应/网关 502"。
+#   2. 启动后必须等 socket 就绪才算成功 —— 否则框架认为已启动，用户点进去是 502。
+#   3. PID 文件用"子进程自报 $$"的方式写 —— setsid 在部分环境会 fork，
+#      shell 的 $! 会拿到一个立刻退出的中间进程，之后 stop 就杀不到真身。
+#   4. 停服用进程组 kill（kill -- -PID）—— 转码会派生 ffmpeg 子进程，
+#      只杀父进程会留下僵尸转码进程继续吃 CPU/句柄。
+# =============================================================================
+
+set -u
+umask 022
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+APP_ROOT="$(dirname "$SCRIPT_DIR")"
+
+APPNAME="litv"
+BIN_NAME="litvd"
+GATEWAY_PREFIX="/app/litv"
+# 必须与 app/ui/config 里的 gatewaySocket 完全一致，网关按这个名字去 target 下找 socket
+GATEWAY_SOCKET="app.sock"
+DEFAULT_PORT="9527"
+
+LOG_MAX_BYTES=$((10 * 1024 * 1024))   # 10MB 触发轮转，只保留一份 .1
+SOCKET_WAIT_TICKS=50                  # 50 * 0.2s = 最多等 10s
+STOP_WAIT_TICKS=50
+
+# -----------------------------------------------------------------------------
+# 一、目录解析：优先用 fnOS 注入的 TRIM_*；本地开发时降级到源码目录相对路径
+# -----------------------------------------------------------------------------
+# DEV_MODE 判定：只有在"没有 TRIM_APPDEST 且脚本旁边就有 ./app 目录"时才算本地开发，
+# 这样线上（TRIM_* 齐全）永远不会误用相对路径。
+DEV_MODE=0
+if [ -z "${TRIM_APPDEST:-}" ] && [ -d "${APP_ROOT}/app" ]; then
+    DEV_MODE=1
+fi
+
+if [ -z "${TRIM_APPDEST:-}" ]; then
+    if [ "${DEV_MODE}" = "1" ]; then
+        TRIM_APPDEST="${APP_ROOT}/app"
+    else
+        TRIM_APPDEST="/var/apps/${APPNAME}/target"
+    fi
+fi
+
+if [ -z "${TRIM_PKGVAR:-}" ]; then
+    if [ "${DEV_MODE}" = "1" ]; then
+        TRIM_PKGVAR="${APP_ROOT}/var"
+    else
+        TRIM_PKGVAR="/var/apps/${APPNAME}/var"
+    fi
+fi
+
+if [ -z "${TRIM_PKGETC:-}" ]; then
+    if [ "${DEV_MODE}" = "1" ]; then
+        TRIM_PKGETC="${APP_ROOT}/etc"
+    else
+        TRIM_PKGETC="/var/apps/${APPNAME}/etc"
+    fi
+fi
+
+# 架构 → 二进制后缀（构建脚本按 uname -m 命名，见 build.sh）
+case "$(uname -m)" in
+    x86_64 | amd64)   BIN_ARCH="x86_64" ;;
+    aarch64 | arm64)  BIN_ARCH="aarch64" ;;
+    *)                BIN_ARCH="$(uname -m)" ;;
+esac
+
+BINARY="${TRIM_APPDEST}/server/${BIN_NAME}_${BIN_ARCH}"
+# 单架构包（只放了一份 litvd）时回退到无后缀名
+if [ ! -f "${BINARY}" ] && [ -f "${TRIM_APPDEST}/server/${BIN_NAME}" ]; then
+    BINARY="${TRIM_APPDEST}/server/${BIN_NAME}"
+fi
+
+SOCK="${TRIM_APPDEST}/${GATEWAY_SOCKET}"
+LOG_FILE="${TRIM_PKGVAR}/litvd.log"
+PID_FILE="${TRIM_PKGVAR}/litvd.pid"
+PORT_FILE="${TRIM_PKGVAR}/server_port"
+CONFIG_FILE="${TRIM_PKGETC}/config.yaml"
+WWW_DIR="${TRIM_APPDEST}/www"
+LOCK_FILE="${TRIM_PKGVAR}/.litvd.lock"
+WATCHDOG_STATE="${TRIM_PKGVAR}/.watchdog.state"
+
+# -----------------------------------------------------------------------------
+# 二、基础工具函数
+# -----------------------------------------------------------------------------
+log_msg() {
+    mkdir -p "$(dirname "${LOG_FILE}")" 2>/dev/null || true
+    echo "$(date '+%Y-%m-%d %H:%M:%S') [main] $1" >>"${LOG_FILE}" 2>/dev/null || true
+}
+
+# 把用户可读的错误写进 TRIM_TEMP_LOGFILE，应用中心会把它显示给用户。
+# 注意：这是"覆盖写"，框架每次调用前会清空，所以只写最后一条最重要的原因。
+fail_msg() {
+    local msg="$1"
+    log_msg "FAIL: ${msg}"
+    if [ -n "${TRIM_TEMP_LOGFILE:-}" ]; then
+        printf '%s\n' "${msg}" >"${TRIM_TEMP_LOGFILE}" 2>/dev/null || true
+    fi
+    echo "${msg}" >&2
+}
+
+# 日志按大小轮转：超过 10MB 就把当前日志 mv 成 .1（旧的 .1 直接丢弃）
+rotate_log() {
+    [ -f "${LOG_FILE}" ] || return 0
+    local size
+    size=$(wc -c <"${LOG_FILE}" 2>/dev/null | tr -dc '0-9')
+    [ -n "${size}" ] || return 0
+    if [ "${size}" -gt "${LOG_MAX_BYTES}" ]; then
+        mv -f "${LOG_FILE}" "${LOG_FILE}.1" 2>/dev/null || true
+        log_msg "日志超过 ${LOG_MAX_BYTES} 字节，已轮转为 litvd.log.1"
+    fi
+}
+
+read_pid() {
+    [ -f "${PID_FILE}" ] || return 1
+    local pid
+    pid=$(head -n 1 "${PID_FILE}" 2>/dev/null | tr -dc '0-9')
+    [ -n "${pid}" ] || return 1
+    printf '%s' "${pid}"
+}
+
+# 进程存活 + 身份校验（防 PID 复用：机器重启后 PID 文件里的号可能被别的进程占用）
+is_running() {
+    local pid
+    pid=$(read_pid) || return 1
+    kill -0 "${pid}" 2>/dev/null || return 1
+    # 没有 /proc（极少见）时不做身份校验，只信 kill -0
+    if [ -r "/proc/${pid}/cmdline" ]; then
+        tr '\0' ' ' <"/proc/${pid}/cmdline" 2>/dev/null | grep -q "${BIN_NAME}" || return 1
+    fi
+    return 0
+}
+
+# 若记录到的是 runuser/su 这类包装进程，返回它的子进程（真正的 litvd）
+resolve_daemon_pid() {
+    local pid="$1"
+    if [ -r "/proc/${pid}/task" ]; then
+        local child
+        child=$(pgrep -P "${pid}" 2>/dev/null | head -n 1)
+        if [ -n "${child}" ]; then
+            printf '%s' "${child}"
+            return 0
+        fi
+    fi
+    printf '%s' "${pid}"
+}
+
+service_port() {
+    local port=""
+    [ -f "${PORT_FILE}" ] && port=$(head -n 1 "${PORT_FILE}" 2>/dev/null | tr -dc '0-9')
+    [ -n "${port}" ] || port="${DEFAULT_PORT}"
+    printf '%s' "${port}"
+}
+
+# 仅告警，不作为启动失败条件：网关走 socket，TCP 端口被占时原生客户端会连不上，
+# 但管理台仍然可用，这比"整体起不来"对用户友好。
+warn_port_in_use() {
+    local port="$1"
+    command -v ss >/dev/null 2>&1 || return 0
+    if ss -ltn 2>/dev/null | awk '{print $4}' | grep -qE "[:.]${port}$"; then
+        log_msg "警告: TCP 端口 ${port} 已被占用，Android TV / 手机客户端将无法直连（统一网关不受影响）"
+    fi
+}
+
+# -----------------------------------------------------------------------------
+# 三、start / stop / status
+# -----------------------------------------------------------------------------
+ensure_config() {
+    if [ -f "${CONFIG_FILE}" ]; then
+        return 0
+    fi
+    # 配置缺失有两种可能：装完没跑回调，或本地开发直接 start。
+    # 两种情况都用 install_callback 兜底（它是幂等的），避免在这里重复一套模板渲染逻辑。
+    log_msg "未找到配置 ${CONFIG_FILE}，调用 install_callback 生成默认配置"
+    if [ -x "${SCRIPT_DIR}/install_callback" ] || [ -f "${SCRIPT_DIR}/install_callback" ]; then
+        bash "${SCRIPT_DIR}/install_callback" >>"${LOG_FILE}" 2>&1 || true
+    fi
+    [ -f "${CONFIG_FILE}" ]
+}
+
+start_app() {
+    if is_running; then
+        log_msg "已在运行 (PID $(read_pid))，跳过启动"
+        return 0
+    fi
+
+    log_msg "========== START =========="
+    log_msg "APPDEST=${TRIM_APPDEST} PKGVAR=${TRIM_PKGVAR} PKGETC=${TRIM_PKGETC} DEV_MODE=${DEV_MODE}"
+
+    mkdir -p "${TRIM_PKGVAR}" "${TRIM_PKGETC}" "${TRIM_PKGVAR}/data" 2>/dev/null || true
+
+    if [ ! -f "${BINARY}" ]; then
+        fail_msg "未找到服务端程序: ${BINARY}（请确认安装包内的 server/ 目录完整，或用 build.sh 重新打包）"
+        return 1
+    fi
+    chmod +x "${BINARY}" 2>/dev/null || true
+
+    if ! ensure_config; then
+        fail_msg "配置生成失败: ${CONFIG_FILE} 不存在，请重新安装本应用"
+        return 1
+    fi
+
+    # ★ 关键：清掉上一次残留的 socket。被 SIGKILL 的进程不会清理 socket 文件，
+    #   残留文件会让 net.Listen("unix", ...) 直接返回 address already in use。
+    if [ -e "${SOCK}" ]; then
+        log_msg "清理残留 socket: ${SOCK}"
+        rm -f "${SOCK}" 2>/dev/null || true
+    fi
+    rm -f "${PID_FILE}" 2>/dev/null || true
+
+    rotate_log
+
+    local port
+    port=$(service_port)
+    warn_port_in_use "${port}"
+
+    # 运行身份：run-as=package 时框架本来就用应用用户跑本脚本，无需降权；
+    # 只有被 root 拉起（run-as=root 或手工调试）时才显式降权到 TRIM_USERNAME。
+    local drop=0 run_user=""
+    if [ "$(id -u)" = "0" ] && [ -n "${TRIM_USERNAME:-}" ] && [ "${TRIM_USERNAME}" != "root" ]; then
+        if command -v runuser >/dev/null 2>&1; then
+            drop=1
+            run_user="${TRIM_USERNAME}"
+            log_msg "以 root 运行，降权到用户 ${run_user}"
+        else
+            log_msg "警告: 当前为 root 且没有 runuser，将以 root 直接运行服务"
+        fi
+    fi
+
+    # 环境变量即契约（Go 侧按这些变量读路径，见 README「运行时契约」）
+    local -a envs=(
+        "LITV_DATA_DIR=${TRIM_PKGVAR}"
+        "LITV_ETC_DIR=${TRIM_PKGETC}"
+        "LITV_CONFIG=${CONFIG_FILE}"
+        "LITV_WWW_DIR=${WWW_DIR}"
+        "LITV_LISTEN_SOCKET=${SOCK}"
+        "LITV_URL_PREFIX=${GATEWAY_PREFIX}"
+        "LITV_LISTEN_ADDR=0.0.0.0:${port}"
+        "LITV_LOG_FILE=${LOG_FILE}"
+        "LITV_APPNAME=${APPNAME}"
+        "TRIM_APPDEST=${TRIM_APPDEST}"
+        "TRIM_PKGVAR=${TRIM_PKGVAR}"
+        "TRIM_PKGETC=${TRIM_PKGETC}"
+    )
+
+    local -a cmd=(env "${envs[@]}" "${BINARY}")
+    if [ "${drop}" = "1" ]; then
+        cmd=(runuser -u "${run_user}" -- "${cmd[@]}")
+    fi
+
+    log_msg "Exec: ${BINARY} (port=${port}, prefix=${GATEWAY_PREFIX}, socket=${SOCK})"
+
+    # 子进程自报 PID 再 exec，避免 setsid fork 导致 $! 记到中间进程上；
+    # 9>&- 让子进程不要继承 flock 的锁 fd，否则锁会被守护进程一直占住。
+    # 注意：bash -c 的第一个参数是 $0（这里放 PID 文件路径），真正的命令从 $1 开始，
+    # 所以**不能**在 exec 前 shift —— shift 会把 "env" 本身吃掉，变成去执行
+    # "LITV_DATA_DIR=/path" 这种赋值串，报 "No such file or directory"。
+    setsid bash -c 'printf "%s" "$$" >"$0"; exec "$@"' \
+        "${PID_FILE}" "${cmd[@]}" >>"${LOG_FILE}" 2>&1 9>&- &
+
+    # 等 PID 文件落地
+    local i=0
+    while [ ! -s "${PID_FILE}" ] && [ "${i}" -lt 25 ]; do
+        sleep 0.1
+        i=$((i + 1))
+    done
+
+    if [ ! -s "${PID_FILE}" ]; then
+        fail_msg "服务进程未能拉起，请查看日志: ${LOG_FILE}"
+        return 1
+    fi
+
+    local pid real_pid
+    pid=$(read_pid || echo "")
+    [ -n "${pid}" ] || { fail_msg "PID 文件写入失败: ${PID_FILE}"; return 1; }
+    real_pid=$(resolve_daemon_pid "${pid}")
+    if [ "${real_pid}" != "${pid}" ]; then
+        log_msg "包装进程 ${pid} 的实际服务进程为 ${real_pid}，PID 文件已更正"
+        printf '%s' "${real_pid}" >"${PID_FILE}"
+        pid="${real_pid}"
+    fi
+
+    # 等 socket 就绪（这才是"启动成功"的判据）
+    i=0
+    while [ "${i}" -lt "${SOCKET_WAIT_TICKS}" ]; do
+        if [ -S "${SOCK}" ]; then
+            log_msg "启动成功 (PID ${pid})，socket 已就绪: ${SOCK}"
+            return 0
+        fi
+        if ! kill -0 "${pid}" 2>/dev/null; then
+            log_msg "进程 ${pid} 在 socket 就绪前退出"
+            fail_msg "服务启动失败并已退出，原因见日志末尾: $(tail -n 3 "${LOG_FILE}" 2>/dev/null | tr '\n' ' ')"
+            rm -f "${PID_FILE}"
+            return 1
+        fi
+        sleep 0.2
+        i=$((i + 1))
+    done
+
+    fail_msg "启动超时：等待 socket ${SOCK} 超过 10 秒，请查看日志 ${LOG_FILE}"
+    # 超时也要收拾干净，避免留下半启动的进程占着端口
+    kill -TERM "${pid}" 2>/dev/null || true
+    sleep 1
+    kill -KILL "${pid}" 2>/dev/null || true
+    rm -f "${PID_FILE}" "${SOCK}"
+    return 1
+}
+
+stop_app() {
+    log_msg "========== STOP =========="
+
+    local pid
+    if ! pid=$(read_pid); then
+        log_msg "没有 PID 文件，检查是否有游离的 ${BIN_NAME} 进程"
+        # 兜底：PID 文件丢了但进程还在（手工 kill 掉 pid 文件、或上次异常退出）
+        local stray
+        stray=$(pgrep -f "${TRIM_APPDEST}/server/${BIN_NAME}" 2>/dev/null | head -n 1)
+        if [ -n "${stray}" ]; then
+            log_msg "发现游离进程 ${stray}，一并结束"
+            pid="${stray}"
+        else
+            rm -f "${SOCK}" 2>/dev/null || true
+            log_msg "确认无运行中进程"
+            return 0
+        fi
+    fi
+
+    if ! kill -0 "${pid}" 2>/dev/null; then
+        log_msg "PID ${pid} 已不存在，清理 PID 文件"
+        rm -f "${PID_FILE}" "${SOCK}" 2>/dev/null || true
+        return 0
+    fi
+
+    log_msg "向进程组 ${pid} 发送 SIGTERM"
+    # 负号 = 整个进程组（转码子进程一起走）
+    kill -TERM -- "-${pid}" 2>/dev/null || kill -TERM "${pid}" 2>/dev/null || true
+
+    local i=0
+    while [ "${i}" -lt "${STOP_WAIT_TICKS}" ] && kill -0 "${pid}" 2>/dev/null; do
+        sleep 0.2
+        i=$((i + 1))
+    done
+
+    if kill -0 "${pid}" 2>/dev/null; then
+        log_msg "SIGTERM 超时，发送 SIGKILL"
+        kill -KILL -- "-${pid}" 2>/dev/null || kill -KILL "${pid}" 2>/dev/null || true
+        sleep 1
+    fi
+
+    rm -f "${PID_FILE}" 2>/dev/null || true
+    # 停完顺手清 socket：留着它，下次启动虽然会 rm，但 status/网关探活会误判
+    rm -f "${SOCK}" 2>/dev/null || true
+    log_msg "已停止"
+    return 0
+}
+
+status_app() {
+    if is_running; then
+        local pid port sock_state
+        pid=$(read_pid)
+        port=$(service_port)
+        if [ -S "${SOCK}" ]; then sock_state="socket ok"; else sock_state="socket missing"; fi
+        echo "Running (PID ${pid}, port ${port}, ${sock_state})"
+        return 0
+    fi
+    # PID 文件在但进程没了 → 明确的"未运行"，顺手清掉脏文件
+    if [ -f "${PID_FILE}" ]; then
+        rm -f "${PID_FILE}" 2>/dev/null || true
+    fi
+    echo "Not running"
+    return 3
+}
+
+# reload：优先 SIGHUP 让服务自己重载配置；若进程不认 SIGHUP（默认动作是终止）
+# 就自动退化成 restart。config_callback 里一律用 restart，保证配置一定生效。
+reload_app() {
+    log_msg "========== RELOAD =========="
+    if ! is_running; then
+        log_msg "未在运行，直接启动"
+        start_app
+        return $?
+    fi
+    local pid
+    pid=$(read_pid)
+    log_msg "向 ${pid} 发送 SIGHUP"
+    kill -HUP "${pid}" 2>/dev/null || true
+    sleep 1
+    if is_running; then
+        log_msg "SIGHUP 后进程存活，视为重载成功"
+        return 0
+    fi
+    log_msg "SIGHUP 后进程已退出（服务端未实现信号重载），回退为 restart"
+    stop_app
+    start_app
+    return $?
+}
+
+# -----------------------------------------------------------------------------
+# 四、watchdog：供 cron / 外部探活周期调用，进程挂了就拉起来
+# 带简单崩溃环保护：10 分钟内连续拉起超过 5 次就停手，避免"启动即崩"打满日志。
+# -----------------------------------------------------------------------------
+watchdog_app() {
+    if is_running; then
+        return 0
+    fi
+
+    local now last_count=0 last_time=0
+    now=$(date +%s)
+    if [ -f "${WATCHDOG_STATE}" ]; then
+        read -r last_count last_time <"${WATCHDOG_STATE}" 2>/dev/null || true
+        last_count=${last_count:-0}
+        last_time=${last_time:-0}
+    fi
+    if [ $((now - last_time)) -gt 600 ]; then
+        last_count=0
+    fi
+    if [ "${last_count}" -ge 5 ]; then
+        log_msg "watchdog: 10 分钟内已重启 ${last_count} 次，暂停自动拉起（疑似配置错误，请人工检查）"
+        return 1
+    fi
+    last_count=$((last_count + 1))
+    printf '%s %s' "${last_count}" "${now}" >"${WATCHDOG_STATE}" 2>/dev/null || true
+
+    log_msg "watchdog: 检测到服务未运行，第 ${last_count} 次自动拉起"
+    start_app
+    return $?
+}
+
+# -----------------------------------------------------------------------------
+# 五、入口分发
+# -----------------------------------------------------------------------------
+main() {
+    local action="${1:-}"
+    mkdir -p "${TRIM_PKGVAR}" 2>/dev/null || true
+
+    case "${action}" in
+        start)
+            # 用 flock 串行化启动，避免框架并发调用（安装后自动启动 + 用户点启动）
+            # 同时进 start_app 造成双实例抢同一个 socket。
+            if command -v flock >/dev/null 2>&1; then
+                (
+                    flock -n 9 || { log_msg "另一个 start 正在进行，退出"; exit 0; }
+                    start_app
+                ) 9>"${LOCK_FILE}"
+                exit $?
+            fi
+            start_app
+            exit $?
+            ;;
+        stop)
+            stop_app
+            exit $?
+            ;;
+        restart)
+            stop_app
+            sleep 1
+            start_app
+            exit $?
+            ;;
+        reload)
+            reload_app
+            exit $?
+            ;;
+        status)
+            status_app
+            exit $?
+            ;;
+        watchdog)
+            watchdog_app
+            exit $?
+            ;;
+        ""|help|-h|--help)
+            echo "Usage: $0 {start|stop|restart|reload|status|watchdog}"
+            exit 1
+            ;;
+        *)
+            fail_msg "未知动作: ${action}（支持 start|stop|restart|reload|status|watchdog）"
+            exit 1
+            ;;
+    esac
+}
+
+main "$@"

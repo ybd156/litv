@@ -1,0 +1,76 @@
+# =============================================================================
+# LITV 服务端配置模板
+#
+# 这个文件不会被服务端直接读取：install_callback 会把它复制成
+#   ${TRIM_PKGETC}/config.yaml
+# 并把带 # @@XXX@@ 标记的行整行替换成真实值（路径、随机 secret、向导里填的密码）。
+#
+# 为什么用"整行替换 + 行尾标记"而不是 sed 's/旧值/新值/'：
+#   1. 密码里可能有 / & \ $ 等字符，sed 的 s/// 与 c\ 都会被它们搞坏；
+#   2. 标记留在新行里，重跑 install_callback / config_callback 时还能再次定位到该行。
+# 新增配置项时，请同时在 install_callback 里加一条 replace_line_marked。
+#
+# ⚠️ 字段名必须与 server/internal/config/config.go 的 yaml tag 一致。
+#    yaml.v3 默认忽略未知字段，写错名字不会报错，只会静默变成默认值。
+# =============================================================================
+
+server:
+  host: "0.0.0.0"
+  # 独立 TCP 端口：给 Android TV / 手机 / iOS 原生客户端直连（自建 device token 鉴权）
+  port: 9527                             # @@SERVER_PORT@@
+  # 统一网关 Unix Socket：必须与 app/ui/config 的 gatewaySocket 同名，且位于 target 目录
+  gateway_socket: "/var/apps/litv/target/app.sock"   # @@GATEWAY_SOCKET@@
+  # 网关公开前缀：必须与 app/ui/config 的 gatewayPrefix 完全一致，否则网关 404
+  prefix: "/app/litv"
+  read_timeout: 30
+  # 0 = 不限制（直播流会长时间挂着，不能设短）
+  write_timeout: 0
+
+database:
+  # SQLite 数据库文件（放在 TRIM_PKGVAR 下，跨重启/升级保留）
+  path: "/var/apps/litv/var/data/litv.db"  # @@DB_PATH@@
+
+auth:
+  # ⚠️ 安装时由 openssl rand -hex 32 随机生成，不要手工改成弱口令
+  secret: "CHANGE_ME"                    # @@AUTH_SECRET@@
+  # ⚠️ 管理台应急密码（网关不可用时用）；安装向导里填的会写在这里
+  admin_password: "CHANGE_ME"            # @@ADMIN_PASSWORD@@
+  # 终端 device token 有效期（小时），默认一年
+  token_hours: 8760
+  # 开发模式：没有网关注入的 X-Trim-* 头时降级成本地管理员。生产必须 false
+  dev_mode: false
+
+stream:
+  # 切片/预缓冲缓存目录
+  cache_dir: "/var/apps/litv/var/data/cache"   # @@CACHE_DIR@@
+  # 最大并发流数：N100 这类小机器建议 8-20；外网访问再调低
+  max_concurrent: 8
+  # 上游读取块大小（字节）
+  buffer_size: 32768
+  # 每频道环形缓冲（字节），新客户端从这里起播；小于 64KB 会被服务端纠正为 2MB
+  ring_size: 2097152
+  user_agent: "LITV/1.0 (fnOS)"
+  # 上游连接超时（秒）
+  upstream_timeout: 15
+
+transcode:
+  # 服务端转码开关（可在应用设置页切换）
+  enabled: false                         # @@TRANSCODE_ENABLED@@
+  ffmpeg: "ffmpeg"
+  # qsv = Intel 核显硬解（N100 用这个）；vaapi = 通用 Linux；none = 纯软解
+  # 走 qsv 需要 config/privilege 里的 join-groups [video, render]
+  hwaccel: "qsv"
+  preset: "veryfast"
+
+epg:
+  enabled: true
+  # 抓取计划（标准 cron 五段式，容器内本地时区）
+  refresh_cron: "0 3 * * *"
+  # 节目单保留天数
+  keep_days: 3
+  # 默认节目单源，用户可在管理台里覆盖
+  default_urls: []
+
+log:
+  level: "info"
+  max_mb: 10

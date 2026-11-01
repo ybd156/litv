@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 手机竖屏：屏幕窄，边距收紧 -->
+<resources>
+    <dimen name="screen_padding">20dp</dimen>
+</resources>

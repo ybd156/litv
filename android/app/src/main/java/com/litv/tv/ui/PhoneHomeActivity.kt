@@ -7,6 +7,8 @@ import android.view.View
 import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.google.gson.Gson
@@ -43,6 +45,7 @@ class PhoneHomeActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_phone_home)
+        applySystemInsets()
         app = application as LitvApp
 
         if (app.prefs.token.isBlank()) {
@@ -157,6 +160,22 @@ class PhoneHomeActivity : AppCompatActivity() {
             renderChips()
             render()
         }, onErr = { status.text = "收藏失败：$it" })
+    }
+
+    /**
+     * 让内容避开状态栏和底部手势条。
+     *
+     * 布局里的 20dp 顶部内边距只是视觉留白，**不能代替系统栏避让**——
+     * 全面屏手机上状态栏会直接压在标题上，底部 Tab 会被手势条盖住一半。
+     * 这里把 systemBars 的 inset 加到根容器上，标题和 Tab 就都躲开了。
+     */
+    private fun applySystemInsets() {
+        val root = findViewById<View>(android.R.id.content)
+        ViewCompat.setOnApplyWindowInsetsListener(root) { v, insets ->
+            val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
+            v.setPadding(0, bars.top, 0, bars.bottom)
+            insets
+        }
     }
 
     private fun openPlayer(ch: Channel) {

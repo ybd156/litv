@@ -73,15 +73,19 @@
             android:configChanges="keyboard|keyboardHidden|navigation|orientation|screenSize|screenLayout|smallestScreenSize|uiMode"
             android:theme="@style/Theme.Litv.Player" />
 
+        <!-- 绑定页：TV 和手机共用。不锁方向——TV 本身是横的，
+             手机是竖的，各自按物理方向来才自然 -->
         <activity
             android:name=".ui.BindActivity"
             android:exported="false"
-            android:screenOrientation="landscape" />
+            android:configChanges="keyboard|keyboardHidden|orientation|screenSize|screenLayout|smallestScreenSize|uiMode"
+            android:windowSoftInputMode="adjustResize" />
 
+        <!-- 设置页：同上，不锁方向 -->
         <activity
             android:name=".ui.SettingsActivity"
             android:exported="false"
-            android:screenOrientation="landscape" />
+            android:configChanges="keyboard|keyboardHidden|orientation|screenSize|screenLayout|smallestScreenSize|uiMode" />
 
         <!-- 手机端遥控器 -->
         <activity

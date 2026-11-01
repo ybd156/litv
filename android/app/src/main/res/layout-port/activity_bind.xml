@@ -1,0 +1,150 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  手机竖屏绑定页。
+
+  为什么要单独一份：默认那份（layout/）是给电视用的，
+  里面写死了 640dp 宽 + 60dp 内边距——在 360dp 宽的手机上直接溢出。
+  这里改成撑满 + 小边距，并套一层 ScrollView 防小屏被键盘顶掉。
+-->
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/bg"
+    android:fillViewport="true">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:gravity="center_horizontal"
+        android:orientation="vertical"
+        android:paddingHorizontal="24dp"
+        android:paddingTop="48dp"
+        android:paddingBottom="32dp">
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="@string/bind_title"
+            android:textColor="@color/text_primary"
+            android:textSize="26sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/hint"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="10dp"
+            android:gravity="center"
+            android:lineSpacingExtra="3dp"
+            android:text="@string/bind_hint"
+            android:textColor="@color/text_secondary"
+            android:textSize="14sp" />
+
+        <!-- 服务器地址 -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="28dp"
+            android:orientation="vertical">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/bind_server_label"
+                android:textColor="@color/text_secondary"
+                android:textSize="14sp" />
+
+            <EditText
+                android:id="@+id/serverInput"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="6dp"
+                android:autofillHints="none"
+                android:hint="http://192.168.1.10:9527"
+                android:inputType="textUri"
+                android:paddingVertical="12dp"
+                android:singleLine="true"
+                android:textColor="@color/text_primary"
+                android:textSize="17sp" />
+        </LinearLayout>
+
+        <!-- 绑定码 -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:orientation="vertical">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/bind_code_label"
+                android:textColor="@color/text_secondary"
+                android:textSize="14sp" />
+
+            <EditText
+                android:id="@+id/codeInput"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="6dp"
+                android:autofillHints="none"
+                android:hint="6 位数字（可留空，去管理台批准）"
+                android:inputType="number"
+                android:maxLength="6"
+                android:paddingVertical="12dp"
+                android:singleLine="true"
+                android:textColor="@color/text_primary"
+                android:textSize="17sp" />
+        </LinearLayout>
+
+        <Button
+            android:id="@+id/bindButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="26dp"
+            android:background="@drawable/bg_focusable"
+            android:paddingVertical="14dp"
+            android:text="@string/bind_action"
+            android:textColor="@color/text_primary"
+            android:textSize="17sp" />
+
+        <TextView
+            android:id="@+id/status"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="18dp"
+            android:gravity="center"
+            android:textColor="@color/accent"
+            android:textSize="14sp" />
+
+        <!-- 二维码：手机端也留着，扫一下能直接打开管理台 -->
+        <LinearLayout
+            android:id="@+id/qrBox"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="24dp"
+            android:gravity="center_horizontal"
+            android:orientation="vertical"
+            android:visibility="gone">
+
+            <ImageView
+                android:id="@+id/qrImage"
+                android:layout_width="140dp"
+                android:layout_height="140dp"
+                android:background="@android:color/white"
+                android:contentDescription="管理台二维码"
+                android:padding="6dp"
+                android:scaleType="fitCenter" />
+
+            <TextView
+                android:id="@+id/qrHint"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:gravity="center"
+                android:text="扫码打开管理台 → 终端设备 → 批准本机"
+                android:textColor="@color/text_secondary"
+                android:textSize="12sp" />
+        </LinearLayout>
+    </LinearLayout>
+</ScrollView>

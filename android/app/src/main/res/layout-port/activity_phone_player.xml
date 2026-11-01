@@ -1,0 +1,158 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  手机竖屏播放页。
+
+  和横屏版的区别：
+    横屏 = 视频铺满全屏（activity_phone_player.xml，默认目录那份）
+    竖屏 = 视频按 16:9 固定比例置顶，下面是频道信息 + 操作栏
+
+  为什么竖屏不能铺满：竖屏是全屏时 16:9 的画面只占中间一条，
+  上下全是黑边，手势区也被黑边吃掉。把画面收到顶部后，
+  下半屏可以用来放信息、换台、看节目单，这才像手机 App。
+-->
+<androidx.constraintlayout.widget.ConstraintLayout
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/bg">
+
+    <!-- 视频区：宽度撑满，高度按 16:9 推导 -->
+    <FrameLayout
+        android:id="@+id/videoBox"
+        android:layout_width="0dp"
+        android:layout_height="0dp"
+        android:background="@android:color/black"
+        app:layout_constraintDimensionRatio="16:9"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toTopOf="parent">
+
+        <SurfaceView
+            android:id="@+id/surface"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent" />
+
+        <ProgressBar
+            android:id="@+id/loading"
+            android:layout_width="40dp"
+            android:layout_height="40dp"
+            android:layout_gravity="center"
+            android:indeterminateTint="@color/accent" />
+
+        <!-- 手势提示浮在画面中间 -->
+        <TextView
+            android:id="@+id/gestureTip"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="center"
+            android:background="#CC151A21"
+            android:paddingHorizontal="18dp"
+            android:paddingVertical="10dp"
+            android:textColor="@color/text_primary"
+            android:textSize="15sp"
+            android:visibility="gone" />
+    </FrameLayout>
+
+    <!-- 频道信息区（原来浮在画面上，竖屏挪到画面下方） -->
+    <LinearLayout
+        android:id="@+id/osd"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:background="@color/bg_panel"
+        android:orientation="vertical"
+        android:paddingHorizontal="16dp"
+        android:paddingVertical="14dp"
+        android:visibility="gone"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toBottomOf="@id/videoBox">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
+
+            <TextView
+                android:id="@+id/osdName"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:ellipsize="end"
+                android:maxLines="1"
+                android:textColor="@color/text_primary"
+                android:textSize="19sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/osdEngine"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="8dp"
+                android:textColor="@color/accent"
+                android:textSize="12sp" />
+        </LinearLayout>
+
+        <TextView
+            android:id="@+id/osdNow"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:ellipsize="end"
+            android:maxLines="2"
+            android:textColor="@color/text_secondary"
+            android:textSize="13sp" />
+
+        <TextView
+            android:id="@+id/osdHint"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="10dp"
+            android:lineSpacingExtra="3dp"
+            android:text="单击显示/隐藏信息 · 双击暂停\n上下滑换台 · 左半屏滑音量 · 右半屏滑亮度"
+            android:textColor="#66FFFFFF"
+            android:textSize="11sp" />
+    </LinearLayout>
+
+    <!-- 操作栏：贴着信息区下方 -->
+    <LinearLayout
+        android:id="@+id/actionBar"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:background="@color/bg_panel"
+        android:orientation="horizontal"
+        android:paddingHorizontal="8dp"
+        android:paddingVertical="8dp"
+        android:visibility="gone"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toBottomOf="@id/osd">
+
+        <TextView
+            android:id="@+id/btnPrev"
+            style="@style/PhoneTab"
+            android:text="上一台" />
+
+        <TextView
+            android:id="@+id/btnList"
+            style="@style/PhoneTab"
+            android:text="频道" />
+
+        <TextView
+            android:id="@+id/btnLines"
+            style="@style/PhoneTab"
+            android:text="线路" />
+
+        <TextView
+            android:id="@+id/btnNext"
+            style="@style/PhoneTab"
+            android:text="下一台" />
+    </LinearLayout>
+
+    <!--
+      注意：这里刻意没有放"点画面显示信息"的提示条。
+      osd 的显隐由 Activity 控制，布局里加一条常驻提示会一直挂着，看着像 bug。
+    -->
+
+</androidx.constraintlayout.widget.ConstraintLayout>

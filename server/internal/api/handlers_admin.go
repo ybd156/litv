@@ -407,11 +407,12 @@ func allExternal(items []parse.Item) bool {
 
 func (a *API) listChannels(w http.ResponseWriter, r *http.Request) {
 	q := store.ChannelQuery{
-		Group:   r.URL.Query().Get("group"),
-		Keyword: r.URL.Query().Get("q"),
-		Enabled: queryBool(r, "enabled"),
-		Offset:  queryInt(r, "offset", 0),
-		Limit:   queryInt(r, "limit", 50),
+		Group:    r.URL.Query().Get("group"),
+		Keyword:  r.URL.Query().Get("q"),
+		Enabled:  queryBool(r, "enabled"),
+		SourceID: int64(queryInt(r, "source_id", 0)),
+		Offset:   queryInt(r, "offset", 0),
+		Limit:    queryInt(r, "limit", 50),
 	}
 	items, total, err := a.st.ListChannels(r.Context(), q)
 	if err != nil {

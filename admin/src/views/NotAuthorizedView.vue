@@ -27,6 +27,7 @@ function reload(): void {
       <div class="actions">
         <NButton type="primary" @click="loadSession">我已经从桌面进来了，重试</NButton>
         <NButton quaternary @click="reload">刷新页面</NButton>
+        <NButton quaternary tag="a" href="#/login">用密码登录（应急）</NButton>
       </div>
 
       <p v-if="mockEnabled()" class="mock-tip">

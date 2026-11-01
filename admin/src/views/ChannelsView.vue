@@ -5,6 +5,7 @@ import {
   NCheckbox,
   NCheckboxGroup,
   NDataTable,
+  NDropdown,
   NInput,
   NModal,
   NPopover,
@@ -23,6 +24,7 @@ import ChannelStreamsPanel from '@/components/ChannelStreamsPanel.vue'
 import Icon from '@/components/Icon.vue'
 import { useDragSort } from '@/composables/useDragSort'
 import * as channelsApi from '@/api/modules/channels'
+import * as sourcesApi from '@/api/modules/sources'
 import type { Channel, GroupStat } from '@/api/types'
 import { toErrorMessage } from '@/api/errors'
 import { confirmAction, toast } from '@/utils/feedback'
@@ -37,6 +39,11 @@ const loaded = ref(false)
 const group = ref('')
 const keyword = ref('')
 const page = ref(1)
+// 按源筛选：sourceFilter 为 null 表示全部来源
+const sources = ref<Array<{ id: number; name: string }>>([])
+const sourceFilter = ref<number | null>(null)
+const sourceNameOf = (id?: number): string =>
+  sources.value.find((s) => s.id === id)?.name ?? (id ? `源 #${id}` : '—')
 const pageSize = ref(20)
 const checkedKeys = ref<DataTableRowKey[]>([])
 
@@ -46,12 +53,13 @@ const editing = ref<Channel | null>(null)
 const batchGroupShow = ref(false)
 const batchGroupValue = ref('')
 
-const ALL_COLUMN_KEYS = ['logo', 'number', 'name', 'group', 'streams', 'epg', 'status'] as const
+const ALL_COLUMN_KEYS = ['logo', 'number', 'name', 'group', 'source', 'streams', 'epg', 'status'] as const
 const COLUMN_LABELS: Record<string, string> = {
   logo: '台标',
   number: '频道号',
   name: '名称',
   group: '分组',
+  source: '来源',
   streams: '线路数',
   epg: 'EPG',
   status: '状态',
@@ -71,6 +79,16 @@ async function loadGroups(): Promise<void> {
   }
 }
 
+/** 拉源列表：按源筛选和「来源」列都要用 */
+async function loadSources(): Promise<void> {
+  try {
+    const list = await sourcesApi.listSources()
+    sources.value = list.map((s) => ({ id: s.id, name: s.name || `源 #${s.id}` }))
+  } catch {
+    sources.value = []
+  }
+}
+
 async function loadChannels(silent = false): Promise<void> {
   loading.value = true
   if (!silent) error.value = ''
@@ -78,6 +96,7 @@ async function loadChannels(silent = false): Promise<void> {
     const res = await channelsApi.listChannels({
       group: group.value || undefined,
       q: keyword.value.trim() || undefined,
+      sourceId: sourceFilter.value ?? undefined,
       page: page.value,
       size: pageSize.value,
     })
@@ -228,11 +247,69 @@ function markRowChanged(): void {
 }
 
 // ---------- 列 ----------
+/**
+ * 台标格子：点一下出菜单，可以「抓取到本地 / 上传 / 清除」。
+ *
+ * 为什么要有"抓取到本地"：源里的 tvg-logo 大多是外链，挂了或防盗链时
+ * 电视上就是一片空白。抓到本地之后统一由服务端 /logo/{id} 出图，
+ * 所有终端都稳定。
+ */
 function logoCell(row: Channel) {
-  if (row.logo) {
-    return h('img', { src: row.logo, class: 'logo-thumb', alt: row.name, loading: 'lazy' })
+  const inner = row.logo
+    ? h('img', { src: row.logo, class: 'logo-thumb', alt: row.name, loading: 'lazy' })
+    : h('span', { class: 'logo-fallback' }, row.name.slice(0, 2))
+
+  const isLocal = (row.logo ?? '').startsWith('/logo/')
+  const options = [
+    { label: isLocal ? '重新抓取外链' : '抓取外链到本地', key: 'fetch' },
+    { label: '上传图片…', key: 'upload' },
+    { label: '清除台标', key: 'clear' },
+  ]
+  return h(
+    NDropdown,
+    { options, trigger: 'click', onSelect: (k: string) => void handleLogoAction(row, k) },
+    { default: () => inner },
+  )
+}
+
+async function handleLogoAction(row: Channel, key: string): Promise<void> {
+  if (key === 'fetch') {
+    try {
+      await channelsApi.fetchLogo(row.id)
+      toast.success('台标已抓到本地')
+      await loadChannels(true)
+    } catch (e) {
+      toast.error(toErrorMessage(e))
+    }
+    return
   }
-  return h('span', { class: 'logo-fallback' }, row.name.slice(0, 2))
+  if (key === 'clear') {
+    try {
+      await channelsApi.deleteLogo(row.id)
+      toast.success('已清除')
+      await loadChannels(true)
+    } catch (e) {
+      toast.error(toErrorMessage(e))
+    }
+    return
+  }
+  if (key === 'upload') {
+    const input = document.createElement('input')
+    input.type = 'file'
+    input.accept = 'image/png,image/jpeg,image/webp,image/gif,image/bmp'
+    input.onchange = async () => {
+      const f = input.files?.[0]
+      if (!f) return
+      try {
+        await channelsApi.uploadLogoFile(row.id, f)
+        toast.success('台标已更新')
+        await loadChannels(true)
+      } catch (e) {
+        toast.error(toErrorMessage(e))
+      }
+    }
+    input.click()
+  }
 }
 
 const allColumns = computed<Record<string, DataTableColumns<Channel>[number]>>(() => ({
@@ -265,6 +342,18 @@ const allColumns = computed<Record<string, DataTableColumns<Channel>[number]>>((
     width: 100,
     render: (row) =>
       h(NTag, { size: 'small', bordered: false }, { default: () => row.group || '未分组' }),
+  },
+  source: {
+    title: '来源',
+    key: 'source_id',
+    width: 130,
+    ellipsis: { tooltip: true },
+    render: (row) =>
+      h(
+        'span',
+        { class: 'muted' },
+        sourceNameOf((row as unknown as { source_id?: number }).source_id),
+      ),
   },
   streams: {
     title: '线路',
@@ -396,7 +485,12 @@ const pagination = computed(() => ({
 }))
 
 onMounted(async () => {
-  await Promise.all([loadGroups(), loadChannels()])
+  await Promise.all([loadGroups(), loadSources(), loadChannels()])
+})
+
+watch(sourceFilter, () => {
+  page.value = 1
+  void loadChannels()
 })
 </script>
 
@@ -449,6 +543,16 @@ onMounted(async () => {
           >
             <template #prefix><Icon name="search" :size="15" /></template>
           </NInput>
+
+          <!-- 按源筛选：源一多，混在一起就分不清哪个台来自哪个源 -->
+          <NSelect
+            v-model:value="sourceFilter"
+            size="small"
+            clearable
+            placeholder="全部来源"
+            style="width: 170px"
+            :options="sources.map((s) => ({ label: s.name, value: s.id }))"
+          />
 
           <NPopover trigger="click" placement="bottom-start" style="max-width: 240px">
             <template #trigger>

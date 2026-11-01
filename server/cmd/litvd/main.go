@@ -26,6 +26,7 @@ import (
 	"github.com/litv/litv/server/internal/api"
 	"github.com/litv/litv/server/internal/config"
 	"github.com/litv/litv/server/internal/dlna"
+	"github.com/litv/litv/server/internal/logo"
 	"github.com/litv/litv/server/internal/probe"
 	"github.com/litv/litv/server/internal/record"
 	"github.com/litv/litv/server/internal/remux"
@@ -128,6 +129,10 @@ func main() {
 				"解决", "安装 ffmpeg 后在「应用设置」里填绝对路径，或放到 litvd 同目录")
 		}
 	}
+
+	// 台标存储：下载到本地，统一由 /logo/{id} 出图，
+	// 免得每个终端都去拉外链（外链经常挂/防盗链）
+	a.SetLogoStore(logo.New(filepath.Join(cfg.Stream.CacheDir, "logos")))
 
 	// DLNA 的创建要放在 rootHandler 之前：
 	// rootHandler 在服务器构造时就把路由建好了，之后再 SetDLNA 是挂不上去的
@@ -359,6 +364,10 @@ func isAPIPath(p string) bool {
 	}
 	// DLNA 的 desc.xml / cds/control 等
 	if len(p) >= 6 && p[:6] == "/dlna/" {
+		return true
+	}
+	// 台标出图
+	if len(p) >= 6 && p[:6] == "/logo/" {
 		return true
 	}
 	return false

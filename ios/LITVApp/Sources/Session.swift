@@ -10,6 +10,11 @@ final class Session: ObservableObject {
     // 绑定相关
     @Published var serverBase: String = UserDefaults.standard.string(forKey: "server") ?? ""
     @Published var token: String = UserDefaults.standard.string(forKey: "token") ?? ""
+    /// 是否已被管理员批准。
+    ///
+    /// 不能用 `token.isEmpty` 当"已登录"：设备注册后服务端立刻返回 token，
+    /// 但状态还是 pending，拿它调接口一律 2003。
+    @Published var isBound: Bool = UserDefaults.standard.bool(forKey: "isBound")
     @Published var deviceName: String = UserDefaults.standard.string(forKey: "deviceName") ?? ""
 
     // 数据
@@ -62,8 +67,12 @@ final class Session: ObservableObject {
                                            code: code)
             token = r.token
             UserDefaults.standard.set(r.token, forKey: "token")
+            // 只有 bound 才算真的进去了；pending 时 token 存着用于轮询，
+            // 但不能让界面以为已登录（否则没批准也能进首页）。
+            isBound = (r.status == "bound")
+            UserDefaults.standard.set(isBound, forKey: "isBound")
             statusText = r.hint
-            return r.status == "bound"
+            return isBound
         } catch {
             errorText = error.localizedDescription
             return false
@@ -75,6 +84,8 @@ final class Session: ObservableObject {
         for _ in 0..<60 {
             try? await Task.sleep(nanoseconds: 3_000_000_000)
             if (try? await api.bootstrap()) != nil {
+                isBound = true
+                UserDefaults.standard.set(true, forKey: "isBound")
                 await bootstrap()
                 return
             }
@@ -119,7 +130,9 @@ final class Session: ObservableObject {
 
     func unbind() {
         token = ""
+        isBound = false
         UserDefaults.standard.removeObject(forKey: "token")
+        UserDefaults.standard.set(false, forKey: "isBound")
         channels = []
         favorites = []
     }

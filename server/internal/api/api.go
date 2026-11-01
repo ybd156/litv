@@ -27,6 +27,7 @@ import (
 	"github.com/litv/litv/server/internal/auth"
 	"github.com/litv/litv/server/internal/config"
 	"github.com/litv/litv/server/internal/dlna"
+	"github.com/litv/litv/server/internal/logo"
 	"github.com/litv/litv/server/internal/record"
 	"github.com/litv/litv/server/internal/remote"
 	"github.com/litv/litv/server/internal/remux"
@@ -46,6 +47,7 @@ type API struct {
 	rec     *record.Manager
 	alert   *alert.Notifier
 	dlna    *dlna.Server
+	logos   *logo.Store
 	signer  *auth.Signer
 
 	// 运行时事实（由 main 注入）
@@ -82,6 +84,9 @@ func (a *API) SetAlert(n *alert.Notifier) { a.alert = n }
 
 // SetDLNA 注入 DLNA 服务（同时把路由挂到 /dlna/*）。
 func (a *API) SetDLNA(s *dlna.Server) { a.dlna = s }
+
+// SetLogoStore 注入台标存储（同时启用 /logo/{id} 出图）。
+func (a *API) SetLogoStore(s *logo.Store) { a.logos = s }
 
 // SetRuntime 注入运行时事实：实际监听端口、解析到的 ffmpeg 路径。
 //
@@ -192,6 +197,10 @@ func (a *API) Handler(viaGateway bool) http.Handler {
 		pr.Post("/api/v1/devices/{id}/reject", a.rejectDevice)
 		pr.Delete("/api/v1/devices/{id}", a.revokeDevice)
 		pr.Put("/api/v1/devices/{id}/config", a.setDeviceConfig)
+
+		// 台标管理：抓外链入库 / 上传自己的图 / 清除
+		pr.Post("/api/v1/channels/{id}/logo", a.uploadLogo)
+		pr.Delete("/api/v1/channels/{id}/logo", a.deleteLogo)
 	})
 
 	// ---- 终端（需 device token） ----
@@ -226,6 +235,9 @@ func (a *API) Handler(viaGateway bool) http.Handler {
 	r.Get("/live/{id}/remux.m3u8", a.liveRemuxPlaylist)
 	r.Get("/live/{id}/remux/{seg}", a.liveRemuxSegment)
 	r.Get("/live/{id}/seg", a.liveSegment)
+
+	// 台标出图：公开访问，终端/浏览器/DLNA 都要能直接拉
+	r.Get("/logo/{id}", a.serveLogo)
 
 	// ---- DLNA（局域网设备发现与浏览，不需要我们的 App）----
 	//
@@ -279,6 +291,16 @@ func (a *API) identityMiddleware(viaGateway bool) func(http.Handler) http.Handle
 				if d, err := a.st.GetDeviceByToken(ctx, auth.HashToken(tok)); err == nil && d != nil {
 					ctx = context.WithValue(ctx, ctxDevice, d)
 					_ = a.st.TouchDevice(ctx, d.ID)
+					// 应急登录（网关不可用时用密码登录）发的 token 存在 device 表里，
+					// platform=admin。这种 token 等价于管理员身份，否则登录了也进不去。
+					if d.Platform == "admin" {
+						ctx = context.WithValue(ctx, ctxIdentity, auth.Identity{
+							UserID:     d.DeviceKey,
+							Username:   d.Name,
+							IsAdmin:    true,
+							ViaGateway: false,
+						})
+					}
 				}
 			}
 

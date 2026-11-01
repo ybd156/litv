@@ -60,6 +60,26 @@ function notifyError(msg: string): void {
   if (errorNotifier) errorNotifier(msg)
 }
 
+/** 应急登录的 token 存 localStorage（正常从飞牛桌面进来不需要） */
+const TOKEN_KEY = 'litv_admin_token'
+
+export function adminToken(): string {
+  try {
+    return localStorage.getItem(TOKEN_KEY) ?? ''
+  } catch {
+    return ''
+  }
+}
+
+export function setAdminToken(tk: string): void {
+  try {
+    if (tk) localStorage.setItem(TOKEN_KEY, tk)
+    else localStorage.removeItem(TOKEN_KEY)
+  } catch {
+    /* 隐私模式下 localStorage 可能不可用，忽略 */
+  }
+}
+
 function fail(err: ApiError, silent = false): ApiError {
   if (err.isUnauthorized) unauthorizedHandler?.()
   else if (!silent) notifyError(err.message)
@@ -89,6 +109,10 @@ export async function request<T>(path: string, opts: RequestOptions = {}): Promi
     credentials: 'same-origin',
     headers: { Accept: 'application/json' },
   }
+  // 应急登录拿到的 token（网关不可用时用密码登录）。
+  // 正常从飞牛桌面进来没有这个，身份由网关注入。
+  const tk = adminToken()
+  if (tk) (init.headers as Record<string, string>).Authorization = `Bearer ${tk}`
   if (opts.body !== undefined) {
     init.headers = { ...(init.headers as Record<string, string>), 'Content-Type': 'application/json' }
     init.body = JSON.stringify(opts.body)

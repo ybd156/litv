@@ -104,6 +104,7 @@ class PhonePlayerActivity : AppCompatActivity(), PlayerManager.Callback {
 
         loadChannels()
         setupGestures()
+        setupVideoBox()
 
         findViewById<TextView>(R.id.btnPrev).setOnClickListener { switchBy(-1) }
         findViewById<TextView>(R.id.btnNext).setOnClickListener { switchBy(+1) }
@@ -208,6 +209,7 @@ class PhonePlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         val now = System.currentTimeMillis() / 1000
         val cur = programs.firstOrNull { it.startAt <= now && it.endAt > now }
         osdNow.text = cur?.title ?: getString(R.string.no_epg)
+        renderEpg()
     }
 
     private fun switchBy(delta: Int) {
@@ -237,12 +239,72 @@ class PhonePlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         }, onErr = { tip("获取线路失败：$it") })
     }
 
+    /** dp → px。节目单那些 View 是代码里动态建的，只能手动换算。 */
+    private fun dp(v: Int): Int = (v * resources.displayMetrics.density).toInt()
+
+    /**
+     * 竖屏下名称栏和菜单栏是**常驻**的，不做自动隐藏。
+     *
+     * 横屏那份布局是沉浸式全屏，OSD 会 4 秒后自动收；
+     * 竖屏这份把标题和菜单放在视频外面，收起来反而让版面跳。
+     */
     private fun setOsd(show: Boolean) {
         osdVisible = show
+        val portrait = resources.configuration.orientation ==
+            android.content.res.Configuration.ORIENTATION_PORTRAIT
+        if (portrait) {
+            // 竖屏：名称栏和菜单栏在视频外面，常驻，收起反而让版面跳
+            osd.visibility = View.VISIBLE
+            actionBar.visibility = View.VISIBLE
+            return
+        }
+        // 横屏：沉浸式全屏，OSD 4 秒后自动收
         osd.visibility = if (show) View.VISIBLE else View.GONE
         actionBar.visibility = if (show) View.VISIBLE else View.GONE
         main.removeCallbacks(hideOsd)
         if (show) main.postDelayed(hideOsd, 4000)
+    }
+
+    /** 视频框按 16:9 固定高度：竖屏铺满全高会把画面压成中间一条。 */
+    private fun setupVideoBox() {
+        val box = findViewById<View>(R.id.videoBox)
+        box.post {
+            val w = box.width
+            if (w <= 0) return@post
+            val h = w * 9 / 16
+            box.layoutParams = box.layoutParams.apply { height = h }
+        }
+    }
+
+    /** 节目单：当前节目高亮，其余灰。 */
+    private fun renderEpg() {
+        val list = findViewById<android.widget.LinearLayout>(R.id.epgList)
+        list.removeAllViews()
+        if (programs.isEmpty()) {
+            val tv = TextView(this)
+            tv.text = getString(R.string.no_epg)
+            tv.setTextColor(getColor(R.color.text_secondary))
+            tv.textSize = 13f
+            tv.setPadding(0, dp(10), 0, dp(10))
+            list.addView(tv)
+            return
+        }
+        val now = System.currentTimeMillis() / 1000
+        val fmt = java.text.SimpleDateFormat("HH:mm", java.util.Locale.getDefault())
+        programs.forEach { p ->
+            val row = TextView(this)
+            val playing = p.startAt <= now && p.endAt > now
+            val time = "${fmt.format(java.util.Date(p.startAt * 1000))}  "
+            row.text = time + p.title
+            row.textSize = 14f
+            row.setPadding(dp(10), dp(10), dp(10), dp(10))
+            row.setTextColor(getColor(if (playing) R.color.accent else R.color.text_secondary))
+            if (playing) {
+                row.setTypeface(null, android.graphics.Typeface.BOLD)
+                row.background = getDrawable(R.drawable.bg_card)
+            }
+            list.addView(row)
+        }
     }
 
     override fun onEngineChanged(kind: EngineKind) {

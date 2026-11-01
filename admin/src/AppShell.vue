@@ -1,10 +1,13 @@
 <script setup lang="ts">
 import { NButton, NSpin } from 'naive-ui'
 import { onMounted } from 'vue'
+import { useRoute } from 'vue-router'
 import AdminLayout from '@/layouts/AdminLayout.vue'
 import NotAuthorizedView from '@/views/NotAuthorizedView.vue'
 import { loadSession, markUnauthenticated, session } from '@/session'
 import { setUnauthorizedHandler } from '@/api/http'
+
+const route = useRoute()
 
 onMounted(() => {
   setUnauthorizedHandler(markUnauthenticated)
@@ -13,7 +16,10 @@ onMounted(() => {
 </script>
 
 <template>
-  <div v-if="session.state === 'loading'" class="splash">
+  <!-- 登录页是独立整页，不套侧边栏 -->
+  <RouterView v-if="route.meta.bare" />
+
+  <div v-else-if="session.state === 'loading'" class="splash">
     <div class="mark">LITV</div>
     <NSpin size="large" />
     <p class="tip">正在确认你的身份…</p>

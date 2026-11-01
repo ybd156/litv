@@ -1,6 +1,15 @@
 export * from './types'
 export * from './errors'
-export { http, request, apiUrl, API_PREFIX, setApiErrorNotifier, setUnauthorizedHandler } from './http'
+export {
+  http,
+  request,
+  apiUrl,
+  API_PREFIX,
+  setApiErrorNotifier,
+  setUnauthorizedHandler,
+  adminToken,
+  setAdminToken,
+} from './http'
 export { mockEnabled } from './mock'
 export * as systemApi from './modules/system'
 export * as sourcesApi from './modules/sources'

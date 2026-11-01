@@ -113,11 +113,13 @@ func (s *Store) MarkSourceFetched(ctx context.Context, id int64, count int, errM
 
 // ChannelQuery 是频道列表查询条件。
 type ChannelQuery struct {
-	Group   string
-	Keyword string
-	Enabled *bool
-	Offset  int
-	Limit   int
+	Group    string
+	Keyword  string
+	Enabled  *bool
+	// SourceID > 0 时只看这个源导入的频道（管理台「按源分组」用）
+	SourceID int64
+	Offset   int
+	Limit    int
 }
 
 // ListChannels 分页查询频道。
@@ -135,6 +137,10 @@ func (s *Store) ListChannels(ctx context.Context, q ChannelQuery) ([]Channel, in
 	if q.Enabled != nil {
 		where = append(where, "enabled = ?")
 		args = append(args, boolInt(*q.Enabled))
+	}
+	if q.SourceID > 0 {
+		where = append(where, "source_id = ?")
+		args = append(args, q.SourceID)
 	}
 	clause := ""
 	if len(where) > 0 {

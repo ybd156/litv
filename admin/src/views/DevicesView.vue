@@ -137,7 +137,12 @@ const columns: DataTableColumns<Device> = [
         null,
         {
           trigger: () =>
-            h('span', { class: row.last_heartbeat_at ? '' : 'muted' }, timeAgo(row.last_heartbeat_at)),
+            h(
+              'span',
+              { class: row.last_heartbeat_at ? '' : 'muted' },
+              // 心跳为 0 时不能拿去算相对时间——会算成「57 年前」（1970 年）
+              row.last_heartbeat_at ? timeAgo(row.last_heartbeat_at) : '从未',
+            ),
           default: () => (row.last_heartbeat_at ? fmtDateTime(row.last_heartbeat_at) : '还没上报过心跳'),
         },
       ),

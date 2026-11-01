@@ -13,6 +13,8 @@ import type {
 export interface ChannelQuery {
   group?: string
   q?: string
+  /** 只看某个源导入的频道（按源分组用） */
+  sourceId?: number
   page?: number
   size?: number
 }
@@ -21,6 +23,7 @@ export async function listChannels(query: ChannelQuery = {}): Promise<ChannelPag
   const raw = await http.get<unknown>('channels', {
     group: query.group,
     q: query.q,
+    source_id: query.sourceId,
     page: query.page ?? 1,
     size: query.size ?? 20,
   })
@@ -75,4 +78,34 @@ export function addStream(channelId: number, input: StreamInput): Promise<Channe
 
 export function deleteStream(channelId: number, streamId: number): Promise<unknown> {
   return http.del<unknown>(`channels/${channelId}/streams/${streamId}`)
+}
+
+/**
+ * 设置台标。
+ *
+ * 不传 url 就抓频道当前那个外链；传了就用指定的。
+ * 服务端把图下载到本地，并把频道 logo 改写成 /logo/{id}——
+ * 之后所有终端都从服务端取图，不用再去连不稳定的外链。
+ */
+export function fetchLogo(channelId: number, url?: string): Promise<{ logo: string }> {
+  return http.post<{ logo: string }>(`channels/${channelId}/logo`, url ? { url } : {})
+}
+
+/** 直接上传自己的图片（multipart）。 */
+export async function uploadLogoFile(channelId: number, file: File): Promise<{ logo: string }> {
+  const fd = new FormData()
+  fd.append('file', file)
+  const res = await fetch(`api/v1/channels/${channelId}/logo`, {
+    method: 'POST',
+    credentials: 'same-origin',
+    body: fd,
+  })
+  const json = (await res.json()) as { code?: number; msg?: string; data?: { logo: string } }
+  if (json.code !== 0 || !json.data) throw new Error(json.msg ?? '上传失败')
+  return json.data
+}
+
+/** 清掉本地台标。 */
+export function deleteLogo(channelId: number): Promise<unknown> {
+  return http.del<unknown>(`channels/${channelId}/logo`)
 }

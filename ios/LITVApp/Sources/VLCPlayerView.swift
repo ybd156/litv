@@ -31,13 +31,13 @@ struct VLCPlayerView: UIViewRepresentable {
 
         let media = VLCMedia(url: url)
         // 直播低延迟参数：不丢帧、网络缓冲给足
-        media.addOptions([
-            "--no-drop-late-frames",
-            "--no-skip-frames",
-            "--network-caching=1500",
-            "--live-caching=1500",
-            "--avcodec-hw=any",
-        ])
+        // 注意：VLCKit 3.5 的 addOptions 收的是 NSDictionary，
+        // 逐个用 addOption(_:) 更稳妥（不同版本签名不一样）。
+        media.addOption("--no-drop-late-frames")
+        media.addOption("--no-skip-frames")
+        media.addOption("--network-caching=1500")
+        media.addOption("--live-caching=1500")
+        media.addOption("--avcodec-hw=any")
         player.media = media
 
         context.coordinator.player = player

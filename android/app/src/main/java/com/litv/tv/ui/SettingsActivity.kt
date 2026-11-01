@@ -29,6 +29,7 @@ class SettingsActivity : AppCompatActivity() {
     private lateinit var valueReverse: TextView
     private lateinit var valueAutoPlay: TextView
     private lateinit var valueNumberTimeout: TextView
+    private lateinit var valueUiMode: TextView
     private lateinit var valueDevice: TextView
     private lateinit var valueServer: TextView
     private lateinit var status: TextView
@@ -51,6 +52,7 @@ class SettingsActivity : AppCompatActivity() {
         valueReverse = findViewById(R.id.valueReverse)
         valueAutoPlay = findViewById(R.id.valueAutoPlay)
         valueNumberTimeout = findViewById(R.id.valueNumberTimeout)
+        valueUiMode = findViewById(R.id.valueUiMode)
         valueDevice = findViewById(R.id.valueDevice)
         valueServer = findViewById(R.id.valueServer)
         status = findViewById(R.id.status)
@@ -80,6 +82,12 @@ class SettingsActivity : AppCompatActivity() {
         bindCycle(R.id.rowNumberTimeout, valueNumberTimeout,
             numTimeouts.map { it.toString() }, app.prefs.numberJumpTimeoutMs.toString()) { v ->
             app.prefs.numberJumpTimeoutMs = v.toInt(); labelNumTimeout(v.toInt())
+        }
+
+        bindCycle(R.id.rowUiMode, valueUiMode, listOf("auto", "tv", "phone"),
+            app.prefs.uiMode) { v ->
+            app.prefs.uiMode = v
+            labelUiMode(v)
         }
 
         // 设备信息（只读）
@@ -148,6 +156,7 @@ class SettingsActivity : AppCompatActivity() {
         labelNumTimeout(app.prefs.numberJumpTimeoutMs)
         // 新加的行也要在这里给初值，否则第一次进设置页是空白的
         valueAutoPlay.text = if (app.prefs.autoPlayLast) "开（打开就看）" else "关（先进列表）"
+        labelUiMode(app.prefs.uiMode)
     }
 
     private fun labelEngine(v: String) {
@@ -200,5 +209,13 @@ class SettingsActivity : AppCompatActivity() {
             }
             .setNegativeButton("取消", null)
             .show()
+    }
+
+    private fun labelUiMode(v: String) {
+        valueUiMode.text = when (v) {
+            "tv" -> "电视"
+            "phone" -> "手机"
+            else -> "自动"
+        }
     }
 }

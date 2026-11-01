@@ -43,6 +43,7 @@ Thumbs.db
 tmp/
 temp/
 *.tmp
+.review-artifacts/
 
 # Third-party reference code used only for local research
 ref/

@@ -127,6 +127,19 @@
                 style="@style/SettingValue" />
         </LinearLayout>
 
+        <LinearLayout
+            android:id="@+id/rowUiMode"
+            style="@style/SettingRow">
+
+            <TextView
+                style="@style/SettingLabel"
+                android:text="数字跳台等待" />
+
+            <TextView
+                android:id="@+id/valueUiMode"
+                style="@style/SettingValue" />
+        </LinearLayout>
+
         <!-- ============ 设备 ============ -->
         <TextView
             style="@style/SectionTitle"

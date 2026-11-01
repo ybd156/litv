@@ -23,13 +23,14 @@ object DeviceType {
         val hasTouch = pm.hasSystemFeature(PackageManager.FEATURE_TOUCHSCREEN)
         val hasLeanback = pm.hasSystemFeature(PackageManager.FEATURE_LEANBACK)
 
-        // 0) 有触摸屏 + 屏幕窄 → 一定是手机，别管 leanback / uiMode 怎么说。
+        // 0) 有触摸屏 + 屏幕窄 + **不是 leanback 设备** → 一定是手机。
         //
-        //    这条放在最前面是有原因的：部分国产手机/平板会同时上报
-        //    FEATURE_LEANBACK，甚至 UiModeManager 报 TELEVISION，
-        //    结果被误判成电视、进了横屏网格 UI。屏幕宽度是最难造假的信号。
+        //    为什么要加 !hasLeanback 这个条件：部分电视盒子（小米电视棒之类）
+        //    会同时上报 FEATURE_TOUCHSCREEN 和较窄的 smallestScreenWidthDp，
+        //    只看这两项会把电视误判成手机，跑出竖屏小窗的界面。
+        //    上报了 leanback 就说明它有电视桌面，按电视处理。
         val sw = context.resources.configuration.smallestScreenWidthDp
-        if (hasTouch && sw in 1..599) return false
+        if (hasTouch && sw in 1..599 && !hasLeanback) return false
 
         // 1) 明确的电视特征：有 leanback 且没有触摸屏
         if (hasLeanback && !hasTouch) return true

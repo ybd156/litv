@@ -17,14 +17,24 @@ class LauncherActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         val app = application as LitvApp
 
+        // 最可靠的信号：从电视桌面（leanback launcher）点进来的。
+        // 部分电视盒子会同时上报"有触摸屏 + 屏宽 < 600dp"，
+        // 光看设备特征会把电视误判成手机，跑出竖屏小窗的界面。
+        val fromLeanback = intent?.categories?.contains(
+            android.content.Intent.CATEGORY_LEANBACK_LAUNCHER
+        ) == true
+
         val isTV = when (app.prefs.uiMode) {
             "tv" -> true
             "phone" -> false
-            else -> DeviceType.isTV(this)
+            else -> fromLeanback || DeviceType.isTV(this)
         }
-        // 把判定依据打出来：用户反馈"手机上进了电视界面"时，
-        // 一眼就能看出是哪个信号判错了（leanback / uiMode / 屏幕宽度）。
-        android.util.Log.i("LITV", "界面模式=${app.prefs.uiMode} " + DeviceType.describe(this))
+        // 把判定依据打出来：用户反馈"电视上跑成了手机界面"时，
+        // 一眼就能看出是哪个信号判错了。
+        android.util.Log.i(
+            "LITV",
+            "界面模式=${app.prefs.uiMode} leanbackIntent=$fromLeanback " + DeviceType.describe(this)
+        )
 
         val target = when {
             app.prefs.token.isBlank() -> BindActivity::class.java

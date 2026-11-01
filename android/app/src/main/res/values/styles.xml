@@ -80,6 +80,19 @@
         <item name="android:textStyle">bold</item>
     </style>
 
+    <!-- 手机播放页控制按钮 -->
+    <style name="PhoneCtl">
+        <item name="android:layout_width">0dp</item>
+        <item name="android:layout_height">wrap_content</item>
+        <item name="android:layout_weight">1</item>
+        <item name="android:layout_marginHorizontal">3dp</item>
+        <item name="android:background">@drawable/bg_card</item>
+        <item name="android:gravity">center</item>
+        <item name="android:paddingVertical">11dp</item>
+        <item name="android:textColor">@color/text_primary</item>
+        <item name="android:textSize">17sp</item>
+    </style>
+
     <!-- 服务器地址分框：每段 IP / 端口一个小框 -->
     <style name="AddrBox">
         <item name="android:layout_width">0dp</item>

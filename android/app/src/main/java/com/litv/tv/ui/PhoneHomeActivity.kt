@@ -1,10 +1,18 @@
 package com.litv.tv.ui
 
 import android.content.Intent
+import android.content.pm.ActivityInfo
+import android.media.AudioManager
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.view.Gravity
+import android.view.SurfaceView
 import android.view.View
+import android.widget.EditText
+import android.widget.ImageView
 import android.widget.LinearLayout
+import android.widget.ProgressBar
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.ViewCompat
@@ -16,40 +24,63 @@ import com.litv.tv.LitvApp
 import com.litv.tv.R
 import com.litv.tv.data.Bootstrap
 import com.litv.tv.data.Channel
+import com.litv.tv.data.EpgProgram
+import com.litv.tv.player.EngineKind
+import com.litv.tv.player.PlayerManager
 
 /**
- * 手机端首页。
+ * 手机端主界面 —— 单页四 Tab，不开新页面。
  *
- * 与 TV 端的差别（不是简单换皮）：
- *  - 单列行式列表（拇指可及、点击热区大）
- *  - 顶部横向滚动的分组 chip（TV 上是用左右键切，手机上必须能直接点）
- *  - 收藏用右侧星标（TV 上是长按，手机上星标更直观）
- *  - 底部 Tab（手机有导航习惯，TV 没有）
+ *   播放   内嵌播放器 + 控制条 + 节目单
+ *   频道   搜索 + 分组 + 列表（点一下就地播放，切到播放页）
+ *   遥控器  跳 RemoteActivity（带同样的底部栏，像切页）
+ *   设置   跳 SettingsActivity（同上）
+ *
+ * 之前点频道是 startActivity 到 PhonePlayerActivity，用户看到的是"又开了一个页面"。
+ * 现在直接在播放页里播，切台也是原地换。
  */
-class PhoneHomeActivity : AppCompatActivity() {
+class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
 
     private lateinit var app: LitvApp
+
+    // 播放页
+    private lateinit var panelPlay: View
+    private lateinit var panelChannel: View
+    private lateinit var surface: SurfaceView
+    private lateinit var loading: ProgressBar
+    private lateinit var playName: TextView
+    private lateinit var playEngine: TextView
+    private lateinit var playNow: TextView
+    private lateinit var playHint: TextView
+    private lateinit var epgList: LinearLayout
+    private lateinit var gestureTip: TextView
+    private lateinit var btnPlayPause: TextView
+    private lateinit var btnMute: TextView
+
+    // 频道页
     private lateinit var list: RecyclerView
     private lateinit var status: TextView
     private lateinit var empty: TextView
     private lateinit var groupChips: LinearLayout
+    private lateinit var searchInput: EditText
     private lateinit var adapter: PhoneChannelAdapter
 
-    // 「正在热播」大卡片 + 搜索框
-    private lateinit var searchInput: android.widget.EditText
-    private lateinit var heroCard: LinearLayout
-    private lateinit var heroLogo: android.widget.ImageView
-    private lateinit var heroName: TextView
-    private lateinit var heroNow: TextView
-    private lateinit var heroPlay: TextView
+    private lateinit var player: PlayerManager
+    private val main = Handler(Looper.getMainLooper())
 
     private var all: List<Channel> = emptyList()
     private val favorites = mutableSetOf<Long>()
     private val nowTitles = mutableMapOf<Long, String>()
     private var groups: List<String> = emptyList()
-    private var selectedGroup: String? = null   // null = 全部
+    private var selectedGroup: String? = null
     private var onlyFav = false
     private var currentTab = TAB_PLAY
+
+    private var currentChannel: Channel? = null
+    private var programs: List<EpgProgram> = emptyList()
+    private var paused = false
+    private var muted = false
+    private var landscape = false
 
     private companion object {
         const val TAB_PLAY = "play"
@@ -66,18 +97,113 @@ class PhoneHomeActivity : AppCompatActivity() {
             startActivity(Intent(this, BindActivity::class.java)); finish(); return
         }
 
+        bindViews()
+        setupPlayer()
+        setupTabs()
+        setupControls()
+        setupList()
+        setupSearch()
+
+        switchTab(TAB_PLAY)
+        load()
+    }
+
+    private fun bindViews() {
+        panelPlay = findViewById(R.id.panelPlay)
+        panelChannel = findViewById(R.id.panelChannel)
+        surface = findViewById(R.id.surface)
+        loading = findViewById(R.id.loading)
+        playName = findViewById(R.id.playName)
+        playEngine = findViewById(R.id.playEngine)
+        playNow = findViewById(R.id.playNow)
+        playHint = findViewById(R.id.playHint)
+        epgList = findViewById(R.id.epgList)
+        gestureTip = findViewById(R.id.gestureTip)
+        btnPlayPause = findViewById(R.id.btnPlayPause)
+        btnMute = findViewById(R.id.btnMute)
+
         list = findViewById(R.id.list)
         status = findViewById(R.id.status)
         empty = findViewById(R.id.empty)
         groupChips = findViewById(R.id.groupChips)
-
         searchInput = findViewById(R.id.searchInput)
-        heroCard = findViewById(R.id.heroCard)
-        heroLogo = findViewById(R.id.heroLogo)
-        heroName = findViewById(R.id.heroName)
-        heroNow = findViewById(R.id.heroNow)
-        heroPlay = findViewById(R.id.heroPlay)
 
+        // 视频按 16:9 固定比例，竖屏铺满全高会把画面压成中间一条
+        val box = findViewById<View>(R.id.videoBox)
+        box.post {
+            if (box.width > 0) {
+                box.layoutParams = box.layoutParams.apply { height = box.width * 9 / 16 }
+            }
+        }
+    }
+
+    private fun setupPlayer() {
+        player = PlayerManager(this, app.prefs).also { it.callback = this }
+        player.attach(surface, findViewById(android.R.id.content))
+    }
+
+    private fun setupTabs() {
+        findViewById<TextView>(R.id.tabPlay).setOnClickListener { switchTab(TAB_PLAY) }
+        findViewById<TextView>(R.id.tabChannel).setOnClickListener { switchTab(TAB_CHANNEL) }
+        findViewById<TextView>(R.id.tabRemote).setOnClickListener {
+            startActivity(Intent(this, RemoteActivity::class.java))
+            overridePendingTransition(0, 0)
+        }
+        findViewById<TextView>(R.id.tabSettings).setOnClickListener {
+            startActivity(Intent(this, SettingsActivity::class.java))
+            overridePendingTransition(0, 0)
+        }
+    }
+
+    private fun setupControls() {
+        findViewById<TextView>(R.id.btnPrev).setOnClickListener { switchBy(-1) }
+        findViewById<TextView>(R.id.btnNext).setOnClickListener { switchBy(+1) }
+
+        btnPlayPause.setOnClickListener {
+            if (currentChannel == null) { switchTab(TAB_CHANNEL); return@setOnClickListener }
+            if (paused) {
+                player.resume(); paused = false; btnPlayPause.text = "⏸"
+            } else {
+                player.pause(); paused = true; btnPlayPause.text = "▶"
+            }
+        }
+
+        btnMute.setOnClickListener {
+            muted = !muted
+            player.setVolume(if (muted) 0f else 1f)
+            btnMute.text = if (muted) "🔇" else "🔊"
+        }
+
+        findViewById<TextView>(R.id.btnFullscreen).setOnClickListener { toggleOrientation() }
+
+        // 点画面：暂停/继续（和主流播放器一致）
+        surface.setOnClickListener { btnPlayPause.performClick() }
+    }
+
+    /** 全屏 = 切横屏；再点切回竖屏。 */
+    private fun toggleOrientation() {
+        landscape = !landscape
+        requestedOrientation = if (landscape) {
+            ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+        } else {
+            ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+        }
+    }
+
+    private fun setupList() {
+        adapter = PhoneChannelAdapter(
+            onClick = { ch ->
+                // 就地播放并切到播放页——不新开 Activity
+                switchTab(TAB_PLAY)
+                playChannel(ch)
+            },
+            onStarClick = { ch -> toggleFavorite(ch) },
+        )
+        list.layoutManager = LinearLayoutManager(this)
+        list.adapter = adapter
+    }
+
+    private fun setupSearch() {
         searchInput.addTextChangedListener(object : android.text.TextWatcher {
             override fun beforeTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
             override fun onTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
@@ -85,44 +211,23 @@ class PhoneHomeActivity : AppCompatActivity() {
                 if (::adapter.isInitialized) render()
             }
         })
-
-        adapter = PhoneChannelAdapter(
-            onClick = { ch -> openPlayer(ch) },
-            onStarClick = { ch -> toggleFavorite(ch) },
-        )
-        list.layoutManager = LinearLayoutManager(this)
-        list.adapter = adapter
-
-        findViewById<TextView>(R.id.tabPlay).setOnClickListener { switchTab(TAB_PLAY) }
-        findViewById<TextView>(R.id.tabChannel).setOnClickListener { switchTab(TAB_CHANNEL) }
-        findViewById<TextView>(R.id.tabRemote).setOnClickListener {
-            startActivity(Intent(this, RemoteActivity::class.java))
-        }
-        findViewById<TextView>(R.id.tabSettings).setOnClickListener {
-            startActivity(Intent(this, SettingsActivity::class.java))
-        }
-
-        // 默认落在「播放」页：手机竖屏第一屏最该看到的是"接着上次看"
-        switchTab(TAB_PLAY)
-        load()
     }
 
-    /**
-     * 切页。
-     *
-     * 播放页：突出「正在热播」大卡片，下面接收藏的台（没收藏就显示全部）。
-     * 频道页：搜索 + 分组 + 全量列表。
-     *
-     * 两个页共用同一个 RecyclerView，只是喂不同的数据和显隐，省一套列表。
-     */
     private fun switchTab(tab: String) {
         currentTab = tab
-        val isPlay = tab == TAB_PLAY
-        heroCard.visibility = if (isPlay && all.isNotEmpty()) View.VISIBLE else View.GONE
-        searchInput.visibility = if (isPlay) View.GONE else View.VISIBLE
-        findViewById<View>(R.id.groupBar).visibility = if (isPlay) View.GONE else View.VISIBLE
-        if (::adapter.isInitialized) render()
+        panelPlay.visibility = if (tab == TAB_PLAY) View.VISIBLE else View.GONE
+        panelChannel.visibility = if (tab == TAB_CHANNEL) View.VISIBLE else View.GONE
+        highlightTabs()
     }
+
+    private fun highlightTabs() {
+        val on = getColor(R.color.accent)
+        val off = getColor(R.color.text_secondary)
+        findViewById<TextView>(R.id.tabPlay).setTextColor(if (currentTab == TAB_PLAY) on else off)
+        findViewById<TextView>(R.id.tabChannel).setTextColor(if (currentTab == TAB_CHANNEL) on else off)
+    }
+
+    // ---------------------------------------------------------------- 数据
 
     private fun load() {
         val cached = app.prefs.cachedBootstrap
@@ -152,20 +257,22 @@ class PhoneHomeActivity : AppCompatActivity() {
         favorites.clear(); favorites.addAll(b.favorites)
         nowTitles.clear(); nowTitles.putAll(b.now.associate { it.channelId to it.title })
         groups = all.map { it.group }.filter { it.isNotBlank() }.distinct()
-        status.text = if (fromCache) "缓存" else "${all.size} 个频道"
+        status.text = if (fromCache) "缓存 ${all.size} 个频道" else "${all.size} 个频道"
         renderChips()
         render()
+
+        // 首次进来：自动播上次看的台，或第一个
+        if (currentChannel == null && all.isNotEmpty()) {
+            val last = all.firstOrNull { it.id == app.prefs.lastChannelId } ?: all.first()
+            playChannel(last)
+        }
     }
 
     private fun renderChips() {
         groupChips.removeAllViews()
         addChip("全部") { selectedGroup = null; onlyFav = false; render() }
-        if (favorites.isNotEmpty()) {
-            addChip("★ 收藏") { onlyFav = true; render() }
-        }
-        groups.forEach { g ->
-            addChip(g) { selectedGroup = g; onlyFav = false; render() }
-        }
+        if (favorites.isNotEmpty()) addChip("★ 收藏") { onlyFav = true; render() }
+        groups.forEach { g -> addChip(g) { selectedGroup = g; onlyFav = false; render() } }
     }
 
     private fun addChip(label: String, onClick: () -> Unit) {
@@ -184,21 +291,7 @@ class PhoneHomeActivity : AppCompatActivity() {
         groupChips.addView(tv)
     }
 
-    private fun dp(v: Int): Int = (v * resources.displayMetrics.density).toInt()
-
     private fun render() {
-        // 播放页：收藏优先；没收藏就显示全部，别让用户对着空白页
-        if (currentTab == TAB_PLAY) {
-            val favList = all.filter { favorites.contains(it.id) }
-            val data = if (favList.isNotEmpty()) favList else all
-            adapter.submit(data, nowTitles, favorites)
-            empty.visibility = if (data.isEmpty()) View.VISIBLE else View.GONE
-            list.visibility = if (data.isEmpty()) View.GONE else View.VISIBLE
-            renderHero()
-            return
-        }
-
-        // 频道页：搜索 + 分组过滤
         val kw = searchInput.text.toString().trim()
         val filtered = all.filter { ch ->
             val okFav = !onlyFav || favorites.contains(ch.id)
@@ -213,32 +306,6 @@ class PhoneHomeActivity : AppCompatActivity() {
         list.visibility = if (filtered.isEmpty()) View.GONE else View.VISIBLE
     }
 
-    /**
-     * 「正在热播」大卡片：优先上次看的台，没有就挑第一个有节目信息的。
-     *
-     * 手机竖屏第一屏只放得下两三行列表，用户最想干的是「接着上次那个台看」，
-     * 所以把它单独做成一张大卡片顶在最上面。
-     */
-    private fun renderHero() {
-        val last = all.firstOrNull { it.id == app.prefs.lastChannelId }
-        val hero = last
-            ?: all.firstOrNull { nowTitles[it.id].orEmpty().isNotBlank() }
-            ?: all.firstOrNull()
-        if (hero == null) {
-            heroCard.visibility = View.GONE
-            return
-        }
-        heroCard.visibility = View.VISIBLE
-        heroName.text = hero.name
-        val now = nowTitles[hero.id].orEmpty()
-        heroNow.text = if (now.isNotBlank()) "正在播：$now" else "点这里开始观看"
-        heroPlay.text = if (last != null) "▶ 继续" else "▶ 观看"
-
-        // 复用列表的台标缓存，别为一张图再开一套加载逻辑
-        adapter.loadLogo(heroLogo, hero.logo)
-        heroCard.setOnClickListener { openPlayer(hero) }
-    }
-
     private fun toggleFavorite(ch: Channel) {
         val on = !favorites.contains(ch.id)
         app.api.favorite(ch.id, on, onOk = {
@@ -248,13 +315,123 @@ class PhoneHomeActivity : AppCompatActivity() {
         }, onErr = { status.text = "收藏失败：$it" })
     }
 
-    /**
-     * 让内容避开状态栏和底部手势条。
-     *
-     * 布局里的 20dp 顶部内边距只是视觉留白，**不能代替系统栏避让**——
-     * 全面屏手机上状态栏会直接压在标题上，底部 Tab 会被手势条盖住一半。
-     * 这里把 systemBars 的 inset 加到根容器上，标题和 Tab 就都躲开了。
-     */
+    // ---------------------------------------------------------------- 播放
+
+    private fun playChannel(ch: Channel) {
+        currentChannel = ch
+        app.prefs.lastChannelId = ch.id
+        playName.text = ch.name
+        playHint.visibility = View.GONE
+        loading.visibility = View.VISIBLE
+        paused = false
+        btnPlayPause.text = "⏸"
+
+        app.api.play(
+            ch.id,
+            direct = app.prefs.directMode != "relay",
+            onOk = { info ->
+                // 源配置里带了 UA 就用它，否则用默认
+                val headers = mapOf("User-Agent" to info.ua.ifBlank { "LITV/1.0 (Android)" })
+                player.play(ch.id, app.api.absolute(info.url), headers, app.prefs.engine)
+                app.api.heartbeat(ch.id, "playing")
+            },
+            onErr = { msg ->
+                loading.visibility = View.GONE
+                playHint.visibility = View.VISIBLE
+                playHint.text = "播放失败：$msg"
+            })
+
+        app.api.epg(ch.id, 0, onOk = { p ->
+            programs = p
+            renderNow()
+        }, onErr = {})
+    }
+
+    private fun switchBy(delta: Int) {
+        if (all.isEmpty()) return
+        val cur = currentChannel ?: return
+        val i = all.indexOfFirst { it.id == cur.id }
+        if (i < 0) return
+        val n = ((i + delta) % all.size + all.size) % all.size
+        playChannel(all[n])
+    }
+
+    private fun renderNow() {
+        val now = System.currentTimeMillis() / 1000
+        val cur = programs.firstOrNull { it.startAt <= now && it.endAt > now }
+        playNow.text = cur?.let { "正在播：${it.title}" } ?: "暂无节目单"
+        renderEpg()
+    }
+
+    /** 节目单：当前节目高亮。 */
+    private fun renderEpg() {
+        epgList.removeAllViews()
+        if (programs.isEmpty()) {
+            val tv = TextView(this)
+            tv.text = getString(R.string.no_epg)
+            tv.setTextColor(getColor(R.color.text_secondary))
+            tv.textSize = 13f
+            tv.setPadding(0, dp(8), 0, dp(8))
+            epgList.addView(tv)
+            return
+        }
+        val now = System.currentTimeMillis() / 1000
+        val fmt = java.text.SimpleDateFormat("HH:mm", java.util.Locale.getDefault())
+        programs.forEach { p ->
+            val row = TextView(this)
+            val playing = p.startAt <= now && p.endAt > now
+            row.text = fmt.format(java.util.Date(p.startAt * 1000)) + "  " + p.title
+            row.textSize = 13f
+            row.setPadding(dp(10), dp(9), dp(10), dp(9))
+            row.setTextColor(getColor(if (playing) R.color.accent else R.color.text_secondary))
+            if (playing) row.setTypeface(null, android.graphics.Typeface.BOLD)
+            epgList.addView(row)
+        }
+    }
+
+    // ---------------------------------------------------------------- PlayerManager.Callback
+
+    override fun onEngineChanged(kind: EngineKind) {
+        playEngine.text = kind.label
+    }
+
+    override fun onPrepared(width: Int, height: Int) = Unit
+
+    override fun onPlaying() {
+        loading.visibility = View.GONE
+        playHint.visibility = View.GONE
+    }
+
+    override fun onError(message: String) {
+        loading.visibility = View.GONE
+        playHint.visibility = View.VISIBLE
+        playHint.text = message
+    }
+
+    override fun onVideoSizeChanged(width: Int, height: Int) = Unit
+
+    // ---------------------------------------------------------------- 生命周期
+
+    override fun onResume() {
+        super.onResume()
+        if (::adapter.isInitialized && all.isNotEmpty()) load()
+    }
+
+    override fun onPause() {
+        super.onPause()
+        player.pause()
+        paused = true
+        if (::btnPlayPause.isInitialized) btnPlayPause.text = "▶"
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        player.release()
+    }
+
+    private fun dp(v: Int): Int = (v * resources.displayMetrics.density).toInt()
+
+    /** 避开状态栏和底部手势条。 */
     private fun applySystemInsets() {
         val root = findViewById<View>(android.R.id.content)
         ViewCompat.setOnApplyWindowInsetsListener(root) { v, insets ->
@@ -262,16 +439,5 @@ class PhoneHomeActivity : AppCompatActivity() {
             v.setPadding(0, bars.top, 0, bars.bottom)
             insets
         }
-    }
-
-    private fun openPlayer(ch: Channel) {
-        app.prefs.lastChannelId = ch.id
-        startActivity(Intent(this, PhonePlayerActivity::class.java)
-            .putExtra(PhonePlayerActivity.EXTRA_CHANNEL_ID, ch.id))
-    }
-
-    override fun onResume() {
-        super.onResume()
-        if (::adapter.isInitialized && all.isNotEmpty()) load()
     }
 }

@@ -8,6 +8,28 @@ enum VLCPlaybackState {
     case failed(String)
 }
 
+/// 把 VLCMediaPlayer 的控制能力暴露给外面的控制条。
+///
+/// SwiftUI 的按钮拿不到 UIViewRepresentable 内部创建的播放器实例，
+/// 所以用一个共享的引用对象转一手。
+final class VLCControl: ObservableObject {
+    weak var player: AnyObject?
+
+    func togglePause() {
+        #if canImport(MobileVLCKit)
+        guard let p = player as? VLCMediaPlayer else { return }
+        if p.isPlaying { p.pause() } else { p.play() }
+        #endif
+    }
+
+    func setMuted(_ muted: Bool) {
+        #if canImport(MobileVLCKit)
+        guard let p = player as? VLCMediaPlayer else { return }
+        p.audio?.volume = muted ? 0 : 100
+        #endif
+    }
+}
+
 #if canImport(MobileVLCKit)
 import MobileVLCKit
 
@@ -22,6 +44,8 @@ struct VLCPlayerView: UIViewRepresentable {
     var autoplay: Bool = true
     /// 源配置里指定的 User-Agent（空 = 用 VLC 默认）
     var userAgent: String = ""
+    /// 控制条通过它拿到底层播放器
+    var control: VLCControl? = nil
     var onState: ((VLCPlaybackState) -> Void)?
 
     func makeUIView(context: Context) -> UIView {
@@ -48,6 +72,8 @@ struct VLCPlayerView: UIViewRepresentable {
 
         context.coordinator.player = player
         context.coordinator.onState = onState
+        // 控制条要能操作这个播放器
+        control?.player = player
 
         NotificationCenter.default.addObserver(
             context.coordinator,
@@ -104,6 +130,8 @@ struct VLCPlayerView: View {
     var autoplay: Bool = true
     /// 源配置里指定的 User-Agent（空 = 用 VLC 默认）
     var userAgent: String = ""
+    /// 控制条通过它拿到底层播放器
+    var control: VLCControl? = nil
     var onState: ((VLCPlaybackState) -> Void)?
 
     var body: some View {

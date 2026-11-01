@@ -25,13 +25,23 @@ struct PlayerView: View {
     @State private var streamId: Int64 = 0
     @State private var streams: [TvStream] = []
 
+    // 控制条状态
+    @State private var paused = false
+    @State private var muted = false
+    @StateObject private var vlc = VLCControl()
+    /// 换台用：切了台就换这个，nil 表示还是进来时那个
+    @State private var switched: Channel?
+
+    /// 当前实际在播的频道
+    private var active: Channel { switched ?? channel }
+
     var body: some View {
         ZStack {
             Color.black.ignoresSafeArea()
 
             // VLCKit 可用就用它（能解 AC3/裸 TS），否则退回 AVPlayer
             if usingVLC, let u = playURL {
-                VLCPlayerView(url: u, userAgent: playUA) { st in
+                VLCPlayerView(url: u, userAgent: playUA, control: vlc) { st in
                     switch st {
                     case .playing:
                         loading = false
@@ -68,11 +78,17 @@ struct PlayerView: View {
 
             VStack {
                 Spacer()
+                // 控制条贴着底部，OSD 信息在它上面
+                controls
                 osd
             }
         }
-        .navigationTitle(channel.name)
+        .navigationTitle(active.name)
         .navigationBarTitleDisplayMode(.inline)
+        .onChange(of: switched?.id) { _ in
+            // 换台：重新起播
+            Task { await start() }
+        }
         .toolbar {
             ToolbarItemGroup(placement: .navigationBarTrailing) {
                 Button {
@@ -95,9 +111,9 @@ struct PlayerView: View {
     private var osd: some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack {
-                Text(channel.name).font(.headline).foregroundColor(.white)
+                Text(active.name).font(.headline).foregroundColor(.white)
                 Spacer()
-                Text(channel.group).font(.caption).foregroundColor(.gray)
+                Text(active.group).font(.caption).foregroundColor(.gray)
             }
             if let now = programs.first(where: { $0.isNow }) {
                 Text("\(now.timeText) \(now.title)")
@@ -108,6 +124,63 @@ struct PlayerView: View {
         .background(.ultraThinMaterial)
         .cornerRadius(10)
         .padding(12)
+    }
+
+    /// 播放控制条：上一台 / 播放暂停 / 下一台 / 静音。
+    ///
+    /// 之前只有 OSD 显示信息，没有任何操作控件——用户只能靠手势，
+    /// 而且不知道能干什么。这里补齐成常规播放器的样子。
+    private var controls: some View {
+        HStack(spacing: 22) {
+            Button { switchBy(-1) } label: {
+                Image(systemName: "backward.end.fill").font(.system(size: 20))
+            }
+            Button { togglePause() } label: {
+                Image(systemName: paused ? "play.fill" : "pause.fill").font(.system(size: 26))
+            }
+            Button { switchBy(+1) } label: {
+                Image(systemName: "forward.end.fill").font(.system(size: 20))
+            }
+            Button { toggleMute() } label: {
+                Image(systemName: muted ? "speaker.slash.fill" : "speaker.wave.2.fill")
+                    .font(.system(size: 20))
+            }
+        }
+        .foregroundColor(.white)
+        .padding(.horizontal, 22)
+        .padding(.vertical, 12)
+        .background(.ultraThinMaterial)
+        .cornerRadius(24)
+        .padding(.bottom, 18)
+    }
+
+    private func togglePause() {
+        if let p = player {
+            if paused { p.play() } else { p.pause() }
+        } else {
+            vlc.togglePause()
+        }
+        paused.toggle()
+    }
+
+    private func toggleMute() {
+        muted.toggle()
+        if let p = player {
+            p.isMuted = muted
+        } else {
+            vlc.setMuted(muted)
+        }
+    }
+
+    private func switchBy(_ delta: Int) {
+        let list = session.channels
+        guard !list.isEmpty else { return }
+        let i = list.firstIndex(where: { $0.id == active.id }) ?? 0
+        let n = ((i + delta) % list.count + list.count) % list.count
+        player?.pause()
+        player = nil
+        // 复用同一个页面：改 current 后由 onChange 重新起播
+        onSwitch?(list[n])
     }
 
     private var epgSheet: some View {
@@ -137,7 +210,7 @@ struct PlayerView: View {
         do {
             // 装了 VLCKit 就尝试直连（省掉 NAS 中转）；服务端不允许时会自动回落
             let info = try await session.api.play(
-                channelId: channel.id, streamId: streamId, direct: VLCPlayerView.isAvailable)
+                channelId: active.id, streamId: streamId, direct: VLCPlayerView.isAvailable)
             guard let u = session.api.url(info.url) else {
                 errorText = "播放地址无效"
                 loading = false
@@ -161,8 +234,8 @@ struct PlayerView: View {
             }
 
             // heartbeat 是 async 的，必须 await——Swift 里 async 函数不能"发了不管"
-            await session.api.heartbeat(channelId: channel.id)
-            programs = (try? await session.api.epg(channelId: channel.id)) ?? []
+            await session.api.heartbeat(channelId: active.id)
+            programs = (try? await session.api.epg(channelId: active.id)) ?? []
         } catch {
             errorText = error.localizedDescription
             loading = false
@@ -190,7 +263,7 @@ struct PlayerView: View {
     }
 
     private func loadStreams() async {
-        streams = (try? await session.api.streams(channelId: channel.id)) ?? []
+        streams = (try? await session.api.streams(channelId: active.id)) ?? []
         // 简单轮换：每次点刷新切到下一条线路
         if streams.count > 1 {
             let idx = streams.firstIndex(where: { $0.id == streamId }) ?? 0

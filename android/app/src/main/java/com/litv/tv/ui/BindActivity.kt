@@ -28,6 +28,10 @@ class BindActivity : AppCompatActivity() {
     private lateinit var app: LitvApp
     private lateinit var ipBoxes: List<EditText>
     private lateinit var portInput: EditText
+    private lateinit var ipRow: View
+    private lateinit var domainInput: EditText
+    private lateinit var btnToggleHost: TextView
+    private var usingDomain = false
     private lateinit var codeInput: EditText
     private lateinit var status: TextView
     private lateinit var bindButton: Button
@@ -51,6 +55,9 @@ class BindActivity : AppCompatActivity() {
             findViewById(R.id.ip4),
         )
         portInput = findViewById(R.id.portInput)
+        ipRow = findViewById(R.id.ipRow)
+        domainInput = findViewById(R.id.domainInput)
+        btnToggleHost = findViewById(R.id.btnToggleHost)
         codeInput = findViewById(R.id.codeInput)
         status = findViewById(R.id.status)
         bindButton = findViewById(R.id.bindButton)
@@ -58,6 +65,7 @@ class BindActivity : AppCompatActivity() {
         qrImage = findViewById(R.id.qrImage)
 
         setupAddrBoxes()
+        btnToggleHost.setOnClickListener { setDomainMode(!usingDomain) }
         fillAddr(app.prefs.serverBase)
         // 如果之前填过地址，直接先把二维码亮出来——用户一眼就知道该拿手机扫
         if (app.prefs.serverBase.isNotBlank()) showQr(app.prefs.serverBase)
@@ -88,23 +96,59 @@ class BindActivity : AppCompatActivity() {
         }
     }
 
-    /** 把保存的地址（http://a.b.c.d:port）回填到各个框。 */
+    /**
+     * 切换「IP 分框」和「域名输入」两种模式。
+     *
+     * 分框对遥控器友好（只输数字、自动跳格），但只收数字；
+     * 用 DDNS 或反向代理的用户必须能填域名，所以两种模式都留着。
+     */
+    private fun setDomainMode(on: Boolean) {
+        usingDomain = on
+        ipRow.visibility = if (on) View.GONE else View.VISIBLE
+        domainInput.visibility = if (on) View.VISIBLE else View.GONE
+        btnToggleHost.text = if (on) "用 IP 分框输入" else "用域名访问"
+        if (on) domainInput.requestFocus() else ipBoxes.first().requestFocus()
+    }
+
+    /** 把保存的地址（http://a.b.c.d:port 或 http://域名:port）回填到各个框。 */
     private fun fillAddr(base: String) {
         if (base.isBlank()) {
             portInput.setText(DEFAULT_PORT)
             ipBoxes.first().requestFocus()
             return
         }
-        val m = Regex("""^(?:https?://)?([0-9.]+)(?::(\d+))?""").find(base.trim())
+        val m = Regex("""^(?:https?://)?([^/:]+)(?::(\d+))?""").find(base.trim())
         val host = m?.groupValues?.getOrNull(1).orEmpty()
         val port = m?.groupValues?.getOrNull(2).orEmpty().ifBlank { DEFAULT_PORT }
-        val parts = host.split(".")
-        ipBoxes.forEachIndexed { i, box -> box.setText(parts.getOrElse(i) { "" }) }
-        portInput.setText(port)
+
+        val octets = host.split(".")
+        val isIPv4 = octets.size == 4 && octets.all { (it.toIntOrNull() ?: -1) in 0..255 }
+        if (isIPv4) {
+            ipBoxes.forEachIndexed { i, box -> box.setText(octets[i]) }
+            portInput.setText(port)
+            setDomainMode(false)
+        } else {
+            // 域名 / 主机名：切到域名模式，原样填进去
+            domainInput.setText(if (port != DEFAULT_PORT) "$host:$port" else host)
+            setDomainMode(true)
+        }
     }
 
-    /** 从各个框拼出完整地址；非法返回 null。 */
+    /** 从当前模式拼出完整地址；非法返回 null。 */
     private fun composeAddr(): String? {
+        if (usingDomain) {
+            val raw = domainInput.text.toString().trim()
+            if (raw.isBlank()) return null
+            val withScheme = if (raw.startsWith("http")) raw else "http://$raw"
+            // 必须带主机名，且端口合法（没写端口就用默认）
+            val u = runCatching { java.net.URI(withScheme) }.getOrNull() ?: return null
+            val host = u.host ?: return null
+            if (host.isBlank()) return null
+            val port = if (u.port == -1) DEFAULT_PORT.toInt() else u.port
+            if (port !in 1..65535) return null
+            return "http://$host:$port"
+        }
+
         val octets = ipBoxes.map { it.text.toString().trim() }
         if (octets.any { it.isEmpty() }) return null
         if (octets.any { (it.toIntOrNull() ?: -1) !in 0..255 }) return null

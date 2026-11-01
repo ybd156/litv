@@ -40,6 +40,7 @@
             android:textSize="16sp" />
 
         <LinearLayout
+            android:id="@+id/ipRow"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="10dp"
@@ -88,6 +89,33 @@
             android:text="端口默认 9527。若服务端提示端口被占用，用管理台概览页显示的实际端口。"
             android:textColor="#66FFFFFF"
             android:textSize="12sp" />
+
+        <!-- 域名模式：DDNS / 反向代理进来的必须能填域名，分框只收数字 -->
+        <EditText
+            android:id="@+id/domainInput"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="10dp"
+            android:autofillHints="none"
+            android:background="@drawable/bg_card"
+            android:hint="tv.example.com 或 tv.example.com:9527"
+            android:inputType="textUri"
+            android:paddingHorizontal="14dp"
+            android:paddingVertical="12dp"
+            android:singleLine="true"
+            android:textColor="@color/text_primary"
+            android:textSize="17sp"
+            android:visibility="gone" />
+
+        <TextView
+            android:id="@+id/btnToggleHost"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:paddingVertical="4dp"
+            android:text="用域名访问"
+            android:textColor="@color/accent"
+            android:textSize="14sp" />
     </LinearLayout>
 
     <LinearLayout

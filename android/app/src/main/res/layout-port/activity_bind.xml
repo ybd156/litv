@@ -54,7 +54,9 @@
                 android:textColor="@color/text_secondary"
                 android:textSize="14sp" />
 
+            <!-- IP 分框：只在「IP 模式」下显示 -->
             <LinearLayout
+                android:id="@+id/ipRow"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="8dp"
@@ -94,6 +96,34 @@
                     style="@style/AddrBox"
                     android:maxLength="5" />
             </LinearLayout>
+
+            <!-- 域名模式：DDNS / 反向代理进来的必须能填域名 -->
+            <EditText
+                android:id="@+id/domainInput"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:autofillHints="none"
+                android:background="@drawable/bg_card"
+                android:hint="tv.example.com 或 tv.example.com:9527"
+                android:inputType="textUri"
+                android:paddingHorizontal="14dp"
+                android:paddingVertical="11dp"
+                android:singleLine="true"
+                android:textColor="@color/text_primary"
+                android:textColorHint="@color/text_secondary"
+                android:textSize="15sp"
+                android:visibility="gone" />
+
+            <TextView
+                android:id="@+id/btnToggleHost"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:paddingVertical="4dp"
+                android:text="用域名访问"
+                android:textColor="@color/accent"
+                android:textSize="13sp" />
 
             <TextView
                 android:id="@+id/addrHint"

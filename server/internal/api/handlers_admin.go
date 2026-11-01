@@ -591,6 +591,10 @@ func (a *API) createEPGSource(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Name string `json:"name"`
 		URL  string `json:"url"`
+		// 管理台表单会带 enabled。服务端建源时一律启用（enabled=1），
+		// 但这个字段必须能收下——decode 用了 DisallowUnknownFields，
+		// 多一个字段就直接 400「unknown field "enabled"」。
+		Enabled *bool `json:"enabled"`
 	}
 	if err := decode(r, &body); err != nil {
 		fail(w, http.StatusBadRequest, 1001, "参数错误: "+err.Error())

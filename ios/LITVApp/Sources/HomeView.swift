@@ -6,10 +6,31 @@ struct HomeView: View {
     @State private var selectedGroup: String? = nil
     @State private var onlyFav = false
     @State private var showSettings = false
+    @State private var keyword = ""
 
     var body: some View {
         NavigationView {
             VStack(spacing: 0) {
+                // 搜索：频道一多就必须能搜（和 Android 端保持一致）
+                HStack(spacing: 6) {
+                    Image(systemName: "magnifyingglass").foregroundColor(.gray).font(.caption)
+                    TextField("搜频道名 / 分组", text: $keyword)
+                        .textFieldStyle(.plain)
+                        .autocorrectionDisabled()
+                        .textInputAutocapitalization(.never)
+                    if !keyword.isEmpty {
+                        Button { keyword = "" } label: {
+                            Image(systemName: "xmark.circle.fill").foregroundColor(.gray)
+                        }
+                    }
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 8)
+                .background(Color.white.opacity(0.06))
+                .cornerRadius(9)
+                .padding(.horizontal, 14)
+                .padding(.top, 8)
+
                 groupBar
                 list
             }
@@ -69,8 +90,15 @@ struct HomeView: View {
     }
 
     private var filtered: [Channel] {
-        if onlyFav { return session.channels.filter { session.favorites.contains($0.id) } }
-        return session.channels(in: selectedGroup)
+        let base = onlyFav
+            ? session.channels.filter { session.favorites.contains($0.id) }
+            : session.channels(in: selectedGroup)
+        let k = keyword.trimmingCharacters(in: .whitespaces)
+        guard !k.isEmpty else { return base }
+        return base.filter {
+            $0.name.localizedCaseInsensitiveContains(k) ||
+                $0.group.localizedCaseInsensitiveContains(k)
+        }
     }
 
     private var list: some View {

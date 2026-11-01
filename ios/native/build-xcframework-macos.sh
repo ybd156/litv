@@ -29,15 +29,19 @@ cd "$WORK"
 if [ ! -f "$WORK/lib/libuavs3d.a" ]; then
   say "构建 uavs3d（AVS3 解码器）"
   [ -d uavs3d ] || git clone --depth 1 https://github.com/uavs3/uavs3d.git
-  cmake -S uavs3d -B uavs3d/build-ios \
+  local bdir="$SRC/uavs3d/build-ios-$abi"
+  rm -rf "$bdir" && mkdir -p "$bdir" && cd "$bdir" || return 1
+
+  cmake -S "$SRC/uavs3d" -B "$bdir" \
     -DCMAKE_SYSTEM_NAME=iOS \
     -DCMAKE_OSX_ARCHITECTURES="$ARCH" \
     -DCMAKE_OSX_DEPLOYMENT_TARGET="$IOS_MIN" \
     -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_INSTALL_PREFIX="$WORK" \
-    -DCOMPILE_10BIT=0
-  cmake --build uavs3d/build-ios -j"$(sysctl -n hw.ncpu)"
-  cmake --install uavs3d/build-ios
+    -DCOMPILE_10BIT=0 \
+    -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+  cmake --build "$bdir" -j"$(sysctl -n hw.ncpu)"
+  cmake --install "$bdir"
 fi
 
 # ---------------------------------------------------------------- 2. FFmpeg

@@ -166,6 +166,9 @@ func (a *API) Handler(viaGateway bool) http.Handler {
 		pr.Get("/api/v1/tv/timeshift/{id}", a.tvTimeshift)
 		// 播放质量上报（起播耗时/卡顿/失败）
 		pr.Post("/api/v1/tv/stats", a.tvReportStats)
+		// 跨端续播
+		pr.Post("/api/v1/tv/progress", a.tvSaveProgress)
+		pr.Get("/api/v1/tv/resume", a.tvResume)
 	})
 
 	// ---- 流出口（签名 URL，不走身份中间件） ----

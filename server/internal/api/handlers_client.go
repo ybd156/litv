@@ -568,6 +568,63 @@ func (a *API) tvReportStats(w http.ResponseWriter, r *http.Request) {
 	ok(w, map[string]any{"recorded": true})
 }
 
+// ---------- 跨端续播 ----------
+
+// tvSaveProgress 终端上报"我在看哪个台、看到第几秒"。
+func (a *API) tvSaveProgress(w http.ResponseWriter, r *http.Request) {
+	dev, okDev := deviceFrom(r.Context())
+	if !okDev {
+		fail(w, http.StatusUnauthorized, 2003, "设备未绑定")
+		return
+	}
+	var body struct {
+		ChannelID   int64 `json:"channel_id"`
+		PositionSec int   `json:"position_sec"`
+	}
+	if err := decode(r, &body); err != nil {
+		fail(w, http.StatusBadRequest, 1001, "参数错误: "+err.Error())
+		return
+	}
+	if body.ChannelID <= 0 {
+		fail(w, http.StatusBadRequest, 1001, "channel_id 不能为空")
+		return
+	}
+	_ = a.st.UpsertProgress(r.Context(), dev.ID, body.ChannelID, body.PositionSec)
+	ok(w, map[string]any{"saved": true})
+}
+
+// tvResume 返回"最近在别的设备上看过的频道"，用于跨端续播提示。
+func (a *API) tvResume(w http.ResponseWriter, r *http.Request) {
+	dev, okDev := deviceFrom(r.Context())
+	if !okDev {
+		fail(w, http.StatusUnauthorized, 2003, "设备未绑定")
+		return
+	}
+	rp, err := a.st.LatestResume(r.Context(), dev.ID)
+	if err != nil {
+		// 没有记录不是错误，返回空让客户端安静处理
+		ok(w, map[string]any{"available": false})
+		return
+	}
+	// 时移能不能覆盖到这个位置，决定了客户端是"从偏移处播"还是"直接看直播"
+	tsAvail := 0
+	if a.ts != nil && a.ts.Enabled() {
+		tsAvail = a.ts.SpanSeconds(rp.ChannelID)
+	}
+	ok(w, map[string]any{
+		"available":          true,
+		"channel_id":         rp.ChannelID,
+		"channel_name":       rp.ChannelName,
+		"channel_logo":       rp.ChannelLogo,
+		"group":              rp.Group,
+		"position_sec":       rp.PositionSec,
+		"device_name":        rp.DeviceName,
+		"updated_at":         rp.UpdatedAt,
+		"age_seconds":        int(time.Now().Unix() - rp.UpdatedAt),
+		"timeshift_available": tsAvail,
+	})
+}
+
 // ---------- 流出口 ----------
 
 // verifyStream 校验签名，返回频道 ID 与设备标识。

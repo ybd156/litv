@@ -245,6 +245,19 @@ class Api(private val prefs: Prefs) {
             onOk = { }, onErr = { /* 上报失败静默 */ })
     }
 
+    /** 跨端续播：上报"我在看哪个台、看到第几秒"。 */
+    fun saveProgress(channelId: Long, positionSec: Int = 0) {
+        call("/api/v1/tv/progress", "POST",
+            mapOf("channel_id" to channelId, "position_sec" to positionSec),
+            clazz = Any::class.java, onOk = { }, onErr = { })
+    }
+
+    /** 跨端续播：查最近在别的设备上看过的频道。 */
+    fun resume(onOk: (ResumePoint?) -> Unit) {
+        call("/api/v1/tv/resume", clazz = ResumePoint::class.java,
+            onOk = { onOk(it) }, onErr = { onOk(null) })
+    }
+
     private companion object {
         val JSON = "application/json; charset=utf-8".toMediaType()
     }

@@ -174,6 +174,26 @@ chk "频道统计可用" '"plays":3' "$R"
 chk "频道统计带名称" '"name"' "$R"
 
 echo
+echo "== 12.6 跨端续播 =="
+REG2=$(curl -sS -X POST -H "Content-Type: application/json" \
+  -d '{"device_key":"e2e-bedroom","name":"卧室电视","platform":"androidtv"}' \
+  "http://127.0.0.1:$PORT/api/v1/device/register")
+TOK2=$(printf '%s' "$REG2" | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')
+DEV2=$(printf '%s' "$REG2" | sed -n 's/.*"device_id":\([0-9]*\).*/\1/p')
+gw -X POST "$GW/api/v1/devices/$DEV2/approve" >/dev/null
+
+curl -sS -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"channel_id":1,"position_sec":0}' "http://127.0.0.1:$PORT/api/v1/tv/progress" >/dev/null
+
+R=$(curl -sS -H "Authorization: Bearer $TOK2" "http://127.0.0.1:$PORT/api/v1/tv/resume")
+chk "另一台设备能看到续播" '"available":true' "$R"
+chk "续播带频道名" '"channel_name"' "$R"
+chk "续播带来源设备名" '"device_name":"E2E电视"' "$R"
+
+R=$(curl -sS -H "Authorization: Bearer $TOKEN" "http://127.0.0.1:$PORT/api/v1/tv/resume")
+chk "自己查不到自己的续播" '"available":false' "$R"
+
+echo
 echo "== 13. 吊销设备后应失效 =="
 gw -X DELETE "$GW/api/v1/devices/$DEV_ID" >/dev/null
 R=$(curl -sS -H "Authorization: Bearer $TOKEN" "http://127.0.0.1:$PORT/api/v1/tv/bootstrap")

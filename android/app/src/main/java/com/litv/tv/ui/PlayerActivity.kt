@@ -543,6 +543,8 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         super.onPause()
         player.pause()
         app.remote.onCommand = null
+        // 跨端续播：离开时记下看到哪个台，别的设备打开就能"接着看"
+        current?.let { app.api.saveProgress(it.id, 0) }
     }
 
     override fun onDestroy() {

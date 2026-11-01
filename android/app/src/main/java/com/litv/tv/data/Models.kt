@@ -116,8 +116,29 @@ data class HeartbeatResult(
     @SerializedName("server_time") val serverTime: Long = 0,
 )
 
-/** 一条线路（终端只拿到标签与健康度，拿不到上游真实地址）。 */
-data class TvStream(
+/** 跨端续播：最近在别的设备上看过的频道。 */
+data class ResumePoint(
+    val available: Boolean = false,
+    @SerializedName("channel_id") val channelId: Long = 0,
+    @SerializedName("channel_name") val channelName: String = "",
+    @SerializedName("channel_logo") val channelLogo: String = "",
+    val group: String = "",
+    @SerializedName("position_sec") val positionSec: Int = 0,
+    @SerializedName("device_name") val deviceName: String = "",
+    @SerializedName("age_seconds") val ageSeconds: Int = 0,
+    @SerializedName("timeshift_available") val timeshiftAvailable: Int = 0,
+) {
+    /** 人类可读的"多久之前"。 */
+    val ageText: String
+        get() = when {
+            ageSeconds < 60 -> "刚刚"
+            ageSeconds < 3600 -> "${ageSeconds / 60} 分钟前"
+            ageSeconds < 86400 -> "${ageSeconds / 3600} 小时前"
+            else -> "${ageSeconds / 86400} 天前"
+        }
+}
+
+/** 一条线路（终端只拿到标签与健康度，拿不到上游真实地址）。 */data class TvStream(
     val id: Long = 0,
     val label: String = "",
     val quality: String = "",

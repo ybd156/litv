@@ -51,6 +51,21 @@
                 android:textSize="13sp" />
         </LinearLayout>
 
+        <!-- 跨端续播提示：在别的设备上看过的台，一点就接着看 -->
+        <TextView
+            android:id="@+id/resumeBanner"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:background="@drawable/bg_focusable"
+            android:clickable="true"
+            android:focusable="true"
+            android:paddingHorizontal="18dp"
+            android:paddingVertical="12dp"
+            android:textColor="@color/accent"
+            android:textSize="15sp"
+            android:visibility="gone" />
+
         <androidx.recyclerview.widget.RecyclerView
             android:id="@+id/channelList"
             android:layout_width="match_parent"

@@ -186,6 +186,17 @@ CREATE TABLE IF NOT EXISTS play_events (
 CREATE INDEX IF NOT EXISTS idx_play_events_time ON play_events(created_at);
 CREATE INDEX IF NOT EXISTS idx_play_events_ch ON play_events(channel_id, created_at);
 
+-- 跨端续播：记住每台设备最后看到哪、看到第几秒。
+-- 家庭场景下这是刚需——客厅看一半去卧室，不该重新找台。
+CREATE TABLE IF NOT EXISTS watch_progress (
+  device_id    INTEGER NOT NULL,
+  channel_id   INTEGER NOT NULL,
+  position_sec INTEGER NOT NULL DEFAULT 0,
+  updated_at   INTEGER NOT NULL,
+  PRIMARY KEY (device_id, channel_id)
+);
+CREATE INDEX IF NOT EXISTS idx_watch_progress_time ON watch_progress(updated_at);
+
 CREATE TABLE IF NOT EXISTS kv (
   k TEXT PRIMARY KEY,
   v TEXT NOT NULL

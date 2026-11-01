@@ -35,6 +35,7 @@ class HomeActivity : AppCompatActivity() {
     private lateinit var groupLabel: TextView
 
     private lateinit var adapter: ChannelAdapter
+    private lateinit var resumeBanner: TextView
     private val main = Handler(Looper.getMainLooper())
     private var lastFocusedPos = 0
     private val favorites = mutableSetOf<Long>()
@@ -56,6 +57,7 @@ class HomeActivity : AppCompatActivity() {
         status = findViewById(R.id.status)
         empty = findViewById(R.id.empty)
         groupLabel = findViewById(R.id.groupLabel)
+        resumeBanner = findViewById(R.id.resumeBanner)
 
         adapter = ChannelAdapter(app.tier.logoMaxPx, onClick = { ch -> openPlayer(ch) }, onLongClick = { ch ->
             toggleFavorite(ch)
@@ -68,6 +70,26 @@ class HomeActivity : AppCompatActivity() {
         // 先渲染缓存
         renderCache()
         refresh()
+        loadResume()
+    }
+
+    /**
+     * 跨端续播：查"最近在别的设备上看过哪个台"。
+     * 家里从客厅换到卧室时，这是最实用的一条提示。
+     */
+    private fun loadResume() {
+        app.api.resume { rp ->
+            if (rp == null || !rp.available || rp.channelId <= 0) {
+                resumeBanner.visibility = View.GONE
+                return@resume
+            }
+            resumeBanner.text = "接着看：${rp.channelName}　·　${rp.deviceName} ${rp.ageText}"
+            resumeBanner.visibility = View.VISIBLE
+            resumeBanner.setOnClickListener {
+                val ch = Channel(id = rp.channelId, name = rp.channelName, logo = rp.channelLogo)
+                openPlayer(ch)
+            }
+        }
     }
 
     private fun renderCache() {

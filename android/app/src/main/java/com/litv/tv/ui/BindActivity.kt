@@ -7,6 +7,8 @@ import android.os.Looper
 import android.view.View
 import android.widget.Button
 import android.widget.EditText
+import android.widget.ImageView
+import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
 import com.litv.tv.LitvApp
@@ -28,6 +30,8 @@ class BindActivity : AppCompatActivity() {
     private lateinit var codeInput: EditText
     private lateinit var status: TextView
     private lateinit var bindButton: Button
+    private lateinit var qrBox: LinearLayout
+    private lateinit var qrImage: ImageView
 
     private val main = Handler(Looper.getMainLooper())
     private var polling = false
@@ -41,11 +45,27 @@ class BindActivity : AppCompatActivity() {
         codeInput = findViewById(R.id.codeInput)
         status = findViewById(R.id.status)
         bindButton = findViewById(R.id.bindButton)
+        qrBox = findViewById(R.id.qrBox)
+        qrImage = findViewById(R.id.qrImage)
 
         serverInput.setText(app.prefs.serverBase)
+        // 如果之前填过地址，直接先把二维码亮出来——用户一眼就知道该拿手机扫
+        if (app.prefs.serverBase.isNotBlank()) showQr(app.prefs.serverBase)
 
         bindButton.setOnClickListener { doBind() }
         bindButton.requestFocus()
+    }
+
+    /** 显示管理台二维码：手机扫完直接进「终端设备」页批准这台电视。 */
+    private fun showQr(base: String) {
+        val url = base.trimEnd('/') + "/"
+        val bmp = QrUtil.encode(url, 512)
+        if (bmp == null) {
+            qrBox.visibility = View.GONE
+            return
+        }
+        qrImage.setImageBitmap(bmp)
+        qrBox.visibility = View.VISIBLE
     }
 
     private fun doBind() {
@@ -65,6 +85,7 @@ class BindActivity : AppCompatActivity() {
                 bindButton.isEnabled = true
                 return@probe
             }
+            showQr(normalized)
             registerAndMaybePoll()
         }
     }

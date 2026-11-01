@@ -28,20 +28,23 @@ import java.util.concurrent.Executors
 class ChannelAdapter(
     private val logoMaxPx: Int,
     private val onClick: (Channel) -> Unit,
+    private val onLongClick: ((Channel) -> Unit)? = null,
 ) : RecyclerView.Adapter<ChannelAdapter.VH>() {
 
     private val items = ArrayList<Channel>()
     private val nowMap = HashMap<Long, String>()
     private val logoCache = LruCache<String, Bitmap>(32)
+    private var favorites: Set<Long> = emptySet()
 
     private val executor = Executors.newFixedThreadPool(2)
     private val main = Handler(Looper.getMainLooper())
 
-    fun submit(list: List<Channel>, now: Map<Long, String>) {
+    fun submit(list: List<Channel>, now: Map<Long, String>, favs: Set<Long> = favorites) {
         items.clear()
         items.addAll(list)
         nowMap.clear()
         nowMap.putAll(now)
+        favorites = favs
         notifyDataSetChanged()
     }
 
@@ -62,15 +65,29 @@ class ChannelAdapter(
         holder.now.text = now ?: ""
         holder.now.visibility = if (now.isNullOrBlank()) View.GONE else View.VISIBLE
 
-        // 多线路徽标：用户一眼能看出这个台有几个源可切
-        if (ch.streamCount > 1) {
-            holder.badge.text = "${ch.streamCount} 线路"
-            holder.badge.visibility = View.VISIBLE
-        } else {
-            holder.badge.visibility = View.GONE
+        // 徽标：收藏星标优先，其次是线路数
+        val fav = favorites.contains(ch.id)
+        when {
+            fav && ch.streamCount > 1 -> {
+                holder.badge.text = "★ ${ch.streamCount} 线路"
+                holder.badge.visibility = View.VISIBLE
+            }
+            fav -> {
+                holder.badge.text = "★ 收藏"
+                holder.badge.visibility = View.VISIBLE
+            }
+            ch.streamCount > 1 -> {
+                holder.badge.text = "${ch.streamCount} 线路"
+                holder.badge.visibility = View.VISIBLE
+            }
+            else -> holder.badge.visibility = View.GONE
         }
 
         holder.itemView.setOnClickListener { onClick(ch) }
+        holder.itemView.setOnLongClickListener {
+            onLongClick?.invoke(ch)
+            onLongClick != null
+        }
         holder.itemView.setOnFocusChangeListener { v, hasFocus ->
             // 焦点放大：TV 上远距离也能分辨
             v.animate().scaleX(if (hasFocus) 1.06f else 1f)

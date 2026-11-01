@@ -1,11 +1,33 @@
+// 注意：Gradle Kotlin DSL 里 `java` 指向 JavaPluginExtension，会遮蔽 java.* 包，
+// 所以必须显式 import，否则 java.util.Properties 报 Unresolved reference。
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
 }
 
+// 签名口令从 local.properties 读（不进版本库）。
+// 没有配置时回落到仓库内自签 keystore，保证 clone 下来就能出可安装的包。
+// 真要发布请换成自己的 keystore 并妥善保管——丢了就无法覆盖升级。
+val localProps = Properties().apply {
+    val f = rootProject.file("local.properties")
+    if (f.exists()) f.inputStream().use { load(it) }
+}
+fun prop(key: String, def: String): String = localProps.getProperty(key) ?: def
+
 android {
     namespace = "com.litv.tv"
     compileSdk = 35
+
+    signingConfigs {
+        create("litv") {
+            storeFile = rootProject.file(prop("LITV_STORE_FILE", "keystore/litv-release.jks"))
+            storePassword = prop("LITV_STORE_PASSWORD", "litv123456")
+            keyAlias = prop("LITV_KEY_ALIAS", "litv")
+            keyPassword = prop("LITV_KEY_PASSWORD", "litv123456")
+        }
+    }
 
     defaultConfig {
         applicationId = "com.litv.tv"
@@ -35,11 +57,13 @@ android {
         release {
             isMinifyEnabled = true
             isShrinkResources = true
+            signingConfig = signingConfigs.getByName("litv")
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }
         debug {
             applicationIdSuffix = ".debug"
             versionNameSuffix = "-debug"
+            signingConfig = signingConfigs.getByName("litv")
         }
     }
 
@@ -97,6 +121,10 @@ dependencies {
 
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("com.google.code.gson:gson:2.11.0")
+
+    // 二维码：TV 上打字太痛苦，绑定页显示二维码让手机扫，
+    // 手机打开管理台直接批准这台设备。
+    implementation("com.google.zxing:core:3.5.3")
 
     debugImplementation("com.squareup.leakcanary:leakcanary-android:2.14")
 }

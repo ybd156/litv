@@ -100,4 +100,33 @@
         android:layout_marginTop="20dp"
         android:textColor="@color/accent"
         android:textSize="15sp" />
+
+    <!-- 手机扫码区：扫这个码直接打开管理台，省去在电视上输入地址 -->
+    <LinearLayout
+        android:id="@+id/qrBox"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="18dp"
+        android:gravity="center_horizontal"
+        android:orientation="vertical"
+        android:visibility="gone">
+
+        <ImageView
+            android:id="@+id/qrImage"
+            android:layout_width="150dp"
+            android:layout_height="150dp"
+            android:background="@android:color/white"
+            android:contentDescription="管理台二维码"
+            android:padding="6dp"
+            android:scaleType="fitCenter" />
+
+        <TextView
+            android:id="@+id/qrHint"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="手机扫码 → 管理台「终端设备」→ 批准这台电视"
+            android:textColor="@color/text_secondary"
+            android:textSize="12sp" />
+    </LinearLayout>
 </LinearLayout>

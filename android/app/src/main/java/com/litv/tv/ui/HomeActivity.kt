@@ -37,6 +37,8 @@ class HomeActivity : AppCompatActivity() {
     private lateinit var adapter: ChannelAdapter
     private val main = Handler(Looper.getMainLooper())
     private var lastFocusedPos = 0
+    private val favorites = mutableSetOf<Long>()
+    private val nowTitles = mutableMapOf<Long, String>()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -55,7 +57,9 @@ class HomeActivity : AppCompatActivity() {
         empty = findViewById(R.id.empty)
         groupLabel = findViewById(R.id.groupLabel)
 
-        adapter = ChannelAdapter(app.tier.logoMaxPx) { ch -> openPlayer(ch) }
+        adapter = ChannelAdapter(app.tier.logoMaxPx, onClick = { ch -> openPlayer(ch) }, onLongClick = { ch ->
+            toggleFavorite(ch)
+        })
         val span = if (app.tier == Tier.LOW) 4 else 6
         list.layoutManager = GridLayoutManager(this, span)
         list.adapter = adapter
@@ -99,7 +103,11 @@ class HomeActivity : AppCompatActivity() {
 
     private fun applyData(b: Bootstrap, fromCache: Boolean) {
         val nowMap = b.now.associate { it.channelId to it.title }
-        adapter.submit(b.channels, nowMap)
+        nowTitles.clear()
+        nowTitles.putAll(nowMap)
+        favorites.clear()
+        favorites.addAll(b.favorites)
+        adapter.submit(b.channels, nowMap, favorites)
 
         empty.visibility = if (b.channels.isEmpty()) View.VISIBLE else View.GONE
         list.visibility = if (b.channels.isEmpty()) View.GONE else View.VISIBLE
@@ -137,6 +145,22 @@ class HomeActivity : AppCompatActivity() {
             }
         }
         return super.dispatchKeyEvent(event)
+    }
+
+    /**
+     * 长按频道 = 收藏/取消收藏。
+     * 为什么用长按而不是加个星标按钮：TV 上没有鼠标，多一个可聚焦元素
+     * 就多一次方向键跳动，破坏"上下走、OK 进"的直觉。
+     */
+    private fun toggleFavorite(ch: Channel) {
+        val on = !favorites.contains(ch.id)
+        app.api.favorite(ch.id, on,
+            onOk = {
+                if (on) favorites.add(ch.id) else favorites.remove(ch.id)
+                adapter.submit(adapter.items(), nowTitles, favorites)
+                status.text = if (on) "已收藏「${ch.name}」" else "已取消收藏「${ch.name}」"
+            },
+            onErr = { status.text = "收藏失败：$it" })
     }
 
     private fun timeNow(): String =

@@ -71,6 +71,7 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
 
     private var channels: List<Channel> = emptyList()
     private var allChannels: List<Channel> = emptyList()
+    private val favoriteIds = mutableSetOf<Long>()
     private var groups: List<String> = emptyList()
     private var groupIdx = 0
     private var index = 0
@@ -133,20 +134,23 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         if (cached.isNotBlank()) {
             runCatching {
                 val b = Gson().fromJson(cached, Bootstrap::class.java)
-                applyChannels(b.channels)
+                applyBootstrap(b)
             }
         }
         if (channels.isEmpty()) {
-            app.api.bootstrap(onOk = { b -> applyChannels(b.channels) }, onErr = {})
+            app.api.bootstrap(onOk = { b -> applyBootstrap(b) }, onErr = {})
         }
-        panelAdapter = ChannelAdapter(app.tier.logoMaxPx) { ch ->
-            closePanel()
-            val i = channels.indexOfFirst { it.id == ch.id }
-            if (i >= 0) {
-                index = i
-                playChannel(ch)
-            }
-        }
+        panelAdapter = ChannelAdapter(
+            logoMaxPx = app.tier.logoMaxPx,
+            onClick = { ch ->
+                closePanel()
+                val i = channels.indexOfFirst { it.id == ch.id }
+                if (i >= 0) {
+                    index = i
+                    playChannel(ch)
+                }
+            },
+        )
         panelList.layoutManager = LinearLayoutManager(this)
         panelList.adapter = panelAdapter
         panelAdapter.submit(channels, emptyMap())
@@ -157,34 +161,49 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         epgList.adapter = epgAdapter
     }
 
-    /** 存全量频道 + 分组名，供「列表内左右键切分组」用。 */
-    private fun applyChannels(list: List<Channel>) {
-        allChannels = list
-        groups = list.map { it.group }.filter { it.isNotBlank() }.distinct()
+    /** 存全量频道 + 分组名 + 收藏，供「列表内左右键切分组」用。 */
+    private fun applyBootstrap(b: Bootstrap) {
+        allChannels = b.channels
+        favoriteIds.clear()
+        favoriteIds.addAll(b.favorites)
+        groups = allChannels.map { it.group }.filter { it.isNotBlank() }.distinct()
         applyGroupFilter()
     }
 
     private fun applyGroupFilter() {
-        channels = if (groupIdx <= 0 || groupIdx > groups.size) {
-            allChannels
-        } else {
-            val g = groups[groupIdx - 1]
-            allChannels.filter { it.group == g }
+        channels = when {
+            // 第 0 组是"全部"，有收藏时第 1 组是"收藏"
+            groupIdx <= 0 -> allChannels
+            hasFavGroup && groupIdx == 1 -> allChannels.filter { favoriteIds.contains(it.id) }
+            else -> {
+                val gi = if (hasFavGroup) groupIdx - 2 else groupIdx - 1
+                val g = groups.getOrNull(gi)
+                if (g == null) allChannels else allChannels.filter { it.group == g }
+            }
         }
         if (index >= channels.size) index = 0
         if (::panelAdapter.isInitialized) {
-            panelAdapter.submit(channels, emptyMap())
+            panelAdapter.submit(channels, emptyMap(), favoriteIds)
             panelTitle.text = groupLabelText()
         }
     }
 
+    private val hasFavGroup: Boolean get() = favoriteIds.isNotEmpty()
+
     private fun groupLabelText(): String {
-        val g = if (groupIdx <= 0) "全部" else groups[groupIdx - 1]
-        return "分组：$g（${channels.size}）  ←→ 切换"
+        val name = when {
+            groupIdx <= 0 -> "全部"
+            hasFavGroup && groupIdx == 1 -> "收藏"
+            else -> {
+                val gi = if (hasFavGroup) groupIdx - 2 else groupIdx - 1
+                groups.getOrNull(gi) ?: "全部"
+            }
+        }
+        return "分组：$name（${channels.size}）  ←→ 切换"
     }
 
     private fun switchGroup(delta: Int) {
-        val total = groups.size + 1 // +1 是"全部"
+        val total = groups.size + 1 + if (hasFavGroup) 1 else 0
         groupIdx = ((groupIdx + delta) % total + total) % total
         applyGroupFilter()
         if (channels.isNotEmpty()) {

@@ -98,11 +98,11 @@ LITV2/
 
 | 设备 | 文件 |
 |---|---|
-| **安卓电视 / 盒子（Android 9、32 位）** | `LITV-0.0.1-tv-armv7.apk` |
-| 64 位设备（新电视 / 手机） | `LITV-0.0.1-arm64.apk` |
-| 飞牛 NAS（N100 等 x86） | `litv_x86_0.0.1.fpk` |
-| 飞牛 NAS（ARM 机型） | `litv_arm_0.0.1.fpk` |
-| iPhone / iPad | `LITV-0.0.1-unsigned.ipa` |
+| **安卓电视 / 盒子（Android 9、32 位）** | `LITV-0.0.2-tv-armv7.apk` |
+| 64 位设备（新电视 / 手机） | `LITV-0.0.2-arm64.apk` |
+| 飞牛 NAS（N100 等 x86） | `litv_x86_0.0.2.fpk` |
+| 飞牛 NAS（ARM 机型） | `litv_arm_0.0.2.fpk` |
+| iPhone / iPad | `LITV-0.0.2-unsigned.ipa` |
 
 发版：Actions 里手动跑 `Release` 工作流，或推 `v*` tag，会自动构建三端并发布。
 

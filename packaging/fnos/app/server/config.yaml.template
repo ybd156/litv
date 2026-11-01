@@ -82,9 +82,13 @@ timeshift:
   max_segments: 12      # 保留段数（12 × 64MB ≈ 1 小时缓冲）
 
 # 裸 TS → HLS 转封装（只转封装不转码，几乎不吃 CPU）
-# iOS 的 AVPlayer 播不了裸 TS，必须开这个才能看裸 TS 源
+# iOS 和网页只认 HLS，播不了裸 TS，必须开这个才能看裸 TS 源。
+# 注意：TV / 手机 App 不需要它——它们直接吃裸 TS。
 remux:
   enabled: true
+  # 留空 = 自动查找（随包目录 → PATH → /usr/bin → /usr/local/bin → /opt/ffmpeg/bin → /usr/trim/bin）
+  # 找不到就填绝对路径，例如 /usr/bin/ffmpeg
+  ffmpeg: ""
   segment_seconds: 2
   playlist_size: 6
   idle_timeout_seconds: 60

@@ -47,6 +47,10 @@ type API struct {
 	alert   *alert.Notifier
 	dlna    *dlna.Server
 	signer  *auth.Signer
+
+	// 运行时事实（由 main 注入）
+	actualPort int
+	ffmpegPath string
 	startAt time.Time
 	version string
 }
@@ -78,6 +82,16 @@ func (a *API) SetAlert(n *alert.Notifier) { a.alert = n }
 
 // SetDLNA 注入 DLNA 服务（同时把路由挂到 /dlna/*）。
 func (a *API) SetDLNA(s *dlna.Server) { a.dlna = s }
+
+// SetRuntime 注入运行时事实：实际监听端口、解析到的 ffmpeg 路径。
+//
+// 为什么要单独注入：配置里的端口可能被占用后自动顺延，
+// 配置里的 ffmpeg 可能只是个名字而实际解析到别的路径。
+// 管理台要显示"真实情况"，否则用户按配置里的端口去填 TV 会连不上。
+func (a *API) SetRuntime(actualPort int, ffmpegPath string) {
+	a.actualPort = actualPort
+	a.ffmpegPath = ffmpegPath
+}
 
 // DLNASource 返回 DLNA 需要的数据源适配器。
 func (a *API) DLNASource() dlna.ChannelSource { return dlnaSource{a: a} }

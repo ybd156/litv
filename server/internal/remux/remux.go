@@ -83,16 +83,62 @@ func (m *Manager) Available() bool {
 	return resolveFFmpeg(m.opt.FFmpeg) != ""
 }
 
+// FFmpegPath 返回实际解析到的 ffmpeg 路径（找不到返回空）。
+// 日志里用它，用户就知道我们到底用了哪个 ffmpeg，而不是只看到配置里的原始值。
+func (m *Manager) FFmpegPath() string {
+	if m == nil || m.opt.FFmpeg == "" {
+		return ""
+	}
+	return resolveFFmpeg(m.opt.FFmpeg)
+}
+
 // resolveFFmpeg 返回可执行的 ffmpeg 路径，找不到返回空。
+//
+// 为什么要找这么多地方：NAS 上 ffmpeg 经常**不在 PATH 里**。
+// 用户看到的现象是「转封装已配置但 ffmpeg 不可用」，然后 iOS / 浏览器
+// 播不了裸 TS 源——但他其实装了 ffmpeg，只是我们没找到。
+//
+// 查找顺序（先精确后模糊）：
+//  1. 配的是绝对路径 → 直接用
+//  2. 随 App 打包的 ffmpeg（和 litvd 同目录）→ 最优先，保证自包含
+//  3. PATH 里的
+//  4. 常见安装位置
 func resolveFFmpeg(name string) string {
+	// 1. 绝对路径
 	if strings.ContainsRune(name, os.PathSeparator) {
 		if st, err := os.Stat(name); err == nil && !st.IsDir() {
 			return name
 		}
 		return ""
 	}
+
+	// 2. 随 App 打包的（fpk 里 bin/ffmpeg）
+	if exe, err := os.Executable(); err == nil {
+		cand := filepath.Join(filepath.Dir(exe), name)
+		if st, err := os.Stat(cand); err == nil && !st.IsDir() {
+			return cand
+		}
+	}
+
+	// 3. PATH
 	if p, err := exec.LookPath(name); err == nil {
 		return p
+	}
+
+	// 4. 常见位置（NAS / 各种 Linux 发行版）
+	for _, dir := range []string{
+		"/usr/bin",
+		"/usr/local/bin",
+		"/opt/ffmpeg/bin",
+		"/opt/bin",
+		"/usr/trim/bin",   // 飞牛 fnOS 自带的组件目录
+		"/vol1/@appstore",
+		"/volume1/@appstore",
+	} {
+		cand := filepath.Join(dir, name)
+		if st, err := os.Stat(cand); err == nil && !st.IsDir() {
+			return cand
+		}
 	}
 	return ""
 }

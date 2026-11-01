@@ -108,7 +108,7 @@ func main() {
 	var rxMgr *remux.Manager
 	if cfg.Remux.Enabled {
 		rxMgr = remux.NewManager(remux.Options{
-			FFmpeg:         cfg.Transcode.FFmpeg,
+			FFmpeg:         cfg.FFmpegPath(),
 			Dir:            rxDir,
 			SegmentSeconds: cfg.Remux.SegmentSeconds,
 			PlaylistSize:   cfg.Remux.PlaylistSize,
@@ -117,10 +117,15 @@ func main() {
 		defer rxMgr.Close()
 		a.SetRemux(rxMgr)
 		if rxMgr.Available() {
-			slog.Info("转封装已启用", "ffmpeg", cfg.Transcode.FFmpeg, "dir", rxDir)
+			slog.Info("转封装已启用", "ffmpeg", rxMgr.FFmpegPath(), "dir", rxDir)
 		} else {
-			slog.Warn("转封装已配置但 ffmpeg 不可用，iOS/仅 HLS 的播放器将无法播放裸 TS 源",
-				"ffmpeg", cfg.Transcode.FFmpeg)
+			// 注意：这个警告不影响 TV/手机 App——它们直接吃裸 TS。
+			// 只有 iOS 和网页（只认 HLS）需要服务端转封装。
+			slog.Warn("未找到 ffmpeg，转封装不可用",
+				"影响", "iOS 和网页播不了裸 TS 源；TV/手机不受影响",
+				"配置值", cfg.Transcode.FFmpeg,
+				"已查找", "随包目录、PATH、/usr/bin、/usr/local/bin、/opt/ffmpeg/bin、/usr/trim/bin 等",
+				"解决", "安装 ffmpeg 后在「应用设置」里填绝对路径，或放到 litvd 同目录")
 		}
 	}
 
@@ -185,14 +190,26 @@ func main() {
 		// 直播流会长时间挂着，不设 WriteTimeout
 		IdleTimeout: 120 * time.Second,
 	}
-	ln, err := net.Listen("tcp", tcpAddr)
+	ln, actualPort, err := listenWithFallback(cfg.Server.Host, cfg.Server.Port, 20)
 	if err != nil {
 		slog.Error("端口监听失败", "addr", tcpAddr, "err", err)
 		os.Exit(1)
 	}
+	if actualPort != cfg.Server.Port {
+		// 端口被占用时自动顺延，并大声说出来——
+		// 否则用户只看到"启动失败"，不知道换个端口就好。
+		slog.Warn("配置的端口被占用，已自动改用下一个可用端口",
+			"配置端口", cfg.Server.Port, "实际端口", actualPort,
+			"提示", "如需固定端口，请在「应用设置」里换一个没被占用的")
+	}
+	// 把实际端口写出来：管理台和命令行都能读到，避免用户猜
+	writePortFile(*cfgPath, actualPort)
+	// 让管理台能显示"真实情况"（实际端口 + 实际用的 ffmpeg）
+	a.SetRuntime(actualPort, rxMgr.FFmpegPath())
+
 	servers = append(servers, tcpSrv)
 	go func() {
-		slog.Info("TCP 入口已启动", "addr", tcpAddr, "version", version)
+		slog.Info("TCP 入口已启动", "addr", ln.Addr().String(), "version", version)
 		if err := tcpSrv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			slog.Error("TCP 服务异常退出", "err", err)
 		}
@@ -237,7 +254,7 @@ func main() {
 			recDir = filepath.Join(cfg.Stream.CacheDir, "recordings")
 		}
 		recMgr := record.NewManager(st, record.Options{
-			FFmpeg:    cfg.Transcode.FFmpeg,
+			FFmpeg:    cfg.FFmpegPath(),
 			Dir:       recDir,
 			UserAgent: cfg.Stream.UserAgent,
 		})
@@ -345,6 +362,54 @@ func isAPIPath(p string) bool {
 		return true
 	}
 	return false
+}
+
+// listenWithFallback 先试配置端口，被占用就顺延，最多试 tries 次。
+//
+// 为什么不在端口被占时直接退出：
+//   NAS 上端口冲突太常见（用户自己装过别的东西、装了两份 LITV、
+//   系统服务恰好用了 9527……）。直接退出的话用户只看到"启动失败"，
+//   根本不知道换个端口就好。
+//
+// 只有「端口被占用」才顺延；权限不足之类的错误立即返回，别掩盖真正的问题。
+func listenWithFallback(host string, port, tries int) (net.Listener, int, error) {
+	var lastErr error
+	for i := 0; i <= tries; i++ {
+		p := port + i
+		if p < 1 || p > 65535 {
+			break
+		}
+		addr := fmt.Sprintf("%s:%d", host, p)
+		ln, err := net.Listen("tcp", addr)
+		if err == nil {
+			return ln, p, nil
+		}
+		lastErr = err
+		if !isAddrInUse(err) {
+			return nil, 0, err
+		}
+		slog.Warn("端口已被占用，尝试下一个", "port", p)
+	}
+	return nil, 0, lastErr
+}
+
+func isAddrInUse(err error) bool {
+	return errors.Is(err, syscall.EADDRINUSE) ||
+		strings.Contains(strings.ToLower(err.Error()), "address already in use")
+}
+
+// writePortFile 把实际监听端口写到配置文件旁边的 litv.port。
+//
+// 用途：用户/脚本想知道"到底起在哪个端口"，不用去翻日志。
+func writePortFile(cfgPath string, port int) {
+	dir := filepath.Dir(cfgPath)
+	if dir == "" || dir == "." {
+		return
+	}
+	f := filepath.Join(dir, "litv.port")
+	if err := os.WriteFile(f, []byte(fmt.Sprintf("%d\n", port)), 0o644); err != nil {
+		slog.Debug("写端口文件失败（不影响运行）", "path", f, "err", err)
+	}
 }
 
 func setupLogger() {

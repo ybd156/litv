@@ -55,6 +55,14 @@ func (a *API) systemInfo(w http.ResponseWriter, r *http.Request) {
 		"transcode":       a.cfg.Transcode.Enabled,
 		"db_path":         a.cfg.Database.Path,
 	}
+	// 实际端口可能和配置不同（被占用时自动顺延），TV 要填的是这个
+	if a.actualPort > 0 {
+		data["actual_port"] = a.actualPort
+		data["port_changed"] = a.actualPort != a.cfg.Server.Port
+	}
+	// ffmpeg 的真实解析结果（配置里可能只写了个名字）
+	data["ffmpeg"] = a.ffmpegPath
+	data["remux_available"] = a.ffmpegPath != ""
 	if st != nil {
 		data["channels_total"] = st.ChannelsTotal
 		data["channels_enabled"] = st.ChannelsOn

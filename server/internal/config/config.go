@@ -110,11 +110,25 @@ type Timeshift struct {
 // 为什么需要：iOS 的 AVPlayer 播不了裸 TS。只转封装不转码（-c copy），
 // 码流原样搬，N100 上几乎不吃 CPU。
 type Remux struct {
-	Enabled        bool   `yaml:"enabled"`
+	Enabled bool `yaml:"enabled"`
+	// FFmpeg 转封装用的 ffmpeg。留空则回落到 transcode.ffmpeg。
+	//
+	// 单独给 remux 一个入口，是因为「转码」和「转封装」是两件事：
+	// 用户只想让 iOS 能播，不需要开转码，却要去 transcode 段里改 ffmpeg，
+	// 报错信息还会说"转封装已配置但 ffmpeg 不可用"——非常劝退。
+	FFmpeg         string `yaml:"ffmpeg"`
 	Dir            string `yaml:"dir"`
 	SegmentSeconds int    `yaml:"segment_seconds"`
 	PlaylistSize   int    `yaml:"playlist_size"`
 	IdleTimeoutSec int    `yaml:"idle_timeout_seconds"`
+}
+
+// FFmpegPath 返回转封装该用的 ffmpeg：优先 remux.ffmpeg，其次 transcode.ffmpeg。
+func (c *Config) FFmpegPath() string {
+	if c.Remux.FFmpeg != "" {
+		return c.Remux.FFmpeg
+	}
+	return c.Transcode.FFmpeg
 }
 
 // Record 录制中心配置。

@@ -28,6 +28,10 @@ type Options struct {
 	UserAgent   string        // 上游 UA
 	Timeout     time.Duration // 上游连接超时
 	IdleTimeout time.Duration // 无订阅者多久后回收上游
+
+	// OnData 每读到一块上游数据时回调（用于时移录制）。
+	// 必须快速返回，不要在里面做阻塞 IO——它在扇出热路径上。
+	OnData func(channelID int64, data []byte)
 }
 
 // Hub 管理所有活跃的上游连接。
@@ -321,6 +325,10 @@ func (u *Upstream) readOnce(ctx context.Context) error {
 			copy(chunk, buf[:n])
 			u.appendRing(chunk)
 			u.broadcast(chunk)
+			// 时移录制：顺手 tee 一份到磁盘（回调内部必须快速返回）
+			if u.opts.OnData != nil {
+				u.opts.OnData(u.ChannelID, chunk)
+			}
 		}
 		if err != nil {
 			if errors.Is(err, io.EOF) {

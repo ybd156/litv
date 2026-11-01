@@ -27,6 +27,7 @@ import (
 	"github.com/litv/litv/server/internal/probe"
 	"github.com/litv/litv/server/internal/store"
 	"github.com/litv/litv/server/internal/stream"
+	"github.com/litv/litv/server/internal/timeshift"
 	"github.com/litv/litv/server/internal/web"
 )
 
@@ -69,15 +70,31 @@ func main() {
 	}
 	defer st.Close()
 
+	// 时移缓冲：扇出层每读到一块就 tee 一份到磁盘，
+	// 所以"看过就有回看"，不需要额外开录制任务。
+	tsDir := cfg.Timeshift.Dir
+	if tsDir == "" {
+		tsDir = filepath.Join(cfg.Stream.CacheDir, "timeshift")
+	}
+	tsMgr := timeshift.NewManager(tsDir, cfg.Timeshift.Enabled, timeshift.Options{
+		SegmentBytes: int64(cfg.Timeshift.SegmentMB) << 20,
+		MaxSegments:  cfg.Timeshift.MaxSegments,
+	})
+	defer tsMgr.Close()
+
 	hub := stream.NewHub(stream.Options{
 		RingSize:  cfg.Stream.RingSize,
 		ChunkSize: cfg.Stream.BufferSize,
 		UserAgent: cfg.Stream.UserAgent,
 		Timeout:   time.Duration(cfg.Stream.UpstreamTimeout) * time.Second,
+		OnData: func(channelID int64, data []byte) {
+			tsMgr.Write(channelID, data)
+		},
 	})
 	defer hub.Close()
 
 	a := api.New(cfg, st, hub, version)
+	a.SetTimeshift(tsMgr)
 
 	// 静态资源（管理台）挂在同一路由下：先走 API，未命中再落静态文件。
 	rootHandler := func(viaGateway bool) http.Handler {

@@ -360,6 +360,81 @@ func (a *API) remoteTargets(w http.ResponseWriter, r *http.Request) {
 	ok(w, out)
 }
 
+// ---------- 时移 / 回看 ----------
+
+// tvTimeshift 告诉终端"这个台能回看多久"，并给出带签名的回看地址。
+func (a *API) tvTimeshift(w http.ResponseWriter, r *http.Request) {
+	dev, _ := deviceFrom(r.Context())
+	id := pathInt64(r, "id")
+	if a.ts == nil || !a.ts.Enabled() {
+		ok(w, map[string]any{"available_seconds": 0, "enabled": false})
+		return
+	}
+	span := a.ts.SpanSeconds(id)
+	exp := time.Now().Add(6 * time.Hour).Unix()
+	sig := a.signer.Sign(id, exp, dev.DeviceKey)
+	q := url.Values{}
+	q.Set("sig", sig)
+	q.Set("exp", strconv.FormatInt(exp, 10))
+	q.Set("dk", dev.DeviceKey)
+	ok(w, map[string]any{
+		"enabled":           true,
+		"available_seconds": span,
+		"url": fmt.Sprintf("%s/live/%d/timeshift.ts?%s",
+			a.cfg.Server.Prefix, id, q.Encode()),
+	})
+}
+
+// liveTimeshift 从时移缓冲里读并吐给客户端。back 是"距今多少秒"。
+func (a *API) liveTimeshift(w http.ResponseWriter, r *http.Request) {
+	id, _, ok2 := a.verifyStream(r)
+	if !ok2 {
+		fail(w, http.StatusForbidden, 2002, "回看地址无效或已过期")
+		return
+	}
+	if a.ts == nil || !a.ts.Enabled() {
+		fail(w, http.StatusNotFound, 3001, "时移未开启")
+		return
+	}
+	back, _ := strconv.Atoi(r.URL.Query().Get("back"))
+	if back < 0 {
+		back = 0
+	}
+	rd, err := a.ts.Open(id, back)
+	if err != nil {
+		fail(w, http.StatusNotFound, 3002, err.Error())
+		return
+	}
+	defer rd.Close()
+
+	flusher, canFlush := w.(http.Flusher)
+	w.Header().Set("Content-Type", "video/mp2t")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.WriteHeader(http.StatusOK)
+
+	buf := make([]byte, 64*1024)
+	for {
+		n, rerr := rd.Read(buf)
+		if n > 0 {
+			if _, werr := w.Write(buf[:n]); werr != nil {
+				return
+			}
+			if canFlush {
+				flusher.Flush()
+			}
+		}
+		if rerr != nil {
+			return
+		}
+		select {
+		case <-r.Context().Done():
+			return
+		default:
+		}
+	}
+}
+
 // ---------- 流出口 ----------
 
 // verifyStream 校验签名，返回频道 ID 与设备标识。

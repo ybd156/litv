@@ -74,3 +74,9 @@ epg:
 log:
   level: "info"
   max_mb: 10
+
+# 时移/回看：边看边录，只要有人看过这个台就能回看最近一段
+timeshift:
+  enabled: true
+  segment_mb: 64        # 单段大小
+  max_segments: 12      # 保留段数（12 × 64MB ≈ 1 小时缓冲）

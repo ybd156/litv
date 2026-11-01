@@ -22,6 +22,7 @@ type Config struct {
 	Transcode Transcode `yaml:"transcode"`
 	EPG       EPG       `yaml:"epg"`
 	Probe     Probe     `yaml:"probe"`
+	Timeshift Timeshift `yaml:"timeshift"`
 	Log       Log       `yaml:"log"`
 }
 
@@ -89,6 +90,17 @@ type Probe struct {
 	Concurrency int  `yaml:"concurrency"`
 }
 
+// Timeshift 时移/回看配置。
+//
+// 实现方式：扇出层（stream.Hub）读到的字节顺手 tee 一份到磁盘，
+// 所以只要有人看过这个台，就有回看缓冲——不需要额外开录制任务。
+type Timeshift struct {
+	Enabled      bool   `yaml:"enabled"`
+	Dir          string `yaml:"dir"`
+	SegmentMB    int    `yaml:"segment_mb"`    // 单段大小
+	MaxSegments  int    `yaml:"max_segments"`  // 最多保留几段
+}
+
 // Log 日志配置。
 type Log struct {
 	Level string `yaml:"level"`
@@ -133,6 +145,11 @@ func Default() *Config {
 			IntervalMin: 15,
 			TimeoutSec:  8,
 			Concurrency: 6,
+		},
+		Timeshift: Timeshift{
+			Enabled:     true,
+			SegmentMB:   64,
+			MaxSegments: 12,
 		},
 		Log: Log{Level: "info", MaxMB: 10},
 	}

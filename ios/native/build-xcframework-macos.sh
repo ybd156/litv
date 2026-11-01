@@ -33,6 +33,7 @@ if [ ! -f "$WORK/lib/libuavs3d.a" ]; then
   # cmake_minimum_required(<3.5)，加这个开关才放行。
   cmake -S "$WORK/uavs3d" -B "$WORK/uavs3d/build-ios" \
     -DCMAKE_SYSTEM_NAME=iOS \
+    -DCMAKE_SYSTEM_PROCESSOR="$ARCH" \
     -DCMAKE_OSX_ARCHITECTURES="$ARCH" \
     -DCMAKE_OSX_DEPLOYMENT_TARGET="$IOS_MIN" \
     -DCMAKE_BUILD_TYPE=Release \

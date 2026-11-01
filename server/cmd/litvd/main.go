@@ -25,6 +25,7 @@ import (
 	"github.com/litv/litv/server/internal/api"
 	"github.com/litv/litv/server/internal/config"
 	"github.com/litv/litv/server/internal/probe"
+	"github.com/litv/litv/server/internal/record"
 	"github.com/litv/litv/server/internal/remux"
 	"github.com/litv/litv/server/internal/store"
 	"github.com/litv/litv/server/internal/stream"
@@ -212,6 +213,21 @@ func main() {
 				}
 			}()
 		}
+	}
+
+	// 录制中心
+	if cfg.Record.Enabled {
+		recDir := cfg.Record.Dir
+		if recDir == "" {
+			recDir = filepath.Join(cfg.Stream.CacheDir, "recordings")
+		}
+		recMgr := record.NewManager(st, record.Options{
+			FFmpeg:    cfg.Transcode.FFmpeg,
+			Dir:       recDir,
+			UserAgent: cfg.Stream.UserAgent,
+		})
+		a.SetRecord(recMgr)
+		go recMgr.Run(ctx)
 	}
 
 	// ---- 后台任务 ----

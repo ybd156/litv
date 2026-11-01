@@ -88,3 +88,9 @@ remux:
   segment_seconds: 2
   playlist_size: 6
   idle_timeout_seconds: 60
+
+# 录制中心（立即录制 / 预约录制）
+# 想长期保存就指到飞牛共享目录，例如 /vol1/litv/recordings
+record:
+  enabled: true
+  dir: ""            # 留空 = 用 cache 目录下的 recordings

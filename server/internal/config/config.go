@@ -24,6 +24,7 @@ type Config struct {
 	Probe     Probe     `yaml:"probe"`
 	Timeshift Timeshift `yaml:"timeshift"`
 	Remux     Remux     `yaml:"remux"`
+	Record    Record    `yaml:"record"`
 	Log       Log       `yaml:"log"`
 }
 
@@ -114,6 +115,15 @@ type Remux struct {
 	IdleTimeoutSec int    `yaml:"idle_timeout_seconds"`
 }
 
+// Record 录制中心配置。
+//
+// 文件默认落在 cache 目录；想长期保存就指到飞牛的共享目录
+// （config/resource 里声明的 data-share，比如 /vol1/litv/recordings）。
+type Record struct {
+	Enabled bool   `yaml:"enabled"`
+	Dir     string `yaml:"dir"`
+}
+
 // Log 日志配置。
 type Log struct {
 	Level string `yaml:"level"`
@@ -170,6 +180,7 @@ func Default() *Config {
 			PlaylistSize:   6,
 			IdleTimeoutSec: 60,
 		},
+		Record: Record{Enabled: true},
 		Log: Log{Level: "info", MaxMB: 10},
 	}
 }

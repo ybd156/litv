@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -728,6 +730,148 @@ func (a *API) statsChannels(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ok(w, items)
+}
+
+// ---------- 录制中心 ----------
+
+func (a *API) listRecordings(w http.ResponseWriter, r *http.Request) {
+	items, err := a.st.ListRecordings(r.Context(), r.URL.Query().Get("status"), queryInt(r, "limit", 100))
+	if err != nil {
+		fail(w, http.StatusInternalServerError, 5001, err.Error())
+		return
+	}
+	total, bytes, _ := a.st.RecordingStats(r.Context())
+	ok(w, map[string]any{
+		"items":       items,
+		"total_files": total,
+		"total_bytes": bytes,
+		"available":   a.rec != nil && a.rec.Available(),
+	})
+}
+
+// createRecording 新建录制任务。
+// 立即录制：start_at 留空（默认现在），duration_min 必填。
+// 预约录制：start_at 传 EPG 里的节目开始时间。
+func (a *API) createRecording(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		ChannelID   int64  `json:"channel_id"`
+		Name        string `json:"name"`
+		StartAt     int64  `json:"start_at"`
+		DurationMin int    `json:"duration_min"`
+		// DurationSec 优先于 DurationMin，方便脚本/测试精确控制
+		DurationSec int `json:"duration_sec"`
+	}
+	if err := decode(r, &body); err != nil {
+		fail(w, http.StatusBadRequest, 1001, "参数错误: "+err.Error())
+		return
+	}
+	if body.ChannelID <= 0 {
+		fail(w, http.StatusBadRequest, 1001, "channel_id 不能为空")
+		return
+	}
+	if a.rec == nil || !a.rec.Available() {
+		fail(w, http.StatusServiceUnavailable, 5001, "录制不可用：服务端未配置 ffmpeg")
+		return
+	}
+	durSec := body.DurationSec
+	if durSec <= 0 {
+		if body.DurationMin <= 0 {
+			body.DurationMin = 30
+		}
+		durSec = body.DurationMin * 60
+	}
+	if durSec < 5 {
+		fail(w, http.StatusBadRequest, 1001, "录制时长至少 5 秒")
+		return
+	}
+	if durSec > 8*3600 {
+		fail(w, http.StatusBadRequest, 1001, "单次录制最长 8 小时")
+		return
+	}
+	start := body.StartAt
+	if start <= 0 {
+		start = time.Now().Unix()
+	}
+	if start < time.Now().Unix()-60 {
+		fail(w, http.StatusBadRequest, 1001, "开始时间已过去")
+		return
+	}
+
+	name := body.Name
+	if name == "" {
+		if ch, err := a.st.GetChannel(r.Context(), body.ChannelID); err == nil {
+			name = ch.Name + " " + time.Unix(start, 0).Format("01-02 15:04")
+		} else {
+			name = "录制 " + time.Unix(start, 0).Format("01-02 15:04")
+		}
+	}
+
+	id, err := a.st.CreateRecording(r.Context(), store.Recording{
+		ChannelID: body.ChannelID,
+		Name:      name,
+		StartAt:   start,
+		EndAt:     start + int64(durSec),
+	})
+	if err != nil {
+		fail(w, http.StatusInternalServerError, 5001, err.Error())
+		return
+	}
+	a.st.Audit(r.Context(), 0, "record.create", fmt.Sprint(id), name, r.RemoteAddr)
+	ok(w, map[string]any{"id": id, "start_at": start, "end_at": start + int64(durSec)})
+}
+
+func (a *API) deleteRecording(w http.ResponseWriter, r *http.Request) {
+	id := pathInt64(r, "id")
+	rec, err := a.st.GetRecording(r.Context(), id)
+	if err != nil {
+		fail(w, http.StatusNotFound, 3001, "录制不存在")
+		return
+	}
+	if a.rec != nil {
+		a.rec.Stop(id)
+	}
+	// 只删我们自己的录制文件，不碰目录里的其它东西
+	if rec.Path != "" && strings.HasPrefix(filepath.Clean(rec.Path), filepath.Clean(a.cfg.Record.Dir)) {
+		_ = os.Remove(rec.Path)
+	}
+	if err := a.st.DeleteRecording(r.Context(), id); err != nil {
+		fail(w, http.StatusInternalServerError, 5001, err.Error())
+		return
+	}
+	ok(w, map[string]any{"deleted": true})
+}
+
+func (a *API) stopRecording(w http.ResponseWriter, r *http.Request) {
+	id := pathInt64(r, "id")
+	if a.rec == nil {
+		fail(w, http.StatusServiceUnavailable, 5001, "录制未启用")
+		return
+	}
+	a.rec.Stop(id)
+	ok(w, map[string]any{"stopped": true})
+}
+
+// recordingFile 把录制文件吐给客户端。
+// 用 http.ServeFile 而不是自己读：它自带 Range 支持，播放器才能拖动进度条。
+func (a *API) recordingFile(w http.ResponseWriter, r *http.Request) {
+	id := pathInt64(r, "id")
+	rec, err := a.st.GetRecording(r.Context(), id)
+	if err != nil {
+		fail(w, http.StatusNotFound, 3001, "录制不存在")
+		return
+	}
+	if rec.Path == "" {
+		fail(w, http.StatusNotFound, 3001, "录制文件还没生成")
+		return
+	}
+	if _, err := os.Stat(rec.Path); err != nil {
+		fail(w, http.StatusNotFound, 3001, "录制文件不存在")
+		return
+	}
+	w.Header().Set("Content-Type", "video/mp2t")
+	w.Header().Set("Content-Disposition",
+		fmt.Sprintf("inline; filename=%q", filepath.Base(rec.Path)))
+	http.ServeFile(w, r, rec.Path)
 }
 
 // ---------- 密码登录（网关不可用时的应急入口） ----------

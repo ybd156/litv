@@ -197,6 +197,21 @@ CREATE TABLE IF NOT EXISTS watch_progress (
 );
 CREATE INDEX IF NOT EXISTS idx_watch_progress_time ON watch_progress(updated_at);
 
+-- 录制中心：立即录制与预约录制共用一张表
+CREATE TABLE IF NOT EXISTS recordings (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  channel_id INTEGER NOT NULL DEFAULT 0,
+  name       TEXT NOT NULL DEFAULT '',
+  start_at   INTEGER NOT NULL,
+  end_at     INTEGER NOT NULL,
+  status     TEXT NOT NULL DEFAULT 'scheduled', -- scheduled|recording|finished|failed|canceled
+  path       TEXT NOT NULL DEFAULT '',
+  size       INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_recordings_start ON recordings(start_at);
+CREATE INDEX IF NOT EXISTS idx_recordings_status ON recordings(status, start_at);
+
 CREATE TABLE IF NOT EXISTS kv (
   k TEXT PRIMARY KEY,
   v TEXT NOT NULL

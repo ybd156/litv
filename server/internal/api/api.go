@@ -25,6 +25,7 @@ import (
 
 	"github.com/litv/litv/server/internal/auth"
 	"github.com/litv/litv/server/internal/config"
+	"github.com/litv/litv/server/internal/record"
 	"github.com/litv/litv/server/internal/remote"
 	"github.com/litv/litv/server/internal/remux"
 	"github.com/litv/litv/server/internal/store"
@@ -40,6 +41,7 @@ type API struct {
 	remote  *remote.Hub
 	ts      *timeshift.Manager
 	rx      *remux.Manager
+	rec     *record.Manager
 	signer  *auth.Signer
 	startAt time.Time
 	version string
@@ -63,6 +65,9 @@ func (a *API) SetTimeshift(m *timeshift.Manager) { a.ts = m }
 
 // SetRemux 注入转封装管理器。
 func (a *API) SetRemux(m *remux.Manager) { a.rx = m }
+
+// SetRecord 注入录制管理器。
+func (a *API) SetRecord(m *record.Manager) { a.rec = m }
 
 // ctxKey 避免 context key 冲突。
 type ctxKey int
@@ -114,6 +119,13 @@ func (a *API) Handler(viaGateway bool) http.Handler {
 		// 播放质量统计
 		pr.Get("/api/v1/stats/overview", a.statsOverview)
 		pr.Get("/api/v1/stats/channels", a.statsChannels)
+
+		// 录制中心
+		pr.Get("/api/v1/recordings", a.listRecordings)
+		pr.Post("/api/v1/recordings", a.createRecording)
+		pr.Delete("/api/v1/recordings/{id}", a.deleteRecording)
+		pr.Post("/api/v1/recordings/{id}/stop", a.stopRecording)
+		pr.Get("/api/v1/recordings/{id}/file", a.recordingFile)
 
 		pr.Get("/api/v1/sources", a.listSources)
 		pr.Post("/api/v1/sources", a.createSource)

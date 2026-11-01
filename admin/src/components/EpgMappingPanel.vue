@@ -15,6 +15,15 @@ const loading = ref(false)
 const error = ref('')
 /** 服务端没有 GET /epg/channels 时降级：用频道表里出现过的 epg_id 反推 */
 const degraded = ref(false)
+/**
+ * 接口通了但 EPG 库是空的。
+ *
+ * 和 degraded 是两回事：
+ *   degraded = 接口不可用，只能从已匹配频道反推（功能受限）
+ *   empty    = 接口正常，只是还没导入节目单（去加个 EPG 源就好）
+ * 之前两者混在一起，导致明明接口正常也提示「服务端还没实现」。
+ */
+const epgEmpty = ref(false)
 
 const chSearch = ref('')
 const epgSearch = ref('')
@@ -62,16 +71,20 @@ async function load(): Promise<void> {
     ])
     if (ch.status === 'rejected') throw ch.reason
     channels.value = ch.value.items
-    if (epg.status === 'fulfilled' && epg.value.length > 0) {
+    if (epg.status === 'fulfilled') {
+      // 接口正常。空就只是"还没导入节目单"，不是接口没实现
       epgChannels.value = epg.value
       degraded.value = false
+      epgEmpty.value = epg.value.length === 0
     } else {
+      // 真降级：接口不可用，只能拿已匹配的频道反推出 EPG 频道清单
       const seen = new Map<string, EpgChannel>()
       for (const c of channels.value) {
         if (c.epg_id && !seen.has(c.epg_id)) seen.set(c.epg_id, { id: c.epg_id, name: c.epg_id })
       }
       epgChannels.value = [...seen.values()]
       degraded.value = true
+      epgEmpty.value = false
     }
   } catch (e) {
     error.value = toErrorMessage(e)
@@ -149,8 +162,14 @@ onMounted(() => void load())
 
     <p v-if="degraded && !loading" class="note">
       <Icon name="warning" :size="14" />
-      服务端还没实现 <code class="mono">GET /api/v1/epg/channels</code>，右侧列表是从已匹配的频道里反推的，
+      读取 EPG 频道清单失败，右侧列表是从已匹配的频道里反推的，
       能改已有匹配但看不到全部 EPG 频道。
+    </p>
+
+    <p v-else-if="epgEmpty && !loading" class="note">
+      <Icon name="warning" :size="14" />
+      EPG 库还是空的。先去「EPG 源」标签页添加一个节目单地址并点「立即刷新」，
+      拉回来之后这里才有东西可以对应。
     </p>
 
     <StateBlock :loading="loading && channels.length === 0" :error="error" :min-height="360" @retry="load">

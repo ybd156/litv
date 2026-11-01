@@ -39,8 +39,11 @@ const loading = ref(true)
 const playing = ref<Channel | null>(null)
 const playError = ref('')
 const buffering = ref(false)
+const muted = ref(true)
+const fullscreen = ref(false)
 
 const videoEl = ref<HTMLVideoElement | null>(null)
+const stageEl = ref<HTMLElement | null>(null)
 const hls = shallowRef<Hls | null>(null)
 
 const filtered = computed(() => {
@@ -93,7 +96,6 @@ async function play(ch: Channel) {
 
   try {
     const info = await request<WebPlay>(`/web/play/${ch.id}`)
-    const url = info.url
     const el = videoEl.value
     if (!el) return
 
@@ -109,7 +111,6 @@ async function play(ch: Channel) {
         if (!data.fatal) return
         switch (data.type) {
           case Hls.ErrorTypes.NETWORK_ERROR:
-            // 网络抖动：hls.js 自己能重试，别打扰用户
             h.startLoad()
             break
           case Hls.ErrorTypes.MEDIA_ERROR:
@@ -125,18 +126,40 @@ async function play(ch: Channel) {
           /* 浏览器可能要求先点一下，忽略 */
         })
       })
-      h.loadSource(url)
+      h.loadSource(info.url)
       h.attachMedia(el)
       hls.value = h
     } else if (el.canPlayType('application/vnd.apple.mpegurl')) {
-      // Safari 原生支持 HLS
-      el.src = url
+      el.src = info.url
       el.play().catch(() => {})
     } else {
       playError.value = '这个浏览器不支持 HLS 播放'
     }
   } catch (e) {
     playError.value = e instanceof Error ? e.message : '获取播放地址失败'
+  }
+}
+
+function toggleMute() {
+  const el = videoEl.value
+  if (!el) return
+  muted.value = !muted.value
+  el.muted = muted.value
+}
+
+async function toggleFullscreen() {
+  const el = stageEl.value
+  if (!el) return
+  try {
+    if (!document.fullscreenElement) {
+      await el.requestFullscreen()
+      fullscreen.value = true
+    } else {
+      await document.exitFullscreen()
+      fullscreen.value = false
+    }
+  } catch {
+    message.warning('这个浏览器不支持全屏')
   }
 }
 
@@ -158,7 +181,7 @@ onBeforeUnmount(destroyPlayer)
 
     <div class="body">
       <!-- 左：频道 -->
-      <div class="channels">
+      <aside class="channels">
         <NSpin :show="loading">
           <StateBlock
             v-if="!loading && channels.length === 0"
@@ -166,7 +189,10 @@ onBeforeUnmount(destroyPlayer)
             desc="先去「源管理」导入一条 M3U/TXT，再回来这里看"
           />
           <div v-for="[group, list] in grouped" :key="group" class="group">
-            <div class="group-title">{{ group }}<NTag size="small" :bordered="false">{{ list.length }}</NTag></div>
+            <div class="group-title">
+              {{ group }}
+              <NTag size="small" :bordered="false">{{ list.length }}</NTag>
+            </div>
             <button
               v-for="ch in list"
               :key="ch.id"
@@ -176,27 +202,56 @@ onBeforeUnmount(destroyPlayer)
             >
               <img v-if="ch.logo" :src="ch.logo" alt="" />
               <span class="name">{{ ch.name }}</span>
-              <span v-if="ch.stream_count > 1" class="badge">{{ ch.stream_count }} 线路</span>
+              <span v-if="ch.stream_count > 1" class="badge">{{ ch.stream_count }}</span>
             </button>
           </div>
         </NSpin>
-      </div>
+      </aside>
 
       <!-- 右：播放器 -->
-      <div class="player">
-        <div class="stage">
-          <video ref="videoEl" controls autoplay playsinline @waiting="buffering = true" @playing="buffering = false" />
-          <div v-if="!playing" class="placeholder">
+      <section class="player">
+        <div ref="stageEl" class="stage">
+          <video
+            ref="videoEl"
+            playsinline
+            muted
+            @waiting="buffering = true"
+            @playing="buffering = false"
+            @click="toggleMute"
+          />
+
+          <!-- 占位：绝对定位盖在画面上，不参与 flex 排版 -->
+          <div v-if="!playing" class="overlay">
+            <div class="ph-mark">LITV</div>
             <div class="ph-title">选一个频道开始</div>
             <div class="ph-desc">左边点任意频道即可播放</div>
           </div>
-          <div v-if="playError" class="err">{{ playError }}</div>
+
+          <div v-if="playError" class="overlay err">{{ playError }}</div>
+
+          <div v-if="buffering && playing && !playError" class="overlay">
+            <NSpin size="large" />
+          </div>
+
+          <!-- 悬浮控制条 -->
+          <div v-if="playing" class="controls">
+            <span class="live-dot" />
+            <span class="cname">{{ playing.name }}</span>
+            <span class="grow" />
+            <button class="ctl" :title="muted ? '取消静音' : '静音'" @click="toggleMute">
+              {{ muted ? '🔇' : '🔊' }}
+            </button>
+            <button class="ctl" title="全屏" @click="toggleFullscreen">⛶</button>
+          </div>
         </div>
+
         <div v-if="playing" class="meta">
           <span class="now">{{ playing.name }}</span>
-          <span class="hint">当前：{{ playing.group }}</span>
+          <span class="hint">{{ playing.group || '未分组' }}</span>
+          <span class="grow" />
+          <span class="hint">点画面可静音 / 取消静音</span>
         </div>
-      </div>
+      </section>
     </div>
   </div>
 </template>
@@ -210,16 +265,19 @@ onBeforeUnmount(destroyPlayer)
 }
 .body {
   display: grid;
-  grid-template-columns: 280px 1fr;
+  grid-template-columns: 260px minmax(0, 1fr);
   gap: 16px;
   flex: 1;
   min-height: 0;
 }
+
+/* ---------------- 左侧频道 ---------------- */
 .channels {
   overflow-y: auto;
   background: var(--litv-panel, #151a21);
   border-radius: 10px;
   padding: 8px;
+  min-height: 0;
 }
 .group + .group {
   margin-top: 12px;
@@ -270,52 +328,122 @@ onBeforeUnmount(destroyPlayer)
   color: #2dd4bf;
   opacity: 0.8;
 }
+
+/* ---------------- 右侧播放器 ---------------- */
 .player {
   display: flex;
   flex-direction: column;
   min-width: 0;
+  min-height: 0;
 }
+
+/*
+ * ★ 这里必须是 position:relative + 绝对定位的子元素。
+ *   之前用 display:flex 排版，结果 <video> 和占位文字被摆成一左一右，
+ *   占位文字跑到画面外面去了。
+ */
 .stage {
   position: relative;
   flex: 1;
+  min-height: 0;
   background: #000;
   border-radius: 10px;
   overflow: hidden;
-  display: flex;
-  align-items: center;
-  justify-content: center;
 }
 .stage video {
+  position: absolute;
+  inset: 0;
   width: 100%;
   height: 100%;
   object-fit: contain;
+  cursor: pointer;
 }
-.placeholder {
-  text-align: center;
-  color: #8b949e;
-}
-.ph-title {
-  font-size: 16px;
-  margin-bottom: 4px;
-}
-.ph-desc {
-  font-size: 13px;
-  opacity: 0.7;
-}
-.err {
+
+/* 占位 / 报错 / 缓冲：全部盖在画面正中 */
+.overlay {
   position: absolute;
-  left: 50%;
-  top: 50%;
-  transform: translate(-50%, -50%);
-  max-width: 70%;
-  padding: 14px 18px;
-  border-radius: 8px;
-  background: #f8514922;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  text-align: center;
+  pointer-events: none;
+  padding: 0 24px;
+}
+.overlay.err {
   color: #ff8f88;
   font-size: 13px;
   line-height: 1.6;
-  text-align: center;
+  background: #000000aa;
+  pointer-events: auto;
 }
+.ph-mark {
+  font-size: 26px;
+  font-weight: 800;
+  letter-spacing: 6px;
+  color: #ffffff22;
+}
+.ph-title {
+  font-size: 15px;
+  color: #c9d1d9;
+}
+.ph-desc {
+  font-size: 12px;
+  color: #8b949e;
+}
+
+/* 悬浮控制条 */
+.controls {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  background: linear-gradient(to top, #000000cc, transparent);
+  opacity: 0;
+  transition: opacity 0.18s;
+}
+.stage:hover .controls {
+  opacity: 1;
+}
+.live-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #f85149;
+  box-shadow: 0 0 6px #f85149;
+}
+.cname {
+  font-size: 13px;
+  color: #e6edf3;
+  max-width: 50%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ctl {
+  border: 0;
+  background: #ffffff14;
+  color: #e6edf3;
+  width: 30px;
+  height: 30px;
+  border-radius: 7px;
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+}
+.ctl:hover {
+  background: #ffffff26;
+}
+.grow {
+  flex: 1;
+}
+
 .meta {
   display: flex;
   gap: 12px;

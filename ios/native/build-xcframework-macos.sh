@@ -98,11 +98,16 @@ if [ ! -f "$WORK/lib/libavcodec.a" ]; then
 fi
 
 # ---------------------------------------------------------------- 3. mpv
+#
+# 用 mpv 0.35.1 而不是 0.39：
+#   0.36 之后 libplacebo 从"可选依赖"变成了无条件 dependency()，
+#   而 iOS 上编 libplacebo 要拉 Vulkan/GLES + shaderc 整条链，成本极高。
+#   0.35.1 仍然可以 -Dlibplacebo=disabled，且自带 ios-gl 后端。
 if [ ! -f "$WORK/lib/libmpv.a" ]; then
-  say "构建 mpv（libmpv 静态库）"
+  say "构建 mpv 0.35.1（libmpv 静态库）"
   [ -d mpv ] || {
-    curl -fL -o mpv.tar.gz https://github.com/mpv-player/mpv/archive/refs/tags/v0.39.0.tar.gz
-    tar xzf mpv.tar.gz && mv mpv-0.39.0 mpv
+    curl -fL --retry 3 -o mpv.tar.gz https://github.com/mpv-player/mpv/archive/refs/tags/v0.35.1.tar.gz
+    tar xzf mpv.tar.gz && mv mpv-0.35.1 mpv
   }
   brew install meson ninja pkg-config || true
   cat > "$WORK/cross-ios.txt" <<CROSS
@@ -123,9 +128,17 @@ CROSS
   PKG_CONFIG_PATH="$WORK/lib/pkgconfig" meson setup mpv/build mpv \
     --cross-file "$WORK/cross-ios.txt" \
     --prefix="$WORK" --buildtype=release \
-    -Dlibmpv=true -Dcplayer=false -Dbuild-date=false \
-    -Dlibass=disabled -Dlibplacebo=disabled \
-    -Dvideotoolbox=enabled -Dmacos-10-15-feature=disabled
+    -Dlibmpv=true -Dcplayer=false -Dbuild-date=false -Dgpl=false \
+    -Dlibplacebo=disabled -Dgl=enabled -Dios-gl=enabled \
+    -Dcocoa=disabled -Dgl-cocoa=disabled -Dmacos-cocoa-cb=disabled \
+    -Dmacos-media-player=disabled -Dmacos-touchbar=disabled \
+    -Dalsa=disabled -Djack=disabled -Dpulse=disabled -Dpipewire=disabled -Dopenal=disabled \
+    -Dsdl2=disabled -Dsdl2-audio=disabled -Dsdl2-video=disabled \
+    -Dvaapi=disabled -Dvdpau=disabled -Dcuda-hwaccel=disabled -Dcuda-interop=disabled \
+    -Ddrm=disabled -Dgbm=disabled -Dwayland=disabled -Dx11=disabled -Dxv=disabled -Dvulkan=disabled \
+    -Dcaca=disabled -Djpeg=disabled -Dlcms2=disabled -Dlibarchive=disabled -Dlibbluray=disabled \
+    -Dlua=disabled -Duchardet=disabled -Dzimg=disabled -Ddvbin=disabled -Ddvdnav=disabled \
+    -Dcdda=disabled -Drubberband=disabled -Djavascript=disabled
   ninja -C mpv/build
   ninja -C mpv/build install
 fi

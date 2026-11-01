@@ -156,38 +156,12 @@ mpv 的 40+ 个 meson 开关也逐个校验过。**卡在 libass**——它只�
 **双内核策略**：VLCKit 优先，起不来时自动退回 AVPlayer；`#if canImport(MobileVLCKit)`
 包住整个文件，Pod 没装上也不影响 App 编译。
 
-## 故障排查
+### 本地构建
 
-### 装完打不开 / 提示"服务启动失败"
-
-**最常见原因：端口被占用。** 0.0.2 起会自动顺延端口并写日志：
-
-```
-WARN 配置的端口被占用，已自动改用下一个可用端口 配置端口=9527 实际端口=9528
-```
-
-实际端口记在配置文件旁的 `litv.port`，管理台「概览」页也能看到
-（`actual_port` / `port_changed`）。**TV / 手机填服务器地址时用实际端口。**
-
-想固定端口：应用设置 → 换一个没被占用的（比如 18027）。
-
-### iOS / 网页播不了，TV 正常
-
-**说明服务端没找到 ffmpeg。** 转封装只影响 iOS 和网页（它们只认 HLS）；
-TV / 手机 App 直接吃裸 TS，不受影响。
-
-服务端会按这个顺序找 ffmpeg：
-随包目录 → `PATH` → `/usr/bin` → `/usr/local/bin` → `/opt/ffmpeg/bin` → `/usr/trim/bin`
-
-都没有就装一个，或在「应用设置」里把 `remux.ffmpeg` 填成绝对路径。
-
-> 为什么不把 ffmpeg 打进 fpk：静态构建单个 130–150MB，包体积会从 6MB 涨到 150MB+，
-> 为了一个只影响 iOS/网页的能力不值当。
-
-## 快速开始（WSL）
+```bash
 # 1. 构建服务端
 cd server
-go build -ldflags "-s -w -X main.version=1.0.0" -o litvd ./cmd/litvd
+go build -ldflags "-s -w -X main.version=0.0.2" -o litvd ./cmd/litvd
 
 # 2. 构建管理台
 cd ../admin
@@ -215,6 +189,34 @@ bash build/test/smoke.sh
 覆盖：健康检查 → 网关身份 → 建源 → 预览 → 刷新 → 分组 → 频道 → 线路 → 设备注册 → 审批 → 绑定码 → 运行时状态。
 
 ---
+
+## 故障排查
+
+### 装完打不开 / 提示"服务启动失败"
+
+**最常见原因：端口被占用。** 0.0.2 起会自动顺延端口并写日志：
+
+```
+WARN 配置的端口被占用，已自动改用下一个可用端口 配置端口=9527 实际端口=9528
+```
+
+实际端口记在配置文件旁的 `litv.port`，管理台「概览」页也能看到
+（`actual_port` / `port_changed`）。**TV / 手机填服务器地址时用实际端口。**
+
+想固定端口：应用设置 → 换一个没被占用的（比如 18027）。
+
+### iOS / 网页播不了，TV 正常
+
+**说明服务端没找到 ffmpeg。** 转封装只影响 iOS 和网页（它们只认 HLS）；
+TV / 手机 App 直接吃裸 TS，不受影响。
+
+服务端会按这个顺序找 ffmpeg：
+随包目录 → `PATH` → `/usr/bin` → `/usr/local/bin` → `/opt/ffmpeg/bin` → `/usr/trim/bin`
+
+都没有就装一个，或在「应用设置」里把 `remux.ffmpeg` 填成绝对路径。
+
+> 为什么不把 ffmpeg 打进 fpk：静态构建单个 130–150MB，包体积会从 6MB 涨到 150MB+，
+> 为了一个只影响 iOS/网页的能力不值当。
 
 ## 打包并安装到飞牛
 

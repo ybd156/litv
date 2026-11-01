@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -729,6 +730,30 @@ func (a *API) liveTS(w http.ResponseWriter, r *http.Request) {
 }
 
 // liveManifest 代理 HLS 清单，并把分片地址改写成我们自己的出口（防上游防盗链、防源泄露）。
+// streamUA 返回这条线路该用的 User-Agent。
+//
+// 顺序：线路自己的（来自源配置）→ 全局配置 → 空（调用方用默认）。
+//
+// 为什么必须按线路取：有的源站强制校验 UA，UA 不对会返回**另一份内容**
+// （比如一段演示视频），而不是报错——用全局 UA 去抓就是"能播但播的不是这个台"。
+func (a *API) streamUA(ctx context.Context, channelID int64) string {
+	if st, err := a.st.BestStream(ctx, channelID); err == nil && st != nil {
+		if ua := st.UserAgent(); ua != "" {
+			return ua
+		}
+	}
+	return a.cfg.Stream.UserAgent
+}
+
+// streamFetchOptions 用线路专属的 UA 去抓上游。
+func (a *API) streamFetchOptions(ctx context.Context, channelID int64) fetch.Options {
+	opt := fetch.DefaultOptions()
+	if ua := a.streamUA(ctx, channelID); ua != "" {
+		opt.UserAgent = ua
+	}
+	return opt
+}
+
 func (a *API) liveManifest(w http.ResponseWriter, r *http.Request) {
 	id, dk, ok2 := a.verifyStream(r)
 	if !ok2 {
@@ -745,7 +770,8 @@ func (a *API) liveManifest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	res, err := fetch.Get(r.Context(), st.URL, fetch.DefaultOptions())
+	// 必须带线路专属 UA，否则源站会返回演示内容或者直接拒绝
+	res, err := fetch.Get(r.Context(), st.URL, a.streamFetchOptions(r.Context(), id))
 	if err != nil {
 		fail(w, http.StatusBadGateway, 4001, "拉取清单失败: "+err.Error())
 		return
@@ -802,7 +828,11 @@ func (a *API) liveSegment(w http.ResponseWriter, r *http.Request) {
 		fail(w, http.StatusBadGateway, 4001, err.Error())
 		return
 	}
-	req.Header.Set("User-Agent", a.cfg.Stream.UserAgent)
+	// 分片也要带同一个 UA：源站校验是整条链路的，不只是清单
+	ua := a.streamUA(r.Context(), id)
+	req.Header.Set("User-Agent", ua)
+	req.Header.Set("Accept", "*/*")
+	req.Header.Set("Cache-Control", "no-cache")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		fail(w, http.StatusBadGateway, 4001, err.Error())

@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -45,10 +46,14 @@ func (a *API) systemInfo(w http.ResponseWriter, r *http.Request) {
 	// 概览页需要的聚合数字一并返回，避免前端打 N 个接口
 	st, _ := a.st.Stats(r.Context())
 	data := map[string]any{
-		"version":         a.version,
-		"uptime_s":        int(time.Since(a.startAt).Seconds()),
+		"version":  a.version,
+		"uptime_s": int(time.Since(a.startAt).Seconds()),
+		// 管理台读的是 uptime_seconds，这里同时给两个名字，省得再对一次契约
+		"uptime_seconds":  int(time.Since(a.startAt).Seconds()),
 		"active_channels": a.hub.Count(),
+		"active_streams":  a.hub.Count(),
 		"max_concurrent":  a.cfg.Stream.MaxConcurrent,
+		"arch":            runtime.GOARCH,
 		"port":            a.cfg.Server.Port,
 		"gateway_socket":  a.cfg.Server.GatewaySocket,
 		"prefix":          a.cfg.Server.Prefix,
@@ -80,7 +85,7 @@ func (a *API) systemLogs(w http.ResponseWriter, r *http.Request) {
 	// M1 阶段：日志走 stdout，由 cmd/main 重定向到文件；
 	// 这里返回最近的内存快照位置说明，后续接入环形缓冲。
 	ok(w, map[string]any{
-		"hint": "日志文件位于 $TRIM_PKGVAR/litv.log",
+		"hint":  "日志文件位于 $TRIM_PKGVAR/litv.log",
 		"lines": []string{},
 	})
 }
@@ -88,18 +93,18 @@ func (a *API) systemLogs(w http.ResponseWriter, r *http.Request) {
 func (a *API) getConfig(w http.ResponseWriter, r *http.Request) {
 	// 只暴露可安全展示的字段，绝不返回 secret / 密码
 	ok(w, map[string]any{
-		"port":               a.cfg.Server.Port,
-		"prefix":             a.cfg.Server.Prefix,
-		"max_concurrent":     a.cfg.Stream.MaxConcurrent,
-		"ring_size":          a.cfg.Stream.RingSize,
-		"transcode":          a.cfg.Transcode.Enabled,
-		"transcode_enabled":  a.cfg.Transcode.Enabled, // 前端字段名，与 transcode 同义
-		"hwaccel":            a.cfg.Transcode.HWAccel,
-		"epg_enabled":        a.cfg.EPG.Enabled,
-		"epg_refresh_hour":   epgRefreshHour(a.cfg.EPG.RefreshCron),
-		"token_hours":        a.cfg.Auth.TokenHours,
-		"log_level":          a.cfg.Log.Level,
-		"allow_lan":          a.cfg.Server.Host == "0.0.0.0",
+		"port":              a.cfg.Server.Port,
+		"prefix":            a.cfg.Server.Prefix,
+		"max_concurrent":    a.cfg.Stream.MaxConcurrent,
+		"ring_size":         a.cfg.Stream.RingSize,
+		"transcode":         a.cfg.Transcode.Enabled,
+		"transcode_enabled": a.cfg.Transcode.Enabled, // 前端字段名，与 transcode 同义
+		"hwaccel":           a.cfg.Transcode.HWAccel,
+		"epg_enabled":       a.cfg.EPG.Enabled,
+		"epg_refresh_hour":  epgRefreshHour(a.cfg.EPG.RefreshCron),
+		"token_hours":       a.cfg.Auth.TokenHours,
+		"log_level":         a.cfg.Log.Level,
+		"allow_lan":         a.cfg.Server.Host == "0.0.0.0",
 	})
 }
 
@@ -171,8 +176,8 @@ func (a *API) deadChannels(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ok(w, map[string]any{
-		"count": len(items),
-		"items": items,
+		"count":         len(items),
+		"items":         items,
 		"alert_enabled": a.alert != nil && a.alert.Enabled(),
 	})
 }

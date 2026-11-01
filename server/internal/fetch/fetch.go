@@ -8,6 +8,8 @@
 package fetch
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
 	"fmt"
 	"io"
@@ -108,6 +110,20 @@ func Get(ctx context.Context, url string, opt Options) (*Result, error) {
 	}
 	if len(body) == 0 {
 		return nil, fmt.Errorf("响应为空")
+	}
+
+	// .xml.gz / .m3u.gz 这类文件是按"附件"发的（Content-Type 不是 gzip），
+	// Go 的 http 客户端不会自动解压，得自己按魔数判断。
+	// EPG 源大量用 t.xml.gz，不解压解析器只会看到一堆二进制。
+	if len(body) > 2 && body[0] == 0x1f && body[1] == 0x8b {
+		zr, zerr := gzip.NewReader(bytes.NewReader(body))
+		if zerr == nil {
+			defer zr.Close()
+			plain, derr := io.ReadAll(io.LimitReader(zr, opt.MaxBytes))
+			if derr == nil && len(plain) > 0 {
+				body = plain
+			}
+		}
 	}
 
 	return &Result{

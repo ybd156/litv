@@ -170,7 +170,7 @@ onMounted(() => void run())
                   <p class="title">{{ a.title }}</p>
                   <p class="desc">{{ a.desc }}</p>
                 </div>
-                <span class="time">{{ timeAgo(a.time) }}</span>
+                <span class="time">{{ a.time && a.time !== '0' ? timeAgo(a.time) : '—' }}</span>
               </li>
             </ul>
           </StateBlock>

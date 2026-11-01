@@ -19,7 +19,7 @@
 | fnOS 打包 | ✅ 已出包 | `packaging/fnos/dist/litv_{x86,arm,all}_v1.0.0.fpk`，生命周期冒烟 39/39 |
 | Android TV | ✅ 已出包 | 四内核、自适应渲染档、完整遥控器交互、EPG 面板、线路/分组切换 |
 | Android 手机 | ✅ 同一 APK | 触摸手势播放、分组 chip、收藏、遥控器 |
-| iOS | 🚧 代码完成 | SwiftUI 客户端已写完（7 个 Swift 文件）；构建走 GitHub Actions macOS runner 出未签名 ipa，见 [ios-ipa.yml](.github/workflows/ios-ipa.yml) |
+| iOS | ✅ 已出包 | SwiftUI 客户端 + GitHub Actions macOS runner，产出**未签名** `LITV-unsigned.ipa`（arm64，195KB）。仓库：<https://github.com/ybd156/litv> |
 
 ### 已验证的测试
 
@@ -92,6 +92,17 @@ LITV2/
 ## 快速开始（WSL）
 
 环境：Ubuntu 26.04 / Go 1.23+ / Node 22+。**不需要 root**。
+
+### iOS 出包（走 GitHub Actions）
+
+iOS 不在 WSL 里编——需要 Apple 的 iOS SDK，Linux 上做不了。
+仓库推送到 GitHub 后，Actions 里的 `Build iOS unsigned IPA` 会自动跑，
+产物在 run 页面的 Artifacts 里下载 `LITV-unsigned-ipa`。
+
+产出的 `.ipa` 是**未签名**的，用 Sideloadly / SideStore 自签安装即可。
+
+> 踩坑记录：`runs-on: macos-14` 在这个账号下会让 job 3 秒内被取消（连 step 都不跑），
+> 换成 `macos-latest` 正常。
 
 ```bash
 # 1. 构建服务端

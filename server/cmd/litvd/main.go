@@ -23,6 +23,7 @@ import (
 
 	"github.com/litv/litv/server/internal/api"
 	"github.com/litv/litv/server/internal/config"
+	"github.com/litv/litv/server/internal/probe"
 	"github.com/litv/litv/server/internal/store"
 	"github.com/litv/litv/server/internal/stream"
 	"github.com/litv/litv/server/internal/web"
@@ -150,6 +151,17 @@ func main() {
 	}
 
 	// ---- 后台任务 ----
+	// 1) 源健康探测：定期探一遍所有线路，供 BestStream 自动择优
+	if cfg.Probe.Enabled {
+		pr := probe.New(st,
+			time.Duration(cfg.Probe.TimeoutSec)*time.Second,
+			cfg.Probe.Concurrency,
+			cfg.Stream.UserAgent)
+		go pr.Run(ctx, time.Duration(cfg.Probe.IntervalMin)*time.Minute)
+		slog.Info("源探测已启用", "interval_min", cfg.Probe.IntervalMin, "concurrency", cfg.Probe.Concurrency)
+	}
+
+	// 2) 过期节目单清理
 	go func() {
 		t := time.NewTicker(10 * time.Minute)
 		defer t.Stop()

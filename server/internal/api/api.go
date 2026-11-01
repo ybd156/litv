@@ -97,6 +97,7 @@ func (a *API) Handler(viaGateway bool) http.Handler {
 		pr.Get("/api/v1/system/config", a.getConfig)
 		pr.Put("/api/v1/system/config", a.putConfig)
 		pr.Get("/api/v1/system/streams", a.activeStreams)
+		pr.Post("/api/v1/system/probe", a.runProbe)
 
 		pr.Get("/api/v1/sources", a.listSources)
 		pr.Post("/api/v1/sources", a.createSource)

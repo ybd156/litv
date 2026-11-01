@@ -102,6 +102,10 @@ class HomeActivity : AppCompatActivity() {
     }
 
     private fun applyData(b: Bootstrap, fromCache: Boolean) {
+        // 服务端下发的远程配置优先于本地设置——这样在管理台改一次，
+        // 家里所有电视下次刷新就生效，不用挨个跑去按遥控器。
+        b.device?.config?.let { applyRemoteConfig(it) }
+
         val nowMap = b.now.associate { it.channelId to it.title }
         nowTitles.clear()
         nowTitles.putAll(nowMap)
@@ -161,6 +165,18 @@ class HomeActivity : AppCompatActivity() {
                 status.text = if (on) "已收藏「${ch.name}」" else "已取消收藏「${ch.name}」"
             },
             onErr = { status.text = "收藏失败：$it" })
+    }
+
+    /**
+     * 应用服务端下发的播放参数。
+     * 只覆盖"服务端明确给了值"的字段，没给的保持本地设置，
+     * 避免服务端字段缺失时把用户自己调好的参数冲掉。
+     */
+    private fun applyRemoteConfig(cfg: com.litv.tv.data.DeviceConfig) {
+        if (cfg.engine.isNotBlank() && cfg.engine != "auto") app.prefs.engine = cfg.engine
+        if (cfg.decode.isNotBlank()) app.prefs.decode = cfg.decode
+        if (cfg.bufferMs > 0) app.prefs.bufferMs = cfg.bufferMs
+        if (cfg.aspect.isNotBlank()) app.prefs.aspect = cfg.aspect
     }
 
     private fun timeNow(): String =

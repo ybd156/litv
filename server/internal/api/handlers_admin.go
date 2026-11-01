@@ -14,6 +14,7 @@ import (
 	"github.com/litv/litv/server/internal/epg"
 	"github.com/litv/litv/server/internal/fetch"
 	"github.com/litv/litv/server/internal/parse"
+	"github.com/litv/litv/server/internal/probe"
 	"github.com/litv/litv/server/internal/store"
 )
 
@@ -128,6 +129,23 @@ func (a *API) putConfig(w http.ResponseWriter, r *http.Request) {
 
 func (a *API) activeStreams(w http.ResponseWriter, r *http.Request) {
 	ok(w, a.hub.Stats())
+}
+
+// runProbe 手动触发一轮源探测（管理台「立即检测所有源」按钮）。
+// 探测是并发 + 只读前 128KB，不会把带宽打满，但也不要频繁点。
+func (a *API) runProbe(w http.ResponseWriter, r *http.Request) {
+	pr := probe.New(a.st,
+		time.Duration(a.cfg.Probe.TimeoutSec)*time.Second,
+		a.cfg.Probe.Concurrency,
+		a.cfg.Stream.UserAgent)
+	res, err := pr.RunOnce(r.Context())
+	if err != nil {
+		fail(w, http.StatusInternalServerError, 5001, err.Error())
+		return
+	}
+	a.st.Audit(r.Context(), 0, "probe.run", "streams",
+		formatErr("检测 %d 条，可用 %d，失效 %d", res.Checked, res.Healthy, res.Failed), r.RemoteAddr)
+	ok(w, res)
 }
 
 // ---------- 源管理 ----------

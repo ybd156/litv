@@ -21,6 +21,7 @@ type Config struct {
 	Stream    Stream    `yaml:"stream"`
 	Transcode Transcode `yaml:"transcode"`
 	EPG       EPG       `yaml:"epg"`
+	Probe     Probe     `yaml:"probe"`
 	Log       Log       `yaml:"log"`
 }
 
@@ -77,6 +78,17 @@ type EPG struct {
 	DefaultURLs []string `yaml:"default_urls"`
 }
 
+// Probe 源健康探测配置。
+//
+// 这是「多源自动择优」的数据来源：定期探一遍所有线路，
+// 记下可用性和延迟，BestStream 就能挑出当下最快的那条。
+type Probe struct {
+	Enabled     bool `yaml:"enabled"`
+	IntervalMin int  `yaml:"interval_minutes"`
+	TimeoutSec  int  `yaml:"timeout_seconds"`
+	Concurrency int  `yaml:"concurrency"`
+}
+
 // Log 日志配置。
 type Log struct {
 	Level string `yaml:"level"`
@@ -115,6 +127,12 @@ func Default() *Config {
 		EPG: EPG{
 			Enabled:  true,
 			KeepDays: 3,
+		},
+		Probe: Probe{
+			Enabled:     true,
+			IntervalMin: 15,
+			TimeoutSec:  8,
+			Concurrency: 6,
 		},
 		Log: Log{Level: "info", MaxMB: 10},
 	}

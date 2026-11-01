@@ -27,8 +27,8 @@ on:
 
 jobs:
   build:
-    # macos-14 = Apple Silicon，与 iOS 设备同为 arm64，交叉编译最省事
-    runs-on: macos-14
+    # 用 macos-latest：macos-14 这个标签在本账号下会让 job 3 秒内被取消（连 step 都不跑）
+    runs-on: macos-latest
     timeout-minutes: 120
 
     steps:

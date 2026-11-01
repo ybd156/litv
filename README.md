@@ -19,7 +19,7 @@
 | fnOS 打包 | ✅ 已出包 | `packaging/fnos/dist/litv_{x86,arm,all}_v1.0.0.fpk`，生命周期冒烟 39/39 |
 | Android TV | ✅ 已出包 | 四内核、自适应渲染档、完整遥控器交互、EPG 面板、线路/分组切换 |
 | Android 手机 | ✅ 同一 APK | 触摸手势播放、分组 chip、收藏、遥控器 |
-| iOS | ✅ 已出包 | SwiftUI 客户端 + GitHub Actions macOS runner，产出**未签名** `LITV-unsigned.ipa`（arm64）。播放用 AVPlayer（覆盖 HLS）。libmpv xcframework 的 CI 交叉编译仍在调（见下）。仓库：<https://github.com/ybd156/litv> |
+| iOS | ✅ 已出包 | SwiftUI 客户端，播放内核 **MobileVLCKit**（AC3/DTS/裸 TS 都能解），产出**未签名** `LITV-unsigned.ipa`（17MB，arm64）。仓库：<https://github.com/ybd156/litv> |
 
 ### 已验证的测试
 

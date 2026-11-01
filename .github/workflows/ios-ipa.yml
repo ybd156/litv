@@ -54,6 +54,9 @@ jobs:
         working-directory: ios
         run: |
           # 有 Pod 之后必须用 .xcworkspace 而不是 .xcodeproj
+          # ⚠️ pipefail 不能少：否则 xcodebuild 失败会被 tail 的退出码盖掉，
+          #    表现成"构建成功但 ipa 里没有主二进制"（踩过一次）。
+          set -o pipefail
           xcodebuild \
             -workspace LITV.xcworkspace \
             -scheme LITV \

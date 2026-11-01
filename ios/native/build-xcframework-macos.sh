@@ -39,7 +39,9 @@ if [ ! -f "$WORK/lib/libuavs3d.a" ]; then
     -DCMAKE_INSTALL_PREFIX="$WORK" \
     -DCOMPILE_10BIT=0 \
     -DCMAKE_POLICY_VERSION_MINIMUM=3.5
-  cmake --build "$WORK/uavs3d/build-ios" -j"$(sysctl -n hw.ncpu)"
+  # 只编静态库目标 uavs3d：默认还会编命令行程序 uavs3dec，
+  # 那是个可执行文件，在 iOS SDK 下链接会失败（ld: symbol(s) not found）。
+  cmake --build "$WORK/uavs3d/build-ios" --target uavs3d -j"$(sysctl -n hw.ncpu)"
   cmake --install "$WORK/uavs3d/build-ios"
 fi
 

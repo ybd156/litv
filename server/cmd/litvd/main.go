@@ -22,6 +22,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/litv/litv/server/internal/alert"
 	"github.com/litv/litv/server/internal/api"
 	"github.com/litv/litv/server/internal/config"
 	"github.com/litv/litv/server/internal/probe"
@@ -231,12 +232,50 @@ func main() {
 	}
 
 	// ---- 后台任务 ----
+	// 0) 告警通知（源失效时主动推）
+	notifier := alert.New(alert.Options{
+		Enabled:     cfg.Alert.Enabled,
+		WebhookURL:  cfg.Alert.WebhookURL,
+		ChatID:      cfg.Alert.ChatID,
+		MinInterval: time.Duration(cfg.Alert.MinIntervalMin) * time.Minute,
+	})
+	if notifier.Enabled() {
+		slog.Info("告警通知已启用")
+	}
+	a.SetAlert(notifier)
+
 	// 1) 源健康探测：定期探一遍所有线路，供 BestStream 自动择优
 	if cfg.Probe.Enabled {
 		pr := probe.New(st,
 			time.Duration(cfg.Probe.TimeoutSec)*time.Second,
 			cfg.Probe.Concurrency,
 			cfg.Stream.UserAgent)
+
+		// 探测结束后检查"整台挂掉"的频道并告警
+		pr.OnDone = func(ctx context.Context, res *probe.Result) {
+			if !notifier.Enabled() {
+				return
+			}
+			dead, err := st.ChannelsWithNoHealthyStream(ctx)
+			if err != nil || len(dead) == 0 {
+				return
+			}
+			var sb strings.Builder
+			for i, d := range dead {
+				if i >= 10 {
+					sb.WriteString(fmt.Sprintf("\n…还有 %d 个", len(dead)-10))
+					break
+				}
+				sb.WriteString(fmt.Sprintf("\n· %s（%s）%d 条线路全失效", d.Name, d.Group, d.Total))
+			}
+			_ = notifier.Send(
+				"dead-channels",
+				fmt.Sprintf("LITV：%d 个频道没有可用线路", len(dead)),
+				fmt.Sprintf("本轮探测 %d 条线路，可用 %d，失效 %d。%s",
+					res.Checked, res.Healthy, res.Failed, sb.String()),
+			)
+		}
+
 		go pr.Run(ctx, time.Duration(cfg.Probe.IntervalMin)*time.Minute)
 		slog.Info("源探测已启用", "interval_min", cfg.Probe.IntervalMin, "concurrency", cfg.Probe.Concurrency)
 	}

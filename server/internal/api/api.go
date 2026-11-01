@@ -23,6 +23,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 
+	"github.com/litv/litv/server/internal/alert"
 	"github.com/litv/litv/server/internal/auth"
 	"github.com/litv/litv/server/internal/config"
 	"github.com/litv/litv/server/internal/record"
@@ -42,6 +43,7 @@ type API struct {
 	ts      *timeshift.Manager
 	rx      *remux.Manager
 	rec     *record.Manager
+	alert   *alert.Notifier
 	signer  *auth.Signer
 	startAt time.Time
 	version string
@@ -68,6 +70,9 @@ func (a *API) SetRemux(m *remux.Manager) { a.rx = m }
 
 // SetRecord 注入录制管理器。
 func (a *API) SetRecord(m *record.Manager) { a.rec = m }
+
+// SetAlert 注入告警通知器。
+func (a *API) SetAlert(n *alert.Notifier) { a.alert = n }
 
 // ctxKey 避免 context key 冲突。
 type ctxKey int
@@ -119,6 +124,8 @@ func (a *API) Handler(viaGateway bool) http.Handler {
 		// 播放质量统计
 		pr.Get("/api/v1/stats/overview", a.statsOverview)
 		pr.Get("/api/v1/stats/channels", a.statsChannels)
+		// 告警：整台挂掉的频道
+		pr.Get("/api/v1/alerts/dead-channels", a.deadChannels)
 
 		// 录制中心
 		pr.Get("/api/v1/recordings", a.listRecordings)

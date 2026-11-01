@@ -94,3 +94,12 @@ remux:
 record:
   enabled: true
   dir: ""            # 留空 = 用 cache 目录下的 recordings
+
+# 源失效告警：整台挂掉时推一条消息
+# Telegram 直接填 https://api.telegram.org/bot<token>/sendMessage 并配 chat_id
+# 其它服务填任意 webhook 地址，会 POST {"source":"litv","title":..,"text":..,"ts":..}
+alert:
+  enabled: false
+  webhook_url: ""
+  chat_id: ""
+  min_interval_minutes: 30

@@ -25,6 +25,7 @@ type Config struct {
 	Timeshift Timeshift `yaml:"timeshift"`
 	Remux     Remux     `yaml:"remux"`
 	Record    Record    `yaml:"record"`
+	Alert     Alert     `yaml:"alert"`
 	Log       Log       `yaml:"log"`
 }
 
@@ -124,6 +125,17 @@ type Record struct {
 	Dir     string `yaml:"dir"`
 }
 
+// Alert 源失效告警配置。
+//
+// 家里电视某个台放不出来，用户不会去看管理台。
+// 与其让人自己发现，不如服务端主动推一条。
+type Alert struct {
+	Enabled     bool   `yaml:"enabled"`
+	WebhookURL  string `yaml:"webhook_url"`
+	ChatID      string `yaml:"chat_id"`       // Telegram 用
+	MinIntervalMin int `yaml:"min_interval_minutes"`
+}
+
 // Log 日志配置。
 type Log struct {
 	Level string `yaml:"level"`
@@ -181,6 +193,7 @@ func Default() *Config {
 			IdleTimeoutSec: 60,
 		},
 		Record: Record{Enabled: true},
+		Alert:  Alert{Enabled: false, MinIntervalMin: 30},
 		Log: Log{Level: "info", MaxMB: 10},
 	}
 }

@@ -26,14 +26,15 @@
 ```bash
 bash build/test/e2e.sh            # 终端链路端到端（28 项）
 bash build/test/remote-test.sh    # 遥控通道（WS 中转）
-bash build/test/timeshift-test.sh # 时移录制与回看
-bash build/test/remux-test.sh     # 裸 TS → HLS 转封装
-bash build/test/record-test.sh    # 录制中心（含调度器）
+bash build/test/timeshift-test.sh # 时移录制与回看（4 项）
+bash build/test/remux-test.sh     # 裸 TS → HLS 转封装（7 项）
+bash build/test/record-test.sh    # 录制中心含调度器（9 项）
+bash build/test/alert-test.sh     # 源失效告警含 webhook（8 项）
 bash build/test/smoke.sh          # 服务端 API 冒烟
 packaging/fnos/tools/smoke-test.sh dist/litv_x86_v1.0.0.fpk   # fpk 生命周期（39 项）
 ```
 
-全部通过（共 48 项断言 + 遥控/冒烟/打包三套）。
+全部通过（56 项断言 + 遥控/冒烟/打包三套）。
 
 ### 已实现的功能梯队
 
@@ -52,7 +53,8 @@ packaging/fnos/tools/smoke-test.sh dist/litv_x86_v1.0.0.fpk   # fpk 生命周期
 **第三梯队（进行中）**
 - ✅ 多语言（fnOS i18n 中英双语已备）
 - ✅ 裸 TS → HLS 转封装（`internal/remux`，顺带解决 iOS 播不了裸 TS）
-- ⏳ Web 端直接看 / DLNA 投屏 / 源失效告警推送
+- ✅ 源失效告警（`internal/alert`，整台挂掉时推 Telegram / 自定义 webhook，30 分钟内去重）
+- ⏳ Web 端直接看 / DLNA 投屏
 
 ---
 

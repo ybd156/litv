@@ -147,7 +147,51 @@ func (a *API) runProbe(w http.ResponseWriter, r *http.Request) {
 	}
 	a.st.Audit(r.Context(), 0, "probe.run", "streams",
 		formatErr("检测 %d 条，可用 %d，失效 %d", res.Checked, res.Healthy, res.Failed), r.RemoteAddr)
+
+	// 手动探测也走一遍告警判定，方便用户立刻验证 webhook 配得对不对
+	a.checkDeadChannels(r.Context(), res)
+
 	ok(w, res)
+}
+
+// deadChannels 返回"所有线路都挂了"的频道，管理台可以直接列出。
+func (a *API) deadChannels(w http.ResponseWriter, r *http.Request) {
+	items, err := a.st.ChannelsWithNoHealthyStream(r.Context())
+	if err != nil {
+		fail(w, http.StatusInternalServerError, 5001, err.Error())
+		return
+	}
+	ok(w, map[string]any{
+		"count": len(items),
+		"items": items,
+		"alert_enabled": a.alert != nil && a.alert.Enabled(),
+	})
+}
+
+// checkDeadChannels 判定并发送告警。去重由 Notifier 内部按 key 做。
+func (a *API) checkDeadChannels(ctx context.Context, res *probe.Result) {
+	if a.alert == nil || !a.alert.Enabled() {
+		return
+	}
+	dead, err := a.st.ChannelsWithNoHealthyStream(ctx)
+	if err != nil || len(dead) == 0 {
+		return
+	}
+	var sb strings.Builder
+	for i, d := range dead {
+		if i >= 10 {
+			sb.WriteString(formatErr("\n…还有 %d 个", len(dead)-10))
+			break
+		}
+		sb.WriteString(formatErr("\n· %s（%s）%d 条线路全失效", d.Name, d.Group, d.Total))
+	}
+	body := sb.String()
+	if res != nil {
+		body = formatErr("本轮探测 %d 条线路，可用 %d，失效 %d。%s",
+			res.Checked, res.Healthy, res.Failed, sb.String())
+	}
+	_ = a.alert.Send("dead-channels",
+		formatErr("LITV：%d 个频道没有可用线路", len(dead)), body)
 }
 
 // ---------- 源管理 ----------

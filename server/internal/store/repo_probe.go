@@ -8,6 +8,41 @@ type ProbeTarget struct {
 	URL string
 }
 
+// DeadChannel 是一个"所有线路都挂了"的频道。
+type DeadChannel struct {
+	ID    int64  `json:"id"`
+	Name  string `json:"name"`
+	Group string `json:"group"`
+	Total int    `json:"total"`
+}
+
+// ChannelsWithNoHealthyStream 返回有线路但没有任何健康线路的频道。
+// 这是告警的判定依据：只要还有一个线路能播，就不该打扰用户。
+func (s *Store) ChannelsWithNoHealthyStream(ctx context.Context) ([]DeadChannel, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT c.id, c.name, c.group_name, COUNT(st.id) AS total
+		FROM channels c
+		JOIN streams st ON st.channel_id = c.id
+		WHERE c.enabled = 1
+		GROUP BY c.id
+		HAVING SUM(CASE WHEN st.health = 1 THEN 1 ELSE 0 END) = 0
+		   AND SUM(CASE WHEN st.health = -1 THEN 1 ELSE 0 END) = 0
+		ORDER BY c.name`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []DeadChannel{}
+	for rows.Next() {
+		var v DeadChannel
+		if err := rows.Scan(&v.ID, &v.Name, &v.Group, &v.Total); err != nil {
+			return nil, err
+		}
+		out = append(out, v)
+	}
+	return out, rows.Err()
+}
+
 // ListStreamsForProbe 取一批线路用于健康探测。
 //
 // 排序策略：**先探最久没探过的**，这样轮转均匀；

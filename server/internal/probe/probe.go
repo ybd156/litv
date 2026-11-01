@@ -24,6 +24,10 @@ type Prober struct {
 	concurrency int
 	userAgent   string
 	client      *http.Client
+
+	// OnDone 每轮探测结束后回调（用于告警、指标上报）。
+	// 在探测 goroutine 里同步调用，别做重活。
+	OnDone func(ctx context.Context, res *Result)
 }
 
 // New 创建探测器。
@@ -178,6 +182,9 @@ func (p *Prober) Run(ctx context.Context, interval time.Duration) {
 			slog.Warn("源探测失败", "err", err)
 		} else if res.Checked > 0 {
 			slog.Info("源探测完成", "checked", res.Checked, "healthy", res.Healthy, "failed", res.Failed)
+			if p.OnDone != nil {
+				p.OnDone(ctx, res)
+			}
 		}
 
 		select {

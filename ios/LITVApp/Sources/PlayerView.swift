@@ -190,8 +190,8 @@ struct PlayerView: View {
         let n = ((i + delta) % list.count + list.count) % list.count
         player?.pause()
         player = nil
-        // 复用同一个页面：改 current 后由 onChange 重新起播
-        onSwitch?(list[n])
+        // 复用同一个页面：改 switched 后由 onChange 重新起播
+        switched = list[n]
     }
 
     private var epgSheet: some View {

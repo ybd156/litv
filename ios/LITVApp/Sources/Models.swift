@@ -111,6 +111,8 @@ struct PlayInfo: Codable {
     /// 这条线路专属的 User-Agent（来自源的配置）。空 = 用默认。
     /// 源站校验 UA 时不带会 403。
     var ua: String = ""
+    /// direct = 客户端直连源站；relay = 走服务端中转
+    var mode: String = "relay"
 
     struct PlayChannel: Codable {
         var id: Int64 = 0

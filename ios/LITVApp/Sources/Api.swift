@@ -99,9 +99,14 @@ struct ApiClient {
         return try await send(req, as: Bootstrap.self)
     }
 
+    /// 取播放地址。
+    ///
+    /// iOS 必须带 `fmt=hls`：AVPlayer 播不了裸 MPEG-TS，
+    /// 服务端收到这个参数后会把裸 TS 源用 ffmpeg 转封装成 HLS（只转封装不转码）。
     func play(channelId: Int64, streamId: Int64 = 0) async throws -> PlayInfo {
-        var path = "/api/v1/tv/play/\(channelId)"
-        if streamId > 0 { path += "?stream_id=\(streamId)" }
+        var q: [String] = ["fmt=hls"]
+        if streamId > 0 { q.append("stream_id=\(streamId)") }
+        let path = "/api/v1/tv/play/\(channelId)?" + q.joined(separator: "&")
         guard let req = request(path, method: "GET", body: nil) else {
             throw ApiError(message: "地址无效")
         }

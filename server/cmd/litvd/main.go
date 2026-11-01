@@ -25,6 +25,7 @@ import (
 	"github.com/litv/litv/server/internal/api"
 	"github.com/litv/litv/server/internal/config"
 	"github.com/litv/litv/server/internal/probe"
+	"github.com/litv/litv/server/internal/remux"
 	"github.com/litv/litv/server/internal/store"
 	"github.com/litv/litv/server/internal/stream"
 	"github.com/litv/litv/server/internal/timeshift"
@@ -95,6 +96,30 @@ func main() {
 
 	a := api.New(cfg, st, hub, version)
 	a.SetTimeshift(tsMgr)
+
+	// 裸 TS → HLS 转封装（给 iOS 和只认 HLS 的播放器）
+	rxDir := cfg.Remux.Dir
+	if rxDir == "" {
+		rxDir = filepath.Join(cfg.Stream.CacheDir, "remux")
+	}
+	var rxMgr *remux.Manager
+	if cfg.Remux.Enabled {
+		rxMgr = remux.NewManager(remux.Options{
+			FFmpeg:         cfg.Transcode.FFmpeg,
+			Dir:            rxDir,
+			SegmentSeconds: cfg.Remux.SegmentSeconds,
+			PlaylistSize:   cfg.Remux.PlaylistSize,
+			IdleTimeout:    time.Duration(cfg.Remux.IdleTimeoutSec) * time.Second,
+		})
+		defer rxMgr.Close()
+		a.SetRemux(rxMgr)
+		if rxMgr.Available() {
+			slog.Info("转封装已启用", "ffmpeg", cfg.Transcode.FFmpeg, "dir", rxDir)
+		} else {
+			slog.Warn("转封装已配置但 ffmpeg 不可用，iOS/仅 HLS 的播放器将无法播放裸 TS 源",
+				"ffmpeg", cfg.Transcode.FFmpeg)
+		}
+	}
 
 	// 静态资源（管理台）挂在同一路由下：先走 API，未命中再落静态文件。
 	rootHandler := func(viaGateway bool) http.Handler {

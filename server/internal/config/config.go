@@ -23,6 +23,7 @@ type Config struct {
 	EPG       EPG       `yaml:"epg"`
 	Probe     Probe     `yaml:"probe"`
 	Timeshift Timeshift `yaml:"timeshift"`
+	Remux     Remux     `yaml:"remux"`
 	Log       Log       `yaml:"log"`
 }
 
@@ -101,6 +102,18 @@ type Timeshift struct {
 	MaxSegments  int    `yaml:"max_segments"`  // 最多保留几段
 }
 
+// Remux 把裸 TS 转封装成 HLS 的配置。
+//
+// 为什么需要：iOS 的 AVPlayer 播不了裸 TS。只转封装不转码（-c copy），
+// 码流原样搬，N100 上几乎不吃 CPU。
+type Remux struct {
+	Enabled        bool   `yaml:"enabled"`
+	Dir            string `yaml:"dir"`
+	SegmentSeconds int    `yaml:"segment_seconds"`
+	PlaylistSize   int    `yaml:"playlist_size"`
+	IdleTimeoutSec int    `yaml:"idle_timeout_seconds"`
+}
+
 // Log 日志配置。
 type Log struct {
 	Level string `yaml:"level"`
@@ -150,6 +163,12 @@ func Default() *Config {
 			Enabled:     true,
 			SegmentMB:   64,
 			MaxSegments: 12,
+		},
+		Remux: Remux{
+			Enabled:        true,
+			SegmentSeconds: 2,
+			PlaylistSize:   6,
+			IdleTimeoutSec: 60,
 		},
 		Log: Log{Level: "info", MaxMB: 10},
 	}

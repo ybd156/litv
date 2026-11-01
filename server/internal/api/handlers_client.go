@@ -12,6 +12,8 @@ import (
 
 	"github.com/gorilla/websocket"
 
+	"github.com/go-chi/chi/v5"
+
 	"github.com/litv/litv/server/internal/auth"
 	"github.com/litv/litv/server/internal/fetch"
 	"github.com/litv/litv/server/internal/remote"
@@ -261,11 +263,23 @@ func (a *API) tvPlay(w http.ResponseWriter, r *http.Request) {
 	if strings.Contains(strings.ToLower(st.URL), ".m3u8") {
 		kind = "hls"
 	}
+	// 客户端可以要求"给我 HLS"（iOS 的 AVPlayer 只认 HLS）。
+	// 上游是裸 TS 时走转封装，上游本来就是 HLS 就直接用。
+	wantHLS := strings.EqualFold(r.URL.Query().Get("fmt"), "hls")
+	if wantHLS && kind == "ts" {
+		if a.rx != nil && a.rx.Available() {
+			kind = "remux"
+		}
+	}
+
 	exp := time.Now().Add(12 * time.Hour).Unix()
 	sig := a.signer.Sign(id, exp, dev.DeviceKey)
 	path := fmt.Sprintf("%s/live/%d/stream.ts", a.cfg.Server.Prefix, id)
-	if kind == "hls" {
+	switch kind {
+	case "hls":
 		path = fmt.Sprintf("%s/live/%d/index.m3u8", a.cfg.Server.Prefix, id)
+	case "remux":
+		path = fmt.Sprintf("%s/live/%d/remux.m3u8", a.cfg.Server.Prefix, id)
 	}
 	q := url.Values{}
 	q.Set("sig", sig)
@@ -433,6 +447,85 @@ func (a *API) liveTimeshift(w http.ResponseWriter, r *http.Request) {
 		default:
 		}
 	}
+}
+
+// ---------- 裸 TS → HLS 转封装 ----------
+
+// liveRemuxPlaylist 返回转封装后的 m3u8。
+// 切片 URI 会被改写成 /live/{id}/remux/{seg}，复用同一套签名鉴权。
+func (a *API) liveRemuxPlaylist(w http.ResponseWriter, r *http.Request) {
+	id, _, ok2 := a.verifyStream(r)
+	if !ok2 {
+		fail(w, http.StatusForbidden, 2002, "播放地址无效或已过期")
+		return
+	}
+	if a.rx == nil {
+		fail(w, http.StatusServiceUnavailable, 5001, "服务端未启用转封装")
+		return
+	}
+	st, err := a.st.BestStream(r.Context(), id)
+	if err != nil {
+		fail(w, http.StatusNotFound, 3002, "该频道没有可用线路")
+		return
+	}
+
+	// 切片 URI 会被改写为 /live/{id}/remux/{seg}，签名通过查询串补到每个 URI 上
+	segPrefix := fmt.Sprintf("%s/live/%d/remux/", a.cfg.Server.Prefix, id)
+
+	data, err := a.rx.Playlist(id, st.URL, segPrefix)
+	if err != nil {
+		fail(w, http.StatusBadGateway, 4001, err.Error())
+		return
+	}
+	// 切片请求需要带上同样的签名，这里把查询串补到每个 URI 上
+	if q := r.URL.RawQuery; q != "" {
+		data = appendQueryToSegments(data, q)
+	}
+
+	w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	_, _ = w.Write(data)
+}
+
+// liveRemuxSegment 返回一个 HLS 切片。
+func (a *API) liveRemuxSegment(w http.ResponseWriter, r *http.Request) {
+	id, _, ok2 := a.verifyStream(r)
+	if !ok2 {
+		fail(w, http.StatusForbidden, 2002, "播放地址无效或已过期")
+		return
+	}
+	if a.rx == nil {
+		fail(w, http.StatusServiceUnavailable, 5001, "服务端未启用转封装")
+		return
+	}
+	seg := chi.URLParam(r, "seg")
+	data, err := a.rx.Segment(id, seg)
+	if err != nil {
+		fail(w, http.StatusNotFound, 3001, err.Error())
+		return
+	}
+	w.Header().Set("Content-Type", "video/mp2t")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	_, _ = w.Write(data)
+}
+
+// appendQueryToSegments 给播放列表里的每个切片 URI 补上签名查询串。
+func appendQueryToSegments(data []byte, query string) []byte {
+	lines := strings.Split(string(data), "\n")
+	for i, line := range lines {
+		t := strings.TrimSpace(line)
+		if t == "" || strings.HasPrefix(t, "#") {
+			continue
+		}
+		if strings.Contains(t, "?") {
+			lines[i] = line + "&" + query
+		} else {
+			lines[i] = line + "?" + query
+		}
+	}
+	return []byte(strings.Join(lines, "\n"))
 }
 
 // ---------- 流出口 ----------

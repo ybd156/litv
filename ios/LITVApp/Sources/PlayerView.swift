@@ -120,8 +120,9 @@ struct PlayerView: View {
                 return
             }
             if info.kind == "ts" {
-                // AVPlayer 播不了裸 TS，明确告诉用户而不是黑屏
-                errorText = "该频道是裸 TS 源，iOS 需要服务端转 HLS 才能播放。\n请在设置里切到其他线路，或让管理员为该频道配置 HLS 源。"
+                // 理论上不该出现：客户端已经带了 fmt=hls，服务端应该给 remux。
+                // 走到这里说明服务端没配 ffmpeg（转封装不可用）。
+                errorText = "该频道是裸 TS 源，而服务端未启用转封装（ffmpeg）。\n请管理员在 config.yaml 里配置 transcode.ffmpeg 后重启服务。"
                 loading = false
                 return
             }

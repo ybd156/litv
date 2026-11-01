@@ -26,6 +26,7 @@ import (
 	"github.com/litv/litv/server/internal/auth"
 	"github.com/litv/litv/server/internal/config"
 	"github.com/litv/litv/server/internal/remote"
+	"github.com/litv/litv/server/internal/remux"
 	"github.com/litv/litv/server/internal/store"
 	"github.com/litv/litv/server/internal/stream"
 	"github.com/litv/litv/server/internal/timeshift"
@@ -38,6 +39,7 @@ type API struct {
 	hub     *stream.Hub
 	remote  *remote.Hub
 	ts      *timeshift.Manager
+	rx      *remux.Manager
 	signer  *auth.Signer
 	startAt time.Time
 	version string
@@ -58,6 +60,9 @@ func New(cfg *config.Config, st *store.Store, hub *stream.Hub, version string) *
 
 // SetTimeshift 注入时移管理器（main 里创建，因为 Hub 也要用它做 tee）。
 func (a *API) SetTimeshift(m *timeshift.Manager) { a.ts = m }
+
+// SetRemux 注入转封装管理器。
+func (a *API) SetRemux(m *remux.Manager) { a.rx = m }
 
 // ctxKey 避免 context key 冲突。
 type ctxKey int
@@ -163,6 +168,9 @@ func (a *API) Handler(viaGateway bool) http.Handler {
 	r.Get("/live/{id}/index.m3u8", a.liveManifest)
 	r.Get("/live/{id}/stream.ts", a.liveTS)
 	r.Get("/live/{id}/timeshift.ts", a.liveTimeshift)
+	// 裸 TS → HLS 转封装（给 iOS 和只认 HLS 的播放器用）
+	r.Get("/live/{id}/remux.m3u8", a.liveRemuxPlaylist)
+	r.Get("/live/{id}/remux/{seg}", a.liveRemuxSegment)
 	r.Get("/live/{id}/seg", a.liveSegment)
 
 	return r

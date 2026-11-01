@@ -80,3 +80,11 @@ timeshift:
   enabled: true
   segment_mb: 64        # 单段大小
   max_segments: 12      # 保留段数（12 × 64MB ≈ 1 小时缓冲）
+
+# 裸 TS → HLS 转封装（只转封装不转码，几乎不吃 CPU）
+# iOS 的 AVPlayer 播不了裸 TS，必须开这个才能看裸 TS 源
+remux:
+  enabled: true
+  segment_seconds: 2
+  playlist_size: 6
+  idle_timeout_seconds: 60

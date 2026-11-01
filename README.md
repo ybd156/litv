@@ -19,18 +19,19 @@
 | fnOS 打包 | ✅ 已出包 | `packaging/fnos/dist/litv_{x86,arm,all}_v1.0.0.fpk`，生命周期冒烟 39/39 |
 | Android TV | ✅ 已出包 | 四内核、自适应渲染档、完整遥控器交互、EPG 面板、线路/分组切换 |
 | Android 手机 | ✅ 同一 APK | 触摸手势播放、分组 chip、收藏、遥控器 |
-| iOS | 🚧 进行中 | CI 交叉编译流程已就绪；xtool 在 WSL 编译受网络影响 |
+| iOS | 🚧 代码完成 | SwiftUI 客户端已写完（7 个 Swift 文件）；构建走 GitHub Actions macOS runner 出未签名 ipa，见 [ios-ipa.yml](.github/workflows/ios-ipa.yml) |
 
 ### 已验证的测试
 
 ```bash
-bash build/test/e2e.sh          # 终端链路端到端（20 项）
-bash build/test/remote-test.sh  # 遥控通道（WS 中转）
-bash build/test/smoke.sh        # 服务端 API 冒烟
+bash build/test/e2e.sh           # 终端链路端到端（20 项）
+bash build/test/remote-test.sh   # 遥控通道（WS 中转）
+bash build/test/timeshift-test.sh # 时移录制与回看
+bash build/test/smoke.sh         # 服务端 API 冒烟
 packaging/fnos/tools/smoke-test.sh dist/litv_x86_v1.0.0.fpk   # fpk 生命周期（39 项）
 ```
 
-`e2e.sh` 覆盖：注册 → 待批准 → 批准 → bootstrap → EPG → 播放地址 → 拉流 →
+全部通过。`e2e.sh` 覆盖：注册 → 待批准 → 批准 → bootstrap → EPG → 播放地址 → 拉流 →
 篡改签名被拒 → 收藏 → 心跳 → 线路列表 → 不泄露上游地址 → 吊销失效。
 
 ### 已实现的功能梯队

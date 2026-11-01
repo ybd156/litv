@@ -24,6 +24,11 @@ struct ApiClient {
     private var decoder: JSONDecoder { JSONDecoder() }
 
     func url(_ path: String) -> URL? {
+        // 直连模式下服务端给的是**上游绝对地址**，不能再拼 base，
+        // 否则会拼成 http://nas:9527/http://源站/xxx.m3u8
+        if path.hasPrefix("http://") || path.hasPrefix("https://") {
+            return URL(string: path)
+        }
         let b = base.hasSuffix("/") ? String(base.dropLast()) : base
         let p = path.hasPrefix("/") ? path : "/" + path
         return URL(string: b + p)
@@ -109,9 +114,19 @@ struct ApiClient {
     ///
     /// iOS 必须带 `fmt=hls`：AVPlayer 播不了裸 MPEG-TS，
     /// 服务端收到这个参数后会把裸 TS 源用 ffmpeg 转封装成 HLS（只转封装不转码）。
-    func play(channelId: Int64, streamId: Int64 = 0) async throws -> PlayInfo {
-        var q: [String] = ["fmt=hls"]
+    /// 取播放地址。
+    ///
+    /// - Parameter direct: 让服务端把**上游原始地址**直接给回来，客户端自己连源站。
+    ///   省掉 NAS 的带宽和 CPU。注意：AVPlayer 播不了裸 TS，所以只有装了 VLCKit
+    ///   才敢要直连；否则仍然要求服务端转封装成 HLS。
+    func play(channelId: Int64, streamId: Int64 = 0, direct: Bool = false) async throws -> PlayInfo {
+        var q: [String] = []
+        // VLCKit 能直接吃裸 TS，AVPlayer 不行
+        if !direct || !VLCPlayerView.isAvailable {
+            q.append("fmt=hls")
+        }
         if streamId > 0 { q.append("stream_id=\(streamId)") }
+        if direct { q.append("direct=1") }
         let path = "/api/v1/tv/play/\(channelId)?" + q.joined(separator: "&")
         guard let req = request(path, method: "GET", body: nil) else {
             throw ApiError(message: "地址无效")

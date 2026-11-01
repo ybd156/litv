@@ -238,7 +238,7 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
                 val headers = mapOf(
                     "User-Agent" to info.ua.ifBlank { "LITV/1.0 (Android TV)" },
                 )
-                player.play(ch.id, info.url, headers, app.prefs.engine)
+                player.play(ch.id, app.api.absolute(info.url), headers, app.prefs.engine)
                 refreshEpg(ch.id)
                 app.api.heartbeat(ch.id, "playing")
             },

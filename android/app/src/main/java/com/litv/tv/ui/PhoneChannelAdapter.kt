@@ -62,7 +62,8 @@ class PhoneChannelAdapter(
         loadLogo(holder.logo, ch.logo)
     }
 
-    private fun loadLogo(target: ImageView, url: String) {
+    /** 加载台标。公开出来是为了让首页的「正在热播」大卡片复用同一个缓存。 */
+    fun loadLogo(target: ImageView, url: String) {
         target.setImageDrawable(null)
         if (url.isBlank()) return
         logoCache.get(url)?.let { target.setImageBitmap(it); return }

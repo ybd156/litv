@@ -35,12 +35,26 @@ class PhoneHomeActivity : AppCompatActivity() {
     private lateinit var groupChips: LinearLayout
     private lateinit var adapter: PhoneChannelAdapter
 
+    // 「正在热播」大卡片 + 搜索框
+    private lateinit var searchInput: android.widget.EditText
+    private lateinit var heroCard: LinearLayout
+    private lateinit var heroLogo: android.widget.ImageView
+    private lateinit var heroName: TextView
+    private lateinit var heroNow: TextView
+    private lateinit var heroPlay: TextView
+
     private var all: List<Channel> = emptyList()
     private val favorites = mutableSetOf<Long>()
     private val nowTitles = mutableMapOf<Long, String>()
     private var groups: List<String> = emptyList()
     private var selectedGroup: String? = null   // null = 全部
     private var onlyFav = false
+    private var currentTab = TAB_PLAY
+
+    private companion object {
+        const val TAB_PLAY = "play"
+        const val TAB_CHANNEL = "channel"
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -57,6 +71,21 @@ class PhoneHomeActivity : AppCompatActivity() {
         empty = findViewById(R.id.empty)
         groupChips = findViewById(R.id.groupChips)
 
+        searchInput = findViewById(R.id.searchInput)
+        heroCard = findViewById(R.id.heroCard)
+        heroLogo = findViewById(R.id.heroLogo)
+        heroName = findViewById(R.id.heroName)
+        heroNow = findViewById(R.id.heroNow)
+        heroPlay = findViewById(R.id.heroPlay)
+
+        searchInput.addTextChangedListener(object : android.text.TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
+            override fun onTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
+            override fun afterTextChanged(s: android.text.Editable?) {
+                if (::adapter.isInitialized) render()
+            }
+        })
+
         adapter = PhoneChannelAdapter(
             onClick = { ch -> openPlayer(ch) },
             onStarClick = { ch -> toggleFavorite(ch) },
@@ -64,12 +93,8 @@ class PhoneHomeActivity : AppCompatActivity() {
         list.layoutManager = LinearLayoutManager(this)
         list.adapter = adapter
 
-        findViewById<TextView>(R.id.tabLive).setOnClickListener {
-            onlyFav = false; selectedGroup = null; render()
-        }
-        findViewById<TextView>(R.id.tabFav).setOnClickListener {
-            onlyFav = true; render()
-        }
+        findViewById<TextView>(R.id.tabPlay).setOnClickListener { switchTab(TAB_PLAY) }
+        findViewById<TextView>(R.id.tabChannel).setOnClickListener { switchTab(TAB_CHANNEL) }
         findViewById<TextView>(R.id.tabRemote).setOnClickListener {
             startActivity(Intent(this, RemoteActivity::class.java))
         }
@@ -77,7 +102,26 @@ class PhoneHomeActivity : AppCompatActivity() {
             startActivity(Intent(this, SettingsActivity::class.java))
         }
 
+        // 默认落在「播放」页：手机竖屏第一屏最该看到的是"接着上次看"
+        switchTab(TAB_PLAY)
         load()
+    }
+
+    /**
+     * 切页。
+     *
+     * 播放页：突出「正在热播」大卡片，下面接收藏的台（没收藏就显示全部）。
+     * 频道页：搜索 + 分组 + 全量列表。
+     *
+     * 两个页共用同一个 RecyclerView，只是喂不同的数据和显隐，省一套列表。
+     */
+    private fun switchTab(tab: String) {
+        currentTab = tab
+        val isPlay = tab == TAB_PLAY
+        heroCard.visibility = if (isPlay && all.isNotEmpty()) View.VISIBLE else View.GONE
+        searchInput.visibility = if (isPlay) View.GONE else View.VISIBLE
+        findViewById<View>(R.id.groupBar).visibility = if (isPlay) View.GONE else View.VISIBLE
+        if (::adapter.isInitialized) render()
     }
 
     private fun load() {
@@ -143,14 +187,56 @@ class PhoneHomeActivity : AppCompatActivity() {
     private fun dp(v: Int): Int = (v * resources.displayMetrics.density).toInt()
 
     private fun render() {
-        val filtered = when {
-            onlyFav -> all.filter { favorites.contains(it.id) }
-            selectedGroup != null -> all.filter { it.group == selectedGroup }
-            else -> all
+        // 播放页：收藏优先；没收藏就显示全部，别让用户对着空白页
+        if (currentTab == TAB_PLAY) {
+            val favList = all.filter { favorites.contains(it.id) }
+            val data = if (favList.isNotEmpty()) favList else all
+            adapter.submit(data, nowTitles, favorites)
+            empty.visibility = if (data.isEmpty()) View.VISIBLE else View.GONE
+            list.visibility = if (data.isEmpty()) View.GONE else View.VISIBLE
+            renderHero()
+            return
+        }
+
+        // 频道页：搜索 + 分组过滤
+        val kw = searchInput.text.toString().trim()
+        val filtered = all.filter { ch ->
+            val okFav = !onlyFav || favorites.contains(ch.id)
+            val okGroup = selectedGroup == null || ch.group == selectedGroup
+            val okKw = kw.isBlank() ||
+                ch.name.contains(kw, ignoreCase = true) ||
+                ch.group.contains(kw, ignoreCase = true)
+            okFav && okGroup && okKw
         }
         adapter.submit(filtered, nowTitles, favorites)
         empty.visibility = if (filtered.isEmpty()) View.VISIBLE else View.GONE
         list.visibility = if (filtered.isEmpty()) View.GONE else View.VISIBLE
+    }
+
+    /**
+     * 「正在热播」大卡片：优先上次看的台，没有就挑第一个有节目信息的。
+     *
+     * 手机竖屏第一屏只放得下两三行列表，用户最想干的是「接着上次那个台看」，
+     * 所以把它单独做成一张大卡片顶在最上面。
+     */
+    private fun renderHero() {
+        val last = all.firstOrNull { it.id == app.prefs.lastChannelId }
+        val hero = last
+            ?: all.firstOrNull { nowTitles[it.id].orEmpty().isNotBlank() }
+            ?: all.firstOrNull()
+        if (hero == null) {
+            heroCard.visibility = View.GONE
+            return
+        }
+        heroCard.visibility = View.VISIBLE
+        heroName.text = hero.name
+        val now = nowTitles[hero.id].orEmpty()
+        heroNow.text = if (now.isNotBlank()) "正在播：$now" else "点这里开始观看"
+        heroPlay.text = if (last != null) "▶ 继续" else "▶ 观看"
+
+        // 复用列表的台标缓存，别为一张图再开一套加载逻辑
+        adapter.loadLogo(heroLogo, hero.logo)
+        heroCard.setOnClickListener { openPlayer(hero) }
     }
 
     private fun toggleFavorite(ch: Channel) {

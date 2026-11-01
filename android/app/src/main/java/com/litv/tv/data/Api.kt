@@ -199,6 +199,19 @@ class Api(private val prefs: Prefs) {
     }
 
     /**
+     * 把服务端返回的播放地址变成播放器能用的绝对地址。
+     *
+     * 服务端给的是站内相对路径（/app/litv/live/1/stream.ts），
+     * 直接丢给 ExoPlayer/VLC 会因为没有 scheme 而失败。
+     * 直连模式下给的是上游绝对地址，原样返回。
+     */
+    fun absolute(url: String): String {
+        if (url.startsWith("http://") || url.startsWith("https://")) return url
+        val base = prefs.serverBase.trimEnd('/')
+        return base + (if (url.startsWith("/")) url else "/$url")
+    }
+
+    /**
      * 取播放地址。
      *
      * direct=true 时服务端会把**上游原始地址**直接给回来（mode=direct），

@@ -135,7 +135,9 @@ struct PlayerView: View {
         loading = true
         errorText = nil
         do {
-            let info = try await session.api.play(channelId: channel.id, streamId: streamId)
+            // 装了 VLCKit 就尝试直连（省掉 NAS 中转）；服务端不允许时会自动回落
+            let info = try await session.api.play(
+                channelId: channel.id, streamId: streamId, direct: VLCPlayerView.isAvailable)
             guard let u = session.api.url(info.url) else {
                 errorText = "播放地址无效"
                 loading = false

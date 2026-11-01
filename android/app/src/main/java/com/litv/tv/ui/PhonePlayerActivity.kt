@@ -188,7 +188,7 @@ class PhonePlayerActivity : AppCompatActivity(), PlayerManager.Callback {
             onOk = { info ->
                 // 源配置里带了 UA 就用它，否则用默认
                 player.play(
-                    ch.id, info.url,
+                    ch.id, app.api.absolute(info.url),
                     mapOf("User-Agent" to info.ua.ifBlank { "LITV/1.0 (Android)" }),
                     app.prefs.engine,
                 )
@@ -227,7 +227,7 @@ class PhonePlayerActivity : AppCompatActivity(), PlayerManager.Callback {
                 .setItems(labels) { _, which ->
                     val s = list[which]
                     app.api.play(ch.id, s.id, direct = app.prefs.directMode != "relay", onOk = { info ->
-                        player.play(ch.id, info.url,
+                        player.play(ch.id, app.api.absolute(info.url),
                             mapOf("User-Agent" to info.ua.ifBlank { "LITV/1.0 (Android)" }),
                             app.prefs.engine)
                     }, onErr = { tip("切换失败：$it") })

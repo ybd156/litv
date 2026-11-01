@@ -1,43 +1,77 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+  手机端首页 —— 直播优先布局。
+
+  信息层次（从上到下）：
+    1. 顶部：标题 + 搜索框（频道一多就必须能搜）
+    2. 分组 chip 横滑
+    3. 「正在热播」大卡片：上次看的台 + 现在在播什么，一点就接着看
+    4. 频道列表
+    5. 底部 Tab
+
+  为什么把大卡片放最上面：手机竖屏第一屏只能看到两三行列表，
+  用户最想干的事是"接着上次那个台看"，而不是从头翻列表。
+-->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:background="@color/bg"
     android:orientation="vertical">
 
-    <!-- 顶部：标题 + 状态 -->
+    <!-- 1. 顶部：标题 + 搜索 -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:gravity="center_vertical"
         android:orientation="horizontal"
-        android:paddingHorizontal="18dp"
-        android:paddingTop="20dp"
-        android:paddingBottom="8dp">
+        android:paddingHorizontal="16dp"
+        android:paddingTop="18dp"
+        android:paddingBottom="6dp">
 
         <TextView
             android:id="@+id/title"
-            android:layout_width="0dp"
+            android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_weight="1"
             android:text="LITV"
             android:textColor="@color/text_primary"
-            android:textSize="24sp"
+            android:textSize="22sp"
             android:textStyle="bold" />
 
         <TextView
             android:id="@+id/status"
-            android:layout_width="wrap_content"
+            android:layout_width="0dp"
             android:layout_height="wrap_content"
+            android:layout_marginStart="10dp"
+            android:layout_weight="1"
             android:textColor="@color/text_secondary"
             android:textSize="12sp" />
     </LinearLayout>
 
-    <!-- 分组横向滚动 -->
+    <EditText
+        android:id="@+id/searchInput"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginHorizontal="16dp"
+        android:layout_marginTop="4dp"
+        android:background="@drawable/bg_card"
+        android:hint="搜频道名 / 分组"
+        android:imeOptions="actionSearch"
+        android:inputType="text"
+        android:maxLines="1"
+        android:paddingHorizontal="14dp"
+        android:paddingVertical="9dp"
+        android:singleLine="true"
+        android:textColor="@color/text_primary"
+        android:textColorHint="@color/text_secondary"
+        android:textSize="14sp"
+        android:autofillHints="none" />
+
+    <!-- 2. 分组横滑 -->
     <HorizontalScrollView
         android:id="@+id/groupBar"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
+        android:layout_marginTop="6dp"
         android:paddingHorizontal="12dp"
         android:scrollbars="none">
 
@@ -48,14 +82,79 @@
             android:orientation="horizontal" />
     </HorizontalScrollView>
 
+    <!-- 3. 正在热播大卡片 -->
+    <LinearLayout
+        android:id="@+id/heroCard"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginHorizontal="16dp"
+        android:layout_marginTop="8dp"
+        android:background="@drawable/bg_card"
+        android:clickable="true"
+        android:focusable="true"
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        android:padding="14dp"
+        android:visibility="gone">
+
+        <ImageView
+            android:id="@+id/heroLogo"
+            android:layout_width="54dp"
+            android:layout_height="54dp"
+            android:contentDescription="@null"
+            android:scaleType="fitCenter" />
+
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="12dp"
+            android:layout_weight="1"
+            android:orientation="vertical">
+
+            <TextView
+                android:id="@+id/heroName"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:ellipsize="end"
+                android:maxLines="1"
+                android:textColor="@color/text_primary"
+                android:textSize="17sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/heroNow"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="3dp"
+                android:ellipsize="end"
+                android:maxLines="1"
+                android:textColor="@color/text_secondary"
+                android:textSize="12sp" />
+        </LinearLayout>
+
+        <TextView
+            android:id="@+id/heroPlay"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="8dp"
+            android:background="@drawable/bg_focusable"
+            android:paddingHorizontal="14dp"
+            android:paddingVertical="8dp"
+            android:text="▶ 继续"
+            android:textColor="@color/accent"
+            android:textSize="13sp"
+            android:textStyle="bold" />
+    </LinearLayout>
+
+    <!-- 4. 频道列表 -->
     <androidx.recyclerview.widget.RecyclerView
         android:id="@+id/list"
         android:layout_width="match_parent"
         android:layout_height="0dp"
-        android:layout_marginTop="8dp"
+        android:layout_marginTop="6dp"
         android:layout_weight="1"
         android:clipToPadding="false"
-        android:paddingHorizontal="12dp"
+        android:paddingHorizontal="16dp"
         android:paddingBottom="12dp"
         android:scrollbars="none" />
 
@@ -70,7 +169,7 @@
         android:textSize="16sp"
         android:visibility="gone" />
 
-    <!-- 底部导航 -->
+    <!-- 5. 底部 Tab：播放 / 频道 / 遥控器 / 设置 -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
@@ -79,19 +178,19 @@
         android:paddingVertical="10dp">
 
         <TextView
-            android:id="@+id/tabLive"
+            android:id="@+id/tabPlay"
             style="@style/PhoneTab"
-            android:text="直播" />
+            android:text="播放" />
 
         <TextView
-            android:id="@+id/tabFav"
+            android:id="@+id/tabChannel"
             style="@style/PhoneTab"
-            android:text="收藏" />
+            android:text="频道" />
 
         <TextView
             android:id="@+id/tabRemote"
             style="@style/PhoneTab"
-            android:text="遥控" />
+            android:text="遥控器" />
 
         <TextView
             android:id="@+id/tabSettings"

@@ -31,6 +31,8 @@ struct PlayerView: View {
     @StateObject private var vlc = VLCControl()
     /// 换台用：切了台就换这个，nil 表示还是进来时那个
     @State private var switched: Channel?
+    /// direct / relay，用于 OSD 显示
+    @State private var playMode = ""
 
     /// 当前实际在播的频道
     private var active: Channel { switched ?? channel }
@@ -108,6 +110,12 @@ struct PlayerView: View {
         .onDisappear { player?.pause(); player = nil }
     }
 
+    private var routeText: String {
+        let mode = playMode == "direct" ? "直连源站" : "服务端中转"
+        let ua = playUA.isEmpty ? "默认 UA" : "UA: " + String(playUA.prefix(30))
+        return mode + " · " + ua
+    }
+
     private var osd: some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack {
@@ -119,6 +127,9 @@ struct PlayerView: View {
                 Text("\(now.timeText) \(now.title)")
                     .font(.caption).foregroundColor(.gray).lineLimit(1)
             }
+            // 播放链路 + 实际用的 UA：排查源站校验时一眼能看到
+            Text(routeText)
+                .font(.system(size: 10)).foregroundColor(.gray.opacity(0.8)).lineLimit(1)
         }
         .padding(12)
         .background(.ultraThinMaterial)
@@ -225,6 +236,7 @@ struct PlayerView: View {
             }
             playURL = u
             playUA = info.ua
+            playMode = info.mode
             // 有 VLCKit 就用它（能解 AC3/裸 TS），没有就走 AVPlayer
             if VLCPlayerView.isAvailable {
                 usingVLC = true

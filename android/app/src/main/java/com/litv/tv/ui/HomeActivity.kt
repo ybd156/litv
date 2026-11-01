@@ -5,39 +5,60 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.view.View
+import android.widget.ImageView
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
-import androidx.recyclerview.widget.GridLayoutManager
+import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.google.gson.Gson
 import com.litv.tv.LitvApp
 import com.litv.tv.R
 import com.litv.tv.data.Bootstrap
 import com.litv.tv.data.Channel
+import com.litv.tv.data.EpgProgram
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
 /**
- * 首页：频道网格。
+ * 电视端首页：三列联动。
  *
- * 冷启动体验关键点：
- *   - 先用本地缓存渲染（0 网络等待），再后台刷新，避免"打开就是转圈"
- *   - 刷新失败不清空已有列表，只在状态栏提示
- *   - 点频道直接进播放页；返回时焦点回到原来那一格
+ *   左  频道分组
+ *   中  该分组下的频道（焦点落到哪个台，右侧就切到哪个台的节目单）
+ *   右  节目单：台标 + 台名 + 当前节目 + 进度条 + 节目列表
+ *
+ * 布局参考 TVBox 系（酷9）的 dialog_channel_group：三列并排、遥控左右切换，
+ * 不用弹窗打断观看。
+ *
+ * 开机自动播放上次的频道（可在设置里关）——电视就该打开就能看。
  */
 class HomeActivity : AppCompatActivity() {
 
     private lateinit var app: LitvApp
+    private lateinit var main: Handler
+
+    private lateinit var groupList: RecyclerView
     private lateinit var list: RecyclerView
+    private lateinit var epgList: RecyclerView
     private lateinit var status: TextView
     private lateinit var empty: TextView
     private lateinit var groupLabel: TextView
+    private lateinit var resumeBanner: TextView
+    private lateinit var epgLogo: ImageView
+    private lateinit var epgChannelName: TextView
+    private lateinit var epgNow: TextView
+    private lateinit var epgProgress: View
 
     private lateinit var adapter: ChannelAdapter
-    private lateinit var resumeBanner: TextView
-    private val main = Handler(Looper.getMainLooper())
-    private var lastFocusedPos = 0
+    private lateinit var groupAdapter: GroupAdapter
+    private lateinit var epgAdapter: EpgAdapter
+
+    private var allChannels: List<Channel> = emptyList()
+    private var groups: List<String> = emptyList()
+    private var selectedGroup: String? = null
+    private var epgChannelId: Long = 0
+    private var autoPlayed = false
+
     private val favorites = mutableSetOf<Long>()
     private val nowTitles = mutableMapOf<Long, String>()
 
@@ -45,38 +66,76 @@ class HomeActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_home)
         app = application as LitvApp
+        main = Handler(Looper.getMainLooper())
 
-        // 没绑过就先走绑定流程
         if (app.prefs.token.isBlank()) {
             startActivity(Intent(this, BindActivity::class.java))
             finish()
             return
         }
 
+        groupList = findViewById(R.id.groupList)
         list = findViewById(R.id.channelList)
+        epgList = findViewById(R.id.epgList)
         status = findViewById(R.id.status)
         empty = findViewById(R.id.empty)
         groupLabel = findViewById(R.id.groupLabel)
         resumeBanner = findViewById(R.id.resumeBanner)
+        epgLogo = findViewById(R.id.epgLogo)
+        epgChannelName = findViewById(R.id.epgChannelName)
+        epgNow = findViewById(R.id.epgNow)
+        epgProgress = findViewById(R.id.epgProgress)
 
-        adapter = ChannelAdapter(app.tier.logoMaxPx, onClick = { ch -> openPlayer(ch) }, onLongClick = { ch ->
-            toggleFavorite(ch)
-        })
-        val span = if (app.tier == Tier.LOW) 4 else 6
-        list.layoutManager = GridLayoutManager(this, span)
-        list.adapter = adapter
-        list.itemAnimator = null // 低端机上动画反而添乱
-
-        // 先渲染缓存
+        setupLists()
         renderCache()
         refresh()
         loadResume()
     }
 
-    /**
-     * 跨端续播：查"最近在别的设备上看过哪个台"。
-     * 家里从客厅换到卧室时，这是最实用的一条提示。
-     */
+    private fun setupLists() {
+        groupAdapter = GroupAdapter().also { ga ->
+            ga.onPick = { g ->
+                selectedGroup = g
+                renderChannels()
+                // 分组切换后焦点跳到频道列表第一项
+                list.post { list.requestFocus() }
+            }
+        }
+        groupList.layoutManager = LinearLayoutManager(this)
+        groupList.adapter = groupAdapter
+        groupList.itemAnimator = null
+
+        adapter = ChannelAdapter(
+            app.tier.logoMaxPx,
+            onClick = { ch -> openPlayer(ch) },
+            onLongClick = { ch -> toggleFavorite(ch) },
+            onFocus = { ch -> loadEpg(ch) },
+        )
+        // 三列布局里中间是竖列表，不是网格
+        list.layoutManager = LinearLayoutManager(this)
+        list.adapter = adapter
+        list.itemAnimator = null
+
+        epgAdapter = EpgAdapter()
+        epgAdapter.onProgramClick = { p ->
+            val ch = allChannels.firstOrNull { it.id == epgChannelId }
+            if (ch != null) {
+                // 已播完的节目可以回看；未播的暂时只提示
+                val now = System.currentTimeMillis() / 1000
+                if (p.endAt in 1 until now) {
+                    openPlayer(ch, timeshiftFrom = p.startAt)
+                } else {
+                    status.text = "「${p.title}」还没播，到点再看"
+                }
+            }
+        }
+        epgList.layoutManager = LinearLayoutManager(this)
+        epgList.adapter = epgAdapter
+        epgList.itemAnimator = null
+    }
+
+    // ---------------------------------------------------------------- 数据
+
     private fun loadResume() {
         app.api.resume { rp ->
             if (rp == null || !rp.available || rp.channelId <= 0) {
@@ -86,8 +145,7 @@ class HomeActivity : AppCompatActivity() {
             resumeBanner.text = "接着看：${rp.channelName}　·　${rp.deviceName} ${rp.ageText}"
             resumeBanner.visibility = View.VISIBLE
             resumeBanner.setOnClickListener {
-                val ch = Channel(id = rp.channelId, name = rp.channelName, logo = rp.channelLogo)
-                openPlayer(ch)
+                openPlayer(Channel(id = rp.channelId, name = rp.channelName, logo = rp.channelLogo))
             }
         }
     }
@@ -95,10 +153,7 @@ class HomeActivity : AppCompatActivity() {
     private fun renderCache() {
         val cached = app.prefs.cachedBootstrap
         if (cached.isBlank()) return
-        runCatching {
-            val b = Gson().fromJson(cached, Bootstrap::class.java)
-            applyData(b, fromCache = true)
-        }
+        runCatching { applyData(Gson().fromJson(cached, Bootstrap::class.java), fromCache = true) }
     }
 
     private fun refresh() {
@@ -109,9 +164,8 @@ class HomeActivity : AppCompatActivity() {
                 applyData(b, fromCache = false)
             },
             onErr = { msg ->
-                if (adapter.itemCount == 0) {
+                if (allChannels.isEmpty()) {
                     status.text = "加载失败：$msg"
-                    // token 失效（服务端被吊销）→ 回绑定页
                     if (msg.contains("未绑定") || msg.contains("token")) {
                         app.prefs.clearSession()
                         startActivity(Intent(this, BindActivity::class.java))
@@ -124,48 +178,115 @@ class HomeActivity : AppCompatActivity() {
     }
 
     private fun applyData(b: Bootstrap, fromCache: Boolean) {
-        // 服务端下发的远程配置优先于本地设置——这样在管理台改一次，
-        // 家里所有电视下次刷新就生效，不用挨个跑去按遥控器。
         b.device?.config?.let { applyRemoteConfig(it) }
 
-        val nowMap = b.now.associate { it.channelId to it.title }
         nowTitles.clear()
-        nowTitles.putAll(nowMap)
+        nowTitles.putAll(b.now.associate { it.channelId to it.title })
         favorites.clear()
         favorites.addAll(b.favorites)
-        adapter.submit(b.channels, nowMap, favorites)
 
-        empty.visibility = if (b.channels.isEmpty()) View.VISIBLE else View.GONE
-        list.visibility = if (b.channels.isEmpty()) View.GONE else View.VISIBLE
+        allChannels = b.channels
+        groups = b.channels.map { it.group }.filter { it.isNotBlank() }.distinct()
 
-        val total = b.channels.size
-        groupLabel.text = "${b.groups.size} 个分组 · $total 个频道"
+        renderGroups()
+        renderChannels()
+
         status.text = if (fromCache) "已加载缓存，正在刷新…" else "更新于 ${timeNow()}"
 
-        // 焦点落在上次看的那台
-        if (!fromCache && total > 0) {
-            val idx = b.channels.indexOfFirst { it.id == app.prefs.lastChannelId }
-            lastFocusedPos = if (idx >= 0) idx else 0
-            list.post { list.scrollToPosition(lastFocusedPos) }
+        // 开机自动播放上次的频道：只做一次，且要等拿到真实数据
+        if (!fromCache && !autoPlayed) {
+            autoPlayed = true
+            val last = allChannels.firstOrNull { it.id == app.prefs.lastChannelId }
+            if (app.prefs.autoPlayLast && last != null) {
+                openPlayer(last)
+            }
         }
     }
 
-    private fun openPlayer(ch: Channel) {
-        app.prefs.lastChannelId = ch.id
-        startActivity(
-            Intent(this, PlayerActivity::class.java)
-                .putExtra(PlayerActivity.EXTRA_CHANNEL_ID, ch.id)
-                .putExtra(PlayerActivity.EXTRA_CHANNEL_NAME, ch.name)
-        )
+    private fun renderGroups() {
+        val rows = buildList {
+            add(GroupAdapter.Row("全部", allChannels.size))
+            groups.forEach { g ->
+                add(GroupAdapter.Row(g, allChannels.count { it.group == g }))
+            }
+        }
+        groupAdapter.submit(rows, selectedGroup)
     }
 
-    /** MENU 键进设置——TV 上没有"我的"页面，菜单键是最符合直觉的入口。 */
+    private fun renderChannels() {
+        val shown = if (selectedGroup == null) allChannels
+        else allChannels.filter { it.group == selectedGroup }
+        adapter.submit(shown, nowTitles, favorites)
+        empty.visibility = if (shown.isEmpty()) View.VISIBLE else View.GONE
+        list.visibility = if (shown.isEmpty()) View.GONE else View.VISIBLE
+        groupLabel.text = "${selectedGroup ?: "全部"} · ${shown.size} 个频道"
+
+        // 焦点回到上次看的台
+        val idx = shown.indexOfFirst { it.id == app.prefs.lastChannelId }
+        if (idx >= 0) list.post { list.scrollToPosition(idx) }
+
+        shown.firstOrNull()?.let { loadEpg(it) }
+    }
+
+    /** 三列联动的核心：焦点到哪个台，右侧就加载哪个台的节目单。 */
+    private fun loadEpg(ch: Channel) {
+        if (ch.id == epgChannelId) return
+        epgChannelId = ch.id
+        epgChannelName.text = ch.name
+        epgNow.text = "正在加载节目单…"
+        epgProgress.layoutParams = epgProgress.layoutParams.apply { width = 0 }
+        adapter.loadLogoFor(epgLogo, ch.logo)
+
+        app.api.epg(ch.id, 0, onOk = { progs ->
+            if (epgChannelId != ch.id) return@epg // 焦点已经移走了，丢弃过期结果
+            renderEpg(progs)
+        }, onErr = {
+            if (epgChannelId == ch.id) {
+                epgNow.text = "该频道没有节目单"
+                epgAdapter.submit(emptyList())
+            }
+        })
+    }
+
+    private fun renderEpg(progs: List<EpgProgram>) {
+        epgAdapter.submit(progs)
+        val now = System.currentTimeMillis() / 1000
+        val cur = progs.firstOrNull { it.startAt <= now && it.endAt > now }
+        if (cur == null) {
+            epgNow.text = getString(R.string.no_epg)
+            return
+        }
+        epgNow.text = "正在播：${cur.title}"
+        // 进度条：当前节目已播百分比
+        val total = (cur.endAt - cur.startAt).coerceAtLeast(1)
+        val done = (now - cur.startAt).coerceIn(0, total)
+        epgProgress.post {
+            val parentW = (epgProgress.parent as? View)?.width ?: 0
+            epgProgress.layoutParams = epgProgress.layoutParams.apply {
+                width = (parentW * done / total).toInt()
+            }
+        }
+        epgList.post { epgList.scrollToPosition(epgAdapter.currentPosition()) }
+    }
+
+    // ---------------------------------------------------------------- 交互
+
+    private fun openPlayer(ch: Channel, timeshiftFrom: Long = 0) {
+        app.prefs.lastChannelId = ch.id
+        val i = Intent(this, PlayerActivity::class.java)
+            .putExtra(PlayerActivity.EXTRA_CHANNEL_ID, ch.id)
+            .putExtra(PlayerActivity.EXTRA_CHANNEL_NAME, ch.name)
+        if (timeshiftFrom > 0) i.putExtra("timeshift_from", timeshiftFrom)
+        startActivity(i)
+    }
+
     override fun dispatchKeyEvent(event: android.view.KeyEvent): Boolean {
         if (event.action == android.view.KeyEvent.ACTION_DOWN) {
             when (event.keyCode) {
                 android.view.KeyEvent.KEYCODE_MENU,
                 android.view.KeyEvent.KEYCODE_INFO -> {
-                    startActivity(Intent(this, SettingsActivity::class.java))
+                    // 菜单键 = 设置弹层（和播放页一致）
+                    SettingsDialog(this).show()
                     return true
                 }
             }
@@ -173,11 +294,6 @@ class HomeActivity : AppCompatActivity() {
         return super.dispatchKeyEvent(event)
     }
 
-    /**
-     * 长按频道 = 收藏/取消收藏。
-     * 为什么用长按而不是加个星标按钮：TV 上没有鼠标，多一个可聚焦元素
-     * 就多一次方向键跳动，破坏"上下走、OK 进"的直觉。
-     */
     private fun toggleFavorite(ch: Channel) {
         val on = !favorites.contains(ch.id)
         app.api.favorite(ch.id, on,
@@ -189,11 +305,6 @@ class HomeActivity : AppCompatActivity() {
             onErr = { status.text = "收藏失败：$it" })
     }
 
-    /**
-     * 应用服务端下发的播放参数。
-     * 只覆盖"服务端明确给了值"的字段，没给的保持本地设置，
-     * 避免服务端字段缺失时把用户自己调好的参数冲掉。
-     */
     private fun applyRemoteConfig(cfg: com.litv.tv.data.DeviceConfig) {
         if (cfg.engine.isNotBlank() && cfg.engine != "auto") app.prefs.engine = cfg.engine
         if (cfg.decode.isNotBlank()) app.prefs.decode = cfg.decode
@@ -206,16 +317,13 @@ class HomeActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
-        // 电视在首页时也待命：手机可以直接"点播某台"把它推进播放页
         app.remote.onCommand = { cmd -> main.post { RemoteKeys.handle(this, cmd) } }
         app.remote.connect()
-        // 从播放页返回时轻量刷新一下"正在播"
         if (::adapter.isInitialized && adapter.itemCount > 0) refresh()
     }
 
     override fun onPause() {
         super.onPause()
-        // 只摘掉处理器，不断连接——进播放页时由播放页接管，避免两条 WS 打架
         app.remote.onCommand = null
     }
 

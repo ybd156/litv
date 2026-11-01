@@ -27,6 +27,7 @@ class SettingsActivity : AppCompatActivity() {
     private lateinit var valueBuffer: TextView
     private lateinit var valueAspect: TextView
     private lateinit var valueReverse: TextView
+    private lateinit var valueAutoPlay: TextView
     private lateinit var valueNumberTimeout: TextView
     private lateinit var valueDevice: TextView
     private lateinit var valueServer: TextView
@@ -48,6 +49,7 @@ class SettingsActivity : AppCompatActivity() {
         valueBuffer = findViewById(R.id.valueBuffer)
         valueAspect = findViewById(R.id.valueAspect)
         valueReverse = findViewById(R.id.valueReverse)
+        valueAutoPlay = findViewById(R.id.valueAutoPlay)
         valueNumberTimeout = findViewById(R.id.valueNumberTimeout)
         valueDevice = findViewById(R.id.valueDevice)
         valueServer = findViewById(R.id.valueServer)
@@ -69,6 +71,11 @@ class SettingsActivity : AppCompatActivity() {
         bindCycle(R.id.rowReverse, valueReverse, listOf("off", "on"),
             if (app.prefs.reverseChannelKeys) "on" else "off") { v ->
             app.prefs.reverseChannelKeys = (v == "on"); labelReverse(v == "on")
+        }
+        bindCycle(R.id.rowAutoPlay, valueAutoPlay, listOf("off", "on"),
+            if (app.prefs.autoPlayLast) "on" else "off") { v ->
+            app.prefs.autoPlayLast = (v == "on")
+            valueAutoPlay.text = if (v == "on") "开（打开就看）" else "关（先进列表）"
         }
         bindCycle(R.id.rowNumberTimeout, valueNumberTimeout,
             numTimeouts.map { it.toString() }, app.prefs.numberJumpTimeoutMs.toString()) { v ->

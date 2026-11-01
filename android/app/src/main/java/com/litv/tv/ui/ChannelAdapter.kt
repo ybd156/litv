@@ -29,6 +29,8 @@ class ChannelAdapter(
     private val logoMaxPx: Int,
     private val onClick: (Channel) -> Unit,
     private val onLongClick: ((Channel) -> Unit)? = null,
+    /** 焦点落到某个台上时回调——三列联动要靠它实时刷新右侧节目单 */
+    private val onFocus: ((Channel) -> Unit)? = null,
 ) : RecyclerView.Adapter<ChannelAdapter.VH>() {
 
     private val items = ArrayList<Channel>()
@@ -93,10 +95,15 @@ class ChannelAdapter(
             v.animate().scaleX(if (hasFocus) 1.06f else 1f)
                 .scaleY(if (hasFocus) 1.06f else 1f)
                 .setDuration(120).start()
+            // 三列联动：焦点到哪个台，右侧就显示哪个台的节目单
+            if (hasFocus) onFocus?.invoke(ch)
         }
 
         loadLogo(holder.logo, ch.logo)
     }
+
+    /** 公开出来：三列布局右侧的台标复用同一份缓存 */
+    fun loadLogoFor(target: ImageView, url: String) = loadLogo(target, url)
 
     private fun loadLogo(target: ImageView, url: String) {
         target.setImageDrawable(null)

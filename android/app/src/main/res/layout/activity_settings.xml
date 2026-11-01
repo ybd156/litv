@@ -102,6 +102,19 @@
         </LinearLayout>
 
         <LinearLayout
+            android:id="@+id/rowAutoPlay"
+            style="@style/SettingRow">
+
+            <TextView
+                style="@style/SettingLabel"
+                android:text="开机自动播放上次频道" />
+
+            <TextView
+                android:id="@+id/valueAutoPlay"
+                style="@style/SettingValue" />
+        </LinearLayout>
+
+        <LinearLayout
             android:id="@+id/rowNumberTimeout"
             style="@style/SettingRow">
 

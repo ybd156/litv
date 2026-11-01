@@ -73,6 +73,15 @@ class Prefs(ctx: Context) {
         set(v) = sp.edit().putInt(K_NUM_TIMEOUT, v).apply()
 
     /**
+     * 开机自动播放上次看的频道。
+     *
+     * 电视的使用习惯就是「打开就看」，不该先让人在列表里找台。
+     */
+    var autoPlayLast: Boolean
+        get() = sp.getBoolean(K_AUTOPLAY, true)
+        set(v) = sp.edit().putBoolean(K_AUTOPLAY, v).apply()
+
+    /**
      * 播放方式：auto（默认，能直连就直连）/ direct（强制直连）/ relay（强制走服务端）。
      *
      * 直连 = 客户端自己连源站，省掉 NAS 的带宽和 CPU，起播更快；
@@ -119,6 +128,7 @@ class Prefs(ctx: Context) {
         const val K_REVERSE = "reverse_keys"
         const val K_NUM_TIMEOUT = "num_timeout"
         const val K_UI_MODE = "ui_mode"
+        const val K_AUTOPLAY = "auto_play_last"
         const val K_DIRECT_MODE = "direct_mode"
         const val K_CACHE = "bootstrap_cache"
     }

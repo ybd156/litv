@@ -480,7 +480,8 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
                 return true
             }
             KeyEvent.KEYCODE_MENU, KeyEvent.KEYCODE_INFO -> {
-                if (action == KeyEvent.ACTION_DOWN) showOsd()
+                // 菜单键 = 打开设置弹层，改完继续看，不离开画面
+                if (action == KeyEvent.ACTION_DOWN) SettingsDialog(this).show()
                 return true
             }
             KeyEvent.KEYCODE_BACK -> {

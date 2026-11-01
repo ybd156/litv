@@ -1,0 +1,66 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  播放中的设置弹层：左主题、右选项。
+
+  参考 TVBox 系（酷9）的做法——设置按主题拆成弹层，
+  在播放页按 MENU 弹出来改，改完继续看，不离开画面。
+  以前是跳到独立页面，看一半想调个缓冲就得退出再进。
+-->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="720dp"
+    android:layout_height="wrap_content"
+    android:background="@color/bg_panel"
+    android:orientation="horizontal"
+    android:padding="18dp">
+
+    <!-- 左：主题 -->
+    <LinearLayout
+        android:layout_width="150dp"
+        android:layout_height="wrap_content"
+        android:orientation="vertical">
+
+        <TextView
+            android:id="@+id/tabPlay"
+            style="@style/SettingRow"
+            android:paddingHorizontal="12dp"
+            android:paddingVertical="12dp"
+            android:text="播放"
+            android:textColor="@color/text_primary"
+            android:textSize="15sp" />
+
+        <TextView
+            android:id="@+id/tabInteract"
+            style="@style/SettingRow"
+            android:layout_marginTop="4dp"
+            android:paddingHorizontal="12dp"
+            android:paddingVertical="12dp"
+            android:text="交互"
+            android:textColor="@color/text_primary"
+            android:textSize="15sp" />
+
+        <TextView
+            android:id="@+id/tabDevice"
+            style="@style/SettingRow"
+            android:layout_marginTop="4dp"
+            android:paddingHorizontal="12dp"
+            android:paddingVertical="12dp"
+            android:text="设备"
+            android:textColor="@color/text_primary"
+            android:textSize="15sp" />
+    </LinearLayout>
+
+    <!-- 右：选项（代码里按主题动态填） -->
+    <ScrollView
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="14dp"
+        android:layout_weight="1"
+        android:scrollbars="none">
+
+        <LinearLayout
+            android:id="@+id/optionBox"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical" />
+    </ScrollView>
+</LinearLayout>

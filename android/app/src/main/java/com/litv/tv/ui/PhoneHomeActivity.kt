@@ -51,6 +51,7 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
     private lateinit var playName: TextView
     private lateinit var playEngine: TextView
     private lateinit var playNow: TextView
+    private lateinit var playRoute: TextView
     private lateinit var playHint: TextView
     private lateinit var epgList: LinearLayout
     private lateinit var gestureTip: TextView
@@ -116,6 +117,7 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
         playName = findViewById(R.id.playName)
         playEngine = findViewById(R.id.playEngine)
         playNow = findViewById(R.id.playNow)
+        playRoute = findViewById(R.id.playRoute)
         playHint = findViewById(R.id.playHint)
         epgList = findViewById(R.id.epgList)
         gestureTip = findViewById(R.id.gestureTip)
@@ -332,6 +334,10 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
             onOk = { info ->
                 // 源配置里带了 UA 就用它，否则用默认
                 val headers = mapOf("User-Agent" to info.ua.ifBlank { "LITV/1.0 (Android)" })
+                // 把链路和实际用的 UA 显示出来，方便确认源站校验的 UA 到底带没带
+                val modeText = if (info.mode == "direct") "直连源站" else "服务端中转"
+                val uaText = if (info.ua.isBlank()) "默认 UA" else "UA: " + info.ua.take(30)
+                playRoute.text = modeText + " · " + uaText
                 player.play(ch.id, app.api.absolute(info.url), headers, app.prefs.engine)
                 app.api.heartbeat(ch.id, "playing")
             },

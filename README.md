@@ -19,7 +19,7 @@
 | fnOS 打包 | ✅ 已出包 | `packaging/fnos/dist/litv_{x86,arm,all}_v1.0.0.fpk`，生命周期冒烟 39/39 |
 | Android TV | ✅ 已出包 | 四内核、自适应渲染档、完整遥控器交互、EPG 面板、线路/分组切换 |
 | Android 手机 | ✅ 同一 APK | 触摸手势播放、分组 chip、收藏、遥控器 |
-| iOS | ✅ 已出包 | SwiftUI 客户端 + GitHub Actions macOS runner，产出**未签名** `LITV-unsigned.ipa`（arm64，195KB）。仓库：<https://github.com/ybd156/litv> |
+| iOS | ✅ 已出包 | SwiftUI 客户端 + GitHub Actions macOS runner，产出**未签名** `LITV-unsigned.ipa`（arm64）。播放用 AVPlayer（覆盖 HLS）。libmpv xcframework 的 CI 交叉编译仍在调（见下）。仓库：<https://github.com/ybd156/litv> |
 
 ### 已验证的测试
 
@@ -106,6 +106,20 @@ iOS 不在 WSL 里编——需要 Apple 的 iOS SDK，Linux 上做不了。
 
 > 踩坑记录：`runs-on: macos-14` 在这个账号下会让 job 3 秒内被取消（连 step 都不跑），
 > 换成 `macos-latest` 正常。
+
+### iOS 的 libmpv（进行中）
+
+`ios/native/build-xcframework-macos.sh` + [ios-xcframework.yml](.github/workflows/ios-xcframework.yml)
+负责在 macOS runner 上交叉编译 `libuavs3d → FFmpeg → libmpv`，产出 `LITVKit.xcframework`，
+再由 WSL 侧链接打包。
+
+当前已修的坑（每次都是 CI 日志定位）：
+1. `runs-on: macos-14` → 秒取消，改 `macos-latest`
+2. CMake 4 拒绝 `cmake_minimum_required(<3.5)` → 加 `-DCMAKE_POLICY_VERSION_MINIMUM=3.5`
+3. uavs3d 默认会编命令行程序 `uavs3dec`，iOS 下链接失败 → `--target uavs3d` 只编静态库
+
+**现状**：iOS App 用 AVPlayer 已经能完整播放（服务端产出 HLS），
+libmpv 是为了补 AC3/AVS3 这类 AVPlayer 解不了的格式，属于增强项。
 
 ```bash
 # 1. 构建服务端

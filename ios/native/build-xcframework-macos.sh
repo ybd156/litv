@@ -134,6 +134,21 @@ if [ ! -f "$WORK/lib/libfribidi.a" ]; then
     curl -fL --retry 3 -o fribidi.tar.gz https://github.com/fribidi/fribidi/archive/refs/tags/v1.0.15.tar.gz
     tar xzf fribidi.tar.gz && mv fribidi-1.0.15 fribidi
   }
+  # fribidi 的代码生成器（gen.tab/*.c）没 include <stdlib.h>/<string.h>
+  # 就用了 exit/strcpy/strstr/strrchr，而 clang 16+ 把隐式函数声明当错误。
+  # CFLAGS 对 meson 的 native:true 目标不生效，直接给源码补 include 最稳。
+  python3 - <<'PYEOF'
+import glob
+for f in glob.glob("fribidi/gen.tab/*.c"):
+    s = open(f, encoding="utf-8", errors="ignore").read()
+    add = ""
+    if "<string.h>" not in s:
+        add += "#include <string.h>\n"
+    if "<stdlib.h>" not in s:
+        add += "#include <stdlib.h>\n"
+    if add:
+        open(f, "w", encoding="utf-8").write(add + s)
+PYEOF
   CFLAGS="-Wno-error=implicit-function-declaration" \
   meson setup fribidi/build fribidi --cross-file "$WORK/cross-ios.txt" \
     --prefix="$WORK" --buildtype=release --default-library=static \

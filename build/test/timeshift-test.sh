@@ -12,7 +12,10 @@ GWURL="http://localhost/app/litv/api/v1"
 BIN=${BIN:-/tmp/litvd}
 G="curl -sS --unix-socket $W/app.sock -H X-Trim-Userid:1000 -H X-Trim-Username:admin -H X-Trim-Isadmin:true"
 
-pkill -x litvd 2>/dev/null; sleep 0.5
+pkill -x litvd 2>/dev/null
+# 清掉上一轮残留的静态服务，否则端口被占会静默失败（表现为上游 404）
+pkill -f "http[.]server" 2>/dev/null
+sleep 0.5
 rm -rf "$W"; mkdir -p "$W/cache" "$W/www"
 
 # 造一个 8MB 的"直播流"（188 字节包长的整数倍，模拟 TS）

@@ -126,6 +126,8 @@ func (a *API) Handler(viaGateway bool) http.Handler {
 		pr.Get("/api/v1/stats/channels", a.statsChannels)
 		// 告警：整台挂掉的频道
 		pr.Get("/api/v1/alerts/dead-channels", a.deadChannels)
+		// Web 端直接看：给管理台发一个短期签名播放地址
+		pr.Get("/api/v1/web/play/{id}", a.webPlay)
 
 		// 录制中心
 		pr.Get("/api/v1/recordings", a.listRecordings)

@@ -15,7 +15,10 @@ pass=0; fail=0
 chk() { if printf '%s' "$3" | grep -q "$2"; then printf '\033[32m  PASS\033[0m %s\n' "$1"; pass=$((pass+1));
         else printf '\033[31m  FAIL\033[0m %s\n        期望: %s\n        实际: %s\n' "$1" "$2" "${3:0:200}"; fail=$((fail+1)); fi; }
 
-pkill -x litvd 2>/dev/null; sleep 0.5
+pkill -x litvd 2>/dev/null
+# 清掉上一轮残留的静态服务，否则端口被占会静默失败（表现为上游 404）
+pkill -f "http[.]server" 2>/dev/null
+sleep 0.5
 rm -rf "$W"; mkdir -p "$W/cache" "$W/hook"
 
 # ---- 本地 webhook 接收器 ----

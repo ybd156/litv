@@ -16,7 +16,10 @@ BIN=${BIN:-/tmp/litvd}
 PORT=19541
 GW="http://localhost/app/litv"
 
-pkill -x litvd 2>/dev/null; sleep 0.5
+pkill -x litvd 2>/dev/null
+# 清掉上一轮残留的静态服务，否则端口被占会静默失败（表现为上游 404）
+pkill -f "http[.]server" 2>/dev/null
+sleep 0.5
 rm -rf "$WORK"; mkdir -p "$WORK/cache"
 cp "$ROOT/build/test/sample.m3u" "$WORK/" || { echo "样例源缺失: $ROOT/build/test/sample.m3u"; exit 1; }
 [ -s "$WORK/sample.m3u" ] || { echo "样例源为空"; exit 1; }

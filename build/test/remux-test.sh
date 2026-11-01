@@ -26,7 +26,10 @@ if [ ! -x "$FF" ]; then
   exit 2
 fi
 
-pkill -x litvd 2>/dev/null; sleep 0.5
+pkill -x litvd 2>/dev/null
+# 清掉上一轮残留的静态服务，否则端口被占会静默失败（表现为上游 404）
+pkill -f "http[.]server" 2>/dev/null
+sleep 0.5
 rm -rf "$W"; mkdir -p "$W/cache" "$W/www"
 
 echo "== 生成测试用 TS（60 秒，H.264 + AAC）=="

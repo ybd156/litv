@@ -18,7 +18,10 @@ chk() { if printf '%s' "$3" | grep -q "$2"; then printf '\033[32m  PASS\033[0m %
 
 [ -x "$FF" ] || { echo "缺少 ffmpeg: $FF"; exit 2; }
 
-pkill -x litvd 2>/dev/null; sleep 0.5
+pkill -x litvd 2>/dev/null
+# 清掉上一轮残留的静态服务，否则端口被占会静默失败（表现为上游 404）
+pkill -f "http[.]server" 2>/dev/null
+sleep 0.5
 rm -rf "$W"; mkdir -p "$W/cache" "$W/www" "$W/rec"
 
 echo "== 生成 90 秒测试流 =="

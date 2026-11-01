@@ -4,7 +4,8 @@ import android.app.Application
 import android.util.Log
 import com.litv.tv.data.Api
 import com.litv.tv.data.Prefs
-import com.litv.tv.player.MpvNative
+// 注意：`is` 是 Kotlin 关键字，导入这个包必须用反引号转义
+import `is`.xyz.mpv.MPVLib
 import com.litv.tv.ui.Tier
 
 /**
@@ -27,7 +28,7 @@ class LitvApp : Application() {
 
         Log.i(
             TAG,
-            "LITV 启动 | 渲染档=${tier.name} | libmpv=${if (MpvNative.available) "可用" else "未编译"} " +
+            "LITV 启动 | 渲染档=${tier.name} | libmpv=${if (MPVLib.available) "可用" else "未打包"} " +
                 "| Android ${android.os.Build.VERSION.SDK_INT} | ${android.os.Build.MODEL}"
         )
 

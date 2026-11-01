@@ -171,7 +171,11 @@ build_ffmpeg() {
     >"$bdir/configure.log" 2>&1 || { err "ffmpeg configure 失败，见 $bdir/configure.log"; tail -20 "$bdir/configure.log"; return 1; }
 
   make -j"$JOBS" >>"$bdir/build.log" 2>&1 || { err "ffmpeg make 失败，见 $bdir/build.log"; return 1; }
-  make install >>"$bdir/build.log" 2>&1
+  # 关键：make install 默认会用宿主 strip，而宿主 strip 不认识 Android ARM 的 .so，
+  # 报 "Unable to recognise the architecture"，导致 install 半途而废（.so 没装全、.pc 没生成）。
+  # 传 STRIP=true 跳过 stripping。
+  make install STRIP=true >>"$bdir/build.log" 2>&1 || { err "ffmpeg install 失败，见 $bdir/build.log"; return 1; }
+  [ -f "$prefix/lib/pkgconfig/libavcodec.pc" ] || { err "ffmpeg 未安装完整（缺 libavcodec.pc）"; return 1; }
   ok "ffmpeg[$abi] 完成"
 }
 
@@ -206,6 +210,11 @@ cpu = '$( [ "$abi" = "arm64-v8a" ] && echo aarch64 || echo armv7a )'
 endian = 'little'
 CROSS
 
+  # mpv 0.39 的 meson 选项与 0.37 之前差别很大：
+  #   - 没有 libass / libplacebo 开关（改为 pkg-config 自动探测，没装就是没有）
+  #   - 没有 android 开关；Android 支持由 egl-android + android-media-ndk 组成
+  #   - 没有 macos-10-15-feature（改叫 macos-10-15-4-features）
+  # 给错选项 meson 会直接 "Unknown option" 退出，所以这里只列真实存在的。
   PKG_CONFIG_PATH="$prefix/lib/pkgconfig" \
   meson setup build "$SRC/mpv" \
     --cross-file "$bdir/cross.txt" \
@@ -214,13 +223,17 @@ CROSS
     -Dlibmpv=true \
     -Dcplayer=false \
     -Dbuild-date=false \
-    -Dalsa=disabled -Djack=disabled -Dpulse=disabled \
-    -Dpipewire=disabled -Dsdl2=disabled \
-    -Dlibass=disabled -Dlibplacebo=disabled \
+    -Dgpl=false \
+    -Degl-android=enabled \
+    -Dandroid-media-ndk=enabled \
+    -Dalsa=disabled -Djack=disabled -Dpulse=disabled -Dpipewire=disabled \
+    -Dopenal=disabled -Dsdl2=disabled -Dsdl2-audio=disabled \
     -Dvaapi=disabled -Dvdpau=disabled -Dcuda-hwaccel=disabled \
-    -Ddrm=disabled -Dgbm=disabled -Dwayland=disabled -Dx11=disabled \
-    -Dandroid=enabled -Dmediacodec=enabled \
-    >"$bdir/meson.log" 2>&1 || { err "mpv meson 配置失败，见 $bdir/meson.log"; tail -25 "$bdir/meson.log"; return 1; }
+    -Ddrm=disabled -Dgbm=disabled -Dwayland=disabled -Dx11=disabled -Dvulkan=disabled \
+    -Dcaca=disabled -Djpeg=disabled -Dlcms2=disabled -Dlibarchive=disabled \
+    -Dlibbluray=disabled -Dlua=disabled -Duchardet=disabled -Dzimg=disabled \
+    -Ddvbin=disabled -Ddvdnav=disabled -Dcdda=disabled \
+    >"$bdir/meson.log" 2>&1 || { err "mpv meson 配置失败，见 $bdir/meson.log"; tail -20 "$bdir/meson.log"; return 1; }
 
   ninja -C build -j"$JOBS" >>"$bdir/meson.log" 2>&1 || { err "mpv 编译失败，见 $bdir/meson.log"; return 1; }
   ninja -C build install >>"$bdir/meson.log" 2>&1

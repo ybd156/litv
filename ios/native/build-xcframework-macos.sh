@@ -66,8 +66,9 @@ PCEOF
 if [ ! -f "$WORK/lib/libavcodec.a" ]; then
   say "构建 FFmpeg（静态库，开 libuavs3d）"
   [ -d ffmpeg ] || {
-    curl -fL -o ffmpeg.tar.xz https://ffmpeg.org/releases/ffmpeg-7.1.tar.xz
-    tar xJf ffmpeg.tar.xz && mv ffmpeg-7.1 ffmpeg
+    # 用 GitHub 的 tag 归档而不是 ffmpeg.org：后者在 CI 上经常超时/断流
+    curl -fL --retry 3 -o ffmpeg.tar.gz https://github.com/FFmpeg/FFmpeg/archive/refs/tags/n7.1.tar.gz
+    tar xzf ffmpeg.tar.gz && mv FFmpeg-n7.1 ffmpeg
   }
   cd ffmpeg
   # 让 pkg-config 能找到刚装的 uavs3d

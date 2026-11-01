@@ -24,15 +24,16 @@
 ### 已验证的测试
 
 ```bash
-bash build/test/e2e.sh           # 终端链路端到端（20 项）
-bash build/test/remote-test.sh   # 遥控通道（WS 中转）
+bash build/test/e2e.sh            # 终端链路端到端（28 项）
+bash build/test/remote-test.sh    # 遥控通道（WS 中转）
 bash build/test/timeshift-test.sh # 时移录制与回看
-bash build/test/smoke.sh         # 服务端 API 冒烟
+bash build/test/remux-test.sh     # 裸 TS → HLS 转封装
+bash build/test/record-test.sh    # 录制中心（含调度器）
+bash build/test/smoke.sh          # 服务端 API 冒烟
 packaging/fnos/tools/smoke-test.sh dist/litv_x86_v1.0.0.fpk   # fpk 生命周期（39 项）
 ```
 
-全部通过。`e2e.sh` 覆盖：注册 → 待批准 → 批准 → bootstrap → EPG → 播放地址 → 拉流 →
-篡改签名被拒 → 收藏 → 心跳 → 线路列表 → 不泄露上游地址 → 吊销失效。
+全部通过（共 48 项断言 + 遥控/冒烟/打包三套）。
 
 ### 已实现的功能梯队
 
@@ -42,8 +43,16 @@ packaging/fnos/tools/smoke-test.sh dist/litv_x86_v1.0.0.fpk   # fpk 生命周期
 - ✅ 手机当遥控（WebSocket 中转，跨网段可用，电视不开端口）
 - ✅ 回看 / 时移（`internal/timeshift` 边看边录，默认保留约 1 小时）
 
-**第二梯队**：EPG 智能匹配 ✅、录制中心 ⏳、跨端续播 ⏳、播放统计 ⏳
-**第三梯队**：多语言（fnOS i18n 已备）✅、Web 播放/DLNA/告警 ⏳
+**第二梯队（已完成）**
+- ✅ EPG 智能匹配（归一化 + 数字编号匹配）
+- ✅ 录制中心（`internal/record`，立即录制与预约录制，`-c copy` 不转码）
+- ✅ 跨端续播（`watch_progress`，客厅看一半去卧室接着看）
+- ✅ 播放质量统计（起播耗时/P90/卡顿率/失败率，客户端上报）
+
+**第三梯队（进行中）**
+- ✅ 多语言（fnOS i18n 中英双语已备）
+- ✅ 裸 TS → HLS 转封装（`internal/remux`，顺带解决 iOS 播不了裸 TS）
+- ⏳ Web 端直接看 / DLNA 投屏 / 源失效告警推送
 
 ---
 

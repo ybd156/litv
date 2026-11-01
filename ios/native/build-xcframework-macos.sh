@@ -97,7 +97,79 @@ if [ ! -f "$WORK/lib/libavcodec.a" ]; then
   cd ..
 fi
 
-# ---------------------------------------------------------------- 3. mpv
+# ---------------------------------------------------------------- 3. libass 依赖
+#
+# mpv 0.35.1 的 meson.build 里 libass 是无条件 dependency()（没有 required: 开关），
+# 所以躲不掉。libass 又依赖 fribidi + freetype。
+# 三者都是小而成熟的库，交叉编译成本可控。
+say "准备 meson 交叉编译文件"
+cat > "$WORK/cross-ios.txt" <<CROSS
+[binaries]
+c = '$(xcrun --sdk iphoneos -f clang)'
+cpp = '$(xcrun --sdk iphoneos -f clang++)'
+ar = '$(xcrun --sdk iphoneos -f ar)'
+strip = '$(xcrun --sdk iphoneos -f strip)'
+pkg-config = 'pkg-config'
+
+[host_machine]
+system = 'darwin'
+cpu_family = 'aarch64'
+cpu = 'arm64'
+endian = 'little'
+CROSS
+
+export PKG_CONFIG_PATH="$WORK/lib/pkgconfig"
+export PKG_CONFIG_LIBDIR="$WORK/lib/pkgconfig"
+
+# ---- fribidi（双向文本，libass 必需）----
+if [ ! -f "$WORK/lib/libfribidi.a" ]; then
+  say "构建 fribidi"
+  [ -d fribidi ] || {
+    curl -fL --retry 3 -o fribidi.tar.gz https://github.com/fribidi/fribidi/archive/refs/tags/v1.0.15.tar.gz
+    tar xzf fribidi.tar.gz && mv fribidi-1.0.15 fribidi
+  }
+  meson setup fribidi/build fribidi --cross-file "$WORK/cross-ios.txt" \
+    --prefix="$WORK" --buildtype=release --default-library=static \
+    -Ddocs=false -Dtests=false -Dbin=false
+  ninja -C fribidi/build install
+fi
+
+# ---- freetype（字体解析，libass 必需）----
+if [ ! -f "$WORK/lib/libfreetype.a" ]; then
+  say "构建 freetype"
+  [ -d freetype ] || {
+    curl -fL --retry 3 -o freetype.tar.gz https://github.com/freetype/freetype/archive/refs/tags/VER-2-13-2.tar.gz
+    tar xzf freetype.tar.gz && mv freetype-VER-2-13-2 freetype
+  }
+  cmake -S freetype -B freetype/build-ios \
+    -DCMAKE_SYSTEM_NAME=iOS \
+    -DCMAKE_SYSTEM_PROCESSOR="$ARCH" \
+    -DCMAKE_OSX_ARCHITECTURES="$ARCH" \
+    -DCMAKE_OSX_DEPLOYMENT_TARGET="$IOS_MIN" \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_INSTALL_PREFIX="$WORK" \
+    -DBUILD_SHARED_LIBS=OFF \
+    -DFT_DISABLE_PNG=ON -DFT_DISABLE_BZIP2=ON -DFT_DISABLE_HARFBUZZ=ON \
+    -DFT_DISABLE_BROTLI=ON -DFT_DISABLE_ZLIB=OFF \
+    -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+  cmake --build freetype/build-ios -j"$(sysctl -n hw.ncpu)"
+  cmake --install freetype/build-ios
+fi
+
+# ---- libass（字幕渲染，mpv 必需）----
+if [ ! -f "$WORK/lib/libass.a" ]; then
+  say "构建 libass"
+  [ -d libass ] || {
+    curl -fL --retry 3 -o libass.tar.gz https://github.com/libass/libass/archive/refs/tags/0.17.1.tar.gz
+    tar xzf libass.tar.gz && mv libass-0.17.1 libass
+  }
+  meson setup libass/build libass --cross-file "$WORK/cross-ios.txt" \
+    --prefix="$WORK" --buildtype=release --default-library=static \
+    -Dfontconfig=disabled -Dharfbuzz=disabled -Dlibunibreak=disabled -Dtest=disabled
+  ninja -C libass/build install
+fi
+
+# ---------------------------------------------------------------- 4. mpv
 #
 # 用 mpv 0.35.1 而不是 0.39：
 #   0.36 之后 libplacebo 从"可选依赖"变成了无条件 dependency()，
@@ -145,7 +217,7 @@ fi
 
 # ---------------------------------------------------------------- 4. 打 xcframework
 say "打包 xcframework"
-LIBS="libmpv.a libavcodec.a libavformat.a libavutil.a libswscale.a libswresample.a libuavs3d.a"
+LIBS="libmpv.a libavcodec.a libavformat.a libavutil.a libswscale.a libswresample.a libuavs3d.a libass.a libfreetype.a libfribidi.a"
 mkdir -p "$WORK/headers" "$WORK/xcf"
 cp -r "$WORK"/include/* "$WORK/headers/" 2>/dev/null || true
 

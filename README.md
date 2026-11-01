@@ -223,7 +223,7 @@ cd packaging/fnos
 ./build.sh              # 默认 x86；ARM 用 ./build.sh --arch arm
 ```
 
-产物：`dist/litv_x86_v1.0.0.fpk` + `.sha256`
+产物：`dist/litv_x86_<版本>.fpk` + `.sha256`
 
 安装：
 1. 飞牛桌面 → **应用中心 → 手动安装** → 选择 `.fpk`

@@ -45,6 +45,23 @@ if [ ! -f "$WORK/lib/libuavs3d.a" ]; then
   cmake --install "$WORK/uavs3d/build-ios"
 fi
 
+# uavs3d 的 CMake 不生成 pkg-config 文件，但 ffmpeg 的 --enable-libuavs3d
+# 是用 pkg-config 找库的（require_pkg_config libuavs3d "uavs3d >= 1.1.41"）。
+# 这里手写一个最小的 .pc，否则 configure 会直接报 uavs3d not found。
+mkdir -p "$WORK/lib/pkgconfig"
+cat > "$WORK/lib/pkgconfig/uavs3d.pc" <<PCEOF
+prefix=$WORK
+exec_prefix=\${prefix}
+libdir=\${prefix}/lib
+includedir=\${prefix}/include
+
+Name: uavs3d
+Description: AVS3-P2 video decoder
+Version: 1.1.41
+Libs: -L\${libdir} -luavs3d
+Cflags: -I\${includedir}
+PCEOF
+
 # ---------------------------------------------------------------- 2. FFmpeg
 if [ ! -f "$WORK/lib/libavcodec.a" ]; then
   say "构建 FFmpeg（静态库，开 libuavs3d）"
@@ -53,6 +70,9 @@ if [ ! -f "$WORK/lib/libavcodec.a" ]; then
     tar xJf ffmpeg.tar.xz && mv ffmpeg-7.1 ffmpeg
   }
   cd ffmpeg
+  # 让 pkg-config 能找到刚装的 uavs3d
+  export PKG_CONFIG_PATH="$WORK/lib/pkgconfig"
+  export PKG_CONFIG_LIBDIR="$WORK/lib/pkgconfig"
   ./configure \
     --prefix="$WORK" \
     --target-os=darwin --arch="$ARCH" \
@@ -65,6 +85,7 @@ if [ ! -f "$WORK/lib/libavcodec.a" ]; then
     --disable-programs --disable-doc --disable-avdevice --disable-postproc \
     --enable-libuavs3d \
     --enable-videotoolbox \
+    --disable-vaapi --disable-vdpau --disable-cuda --disable-cuvid \
     --enable-decoder=h264,hevc,mpeg2video,avs2,avs3,mp3,aac,ac3,eac3,dca,flac,opus \
     --enable-parser=h264,hevc,mpegvideo,avs3,aac,ac3 \
     --enable-demuxer=mpegts,hls,mov,flv,matroska,h264,hevc,aac,mp3 \

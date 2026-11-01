@@ -1,0 +1,50 @@
+# xcodegen 工程描述
+#
+# 为什么用 xcodegen 而不是提交 .xcodeproj：
+#   pbxproj 是二进制式的巨型文本，手写/合并都是灾难。用一份 YAML 生成，
+#   CI 里 `xcodegen generate` 一行就出来，也方便以后改配置。
+name: LITV
+options:
+  bundleIdPrefix: com.litv
+  deploymentTarget:
+    iOS: "15.0"
+  createIntermediateGroups: true
+
+settings:
+  base:
+    SWIFT_VERSION: "5.9"
+    # 不签名：CI 里靠 CODE_SIGNING_ALLOWED=NO 覆盖，这里留空
+    CODE_SIGN_STYLE: Manual
+    DEVELOPMENT_TEAM: ""
+
+targets:
+  LITV:
+    type: application
+    platform: iOS
+    deploymentTarget: "15.0"
+    sources:
+      - path: LITVApp/Sources
+    info:
+      path: LITVApp/Info.plist
+      properties:
+        CFBundleDisplayName: LITV
+        CFBundleShortVersionString: "1.0.0"
+        CFBundleVersion: "1"
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        # 直播源大量是 http 明文，必须放开 ATS，否则 URLSession 直接拒绝
+        NSAppTransportSecurity:
+          NSAllowsArbitraryLoads: true
+          NSAllowsArbitraryLoadsForMedia: true
+        # 局域网发现服务端
+        NSLocalNetworkUsageDescription: 用于发现局域网内的 LITV 服务端
+        NSBonjourServices:
+          - _http._tcp
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.litv.app
+        TARGETED_DEVICE_FAMILY: "1,2"
+        ENABLE_BITCODE: NO

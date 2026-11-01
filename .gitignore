@@ -26,3 +26,10 @@ android/.idea/
 *.iml
 android/app/src/main/jniLibs/
 android/keystore/
+
+# iOS
+ios/build/
+ios/LITV.xcodeproj/
+ios/LITVApp/Info.plist
+ios/*.ipa
+ios/Payload/

@@ -233,11 +233,27 @@ jobs:
           # 已存在就先删（允许重跑覆盖）
           gh release delete "$TAG" --yes --cleanup-tag 2>/dev/null || true
 
-          # 发布说明放仓库文件里，不在 YAML 里写 heredoc
-          # （YAML 块标量不允许顶格内容，heredoc 会把它截断）
+          # 发布说明 = 下载指引 + 该版本的 CHANGELOG 段落
+          # （说明放仓库文件里，不在 YAML 里写 heredoc——
+          #   YAML 块标量不允许顶格内容，heredoc 会把它截断）
+          cp docs/release-notes.md /tmp/notes.md
+          echo "" >> /tmp/notes.md
+          echo "## 本版变化" >> /tmp/notes.md
+          echo "" >> /tmp/notes.md
+          # 用 index() 而不是正则：awk 里 "\[" 这种转义不可靠
+          awk -v v="$V" '
+            index($0, "## [" v "]") == 1 { found = 1; next }
+            found && index($0, "## [") == 1 { exit }
+            found { print }
+          ' CHANGELOG.md >> /tmp/notes.md
+          echo "" >> /tmp/notes.md
+          echo "完整更新日志见 [CHANGELOG.md](../blob/main/CHANGELOG.md)。" >> /tmp/notes.md
+          echo "----- 发布说明预览 -----"
+          head -50 /tmp/notes.md
+
           gh release create "$TAG" out/* \
             --title "LITV ${V}" \
-            --notes-file docs/release-notes.md
+            --notes-file /tmp/notes.md
 
       - name: 打印 Release 地址
         run: echo "https://github.com/${{ github.repository }}/releases/tag/v${{ github.event.inputs.version || env.DEFAULT_VERSION }}"

@@ -2,7 +2,7 @@
 
 > 私有化部署在飞牛 NAS（fnOS）上的「直播源 + 频道编排 + 多终端分发」中台。
 > 服务端是一个 Go 单二进制，打成 fnOS 原生 `.fpk`；管理台走飞牛统一网关**点开即登录**；
-> 终端（Android TV / 手机 / iOS）用绑定码接入，播放内核 **Media3 主 + libmpv 兜底**。
+> 终端（Android TV / 手机 / iOS）用绑定码接入，播放内核 **Media3 主 + libmpv / VLC 兜底**。
 
 > [!IMPORTANT]
 > **合规声明**：本项目是**中立的源管理与播放外壳**，不提供、不预装、不托管、不分发任何直播源、EPG 或音视频内容。
@@ -15,11 +15,11 @@
 | 模块 | 状态 | 说明 |
 |---|---|---|
 | 服务端 `litvd` | ✅ 可运行 | 双入口、源解析、频道编排、EPG、设备绑定、流扇出、源探测、遥控中转 |
-| 管理台 Web | ✅ 可构建 | Vue 3 + Vite + Naive UI，深色主题，部署在 `/app/litv/` 子路径 |
-| fnOS 打包 | ✅ 已出包 | `packaging/fnos/dist/litv_{x86,arm,all}_v1.0.0.fpk`，生命周期冒烟 39/39 |
+| 管理台 Web | ✅ 可构建 | Vue 3 + Vite + Naive UI，深色主题，部署在 `/app/litv/` 子路径，8 个页面含直播预览 |
+| fnOS 打包 | ✅ 已出包 | `litv_{x86,arm}.fpk` 0.0.2，生命周期冒烟 39/39 |
 | Android TV | ✅ 已出包 | 四内核、自适应渲染档、完整遥控器交互、EPG 面板、线路/分组切换 |
-| Android 手机 | ✅ 同一 APK | 触摸手势播放、分组 chip、收藏、遥控器 |
-| iOS | ✅ 已出包 | SwiftUI 客户端，播放内核 **MobileVLCKit**（AC3/DTS/裸 TS 都能解），产出**未签名** `LITV-unsigned.ipa`（17MB，arm64）。仓库：<https://github.com/ybd156/litv> |
+| Android 手机 | ✅ 同一 APK | **竖屏适配**（16:9 置顶播放器 + 下方信息区）、触摸手势、分组 chip、收藏、遥控器 |
+| iOS | ✅ 已出包 | SwiftUI 客户端，播放内核 **MobileVLCKit**（AC3/DTS/裸 TS 都能解），产出**未签名** `LITV-unsigned.ipa`（16MB，arm64） |
 
 ### 已验证的测试
 
@@ -33,7 +33,7 @@ bash build/test/alert-test.sh     # 源失效告警含 webhook（8 项）
 bash build/test/web-test.sh       # Web 端播放经网关取流（7 项）
 bash build/test/dlna-test.sh      # DLNA 发现/浏览/播放（14 项）
 bash build/test/smoke.sh          # 服务端 API 冒烟
-packaging/fnos/tools/smoke-test.sh dist/litv_x86_v1.0.0.fpk   # fpk 生命周期（39 项）
+packaging/fnos/tools/smoke-test.sh dist/litv_x86_0.0.2.fpk   # fpk 生命周期（39 项）
 ```
 
 全部通过（77 项断言 + 遥控/冒烟 + 打包 39 项）。
@@ -96,6 +96,9 @@ LITV2/
 
 **直接去 Releases 拿包**：<https://github.com/ybd156/litv/releases/latest>
 
+> 每个版本改了什么，见 **[CHANGELOG.md](CHANGELOG.md)**。
+> Release 页面上的「本版变化」就是从它自动摘出来的。
+
 | 设备 | 文件 |
 |---|---|
 | **安卓电视 / 盒子（Android 9、32 位）** | `LITV-0.0.2-tv-armv7.apk` |
@@ -125,21 +128,63 @@ iOS 不在 WSL 里编——需要 Apple 的 iOS SDK，Linux 上做不了。
 > 踩坑记录：`runs-on: macos-14` 在这个账号下会让 job 3 秒内被取消（连 step 都不跑），
 > 换成 `macos-latest` 正常。
 
-### iOS 的 libmpv（进行中）
+### iOS 播放内核：为什么最终是 VLCKit 而不是 libmpv
 
-`ios/native/build-xcframework-macos.sh` + [ios-xcframework.yml](.github/workflows/ios-xcframework.yml)
-负责在 macOS runner 上交叉编译 `libuavs3d → FFmpeg → libmpv`，产出 `LITVKit.xcframework`，
-再由 WSL 侧链接打包。
+最初的目标是 libmpv。实际推进时发现 mpv 在 iOS 上不是"一个库"，而是一整条链：
 
-当前已修的坑（每次都是 CI 日志定位）：
-1. `runs-on: macos-14` → 秒取消，改 `macos-latest`
-2. CMake 4 拒绝 `cmake_minimum_required(<3.5)` → 加 `-DCMAKE_POLICY_VERSION_MINIMUM=3.5`
-3. uavs3d 默认会编命令行程序 `uavs3dec`，iOS 下链接失败 → `--target uavs3d` 只编静态库
+```
+mpv 0.35.1
+ ├── libass（**无条件必需**，0.35 之后没有关闭开关）
+ │    ├── fribidi
+ │    └── freetype
+ ├── libplacebo（0.36+ 硬依赖；0.35.1 可关）
+ └── FFmpeg
+      └── libuavs3d（AVS3 解码）
+```
 
-**现状**：iOS App 用 AVPlayer 已经能完整播放（服务端产出 HLS），
-libmpv 是为了补 AC3/AVS3 这类 AVPlayer 解不了的格式，属于增强项。
+已经在 WSL 本地真编通并验证过的：**libuavs3d / FFmpeg / fribidi / freetype**，
+mpv 的 40+ 个 meson 开关也逐个校验过。**卡在 libass**——它只有 autotools
+（无 meson / 无 CMakeLists），需要 autoconf + automake + libtool 交叉编译。
 
-```bash
+考虑到这条链的产出只是补 AC3/AVS3，而 `MobileVLCKit` 是预编译 xcframework、
+一次链接搞定、能力覆盖更全（AC3/EAC3/DTS/MPEG-TS）、License 还更宽松（LGPL vs GPL），
+最终改用 VLCKit。
+
+完整记录见 [docs/design/02-iOS构建现状.md](docs/design/02-iOS构建现状.md)，
+`ios/native/build-xcframework-macos.sh` 保留着（uavs3d + FFmpeg 的 iOS 交叉编译可用）。
+
+**双内核策略**：VLCKit 优先，起不来时自动退回 AVPlayer；`#if canImport(MobileVLCKit)`
+包住整个文件，Pod 没装上也不影响 App 编译。
+
+## 故障排查
+
+### 装完打不开 / 提示"服务启动失败"
+
+**最常见原因：端口被占用。** 0.0.2 起会自动顺延端口并写日志：
+
+```
+WARN 配置的端口被占用，已自动改用下一个可用端口 配置端口=9527 实际端口=9528
+```
+
+实际端口记在配置文件旁的 `litv.port`，管理台「概览」页也能看到
+（`actual_port` / `port_changed`）。**TV / 手机填服务器地址时用实际端口。**
+
+想固定端口：应用设置 → 换一个没被占用的（比如 18027）。
+
+### iOS / 网页播不了，TV 正常
+
+**说明服务端没找到 ffmpeg。** 转封装只影响 iOS 和网页（它们只认 HLS）；
+TV / 手机 App 直接吃裸 TS，不受影响。
+
+服务端会按这个顺序找 ffmpeg：
+随包目录 → `PATH` → `/usr/bin` → `/usr/local/bin` → `/opt/ffmpeg/bin` → `/usr/trim/bin`
+
+都没有就装一个，或在「应用设置」里把 `remux.ffmpeg` 填成绝对路径。
+
+> 为什么不把 ffmpeg 打进 fpk：静态构建单个 130–150MB，包体积会从 6MB 涨到 150MB+，
+> 为了一个只影响 iOS/网页的能力不值当。
+
+## 快速开始（WSL）
 # 1. 构建服务端
 cd server
 go build -ldflags "-s -w -X main.version=1.0.0" -o litvd ./cmd/litvd

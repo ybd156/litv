@@ -83,6 +83,12 @@
             android:exported="false"
             android:screenOrientation="landscape" />
 
+        <!-- 手机端遥控器 -->
+        <activity
+            android:name=".ui.RemoteActivity"
+            android:exported="false"
+            android:configChanges="keyboard|keyboardHidden|orientation|screenSize|screenLayout|smallestScreenSize|uiMode" />
+
         <!-- 开机自启：老人机场景刚需，电视断电重开后自动进直播 -->
         <receiver
             android:name=".ui.BootReceiver"

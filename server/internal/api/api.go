@@ -25,6 +25,7 @@ import (
 
 	"github.com/litv/litv/server/internal/auth"
 	"github.com/litv/litv/server/internal/config"
+	"github.com/litv/litv/server/internal/remote"
 	"github.com/litv/litv/server/internal/store"
 	"github.com/litv/litv/server/internal/stream"
 )
@@ -34,6 +35,7 @@ type API struct {
 	cfg     *config.Config
 	st      *store.Store
 	hub     *stream.Hub
+	remote  *remote.Hub
 	signer  *auth.Signer
 	startAt time.Time
 	version string
@@ -45,6 +47,7 @@ func New(cfg *config.Config, st *store.Store, hub *stream.Hub, version string) *
 		cfg:     cfg,
 		st:      st,
 		hub:     hub,
+		remote:  remote.NewHub(),
 		signer:  auth.NewSigner(cfg.Auth.Secret),
 		startAt: time.Now(),
 		version: version,
@@ -142,6 +145,10 @@ func (a *API) Handler(viaGateway bool) http.Handler {
 		pr.Post("/api/v1/tv/heartbeat", a.tvHeartbeat)
 		pr.Get("/api/v1/tv/play/{id}", a.tvPlay)
 		pr.Get("/api/v1/tv/streams/{id}", a.tvStreams)
+		// 遥控：电视端连 WS 待命，手机端发指令
+		pr.Get("/api/v1/tv/ws", a.tvWS)
+		pr.Post("/api/v1/tv/remote/{id}", a.tvRemote)
+		pr.Get("/api/v1/tv/remote/targets", a.remoteTargets)
 	})
 
 	// ---- 流出口（签名 URL，不走身份中间件） ----

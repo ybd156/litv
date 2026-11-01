@@ -4,6 +4,7 @@ import android.app.Application
 import android.util.Log
 import com.litv.tv.data.Api
 import com.litv.tv.data.Prefs
+import com.litv.tv.data.RemoteClient
 // 注意：`is` 是 Kotlin 关键字，导入这个包必须用反引号转义
 import `is`.xyz.mpv.MPVLib
 import com.litv.tv.ui.Tier
@@ -20,11 +21,22 @@ class LitvApp : Application() {
     lateinit var tier: Tier
         private set
 
+    /**
+     * 遥控通道（电视端待命用）。
+     *
+     * 放在 Application 而不是 Activity：电视从首页进播放页时，
+     * 如果两个 Activity 各自连一条 WS，服务端会把旧连接踢掉，来回打架。
+     * 全局只连一条，当前 Activity 用 setCommandHandler 接管指令即可。
+     */
+    lateinit var remote: RemoteClient
+        private set
+
     override fun onCreate() {
         super.onCreate()
         prefs = Prefs(this)
         api = Api(prefs)
         tier = Tier.detect(this)
+        remote = RemoteClient(prefs)
 
         Log.i(
             TAG,

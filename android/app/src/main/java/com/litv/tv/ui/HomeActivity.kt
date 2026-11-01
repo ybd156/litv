@@ -184,8 +184,17 @@ class HomeActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
+        // 电视在首页时也待命：手机可以直接"点播某台"把它推进播放页
+        app.remote.onCommand = { cmd -> main.post { RemoteKeys.handle(this, cmd) } }
+        app.remote.connect()
         // 从播放页返回时轻量刷新一下"正在播"
         if (::adapter.isInitialized && adapter.itemCount > 0) refresh()
+    }
+
+    override fun onPause() {
+        super.onPause()
+        // 只摘掉处理器，不断连接——进播放页时由播放页接管，避免两条 WS 打架
+        app.remote.onCommand = null
     }
 
     override fun onDestroy() {

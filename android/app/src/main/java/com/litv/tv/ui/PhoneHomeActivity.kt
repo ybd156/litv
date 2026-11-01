@@ -67,6 +67,9 @@ class PhoneHomeActivity : AppCompatActivity() {
         findViewById<TextView>(R.id.tabFav).setOnClickListener {
             onlyFav = true; render()
         }
+        findViewById<TextView>(R.id.tabRemote).setOnClickListener {
+            startActivity(Intent(this, RemoteActivity::class.java))
+        }
         findViewById<TextView>(R.id.tabSettings).setOnClickListener {
             startActivity(Intent(this, SettingsActivity::class.java))
         }

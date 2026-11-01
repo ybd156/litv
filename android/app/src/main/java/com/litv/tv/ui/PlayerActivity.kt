@@ -520,14 +520,18 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
 
     // ---------------------------------------------------------------- 生命周期
 
-    override fun onPause() {
-        super.onPause()
-        player.pause()
-    }
-
     override fun onResume() {
         super.onResume()
         player.resume()
+        // 接管遥控指令：手机发来的按键直接走本页原有的按键逻辑
+        app.remote.onCommand = { cmd -> main.post { RemoteKeys.handle(this, cmd) } }
+        app.remote.connect()
+    }
+
+    override fun onPause() {
+        super.onPause()
+        player.pause()
+        app.remote.onCommand = null
     }
 
     override fun onDestroy() {

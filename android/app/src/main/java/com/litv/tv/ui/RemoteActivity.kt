@@ -7,6 +7,7 @@ import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
 import com.litv.tv.LitvApp
 import com.litv.tv.R
+import com.litv.tv.data.RemoteTarget
 import org.json.JSONObject
 
 /**
@@ -147,12 +148,4 @@ class RemoteActivity : AppCompatActivity() {
         )
     }
 
-    /** 服务端 /tv/remote/targets 的返回结构。 */
-    data class RemoteTarget(
-        val id: Long = 0,
-        val name: String = "",
-        val platform: String = "",
-        val model: String = "",
-        val online: Boolean = false,
-    )
 }

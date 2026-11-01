@@ -1,29 +1,53 @@
-# 构建产物
+# Dependencies
+**/node_modules/
+
+# Build outputs
 build/apk-re/
+**/dist/
+**/dist-mock/
+**/build/
+**/generated/
+**/intermediates/
+**/.gradle/
+coverage/
+.cache/
 packaging/fnos/.build/
 packaging/fnos/dist/
 packaging/fnos/app/server/litvd_*
-admin/node_modules/
-admin/dist/
-admin/dist-mock/
 server/litvd
 *.fpk
 *.apk
+*.aab
 *.ipa
 *.so
 *.db
 *.log
+
+# Local configuration and credentials
+.env
+.env.*
+!.env.example
+local.properties
+android/local.properties
+*.jks
+*.keystore
+
+# IDE and operating system
+.idea/
+.vscode/
+*.iml
 .DS_Store
-# 第三方参考代码（仅本地研究用，不入库）
+Thumbs.db
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# Third-party reference code used only for local research
 ref/
 
-# Android
-android/.gradle/
-android/build/
-android/app/build/
-android/local.properties
-android/.idea/
-*.iml
+# Android native libraries built locally
 android/app/src/main/jniLibs/
 
 # iOS
@@ -32,8 +56,6 @@ ios/LITV.xcodeproj/
 ios/LITVApp/Info.plist
 ios/*.ipa
 ios/Payload/
-
-# iOS CocoaPods
 ios/Pods/
 ios/LITV.xcworkspace/
 ios/Podfile.lock

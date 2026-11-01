@@ -165,7 +165,7 @@ struct BindView: View {
         }
         let hp = parseHostPort(base)
         let octets = hp.host.split(separator: ".")
-        let isIPv4 = octets.count == 4 && octets.allSatisfy { (Int($0) ?? -1) in 0...255 }
+        let isIPv4 = octets.count == 4 && octets.allSatisfy { (0...255).contains(Int($0) ?? -1) }
         if isIPv4 {
             for (i, o) in octets.enumerated() { ip[i] = String(o) }
             port = hp.port.isEmpty ? Self.defaultPort : hp.port
@@ -203,7 +203,8 @@ struct BindView: View {
             guard let n = Int(p), (1...65535).contains(n) else { return nil }
             return "http://\(hp.host):\(p)"
         }
-        guard ip.allSatisfy({ !$0.isEmpty }), ip.allSatisfy({ (Int($0) ?? -1) in 0...255 }) else {
+        guard ip.allSatisfy({ !$0.isEmpty }),
+              ip.allSatisfy({ (0...255).contains(Int($0) ?? -1) }) else {
             return nil
         }
         let p = port.isEmpty ? Self.defaultPort : port

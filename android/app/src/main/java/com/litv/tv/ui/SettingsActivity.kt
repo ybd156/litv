@@ -146,6 +146,8 @@ class SettingsActivity : AppCompatActivity() {
         labelAspect(app.prefs.aspect)
         labelReverse(app.prefs.reverseChannelKeys)
         labelNumTimeout(app.prefs.numberJumpTimeoutMs)
+        // 新加的行也要在这里给初值，否则第一次进设置页是空白的
+        valueAutoPlay.text = if (app.prefs.autoPlayLast) "开（打开就看）" else "关（先进列表）"
     }
 
     private fun labelEngine(v: String) {

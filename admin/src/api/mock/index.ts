@@ -19,7 +19,9 @@ import { createDb, epgProgramsFor, previewItems, type MockDb } from './data'
 
 /**
  * 开发模式假数据层。
- * 触发条件：构建/启动时 VITE_MOCK=1，或地址栏带 ?mock=1（?mock=unauth 可预览未认证页）。
+ * 触发条件：仅允许开发服务器或显式 mock 构建启用。
+ * 开发环境可用 ?mock=1（?mock=unauth 可预览未认证页）临时切换状态。
+ * 生产构建忽略地址栏参数，避免用户通过 URL 强制进入假数据模式。
  * 数据存在内存里，刷新页面即还原，方便反复试各种状态。
  */
 
@@ -30,10 +32,17 @@ function params(): URLSearchParams {
 }
 
 export function mockEnabled(): boolean {
-  // 地址栏参数优先级最高：?mock=1 / ?mock=unauth 强制假数据，?mock=0 强制真实接口
-  const q = params().get('mock')
-  if (q === '1' || q === 'true' || q === 'unauth') return true
-  if (q === '0' || q === 'false') return false
+  const mockBuild = typeof __MOCK_MODE__ !== 'undefined' && __MOCK_MODE__
+  if (!import.meta.env.DEV && !mockBuild) return false
+
+  // 只有开发服务器允许用地址栏切换；显式 mock 构建始终使用假数据。
+  if (import.meta.env.DEV) {
+    const q = params().get('mock')
+    if (q === '1' || q === 'true' || q === 'unauth') return true
+    if (q === '0' || q === 'false') return false
+  }
+  if (mockBuild) return true
+
   const flag = import.meta.env.VITE_MOCK
   if (flag === '1' || flag === 'true') return true
   if (flag === '0' || flag === 'false') return false

@@ -161,3 +161,17 @@ data class ResumePoint(
             else -> "未检测"
         }
 }
+
+/**
+ * 服务端 /api/v1/tv/remote/targets 的返回结构。
+ *
+ * 注意必须放在 data 包里：proguard 只 keep 了 com.litv.tv.data.**，
+ * 放在 UI 类内部会被 R8 混淆掉构造函数，Gson 反序列化直接崩。
+ */
+data class RemoteTarget(
+    val id: Long = 0,
+    val name: String = "",
+    val platform: String = "",
+    val model: String = "",
+    val online: Boolean = false,
+)

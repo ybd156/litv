@@ -28,11 +28,10 @@ cd "$WORK"
 # ---------------------------------------------------------------- 1. uavs3d
 if [ ! -f "$WORK/lib/libuavs3d.a" ]; then
   say "构建 uavs3d（AVS3 解码器）"
-  [ -d uavs3d ] || git clone --depth 1 https://github.com/uavs3/uavs3d.git
-  local bdir="$SRC/uavs3d/build-ios-$abi"
-  rm -rf "$bdir" && mkdir -p "$bdir" && cd "$bdir" || return 1
-
-  cmake -S "$SRC/uavs3d" -B "$bdir" \
+  [ -d "$WORK/uavs3d" ] || git clone --depth 1 https://github.com/uavs3/uavs3d.git "$WORK/uavs3d"
+  # CMAKE_POLICY_VERSION_MINIMUM: runner 自带 CMake 4.x，会拒绝 uavs3d 里
+  # cmake_minimum_required(<3.5)，加这个开关才放行。
+  cmake -S "$WORK/uavs3d" -B "$WORK/uavs3d/build-ios" \
     -DCMAKE_SYSTEM_NAME=iOS \
     -DCMAKE_OSX_ARCHITECTURES="$ARCH" \
     -DCMAKE_OSX_DEPLOYMENT_TARGET="$IOS_MIN" \
@@ -40,8 +39,8 @@ if [ ! -f "$WORK/lib/libuavs3d.a" ]; then
     -DCMAKE_INSTALL_PREFIX="$WORK" \
     -DCOMPILE_10BIT=0 \
     -DCMAKE_POLICY_VERSION_MINIMUM=3.5
-  cmake --build "$bdir" -j"$(sysctl -n hw.ncpu)"
-  cmake --install "$bdir"
+  cmake --build "$WORK/uavs3d/build-ios" -j"$(sysctl -n hw.ncpu)"
+  cmake --install "$WORK/uavs3d/build-ios"
 fi
 
 # ---------------------------------------------------------------- 2. FFmpeg

@@ -3,16 +3,19 @@ import SwiftUI
 
 /// 播放页。
 ///
-/// iOS 的解码现实（调研已确认）：
-///   - AVPlayer 对 HLS（.m3u8）是系统级最优实现，功耗低、起播快
-///   - AVPlayer **不支持裸 MPEG-TS**，也不支持 AC3/E-AC3
-/// 所以服务端对 HLS 上游返回 .m3u8，对裸 TS 上游返回 .ts —— 后者 iOS 播不了。
-/// 这不是客户端能绕过的，必须服务端转封装（未来加 ffmpeg 转 HLS）。
+/// 双内核策略：
+///   - **VLCKit 优先**：底层 FFmpeg，AC3/E-AC3/DTS/裸 TS/AVS3(部分) 全都能解，
+///     正好补上 AVPlayer 的短板（Apple 不授权第三方解 Dolby）
+///   - **AVPlayer 兜底**：VLCKit 没装上时退回系统播放器，保证 App 永远能播 HLS
+///
+/// 服务端配合：iOS 请求播放地址时带 `fmt=hls`，裸 TS 源会被服务端转封装成 HLS。
 struct PlayerView: View {
     @EnvironmentObject var session: Session
     let channel: Channel
 
     @State private var player: AVPlayer?
+    @State private var playURL: URL?
+    @State private var usingVLC = false
     @State private var errorText: String?
     @State private var loading = true
     @State private var programs: [EpgProgram] = []
@@ -24,7 +27,24 @@ struct PlayerView: View {
         ZStack {
             Color.black.ignoresSafeArea()
 
-            if let p = player {
+            // VLCKit 可用就用它（能解 AC3/裸 TS），否则退回 AVPlayer
+            if usingVLC, let u = playURL {
+                VLCPlayerView(url: u) { st in
+                    switch st {
+                    case .playing:
+                        loading = false
+                    case .buffering:
+                        loading = true
+                    case .failed(let msg):
+                        // VLC 起不来就退回 AVPlayer，别让用户卡死
+                        errorText = nil
+                        usingVLC = false
+                        startAVPlayer(u)
+                        _ = msg
+                    }
+                }
+                .ignoresSafeArea()
+            } else if let p = player {
                 VideoPlayer(player: p)
                     .ignoresSafeArea()
             }
@@ -126,11 +146,14 @@ struct PlayerView: View {
                 loading = false
                 return
             }
-            let item = AVPlayerItem(url: u)
-            let p = AVPlayer(playerItem: item)
-            p.play()
-            player = p
-            loading = false
+            playURL = u
+            // 有 VLCKit 就用它（能解 AC3/裸 TS），没有就走 AVPlayer
+            if VLCPlayerView.isAvailable {
+                usingVLC = true
+                player = nil
+            } else {
+                startAVPlayer(u)
+            }
 
             // heartbeat 是 async 的，必须 await——Swift 里 async 函数不能"发了不管"
             await session.api.heartbeat(channelId: channel.id)
@@ -139,6 +162,15 @@ struct PlayerView: View {
             errorText = error.localizedDescription
             loading = false
         }
+    }
+
+    /// AVPlayer 兜底路径（也是 VLCKit 不可用时的唯一路径）。
+    private func startAVPlayer(_ u: URL) {
+        let item = AVPlayerItem(url: u)
+        let p = AVPlayer(playerItem: item)
+        p.play()
+        player = p
+        loading = false
     }
 
     private func loadStreams() async {

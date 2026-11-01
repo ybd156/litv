@@ -35,19 +35,27 @@ jobs:
 
       - name: 安装 xcodegen
         run: brew install xcodegen
-
       - name: 生成 Xcode 工程
         working-directory: ios
         run: |
           xcodegen generate
           ls -la
 
+      - name: 安装 CocoaPods 依赖（MobileVLCKit）
+        working-directory: ios
+        run: |
+          # 用 VLCKit 而不是自编 libmpv：libmpv 在 iOS 上要编六层依赖
+          # （uavs3d/ffmpeg/fribidi/freetype/libass/mpv），
+          # 而 MobileVLCKit 是预编译 xcframework，能力覆盖更全（AC3/DTS/TS）。
+          pod install --repo-update 2>&1 | tail -20
+          ls -la *.xcworkspace
+
       - name: 编译（不签名）
         working-directory: ios
         run: |
-          set -o pipefail
+          # 有 Pod 之后必须用 .xcworkspace 而不是 .xcodeproj
           xcodebuild \
-            -project LITV.xcodeproj \
+            -workspace LITV.xcworkspace \
             -scheme LITV \
             -sdk iphoneos \
             -configuration Release \
@@ -57,17 +65,9 @@ jobs:
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
             CODE_SIGN_ENTITLEMENTS="" \
-            build 2>&1 | xcpretty || \
-          xcodebuild \
-            -project LITV.xcodeproj \
-            -scheme LITV \
-            -sdk iphoneos \
-            -configuration Release \
-            -derivedDataPath build \
-            -destination 'generic/platform=iOS' \
-            CODE_SIGNING_ALLOWED=NO \
-            CODE_SIGNING_REQUIRED=NO \
-            build
+            build 2>&1 | tail -80
+
+
 
       - name: 打包未签名 ipa
         working-directory: ios

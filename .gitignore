@@ -33,3 +33,8 @@ ios/LITV.xcodeproj/
 ios/LITVApp/Info.plist
 ios/*.ipa
 ios/Payload/
+
+# iOS CocoaPods
+ios/Pods/
+ios/LITV.xcworkspace/
+ios/Podfile.lock

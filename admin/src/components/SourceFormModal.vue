@@ -13,10 +13,37 @@ const emit = defineEmits<{
 }>()
 
 const saving = ref(false)
-const form = reactive<SourceInput>({ name: '', type: 'm3u', url: '', enabled: true })
+const form = reactive<SourceInput>({
+  name: '',
+  type: 'm3u',
+  url: '',
+  enabled: true,
+  user_agent: '',
+})
 const errors = reactive<{ name: string; url: string }>({ name: '', url: '' })
 
 const isEdit = computed(() => Boolean(props.source?.id))
+
+/** 常见 UA 预设：源站校验 UA 时，先试这几个基本就够 */
+const uaPresets: Array<{ label: string; value: string }> = [
+  { label: '不设置（用全局默认）', value: '' },
+  {
+    label: 'Android 手机浏览器',
+    value:
+      'Mozilla/5.0 (Linux; Android 12) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Mobile Safari/537.36',
+  },
+  {
+    label: 'Android 电视盒子',
+    value: 'Mozilla/5.0 (Linux; Android 9; Android TV) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/90.0 Safari/537.36',
+  },
+  {
+    label: 'iPhone / Safari',
+    value:
+      'Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1',
+  },
+  { label: 'VLC', value: 'VLC/3.0.20 LibVLC/3.0.20' },
+  { label: 'okhttp', value: 'okhttp/4.12.0' },
+]
 
 const typeOptions: Array<{ label: string; value: SourceType; tip: string }> = [
   { label: 'M3U / M3U8 播放列表', value: 'm3u', tip: '#EXTINF 格式，最常见' },
@@ -36,6 +63,7 @@ watch(
     form.type = (s?.type as SourceType) ?? 'm3u'
     form.url = s?.url ?? ''
     form.enabled = s?.enabled ?? true
+    form.user_agent = s?.user_agent ?? ''
   },
 )
 
@@ -58,6 +86,7 @@ async function submit(): Promise<void> {
       type: form.type,
       url: form.url.trim(),
       enabled: form.enabled,
+      user_agent: (form.user_agent ?? '').trim(),
     }
     if (props.source?.id) {
       await sourcesApi.updateSource(props.source.id, payload)
@@ -107,6 +136,24 @@ function close(): void {
           :autosize="{ minRows: 2, maxRows: 5 }"
           placeholder="https://example.com/live.m3u"
         />
+      </NFormItem>
+
+      <NFormItem label="User-Agent（可选）">
+        <NSelect
+          :value="form.user_agent || ''"
+          :options="uaPresets"
+          @update:value="(v: string) => (form.user_agent = v)"
+        />
+        <NInput
+          v-model:value="form.user_agent"
+          placeholder="留空用全局默认；源站校验 UA 时填这里"
+          style="margin-top: 8px"
+          maxlength="300"
+        />
+        <p class="tip">
+          很多源站会校验 UA：不带就返回 403 或空列表（表现为「导入 0 个频道」）。
+          填了之后，抓取源、服务端代理、客户端直连播放都会带这个 UA。
+        </p>
       </NFormItem>
 
       <NFormItem label="启用">

@@ -31,7 +31,7 @@ import java.util.Locale
 /**
  * 播放页。整个 TV 端体验的核心。
  *
- * 交互设计直接来自对 5 个生产级 IPTV App 的逆向（docs/research/03-apk-re.md §6.4）：
+ * 交互设计参考了主流 IPTV 客户端的通行做法：
  *
  *   面板收起时：↑↓ 换台 · ← 呼出频道列表 · → 呼出节目单 · OK 信息条
  *   面板展开时：↑↓ 选台 · OK 播放 · ←→ 切分组/收起 · BACK 关闭
@@ -232,9 +232,12 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         switchTip.visibility = View.VISIBLE
         osdName.text = ch.name
 
-        app.api.play(ch.id, streamId,
+        app.api.play(ch.id, streamId, direct = app.prefs.directMode != "relay",
             onOk = { info ->
-                val headers = mapOf("User-Agent" to "LITV/1.0 (Android TV)")
+                // 源配置里带了 UA 就用它（源站校验 UA 时没它直接 403），否则用默认
+                val headers = mapOf(
+                    "User-Agent" to info.ua.ifBlank { "LITV/1.0 (Android TV)" },
+                )
                 player.play(ch.id, info.url, headers, app.prefs.engine)
                 refreshEpg(ch.id)
                 app.api.heartbeat(ch.id, "playing")

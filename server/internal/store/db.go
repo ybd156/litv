@@ -9,6 +9,8 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"log/slog"
+	"strings"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -70,6 +72,7 @@ CREATE TABLE IF NOT EXISTS sources (
   last_fetch_at INTEGER NOT NULL DEFAULT 0,
   last_error    TEXT NOT NULL DEFAULT '',
   channel_count INTEGER NOT NULL DEFAULT 0,
+  user_agent    TEXT NOT NULL DEFAULT '',
   created_at    INTEGER NOT NULL
 );
 
@@ -221,6 +224,17 @@ CREATE TABLE IF NOT EXISTS kv (
 func (s *Store) migrate(ctx context.Context) error {
 	if _, err := s.db.ExecContext(ctx, schema); err != nil {
 		return fmt.Errorf("建表失败: %w", err)
+	}
+	// 增量列：老库不会因为 CREATE TABLE IF NOT EXISTS 拿到新字段，
+	// 这里补一遍。重复执行会报 "duplicate column name"，忽略即可。
+	for _, stmt := range []string{
+		`ALTER TABLE sources ADD COLUMN user_agent TEXT NOT NULL DEFAULT ''`,
+	} {
+		if _, err := s.db.ExecContext(ctx, stmt); err != nil &&
+			!strings.Contains(strings.ToLower(err.Error()), "duplicate column") {
+			// 不当作致命错误：建表已经成功，缺列最多是功能降级
+			slog.Warn("增量迁移失败（可忽略）", "stmt", stmt, "err", err)
+		}
 	}
 	return nil
 }

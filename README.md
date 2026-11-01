@@ -86,7 +86,7 @@ LITV2/
 │   └── build.sh             # 一键出包
 ├── docs/
 │   ├── design/              # 总体方案、API 契约
-│   └── research/            # 三份调研报告（fpk 规范 / 技术选型 / APK 逆向）
+│   └── research/            # 两份调研报告（fpk 规范 / 技术选型）
 └── build/test/              # 冒烟测试脚本与样例源
 ```
 
@@ -120,8 +120,7 @@ v3 是 Android 9+。keystore 随仓库分发（CI 要用），口令在 `build.g
 ### iOS 出包（走 GitHub Actions）
 
 iOS 不在 WSL 里编——需要 Apple 的 iOS SDK，Linux 上做不了。
-仓库推送到 GitHub 后，Actions 里的 `Build iOS unsigned IPA` 会自动跑，
-产物在 run 页面的 Artifacts 里下载 `LITV-unsigned-ipa`。
+跑一次 Actions 里的 `Release` 工作流，三端包会一起构建并发布到 Releases。
 
 产出的 `.ipa` 是**未签名**的，用 Sideloadly / SideStore 自签安装即可。
 
@@ -287,7 +286,6 @@ cache-pause=yes
 
 **交互常量**：数字跳台缓冲 2500ms、长按判定 800ms、双击退出 2000ms。
 
-详见 [docs/research/03-apk-re.md](docs/research/03-apk-re.md)。
 
 ---
 
@@ -299,7 +297,6 @@ cache-pause=yes
 | [API 契约](docs/design/01-API.md) | 全部接口、字段、错误码 |
 | [fpk 规范调研](docs/research/01-fnos-fpk.md) | 官方 manifest 字段、生命周期、网关注册、账号接入三方案 |
 | [技术选型调研](docs/research/02-stack-and-oss.md) | 现成轮子评估、License 雷区、播放内核、xtool |
-| [APK 逆向报告](docs/research/03-apk-re.md) | 5 个播放器的内核/参数/UI/交互，抄什么不抄什么 |
 
 ---
 

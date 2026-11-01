@@ -24,12 +24,13 @@
         android:textColor="@color/text_secondary"
         android:textSize="16sp" />
 
+    <!-- 服务器地址：4 段 IP + 端口分框
+         电视遥控器输完整地址太痛苦（要反复切数字/符号），拆成框后可以自动跳格 -->
     <LinearLayout
         android:layout_width="640dp"
         android:layout_height="wrap_content"
         android:layout_marginTop="32dp"
-        android:gravity="center_vertical"
-        android:orientation="horizontal">
+        android:orientation="vertical">
 
         <TextView
             android:layout_width="wrap_content"
@@ -38,18 +39,55 @@
             android:textColor="@color/text_secondary"
             android:textSize="16sp" />
 
-        <EditText
-            android:id="@+id/serverInput"
-            android:layout_width="0dp"
+        <LinearLayout
+            android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginStart="16dp"
-            android:layout_weight="1"
-            android:hint="http://192.168.1.10:9527"
-            android:inputType="textUri"
-            android:singleLine="true"
-            android:textColor="@color/text_primary"
-            android:textSize="18sp"
-            android:autofillHints="none" />
+            android:layout_marginTop="10dp"
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
+
+            <EditText
+                android:id="@+id/ip1"
+                style="@style/AddrBox"
+                android:maxLength="3" />
+
+            <TextView style="@style/AddrDot" android:text="." />
+
+            <EditText
+                android:id="@+id/ip2"
+                style="@style/AddrBox"
+                android:maxLength="3" />
+
+            <TextView style="@style/AddrDot" android:text="." />
+
+            <EditText
+                android:id="@+id/ip3"
+                style="@style/AddrBox"
+                android:maxLength="3" />
+
+            <TextView style="@style/AddrDot" android:text="." />
+
+            <EditText
+                android:id="@+id/ip4"
+                style="@style/AddrBox"
+                android:maxLength="3" />
+
+            <TextView style="@style/AddrDot" android:text=":" />
+
+            <EditText
+                android:id="@+id/portInput"
+                style="@style/AddrBox"
+                android:maxLength="5" />
+        </LinearLayout>
+
+        <TextView
+            android:id="@+id/addrHint"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="端口默认 9527。若服务端提示端口被占用，用管理台概览页显示的实际端口。"
+            android:textColor="#66FFFFFF"
+            android:textSize="12sp" />
     </LinearLayout>
 
     <LinearLayout

@@ -93,6 +93,13 @@ data class PlayInfo(
     val url: String = "",
     val expires: Long = 0,
     @SerializedName("stream_id") val streamId: Long = 0,
+    /**
+     * 这条线路专属的 User-Agent（来自源的配置）。
+     * 客户端直连上游时要用它，否则源站会 403。空 = 用默认 UA。
+     */
+    val ua: String = "",
+    /** direct = 客户端直连源站；relay = 走服务端中转 */
+    val mode: String = "relay",
 )
 
 data class PlayChannel(

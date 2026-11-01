@@ -182,6 +182,9 @@ func (a *API) Handler(viaGateway bool) http.Handler {
 		pr.Delete("/api/v1/epg/sources/{id}", a.deleteEPGSource)
 		pr.Post("/api/v1/epg/refresh", a.refreshEPG)
 		pr.Get("/api/v1/epg/channels", a.listEPGChannels)
+		// 某个频道某天的节目单（管理台频道详情页用）。
+		// 复用 TV 端那个 handler：它只依赖频道 id 和 day，跟设备无关。
+		pr.Get("/api/v1/epg/{id}", a.tvEPG)
 
 		pr.Get("/api/v1/devices", a.listDevices)
 		pr.Post("/api/v1/devices/bindcode", a.createBindCode)

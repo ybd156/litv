@@ -1,5 +1,10 @@
 package store
 
+import (
+	"encoding/json"
+	"strings"
+)
+
 // 本文件只放数据模型，不放查询逻辑（查询见 repo_*.go）。
 
 // User 对应飞牛账号（来自网关注入的 X-Trim-* 头）。
@@ -23,6 +28,12 @@ type Source struct {
 	LastError    string `json:"last_error"`
 	ChannelCount int    `json:"channel_count"`
 	CreatedAt    int64  `json:"created_at"`
+	// UserAgent 这个源专属的 UA。
+	//
+	// 很多源站会校验 UA：不带就返回 403 或者给个空列表。
+	// 全局 UA 只能覆盖一种情况，所以按源配，导入时写进每条线路的 headers_json，
+	// 之后不管是服务端代理还是客户端直连，都带这个 UA。
+	UserAgent string `json:"user_agent"`
 }
 
 // Channel 是编排后的频道。
@@ -55,6 +66,29 @@ type Stream struct {
 	Health      int    `json:"health"`
 	LatencyMs   int    `json:"latency_ms"`
 	LastCheck   int64  `json:"last_check"`
+}
+
+// Headers 把 headers_json 解成 map（解析失败返回空 map，不报错）。
+//
+// 目前主要用来带 User-Agent：源站校验 UA 时，导入阶段就写进 headers_json，
+// 之后不管是服务端代理还是客户端直连，都从这里取。
+func (v Stream) Headers() map[string]string {
+	out := map[string]string{}
+	if v.HeadersJSON == "" || v.HeadersJSON == "{}" {
+		return out
+	}
+	_ = json.Unmarshal([]byte(v.HeadersJSON), &out)
+	return out
+}
+
+// UserAgent 返回这条线路该用的 UA（没有则返回空，调用方回落到全局配置）。
+func (v Stream) UserAgent() string {
+	for k, val := range v.Headers() {
+		if strings.EqualFold(k, "User-Agent") {
+			return val
+		}
+	}
+	return ""
 }
 
 // Device 是一台终端。

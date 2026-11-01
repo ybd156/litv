@@ -65,6 +65,15 @@ type Stream struct {
 	RingSize      int    `yaml:"ring_size"`      // 每频道环形缓冲大小（字节），新客户端从这里起播
 	UserAgent     string `yaml:"user_agent"`
 	UpstreamTimeout int  `yaml:"upstream_timeout"` // 秒
+
+	// DirectEnabled 允许客户端直连上游源地址（不经过服务端中转）。
+	//
+	// 好处：省掉 NAS 的带宽和 CPU，起播更快，服务端挂了也不影响已开播的客户端。
+	// 代价：客户端要能访问到源站（跨网/内网源可能不行），
+	//       而且源站的 UA / Referer 校验得由客户端自己带。
+	// 所以做成"允许"而不是"强制"：客户端请求时带 direct=1 才直连，
+	// 否则仍走服务端中转。
+	DirectEnabled bool `yaml:"direct_enabled"`
 }
 
 // Transcode 转码配置。默认关闭——N100 上纯转发才省电。
@@ -189,6 +198,7 @@ func Default() *Config {
 			RingSize:        2 * 1024 * 1024,
 			UserAgent:       "LITV/1.0 (fnOS)",
 			UpstreamTimeout: 15,
+			DirectEnabled:   true,
 		},
 		Transcode: Transcode{
 			Enabled: false,

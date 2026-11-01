@@ -20,6 +20,8 @@ struct VLCPlayerView: UIViewRepresentable {
 
     let url: URL
     var autoplay: Bool = true
+    /// 源配置里指定的 User-Agent（空 = 用 VLC 默认）
+    var userAgent: String = ""
     var onState: ((VLCPlaybackState) -> Void)?
 
     func makeUIView(context: Context) -> UIView {
@@ -38,6 +40,10 @@ struct VLCPlayerView: UIViewRepresentable {
         media.addOption("--network-caching=1500")
         media.addOption("--live-caching=1500")
         media.addOption("--avcodec-hw=any")
+        // 源站校验 UA 时必须带，否则 403
+        if !userAgent.isEmpty {
+            media.addOption(":http-user-agent=\(userAgent)")
+        }
         player.media = media
 
         context.coordinator.player = player
@@ -96,6 +102,8 @@ struct VLCPlayerView: UIViewRepresentable {
 struct VLCPlayerView: View {
     let url: URL
     var autoplay: Bool = true
+    /// 源配置里指定的 User-Agent（空 = 用 VLC 默认）
+    var userAgent: String = ""
     var onState: ((VLCPlaybackState) -> Void)?
 
     var body: some View {

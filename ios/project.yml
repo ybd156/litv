@@ -24,11 +24,14 @@ targets:
     deploymentTarget: "15.0"
     sources:
       - path: LITVApp/Sources
+      # 图标等资源。之前漏了这行，导致 ipa 里根本没有 Assets.car，
+      # 装到手机上就是个白图标。
+      - path: LITVApp/Resources
     info:
       path: LITVApp/Info.plist
       properties:
         CFBundleDisplayName: LITV
-        CFBundleShortVersionString: "0.0.2"
+        CFBundleShortVersionString: "0.0.3"
         CFBundleVersion: "1"
         UILaunchScreen: {}
         UISupportedInterfaceOrientations:
@@ -48,3 +51,5 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.litv.app
         TARGETED_DEVICE_FAMILY: "1,2"
         ENABLE_BITCODE: NO
+        # 没有这行，Assets.xcassets 里的 AppIcon 不会被编译进 Assets.car
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon

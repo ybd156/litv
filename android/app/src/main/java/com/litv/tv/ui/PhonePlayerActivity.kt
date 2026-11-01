@@ -184,9 +184,14 @@ class PhonePlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         app.prefs.lastChannelId = ch.id
         loading.visibility = View.VISIBLE
         osdName.text = ch.name
-        app.api.play(ch.id,
+        app.api.play(ch.id, direct = app.prefs.directMode != "relay",
             onOk = { info ->
-                player.play(ch.id, info.url, mapOf("User-Agent" to "LITV/1.0 (Android)"), app.prefs.engine)
+                // 源配置里带了 UA 就用它，否则用默认
+                player.play(
+                    ch.id, info.url,
+                    mapOf("User-Agent" to info.ua.ifBlank { "LITV/1.0 (Android)" }),
+                    app.prefs.engine,
+                )
                 app.api.epg(ch.id, 0, onOk = { p ->
                     programs = p
                     renderNow()
@@ -221,9 +226,10 @@ class PhonePlayerActivity : AppCompatActivity(), PlayerManager.Callback {
                 .setTitle("选择线路")
                 .setItems(labels) { _, which ->
                     val s = list[which]
-                    app.api.play(ch.id, s.id, onOk = { info ->
+                    app.api.play(ch.id, s.id, direct = app.prefs.directMode != "relay", onOk = { info ->
                         player.play(ch.id, info.url,
-                            mapOf("User-Agent" to "LITV/1.0 (Android)"), app.prefs.engine)
+                            mapOf("User-Agent" to info.ua.ifBlank { "LITV/1.0 (Android)" }),
+                            app.prefs.engine)
                     }, onErr = { tip("切换失败：$it") })
                 }
                 .setNegativeButton("取消", null)

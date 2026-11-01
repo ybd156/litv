@@ -15,6 +15,8 @@ struct PlayerView: View {
 
     @State private var player: AVPlayer?
     @State private var playURL: URL?
+    /// 源配置里指定的 UA（空 = 用默认）
+    @State private var playUA = ""
     @State private var usingVLC = false
     @State private var errorText: String?
     @State private var loading = true
@@ -29,7 +31,7 @@ struct PlayerView: View {
 
             // VLCKit 可用就用它（能解 AC3/裸 TS），否则退回 AVPlayer
             if usingVLC, let u = playURL {
-                VLCPlayerView(url: u) { st in
+                VLCPlayerView(url: u, userAgent: playUA) { st in
                     switch st {
                     case .playing:
                         loading = false
@@ -147,6 +149,7 @@ struct PlayerView: View {
                 return
             }
             playURL = u
+            playUA = info.ua
             // 有 VLCKit 就用它（能解 AC3/裸 TS），没有就走 AVPlayer
             if VLCPlayerView.isAvailable {
                 usingVLC = true
@@ -166,7 +169,18 @@ struct PlayerView: View {
 
     /// AVPlayer 兜底路径（也是 VLCKit 不可用时的唯一路径）。
     private func startAVPlayer(_ u: URL) {
-        let item = AVPlayerItem(url: u)
+        let item: AVPlayerItem
+        if playUA.isEmpty {
+            item = AVPlayerItem(url: u)
+        } else {
+            // 源站校验 UA 时，AVPlayer 也得带上，否则 403。
+            // AVURLAssetHTTPHeaderFieldsKey 是 AVFoundation 未公开但长期稳定的用法。
+            let asset = AVURLAsset(
+                url: u,
+                options: ["AVURLAssetHTTPHeaderFieldsKey": ["User-Agent": playUA]]
+            )
+            item = AVPlayerItem(asset: asset)
+        }
         let p = AVPlayer(playerItem: item)
         p.play()
         player = p

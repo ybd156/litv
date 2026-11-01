@@ -33,6 +33,8 @@ export interface Source {
   error?: string | null
   /** 这条源解析出多少频道（可选字段，服务端有就展示） */
   channel_count?: number
+  /** 这个源专属的 User-Agent（空 = 用全局默认） */
+  user_agent?: string
 }
 
 export interface SourceInput {
@@ -40,6 +42,13 @@ export interface SourceInput {
   type: SourceType
   url: string
   enabled: boolean
+  /**
+   * 这个源专属的 User-Agent。
+   *
+   * 很多源站校验 UA：不带就 403，或者返回空列表（表现为「导入 0 个频道」）。
+   * 留空 = 用全局默认 UA。
+   */
+  user_agent?: string
 }
 
 /** 源预览里的一条（不落库） */

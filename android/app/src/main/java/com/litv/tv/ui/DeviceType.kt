@@ -20,9 +20,18 @@ object DeviceType {
     fun isTV(context: Context): Boolean {
         val pm = context.packageManager
 
-        // 1) 明确的电视特征：有 leanback 且没有触摸屏
-        val hasLeanback = pm.hasSystemFeature(PackageManager.FEATURE_LEANBACK)
         val hasTouch = pm.hasSystemFeature(PackageManager.FEATURE_TOUCHSCREEN)
+        val hasLeanback = pm.hasSystemFeature(PackageManager.FEATURE_LEANBACK)
+
+        // 0) 有触摸屏 + 屏幕窄 → 一定是手机，别管 leanback / uiMode 怎么说。
+        //
+        //    这条放在最前面是有原因的：部分国产手机/平板会同时上报
+        //    FEATURE_LEANBACK，甚至 UiModeManager 报 TELEVISION，
+        //    结果被误判成电视、进了横屏网格 UI。屏幕宽度是最难造假的信号。
+        val sw = context.resources.configuration.smallestScreenWidthDp
+        if (hasTouch && sw in 1..599) return false
+
+        // 1) 明确的电视特征：有 leanback 且没有触摸屏
         if (hasLeanback && !hasTouch) return true
 
         // 2) UiModeManager 判定
@@ -36,6 +45,19 @@ object DeviceType {
 
         // 4) 兜底：没有触摸屏且没有输入法（盒子常见）
         return !hasHardwareKeyboard(context)
+    }
+
+    /** 给日志用：说明为什么判成了这个类型。 */
+    fun describe(context: Context): String {
+        val pm = context.packageManager
+        val cfg = context.resources.configuration
+        val uiMode = context.getSystemService(Context.UI_MODE_SERVICE) as? android.app.UiModeManager
+        return "isTV=${isTV(context)} touch=${pm.hasSystemFeature(PackageManager.FEATURE_TOUCHSCREEN)}" +
+            " leanback=${pm.hasSystemFeature(PackageManager.FEATURE_LEANBACK)}" +
+            " uiMode=${uiMode?.currentModeType}" +
+            " sw=${cfg.smallestScreenWidthDp}dp" +
+            " ${cfg.screenWidthDp}x${cfg.screenHeightDp}dp" +
+            " orientation=${if (cfg.orientation == android.content.res.Configuration.ORIENTATION_PORTRAIT) "portrait" else "landscape"}"
     }
 
     private fun hasHardwareKeyboard(context: Context): Boolean {

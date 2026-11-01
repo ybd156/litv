@@ -17,9 +17,18 @@ class LauncherActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         val app = application as LitvApp
 
+        val isTV = when (app.prefs.uiMode) {
+            "tv" -> true
+            "phone" -> false
+            else -> DeviceType.isTV(this)
+        }
+        // 把判定依据打出来：用户反馈"手机上进了电视界面"时，
+        // 一眼就能看出是哪个信号判错了（leanback / uiMode / 屏幕宽度）。
+        android.util.Log.i("LITV", "界面模式=${app.prefs.uiMode} " + DeviceType.describe(this))
+
         val target = when {
             app.prefs.token.isBlank() -> BindActivity::class.java
-            DeviceType.isTV(this) -> HomeActivity::class.java
+            isTV -> HomeActivity::class.java
             else -> PhoneHomeActivity::class.java
         }
         startActivity(Intent(this, target))

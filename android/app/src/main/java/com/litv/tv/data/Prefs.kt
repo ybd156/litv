@@ -72,6 +72,27 @@ class Prefs(ctx: Context) {
         get() = sp.getInt(K_NUM_TIMEOUT, 2500)
         set(v) = sp.edit().putInt(K_NUM_TIMEOUT, v).apply()
 
+    /**
+     * 播放方式：auto（默认，能直连就直连）/ direct（强制直连）/ relay（强制走服务端）。
+     *
+     * 直连 = 客户端自己连源站，省掉 NAS 的带宽和 CPU，起播更快；
+     * 代价是客户端得能访问到源站，跨网或内网源可能连不上。
+     */
+    var directMode: String
+        get() = sp.getString(K_DIRECT_MODE, "auto") ?: "auto"
+        set(v) = sp.edit().putString(K_DIRECT_MODE, v).apply()
+
+    /**
+     * 界面模式：auto / tv / phone。
+     *
+     * 自动判定在少数国产手机/平板上会失灵（它们会同时上报 LEANBACK，
+     * 甚至 UiModeManager 报 TELEVISION），结果手机进了横屏网格 UI。
+     * 给用户一个手动开关，比反复猜设备特征靠谱。
+     */
+    var uiMode: String
+        get() = sp.getString(K_UI_MODE, "auto") ?: "auto"
+        set(v) = sp.edit().putString(K_UI_MODE, v).apply()
+
     /** 某个频道上次用哪个内核播成功过——记住它，下次直接命中，省一次失败重试。 */
     fun engineFor(channelId: Long): String = sp.getString("engine_$channelId", "") ?: ""
     fun setEngineFor(channelId: Long, engine: String) =
@@ -97,6 +118,8 @@ class Prefs(ctx: Context) {
         const val K_ASPECT = "aspect"
         const val K_REVERSE = "reverse_keys"
         const val K_NUM_TIMEOUT = "num_timeout"
+        const val K_UI_MODE = "ui_mode"
+        const val K_DIRECT_MODE = "direct_mode"
         const val K_CACHE = "bootstrap_cache"
     }
 }

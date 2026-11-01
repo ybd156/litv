@@ -286,12 +286,37 @@ func (a *API) tvPlay(w http.ResponseWriter, r *http.Request) {
 	q.Set("exp", strconv.FormatInt(exp, 10))
 	q.Set("dk", dev.DeviceKey)
 
+	// 直连：把上游地址原样交给客户端，让它自己连源站。
+	//
+	// 省掉 NAS 的带宽和 CPU，起播也更快；代价是客户端要能访问到源站，
+	// 且 UA/Referer 校验得客户端自己带（所以这里把头一起给出去）。
+	// 只在客户端明确要（direct=1）且服务端允许时才走这条路。
+	wantDirect := strings.EqualFold(r.URL.Query().Get("direct"), "1")
+	if wantDirect && a.cfg.Stream.DirectEnabled && kind != "remux" {
+		ok(w, map[string]any{
+			"channel": map[string]any{"id": ch.ID, "name": ch.Name, "logo": ch.Logo},
+			"kind":    kind,
+			"mode":    "direct",
+			"url":     st.URL, // 上游原始地址
+			"ua":      st.UserAgent(),
+			"headers": st.Headers(),
+			"expires": exp,
+			"stream_id": st.ID,
+		})
+		a.st.Audit(r.Context(), 0, "play.direct", fmt.Sprint(id), ch.Name, r.RemoteAddr)
+		return
+	}
+
 	ok(w, map[string]any{
 		"channel":   map[string]any{"id": ch.ID, "name": ch.Name, "logo": ch.Logo},
 		"kind":      kind,
+		"mode":      "relay",
 		"url":       path + "?" + q.Encode(),
 		"expires":   exp,
 		"stream_id": st.ID,
+		// ua：这条线路专属的 UA（来自源配置）。客户端直连上游时要带上，
+		// 否则源站会 403。为空表示用默认 UA。
+		"ua": st.UserAgent(),
 	})
 
 	// 记一次播放，供概览页的「今日起播次数」统计
@@ -677,7 +702,9 @@ func (a *API) liveTS(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.WriteHeader(http.StatusOK)
 
-	sub, err := a.hub.Subscribe(r.Context(), id, st.URL, nil)
+	// 带上这条线路专属的头（主要是源配置里的 User-Agent）。
+	// 不传的话源站校验 UA 会直接 403，表现为"有画面没声音"或直接黑屏。
+	sub, err := a.hub.Subscribe(r.Context(), id, st.URL, st.Headers())
 	if err != nil {
 		return
 	}

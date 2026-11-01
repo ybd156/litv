@@ -216,10 +216,11 @@ func (a *API) listSources(w http.ResponseWriter, r *http.Request) {
 
 func (a *API) createSource(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Name    string `json:"name"`
-		Type    string `json:"type"`
-		URL     string `json:"url"`
-		Enabled bool   `json:"enabled"`
+		Name      string `json:"name"`
+		Type      string `json:"type"`
+		URL       string `json:"url"`
+		Enabled   bool   `json:"enabled"`
+		UserAgent string `json:"user_agent"`
 	}
 	if err := decode(r, &body); err != nil {
 		fail(w, http.StatusBadRequest, 1001, "参数错误: "+err.Error())
@@ -234,6 +235,7 @@ func (a *API) createSource(w http.ResponseWriter, r *http.Request) {
 	}
 	id, err := a.st.CreateSource(r.Context(), store.Source{
 		Name: body.Name, Type: body.Type, URL: body.URL, Enabled: true,
+		UserAgent: strings.TrimSpace(body.UserAgent),
 	})
 	if err != nil {
 		fail(w, http.StatusInternalServerError, 5001, err.Error())
@@ -245,10 +247,11 @@ func (a *API) createSource(w http.ResponseWriter, r *http.Request) {
 func (a *API) updateSource(w http.ResponseWriter, r *http.Request) {
 	id := pathInt64(r, "id")
 	var body struct {
-		Name    string `json:"name"`
-		Type    string `json:"type"`
-		URL     string `json:"url"`
-		Enabled bool   `json:"enabled"`
+		Name      string `json:"name"`
+		Type      string `json:"type"`
+		URL       string `json:"url"`
+		Enabled   bool   `json:"enabled"`
+		UserAgent string `json:"user_agent"`
 	}
 	if err := decode(r, &body); err != nil {
 		fail(w, http.StatusBadRequest, 1001, "参数错误: "+err.Error())
@@ -256,6 +259,7 @@ func (a *API) updateSource(w http.ResponseWriter, r *http.Request) {
 	}
 	err := a.st.UpdateSource(r.Context(), store.Source{
 		ID: id, Name: body.Name, Type: body.Type, URL: body.URL, Enabled: body.Enabled,
+		UserAgent: strings.TrimSpace(body.UserAgent),
 	})
 	if err != nil {
 		fail(w, http.StatusInternalServerError, 5001, err.Error())
@@ -357,7 +361,12 @@ func (a *API) previewSource(w http.ResponseWriter, r *http.Request) {
 
 // fetchAndParse 是「抓取 + 解析」的公共流程。
 func (a *API) fetchAndParse(ctx context.Context, src store.Source) ([]parse.Item, error) {
-	res, err := fetch.Get(ctx, src.URL, fetch.DefaultOptions())
+	// 用源专属 UA：不少源站校验 UA，不带就 403 或返回空列表
+	opt := fetch.DefaultOptions()
+	if ua := strings.TrimSpace(src.UserAgent); ua != "" {
+		opt.UserAgent = ua
+	}
+	res, err := fetch.Get(ctx, src.URL, opt)
 	if err != nil {
 		return nil, err
 	}
@@ -374,7 +383,7 @@ func (a *API) fetchAndParse(ctx context.Context, src store.Source) ([]parse.Item
 	}
 	// TVBox 形态 A 的 lives 指向外部 m3u/txt：这里再抓一层（只跟一层，防循环）
 	if typ == "tvbox" && len(items) > 0 && allExternal(items) {
-		sub, err := fetch.Get(ctx, items[0].URL, fetch.DefaultOptions())
+		sub, err := fetch.Get(ctx, items[0].URL, opt)
 		if err == nil {
 			if subItems, err2 := parse.Parse(sub.Body, parse.Detect(sub.Body)); err2 == nil && len(subItems) > 0 {
 				return subItems, nil

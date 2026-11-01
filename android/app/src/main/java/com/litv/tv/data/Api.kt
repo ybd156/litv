@@ -198,8 +198,25 @@ class Api(private val prefs: Prefs) {
             onOk = { if (it != null) onOk(it) else onErr("空数据") }, onErr = onErr)
     }
 
-    fun play(channelId: Long, streamId: Long = 0, onOk: (PlayInfo) -> Unit, onErr: (String) -> Unit) {
-        val q = if (streamId > 0) "?stream_id=$streamId" else ""
+    /**
+     * 取播放地址。
+     *
+     * direct=true 时服务端会把**上游原始地址**直接给回来（mode=direct），
+     * 客户端自己连源站——省掉 NAS 的带宽和 CPU，起播也更快。
+     * 服务端不允许直连、或这条线路走转封装时，会自动回落到中转。
+     */
+    fun play(
+        channelId: Long,
+        streamId: Long = 0,
+        direct: Boolean = false,
+        onOk: (PlayInfo) -> Unit,
+        onErr: (String) -> Unit,
+    ) {
+        val params = buildList {
+            if (streamId > 0) add("stream_id=$streamId")
+            if (direct) add("direct=1")
+        }
+        val q = if (params.isEmpty()) "" else "?" + params.joinToString("&")
         call("/api/v1/tv/play/$channelId$q", clazz = PlayInfo::class.java,
             onOk = { if (it != null) onOk(it) else onErr("空数据") }, onErr = onErr)
     }

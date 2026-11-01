@@ -79,4 +79,29 @@
         <item name="android:textColor">@color/accent</item>
         <item name="android:textStyle">bold</item>
     </style>
+
+    <!-- 服务器地址分框：每段 IP / 端口一个小框 -->
+    <style name="AddrBox">
+        <item name="android:layout_width">0dp</item>
+        <item name="android:layout_height">wrap_content</item>
+        <item name="android:layout_weight">1</item>
+        <item name="android:background">@drawable/bg_focusable</item>
+        <item name="android:gravity">center</item>
+        <item name="android:inputType">number</item>
+        <item name="android:paddingVertical">12dp</item>
+        <item name="android:singleLine">true</item>
+        <item name="android:textColor">@color/text_primary</item>
+        <item name="android:textSize">20sp</item>
+        <item name="android:autofillHints">none</item>
+        <item name="android:selectAllOnFocus">true</item>
+    </style>
+
+    <!-- IP 段之间的分隔符（. 和 :） -->
+    <style name="AddrDot">
+        <item name="android:layout_width">wrap_content</item>
+        <item name="android:layout_height">wrap_content</item>
+        <item name="android:paddingHorizontal">4dp</item>
+        <item name="android:textColor">@color/text_secondary</item>
+        <item name="android:textSize">20sp</item>
+    </style>
 </resources>

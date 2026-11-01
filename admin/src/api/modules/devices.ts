@@ -1,4 +1,4 @@
-import { http } from '../http'
+import { http, request } from '../http'
 import { asArray } from '../normalize'
 import type { BindCode, Device, DeviceConfig } from '../types'
 
@@ -7,9 +7,17 @@ export async function listDevices(): Promise<Device[]> {
   return asArray<Device>(raw)
 }
 
-/** 未绑定设备（待批准）。01-API.md 里挂在公开段，但注明需要 admin */
+/**
+ * 未绑定设备（待批准）。
+ *
+ * 之前调的是 `device/pending`——服务端根本没有这个路由，所以每次打开
+ * 「终端设备」页都弹一条 HTTP 404。服务端 listDevices 本来就支持
+ * `?status=` 过滤，直接用它，少一个冗余接口。
+ *
+ * silent：这是可选请求（页面自己有兜底），失败不该糊用户一脸红条。
+ */
 export async function listPendingDevices(): Promise<Device[]> {
-  const raw = await http.get<unknown>('device/pending')
+  const raw = await request<unknown>('devices', { query: { status: 'pending' }, silent: true })
   return asArray<Device>(raw)
 }
 

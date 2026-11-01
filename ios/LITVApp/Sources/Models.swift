@@ -108,6 +108,9 @@ struct PlayInfo: Codable {
     var url: String = ""
     var expires: Int64 = 0
     var channel: PlayChannel = PlayChannel()
+    /// 这条线路专属的 User-Agent（来自源的配置）。空 = 用默认。
+    /// 源站校验 UA 时不带会 403。
+    var ua: String = ""
 
     struct PlayChannel: Codable {
         var id: Int64 = 0

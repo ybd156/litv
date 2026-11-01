@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -50,7 +51,7 @@ func scanUser(row *sql.Row) (*User, error) {
 
 // ListSources 返回全部源。
 func (s *Store) ListSources(ctx context.Context) ([]Source, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id,name,type,url,enabled,last_fetch_at,last_error,channel_count,created_at FROM sources ORDER BY id`)
+	rows, err := s.db.QueryContext(ctx, `SELECT id,name,type,url,enabled,last_fetch_at,last_error,channel_count,created_at,user_agent FROM sources ORDER BY id`)
 	if err != nil {
 		return nil, err
 	}
@@ -59,7 +60,7 @@ func (s *Store) ListSources(ctx context.Context) ([]Source, error) {
 	for rows.Next() {
 		var v Source
 		var en int
-		if err := rows.Scan(&v.ID, &v.Name, &v.Type, &v.URL, &en, &v.LastFetchAt, &v.LastError, &v.ChannelCount, &v.CreatedAt); err != nil {
+		if err := rows.Scan(&v.ID, &v.Name, &v.Type, &v.URL, &en, &v.LastFetchAt, &v.LastError, &v.ChannelCount, &v.CreatedAt, &v.UserAgent); err != nil {
 			return nil, err
 		}
 		v.Enabled = en != 0
@@ -70,8 +71,8 @@ func (s *Store) ListSources(ctx context.Context) ([]Source, error) {
 
 // CreateSource 新增源。
 func (s *Store) CreateSource(ctx context.Context, v Source) (int64, error) {
-	res, err := s.db.ExecContext(ctx, `INSERT INTO sources(name,type,url,enabled,created_at) VALUES(?,?,?,?,?)`,
-		v.Name, v.Type, v.URL, boolInt(v.Enabled), Now())
+	res, err := s.db.ExecContext(ctx, `INSERT INTO sources(name,type,url,enabled,created_at,user_agent) VALUES(?,?,?,?,?,?)`,
+		v.Name, v.Type, v.URL, boolInt(v.Enabled), Now(), v.UserAgent)
 	if err != nil {
 		return 0, err
 	}
@@ -80,8 +81,8 @@ func (s *Store) CreateSource(ctx context.Context, v Source) (int64, error) {
 
 // UpdateSource 更新源。
 func (s *Store) UpdateSource(ctx context.Context, v Source) error {
-	_, err := s.db.ExecContext(ctx, `UPDATE sources SET name=?,type=?,url=?,enabled=? WHERE id=?`,
-		v.Name, v.Type, v.URL, boolInt(v.Enabled), v.ID)
+	_, err := s.db.ExecContext(ctx, `UPDATE sources SET name=?,type=?,url=?,enabled=?,user_agent=? WHERE id=?`,
+		v.Name, v.Type, v.URL, boolInt(v.Enabled), v.UserAgent, v.ID)
 	return err
 }
 
@@ -366,6 +367,17 @@ func (s *Store) ImportChannels(ctx context.Context, sourceID int64, items []Chan
 	var maxSort int
 	_ = tx.QueryRowContext(ctx, `SELECT COALESCE(MAX(sort),0) FROM channels`).Scan(&maxSort)
 
+	// 这个源专属的 UA，导入时写进每条线路的 headers_json。
+	// 之后服务端代理、客户端直连都从这里取，不用再回头查源。
+	var srcUA string
+	_ = tx.QueryRowContext(ctx, `SELECT COALESCE(user_agent,'') FROM sources WHERE id=?`, sourceID).Scan(&srcUA)
+	headersJSON := "{}"
+	if ua := strings.TrimSpace(srcUA); ua != "" {
+		if b, err := json.Marshal(map[string]string{"User-Agent": ua}); err == nil {
+			headersJSON = string(b)
+		}
+	}
+
 	inserted := 0
 	for _, c := range items {
 		var existID int64
@@ -376,8 +388,8 @@ func (s *Store) ImportChannels(ctx context.Context, sourceID int64, items []Chan
 			var n int
 			_ = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM streams WHERE channel_id=? AND url=?`, existID, c.firstURL()).Scan(&n)
 			if n == 0 && c.firstURL() != "" {
-				if _, err := tx.ExecContext(ctx, `INSERT INTO streams(channel_id,url,priority,health) VALUES(?,?,?,?)`,
-					existID, c.firstURL(), 0, -1); err != nil {
+				if _, err := tx.ExecContext(ctx, `INSERT INTO streams(channel_id,url,priority,health,headers_json) VALUES(?,?,?,?,?)`,
+					existID, c.firstURL(), 0, -1, headersJSON); err != nil {
 					return inserted, err
 				}
 			}
@@ -391,8 +403,8 @@ func (s *Store) ImportChannels(ctx context.Context, sourceID int64, items []Chan
 			}
 			cid, _ := res.LastInsertId()
 			if u := c.firstURL(); u != "" {
-				if _, err := tx.ExecContext(ctx, `INSERT INTO streams(channel_id,url,priority,health) VALUES(?,?,?,?)`,
-					cid, u, 0, -1); err != nil {
+				if _, err := tx.ExecContext(ctx, `INSERT INTO streams(channel_id,url,priority,health,headers_json) VALUES(?,?,?,?,?)`,
+					cid, u, 0, -1, headersJSON); err != nil {
 					return inserted, err
 				}
 			}

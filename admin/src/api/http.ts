@@ -7,6 +7,13 @@ export interface RequestOptions {
   method?: HttpMethod
   body?: unknown
   query?: Record<string, unknown>
+  /**
+   * 静默：失败时不弹全局错误提示。
+   *
+   * 用于「有没有都行」的可选请求——比如同时拉列表和待批准列表，
+   * 后者失败不该糊用户一脸红条（页面自己有兜底逻辑）。
+   */
+  silent?: boolean
 }
 
 /**
@@ -53,9 +60,9 @@ function notifyError(msg: string): void {
   if (errorNotifier) errorNotifier(msg)
 }
 
-function fail(err: ApiError): ApiError {
+function fail(err: ApiError, silent = false): ApiError {
   if (err.isUnauthorized) unauthorizedHandler?.()
-  else notifyError(err.message)
+  else if (!silent) notifyError(err.message)
   return err
 }
 
@@ -91,7 +98,7 @@ export async function request<T>(path: string, opts: RequestOptions = {}): Promi
   try {
     res = await fetch(url, init)
   } catch (e) {
-    throw fail(new ApiError(0, '连不上服务端，确认 LITV 服务在运行，或刷新页面重试', 0, String(e)))
+    throw fail(new ApiError(0, '连不上服务端，确认 LITV 服务在运行，或刷新页面重试', 0, String(e)), opts.silent)
   }
 
   const text = await res.text()
@@ -108,20 +115,21 @@ export async function request<T>(path: string, opts: RequestOptions = {}): Promi
     const code = typeof parsed.code === 'number' ? parsed.code : 0
     const msg = typeof parsed.msg === 'string' ? parsed.msg : ''
     if (code !== 0) {
-      throw fail(new ApiError(code, messageForCode(code, msg), res.status))
+      throw fail(new ApiError(code, messageForCode(code, msg), res.status), opts.silent)
     }
     return parsed.data as T
   }
 
   if (!res.ok) {
     const hint = res.status === 401 || res.status === 403 ? '没权限或登录态过期，请从飞牛桌面重新打开' : `HTTP ${res.status}`
-    throw fail(new ApiError(res.status === 401 ? 2001 : 0, hint, res.status, text.slice(0, 300)))
+    throw fail(new ApiError(res.status === 401 ? 2001 : 0, hint, res.status, text.slice(0, 300)), opts.silent)
   }
 
   if (text && parsed === undefined) {
     // 200 但不是 JSON：通常是网关把请求兜底成了 index.html（路径不对）
     throw fail(
       new ApiError(0, '服务端返回的不是 JSON，检查接口路径（应为 api/v1/...）和网关转发', res.status, text.slice(0, 200)),
+      opts.silent,
     )
   }
 

@@ -122,16 +122,29 @@ export PKG_CONFIG_PATH="$WORK/lib/pkgconfig"
 export PKG_CONFIG_LIBDIR="$WORK/lib/pkgconfig"
 
 # ---- fribidi（双向文本，libass 必需）----
+#
+# 用 CMake 而不是 meson：fribidi 的 meson 构建里有个代码生成器
+# gen-unicode-version，它必须在**宿主**上编译运行；meson 交叉编译时
+# 把它当成目标平台产物，直接编译失败（gen-unicode-version.c.o FAILED）。
+# fribidi 的 CMake 构建不需要这个代码生成步骤。
 if [ ! -f "$WORK/lib/libfribidi.a" ]; then
   say "构建 fribidi"
   [ -d fribidi ] || {
     curl -fL --retry 3 -o fribidi.tar.gz https://github.com/fribidi/fribidi/archive/refs/tags/v1.0.15.tar.gz
     tar xzf fribidi.tar.gz && mv fribidi-1.0.15 fribidi
   }
-  meson setup fribidi/build fribidi --cross-file "$WORK/cross-ios.txt" \
-    --prefix="$WORK" --buildtype=release --default-library=static \
-    -Ddocs=false -Dtests=false -Dbin=false
-  ninja -C fribidi/build install
+  cmake -S fribidi -B fribidi/build-ios \
+    -DCMAKE_SYSTEM_NAME=iOS \
+    -DCMAKE_SYSTEM_PROCESSOR="$ARCH" \
+    -DCMAKE_OSX_ARCHITECTURES="$ARCH" \
+    -DCMAKE_OSX_DEPLOYMENT_TARGET="$IOS_MIN" \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_INSTALL_PREFIX="$WORK" \
+    -DBUILD_SHARED_LIBS=OFF \
+    -DFRIBIDI_BUILD_TESTS=OFF \
+    -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+  cmake --build fribidi/build-ios -j"$(sysctl -n hw.ncpu)"
+  cmake --install fribidi/build-ios
 fi
 
 # ---- freetype（字体解析，libass 必需）----

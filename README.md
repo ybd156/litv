@@ -92,6 +92,24 @@ LITV2/
 
 ---
 
+## 下载安装
+
+**直接去 Releases 拿包**：<https://github.com/ybd156/litv/releases/latest>
+
+| 设备 | 文件 |
+|---|---|
+| **安卓电视 / 盒子（Android 9、32 位）** | `LITV-0.0.1-tv-armv7.apk` |
+| 64 位设备（新电视 / 手机） | `LITV-0.0.1-arm64.apk` |
+| 飞牛 NAS（N100 等 x86） | `litv_x86_0.0.1.fpk` |
+| 飞牛 NAS（ARM 机型） | `litv_arm_0.0.1.fpk` |
+| iPhone / iPad | `LITV-0.0.1-unsigned.ipa` |
+
+发版：Actions 里手动跑 `Release` 工作流，或推 `v*` tag，会自动构建三端并发布。
+
+**APK 签名**：v1（JAR）+ v2 + v3 三种方案全开 —— v1 给老盒子、v2 是 Android 7+ 主力、
+v3 是 Android 9+。keystore 随仓库分发（CI 要用），口令在 `build.gradle.kts` 的默认值里，
+**它只保证"能装、能覆盖升级"，不构成安全边界**。
+
 ## 快速开始（WSL）
 
 环境：Ubuntu 26.04 / Go 1.23+ / Node 22+。**不需要 root**。

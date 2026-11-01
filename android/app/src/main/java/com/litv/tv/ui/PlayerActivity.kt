@@ -278,7 +278,7 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
                 numberTip.text = numberBuffer.toString()
                 numberTip.visibility = View.VISIBLE
                 main.removeCallbacks(numberJumpRunnable)
-                main.postDelayed(numberJumpRunnable, app.prefs.channelNumberTimeoutMs.toLong())
+                main.postDelayed(numberJumpRunnable, app.prefs.numberJumpTimeoutMs.toLong())
             }
             return true
         }

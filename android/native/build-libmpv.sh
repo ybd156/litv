@@ -25,9 +25,19 @@ SRC="$ROOT/src"
 OUT="$ROOT/out"
 PROJ="/mnt/d/Documents/deepseek-harness/default-workspace/LITV2/android"
 
-ABIS="${ABIS:-arm64-v8a armeabi-v7a}"
+# 默认只编 arm64-v8a：现在主流电视盒子都是 64 位，先跑通一条链路，
+# 成功后再 ABIS="armeabi-v7a" 补 32 位（老盒子）。
+ABIS="${ABIS:-arm64-v8a}"
 API=21
 JOBS="$(nproc)"
+
+# AVS3 开关。
+# 默认关：uavs3d 的 CMakeLists 与 NDK 27 有兼容 bug
+#   （NDK 的 flags.cmake 里 if("hwaddress" IN_LIST ANDROID_SANITIZE) 在
+#    ANDROID_SANITIZE 未定义时直接报 Unknown arguments specified），
+# 而 AVS3 只有极少数运营商频道用得到，不该拖住整个 libmpv 的交付。
+# 需要时：ENABLE_AVS3=1 ./build-libmpv.sh（并换 NDK r26 或给 uavs3d 打补丁）
+ENABLE_AVS3="${ENABLE_AVS3:-0}"
 
 say()  { printf '\n\033[36m==> %s\033[0m\n' "$*"; }
 ok()   { printf '\033[32m[ok]\033[0m %s\n' "$*"; }
@@ -37,6 +47,23 @@ err()  { printf '\033[31m[err]\033[0m %s\n' "$*"; }
 NDK="${ANDROID_NDK_HOME:-$ROOT/sdk/ndk/27.0.12077973}"
 TOOLCHAIN="$NDK/toolchains/llvm/prebuilt/linux-x86_64"
 [ -d "$TOOLCHAIN" ] || { err "找不到 NDK toolchain: $TOOLCHAIN"; exit 1; }
+
+# 注意 PATH 顺序：pip 装的 cmake 必须在 SDK 自带 cmake 之前。
+# SDK 的 cmake 3.22 太旧，NDK 27 的 flags.cmake 会报
+# 'if given arguments: "hwaddress" IN_LIST ... Unknown arguments specified'。
+export PATH="$HOME/.local/bin:$ROOT/toolpkg/usr/bin:$PATH"
+command -v cmake  >/dev/null || err "缺少 cmake（pip3 install --user --break-system-packages 'cmake==3.31.6'）"
+command -v ninja  >/dev/null || err "缺少 ninja（pip3 install --user --break-system-packages ninja）"
+command -v meson  >/dev/null || err "缺少 meson（pip3 install --user --break-system-packages meson）"
+command -v make   >/dev/null || err "缺少 make（apt-get download make && dpkg-deb -x make_*.deb \$ROOT/toolpkg）"
+say "cmake=$(cmake --version | head -1 | awk '{print $3}') ninja=$(ninja --version) meson=$(meson --version)"
+
+# 构建期统一走代理（境外源码站），国内镜像直连由 NO_PROXY 兜底
+if [ -z "${https_proxy:-}" ]; then
+  HOSTIP="$(ip route show default | awk '{print $3}' | head -1)"
+  export http_proxy="http://$HOSTIP:10808"
+  export https_proxy="http://$HOSTIP:10808"
+fi
 
 mkdir -p "$SRC" "$OUT"
 
@@ -54,7 +81,9 @@ triple_for() {
 fetch_tar() { # fetch_tar <url> <outfile>
   [ -s "$2" ] && { ok "已存在 $(basename "$2")"; return 0; }
   say "下载 $1"
-  curl -fL --connect-timeout 15 -m 1800 --progress-bar -o "$2" "$1" || { err "下载失败"; return 1; }
+  # connect-timeout 给足：走代理时首次建连偶尔要 20~30 秒
+  curl -fL --connect-timeout 40 -m 2400 --retry 3 --retry-delay 3 \
+       --progress-bar -o "$2" "$1" || { err "下载失败"; rm -f "$2"; return 1; }
 }
 
 # ---------------------------------------------------------------- 1. uavs3d（AVS3 解码器）
@@ -73,18 +102,20 @@ build_uavs3d() {
   local bdir="$SRC/uavs3d/build-android-$abi"
   rm -rf "$bdir" && mkdir -p "$bdir" && cd "$bdir" || return 1
 
-  # uavs3d 用 cmake。Android 的 CMake toolchain 文件在 NDK 里。
-  cmake "$SRC/uavs3d" \
+  # 用 Ninja 而不是 Unix Makefiles：容器/精简系统里 make 常常缺失，
+  # 而 ninja 是单二进制、由 meson 依赖自动带上，更省事。
+  cmake "$SRC/uavs3d" -G Ninja \
+    -DCMAKE_MAKE_PROGRAM="$(command -v ninja)" \
     -DCMAKE_TOOLCHAIN_FILE="$NDK/build/cmake/android.toolchain.cmake" \
     -DANDROID_ABI="$abi" \
     -DANDROID_PLATFORM="android-$API" \
     -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_INSTALL_PREFIX="$prefix" \
     -DCOMPILE_10BIT=0 \
-    >"$bdir/cmake.log" 2>&1 || { err "uavs3d cmake 失败，见 $bdir/cmake.log"; return 1; }
+    >"$bdir/cmake.log" 2>&1 || { err "uavs3d cmake 失败，见 $bdir/cmake.log"; tail -15 "$bdir/cmake.log"; return 1; }
 
-  make -j"$JOBS" >>"$bdir/cmake.log" 2>&1 || { err "uavs3d make 失败"; return 1; }
-  make install >>"$bdir/cmake.log" 2>&1
+  ninja -C . >>"$bdir/cmake.log" 2>&1 || { err "uavs3d 编译失败"; return 1; }
+  ninja -C . install >>"$bdir/cmake.log" 2>&1
   ok "uavs3d[$abi] 完成"
 }
 
@@ -97,8 +128,10 @@ build_ffmpeg() {
 
   say "编译 ffmpeg [$abi]"
   if [ ! -d "$SRC/ffmpeg" ]; then
-    fetch_tar "https://ffmpeg.org/releases/ffmpeg-7.1.tar.xz" "$ROOT/dl/ffmpeg.tar.xz" || return 1
-    mkdir -p "$SRC" && tar xJf "$ROOT/dl/ffmpeg.tar.xz" -C "$SRC" && mv "$SRC/ffmpeg-7.1" "$SRC/ffmpeg"
+    # 用 GitHub 的 tag 归档而不是 ffmpeg.org：后者在国内/代理下经常
+    # TLS handshake failure，GitHub 反而稳。
+    fetch_tar "https://github.com/FFmpeg/FFmpeg/archive/refs/tags/n7.1.tar.gz" "$ROOT/dl/ffmpeg.tar.gz" || return 1
+    mkdir -p "$SRC" && tar xzf "$ROOT/dl/ffmpeg.tar.gz" -C "$SRC" && mv "$SRC/FFmpeg-n7.1" "$SRC/ffmpeg"
   fi
 
   local bdir="$SRC/ffmpeg-build-$abi"
@@ -112,6 +145,12 @@ build_ffmpeg() {
   fi
   cxx="${cc}++"
 
+  # 按 ENABLE_AVS3 决定要不要带 libuavs3d
+  local avs3_flags=()
+  if [ "$ENABLE_AVS3" = "1" ]; then
+    avs3_flags=(--enable-libuavs3d)
+  fi
+
   "$SRC/ffmpeg/configure" \
     --prefix="$prefix" \
     --target-os=android --arch="${abi%%-*}" \
@@ -121,7 +160,7 @@ build_ffmpeg() {
     --enable-shared --disable-static \
     --disable-programs --disable-doc \
     --disable-avdevice --disable-postproc \
-    --enable-libuavs3d \
+    "${avs3_flags[@]}" \
     --extra-cflags="-I$prefix/include -fPIC -O2" \
     --extra-ldflags="-L$prefix/lib" \
     --enable-jni --enable-mediacodec \
@@ -202,7 +241,11 @@ collect() {
 # ---------------------------------------------------------------- 主流程
 for abi in $ABIS; do
   say "=========== 构建 $abi ==========="
-  build_uavs3d "$abi" || err "uavs3d[$abi] 失败，跳过该 ABI"
+  if [ "$ENABLE_AVS3" = "1" ]; then
+    build_uavs3d "$abi" || err "uavs3d[$abi] 失败，跳过该 ABI"
+  else
+    say "跳过 uavs3d（ENABLE_AVS3=0，AVS3 解码暂不编入）"
+  fi
   build_ffmpeg  "$abi" || { err "ffmpeg[$abi] 失败，跳过该 ABI"; continue; }
   build_mpv     "$abi" || { err "mpv[$abi] 失败，跳过该 ABI"; continue; }
   collect       "$abi"

@@ -67,8 +67,8 @@ class Prefs(ctx: Context) {
         get() = sp.getBoolean(K_REVERSE, false)
         set(v) = sp.edit().putBoolean(K_REVERSE, v).apply()
 
-    /** 数字键跳台的等待窗口，单位毫秒。 */
-    var channelNumberTimeoutMs: Int
+    /** 数字键跳台的等待窗口，单位毫秒（逆向实测：TVBox 用 2500ms）。 */
+    var numberJumpTimeoutMs: Int
         get() = sp.getInt(K_NUM_TIMEOUT, 2500)
         set(v) = sp.edit().putInt(K_NUM_TIMEOUT, v).apply()
 

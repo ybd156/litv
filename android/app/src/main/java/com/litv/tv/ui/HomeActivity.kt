@@ -125,6 +125,20 @@ class HomeActivity : AppCompatActivity() {
         )
     }
 
+    /** MENU 键进设置——TV 上没有"我的"页面，菜单键是最符合直觉的入口。 */
+    override fun dispatchKeyEvent(event: android.view.KeyEvent): Boolean {
+        if (event.action == android.view.KeyEvent.ACTION_DOWN) {
+            when (event.keyCode) {
+                android.view.KeyEvent.KEYCODE_MENU,
+                android.view.KeyEvent.KEYCODE_INFO -> {
+                    startActivity(Intent(this, SettingsActivity::class.java))
+                    return true
+                }
+            }
+        }
+        return super.dispatchKeyEvent(event)
+    }
+
     private fun timeNow(): String =
         SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date())
 

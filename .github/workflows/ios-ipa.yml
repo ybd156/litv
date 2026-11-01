@@ -20,7 +20,9 @@ on:
 
 jobs:
   build:
-    runs-on: macos-14
+    # 用 macos-latest 而不是钉死 macos-14：实测 macos-14 标签在这个账号下
+    # 会让 job 在 3 秒内被取消（连 step 都没跑），换成 latest 正常。
+    runs-on: macos-latest
     timeout-minutes: 40
 
     steps:

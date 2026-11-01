@@ -29,20 +29,41 @@
         android:usesCleartextTraffic="true"
         android:theme="@style/Theme.Litv">
 
-        <!-- TV 桌面入口：没有 LEANBACK_LAUNCHER 的 App 在电视上根本找不到（5 个参考 APK 里有一家踩了） -->
+        <!-- 统一入口：按设备类型分流到 TV 首页或手机首页。
+             同时挂 LEANBACK_LAUNCHER（电视桌面）和 LAUNCHER（手机桌面），
+             这样一份 APK 两边都能装，用户不用纠结下哪个。 -->
         <activity
-            android:name=".ui.HomeActivity"
+            android:name=".ui.LauncherActivity"
             android:exported="true"
             android:launchMode="singleTask"
-            android:screenOrientation="landscape"
             android:configChanges="keyboard|keyboardHidden|navigation|orientation|screenSize|screenLayout|smallestScreenSize|uiMode">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
-                <!-- 手机/平板也能从普通桌面进（同一套代码，后续做手机端直接复用） -->
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- TV 首页（遥控器 + 网格） -->
+        <activity
+            android:name=".ui.HomeActivity"
+            android:exported="false"
+            android:launchMode="singleTask"
+            android:screenOrientation="landscape"
+            android:configChanges="keyboard|keyboardHidden|navigation|orientation|screenSize|screenLayout|smallestScreenSize|uiMode" />
+
+        <!-- 手机首页（触摸 + 列表 + 底部 Tab） -->
+        <activity
+            android:name=".ui.PhoneHomeActivity"
+            android:exported="false"
+            android:configChanges="keyboard|keyboardHidden|orientation|screenSize|screenLayout|smallestScreenSize|uiMode" />
+
+        <!-- 手机播放页（手势） -->
+        <activity
+            android:name=".ui.PhonePlayerActivity"
+            android:exported="false"
+            android:configChanges="keyboard|keyboardHidden|orientation|screenSize|screenLayout|smallestScreenSize|uiMode"
+            android:theme="@style/Theme.Litv.Player" />
 
         <activity
             android:name=".ui.PlayerActivity"

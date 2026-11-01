@@ -30,7 +30,8 @@ class BootReceiver : BroadcastReceiver() {
             return
         }
         runCatching {
-            val i = Intent(context, HomeActivity::class.java).apply {
+            // 走统一入口，让它自己决定开 TV 首页还是手机首页
+            val i = Intent(context, LauncherActivity::class.java).apply {
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             }
             context.startActivity(i)

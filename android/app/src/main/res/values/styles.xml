@@ -40,4 +40,27 @@
         <item name="android:textColor">@color/accent</item>
         <item name="android:textSize">17sp</item>
     </style>
+
+    <!-- 手机端底部 Tab -->
+    <style name="PhoneTab">
+        <item name="android:layout_width">0dp</item>
+        <item name="android:layout_height">wrap_content</item>
+        <item name="android:layout_weight">1</item>
+        <item name="android:gravity">center</item>
+        <item name="android:paddingVertical">8dp</item>
+        <item name="android:textColor">@color/text_secondary</item>
+        <item name="android:textSize">14sp</item>
+    </style>
+
+    <!-- 手机端分组 chip -->
+    <style name="GroupChip">
+        <item name="android:layout_width">wrap_content</item>
+        <item name="android:layout_height">wrap_content</item>
+        <item name="android:layout_marginHorizontal">4dp</item>
+        <item name="android:background">@drawable/bg_card</item>
+        <item name="android:paddingHorizontal">14dp</item>
+        <item name="android:paddingVertical">7dp</item>
+        <item name="android:textColor">@color/text_secondary</item>
+        <item name="android:textSize">13sp</item>
+    </style>
 </resources>

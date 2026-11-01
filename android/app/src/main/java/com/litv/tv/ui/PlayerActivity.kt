@@ -61,11 +61,18 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
     private lateinit var panelTitle: TextView
     private lateinit var panelList: RecyclerView
     private lateinit var numberTip: TextView
+    private lateinit var epgPanel: LinearLayout
+    private lateinit var epgTitle: TextView
+    private lateinit var epgList: RecyclerView
 
     private lateinit var player: PlayerManager
     private lateinit var panelAdapter: ChannelAdapter
+    private lateinit var epgAdapter: EpgAdapter
 
     private var channels: List<Channel> = emptyList()
+    private var allChannels: List<Channel> = emptyList()
+    private var groups: List<String> = emptyList()
+    private var groupIdx = 0
     private var index = 0
     private var current: Channel? = null
     private var programs: List<EpgProgram> = emptyList()
@@ -74,6 +81,7 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
     private val numberBuffer = StringBuilder()
     private var osdVisible = false
     private var panelVisible = false
+    private var epgVisible = false
 
     // 长按判定：800ms（逆向实测值，不是 320ms）
     private val longPressRunnable = Runnable { onLongPressOk() }
@@ -115,6 +123,9 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         panelTitle = findViewById(R.id.panelTitle)
         panelList = findViewById(R.id.panelList)
         numberTip = findViewById(R.id.numberTip)
+        epgPanel = findViewById(R.id.epgPanel)
+        epgTitle = findViewById(R.id.epgTitle)
+        epgList = findViewById(R.id.epgList)
     }
 
     private fun loadChannels() {
@@ -122,11 +133,11 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         if (cached.isNotBlank()) {
             runCatching {
                 val b = Gson().fromJson(cached, Bootstrap::class.java)
-                channels = b.channels
+                applyChannels(b.channels)
             }
         }
         if (channels.isEmpty()) {
-            app.api.bootstrap(onOk = { b -> channels = b.channels }, onErr = {})
+            app.api.bootstrap(onOk = { b -> applyChannels(b.channels) }, onErr = {})
         }
         panelAdapter = ChannelAdapter(app.tier.logoMaxPx) { ch ->
             closePanel()
@@ -140,11 +151,51 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         panelList.adapter = panelAdapter
         panelAdapter.submit(channels, emptyMap())
         panelTitle.text = "频道列表（${channels.size}）"
+
+        epgAdapter = EpgAdapter()
+        epgList.layoutManager = LinearLayoutManager(this)
+        epgList.adapter = epgAdapter
+    }
+
+    /** 存全量频道 + 分组名，供「列表内左右键切分组」用。 */
+    private fun applyChannels(list: List<Channel>) {
+        allChannels = list
+        groups = list.map { it.group }.filter { it.isNotBlank() }.distinct()
+        applyGroupFilter()
+    }
+
+    private fun applyGroupFilter() {
+        channels = if (groupIdx <= 0 || groupIdx > groups.size) {
+            allChannels
+        } else {
+            val g = groups[groupIdx - 1]
+            allChannels.filter { it.group == g }
+        }
+        if (index >= channels.size) index = 0
+        if (::panelAdapter.isInitialized) {
+            panelAdapter.submit(channels, emptyMap())
+            panelTitle.text = groupLabelText()
+        }
+    }
+
+    private fun groupLabelText(): String {
+        val g = if (groupIdx <= 0) "全部" else groups[groupIdx - 1]
+        return "分组：$g（${channels.size}）  ←→ 切换"
+    }
+
+    private fun switchGroup(delta: Int) {
+        val total = groups.size + 1 // +1 是"全部"
+        groupIdx = ((groupIdx + delta) % total + total) % total
+        applyGroupFilter()
+        if (channels.isNotEmpty()) {
+            index = 0
+            panelList.scrollToPosition(0)
+        }
     }
 
     // ---------------------------------------------------------------- 播放
 
-    private fun playChannel(ch: Channel) {
+    private fun playChannel(ch: Channel, streamId: Long = 0) {
         current = ch
         app.prefs.lastChannelId = ch.id
 
@@ -158,7 +209,7 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         switchTip.visibility = View.VISIBLE
         osdName.text = ch.name
 
-        app.api.play(ch.id,
+        app.api.play(ch.id, streamId,
             onOk = { info ->
                 val headers = mapOf("User-Agent" to "LITV/1.0 (Android TV)")
                 player.play(ch.id, info.url, headers, app.prefs.engine)
@@ -252,6 +303,7 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         panelVisible = true
         panel.visibility = View.VISIBLE
         panelAdapter.submit(channels, emptyMap())
+        panelTitle.text = groupLabelText()
         val i = channels.indexOfFirst { it.id == current?.id }
         if (i >= 0) {
             panelList.scrollToPosition(i)
@@ -263,6 +315,61 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
     private fun closePanel() {
         panelVisible = false
         panel.visibility = View.GONE
+    }
+
+    /** 呼出节目单面板（右侧）。数据是进频道时就预取的，所以这里是瞬开。 */
+    private fun openEpg() {
+        epgVisible = true
+        epgPanel.visibility = View.VISIBLE
+        epgTitle.text = "${current?.name ?: ""} · 节目单"
+        epgAdapter.submit(programs)
+        val pos = epgAdapter.currentPosition()
+        epgList.scrollToPosition(pos)
+        epgList.post {
+            (epgList.layoutManager as? LinearLayoutManager)
+                ?.findViewByPosition(pos)?.requestFocus()
+        }
+        hideOsd()
+    }
+
+    private fun closeEpg() {
+        epgVisible = false
+        epgPanel.visibility = View.GONE
+    }
+
+    /**
+     * 线路切换：长按 OK 呼出。
+     * 线路信息由服务端下发（只给标签和健康度，不给上游真实地址，防抓包盗链）。
+     */
+    private fun showStreamPicker() {
+        val ch = current ?: return
+        app.api.streams(ch.id,
+            onOk = { list ->
+                if (list.isEmpty()) {
+                    statusToast("这个频道只有一条线路")
+                    return@streams
+                }
+                val labels = list.map { s ->
+                    "${s.label}  ·  ${s.healthText}" + if (s.latencyMs > 0) "  ${s.latencyMs}ms" else ""
+                }.toTypedArray()
+                android.app.AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_NoActionBar)
+                    .setTitle("选择线路（${ch.name}）")
+                    .setItems(labels) { _, which ->
+                        val s = list[which]
+                        playChannel(ch, s.id)
+                    }
+                    .setNegativeButton("取消", null)
+                    .show()
+            },
+            onErr = { statusToast("获取线路失败：$it") })
+    }
+
+    private fun statusToast(msg: String) {
+        switchTip.text = msg
+        switchTip.visibility = View.VISIBLE
+        main.postDelayed({
+            if (switchTip.text == msg) switchTip.visibility = View.GONE
+        }, 2500)
     }
 
     // ---------------------------------------------------------------- 按键
@@ -283,13 +390,30 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
             return true
         }
 
-        // 面板打开时，方向键交给列表自己处理
-        if (panelVisible) {
-            if (code == KeyEvent.KEYCODE_BACK && action == KeyEvent.ACTION_DOWN) {
-                closePanel(); return true
+        // 节目单面板打开时，BACK/← 收起，其余交给列表
+        if (epgVisible) {
+            if (action == KeyEvent.ACTION_DOWN &&
+                (code == KeyEvent.KEYCODE_BACK || code == KeyEvent.KEYCODE_DPAD_LEFT)
+            ) {
+                closeEpg(); return true
             }
-            if (code == KeyEvent.KEYCODE_DPAD_RIGHT && action == KeyEvent.ACTION_DOWN) {
-                closePanel(); return true
+            return super.dispatchKeyEvent(event)
+        }
+
+        // 频道列表打开时：←→ 切分组，BACK 收起，↑↓ 交给列表自己
+        if (panelVisible) {
+            if (action == KeyEvent.ACTION_DOWN) {
+                when (code) {
+                    KeyEvent.KEYCODE_BACK -> {
+                        closePanel(); return true
+                    }
+                    KeyEvent.KEYCODE_DPAD_LEFT -> {
+                        switchGroup(-1); return true
+                    }
+                    KeyEvent.KEYCODE_DPAD_RIGHT -> {
+                        switchGroup(+1); return true
+                    }
+                }
             }
             return super.dispatchKeyEvent(event)
         }
@@ -316,7 +440,7 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
                 return true
             }
             KeyEvent.KEYCODE_DPAD_RIGHT -> {
-                if (action == KeyEvent.ACTION_DOWN) showOsd()
+                if (action == KeyEvent.ACTION_DOWN) openEpg()
                 return true
             }
             KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_NUMPAD_ENTER -> {
@@ -347,15 +471,9 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         return super.dispatchKeyEvent(event)
     }
 
-    /** 长按 OK：轮换内核（排查"这个台到底哪个内核能播"最实用）。 */
+    /** 长按 OK：呼出线路选择（排查"这个台哪个源能播"最实用）。 */
     private fun onLongPressOk() {
-        val order = listOf(EngineKind.EXO, EngineKind.VLC, EngineKind.MPV, EngineKind.AVS3)
-        val cur = EngineKind.from(app.prefs.engine) ?: EngineKind.EXO
-        val next = order[(order.indexOf(cur) + 1) % order.size]
-        app.prefs.engine = next.key
-        current?.let { playChannel(it) }
-        showOsd()
-        osdEngine.text = "已切到 ${next.label}"
+        showStreamPicker()
     }
 
     // ---------------------------------------------------------------- PlayerManager 回调

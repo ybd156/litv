@@ -198,9 +198,15 @@ class Api(private val prefs: Prefs) {
             onOk = { if (it != null) onOk(it) else onErr("空数据") }, onErr = onErr)
     }
 
-    fun play(channelId: Long, onOk: (PlayInfo) -> Unit, onErr: (String) -> Unit) {
-        call("/api/v1/tv/play/$channelId", clazz = PlayInfo::class.java,
+    fun play(channelId: Long, streamId: Long = 0, onOk: (PlayInfo) -> Unit, onErr: (String) -> Unit) {
+        val q = if (streamId > 0) "?stream_id=$streamId" else ""
+        call("/api/v1/tv/play/$channelId$q", clazz = PlayInfo::class.java,
             onOk = { if (it != null) onOk(it) else onErr("空数据") }, onErr = onErr)
+    }
+
+    /** 线路列表（手动切线路用）。 */
+    fun streams(channelId: Long, onOk: (List<TvStream>) -> Unit, onErr: (String) -> Unit) {
+        callList("/api/v1/tv/streams/$channelId", TvStream::class.java, onOk, onErr)
     }
 
     fun epg(channelId: Long, day: Int, onOk: (List<EpgProgram>) -> Unit, onErr: (String) -> Unit) {

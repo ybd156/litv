@@ -140,6 +140,7 @@ func (a *API) Handler(viaGateway bool) http.Handler {
 		pr.Post("/api/v1/tv/favorite", a.tvFavorite)
 		pr.Post("/api/v1/tv/heartbeat", a.tvHeartbeat)
 		pr.Get("/api/v1/tv/play/{id}", a.tvPlay)
+		pr.Get("/api/v1/tv/streams/{id}", a.tvStreams)
 	})
 
 	// ---- 流出口（签名 URL，不走身份中间件） ----

@@ -115,3 +115,21 @@ data class HeartbeatResult(
     @SerializedName("config_version") val configVersion: Long = 0,
     @SerializedName("server_time") val serverTime: Long = 0,
 )
+
+/** 一条线路（终端只拿到标签与健康度，拿不到上游真实地址）。 */
+data class TvStream(
+    val id: Long = 0,
+    val label: String = "",
+    val quality: String = "",
+    val priority: Int = 0,
+    /** 1 健康 / 0 失效 / -1 未探测 */
+    val health: Int = -1,
+    @SerializedName("latency_ms") val latencyMs: Int = 0,
+) {
+    val healthText: String
+        get() = when (health) {
+            1 -> "正常"
+            0 -> "失效"
+            else -> "未检测"
+        }
+}

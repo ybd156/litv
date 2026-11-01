@@ -197,6 +197,33 @@ func (a *API) tvHeartbeat(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// tvStreams 返回某频道的全部线路，供终端做「线路切换」。
+// 只暴露必要字段，不回传上游真实地址（防抓包盗链）——终端只需要 id 和标签。
+func (a *API) tvStreams(w http.ResponseWriter, r *http.Request) {
+	id := pathInt64(r, "id")
+	items, err := a.st.ListStreams(r.Context(), id)
+	if err != nil {
+		fail(w, http.StatusInternalServerError, 5001, err.Error())
+		return
+	}
+	out := make([]map[string]any, 0, len(items))
+	for i, s := range items {
+		label := s.Quality
+		if label == "" {
+			label = "线路 " + strconv.Itoa(i+1)
+		}
+		out = append(out, map[string]any{
+			"id":         s.ID,
+			"label":      label,
+			"quality":    s.Quality,
+			"priority":   s.Priority,
+			"health":     s.Health, // 1 健康 / 0 失效 / -1 未探测
+			"latency_ms": s.LatencyMs,
+		})
+	}
+	ok(w, out)
+}
+
 // tvPlay 返回一个带签名的播放地址。终端不需要知道上游长什么样。
 func (a *API) tvPlay(w http.ResponseWriter, r *http.Request) {
 	dev, _ := deviceFrom(r.Context())
@@ -208,6 +235,20 @@ func (a *API) tvPlay(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	st, err := a.st.BestStream(r.Context(), id)
+	// 终端手动切线路时用 stream_id 指定（优先于自动择优）
+	if sidStr := r.URL.Query().Get("stream_id"); sidStr != "" {
+		if sid, e := strconv.ParseInt(sidStr, 10, 64); e == nil && sid > 0 {
+			if all, lerr := a.st.ListStreams(r.Context(), id); lerr == nil {
+				for i := range all {
+					if all[i].ID == sid {
+						st = &all[i]
+						err = nil
+						break
+					}
+				}
+			}
+		}
+	}
 	if err != nil {
 		fail(w, http.StatusNotFound, 3002, "该频道没有可用线路")
 		return

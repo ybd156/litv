@@ -1,0 +1,81 @@
+name: Build iOS libmpv xcframework
+
+# =============================================================================
+# 在 macOS runner 上交叉编译 iOS 版 libmpv + FFmpeg(含 libuavs3d)，产出 xcframework。
+#
+# 为什么放 CI：
+#   WSL/Linux 编不出 iOS 的 mpv —— 需要 Apple iOS SDK 与 clang，这是 SDK 授权问题，
+#   不是配置问题。所以把"编二进制"这一步放到 macOS runner（公开仓库免费），
+#   产物下载回 WSL，再用 xtool 链接打包成 .ipa。开发体验全程留在 WSL。
+#
+# 触发方式：
+#   - 手动（workflow_dispatch）
+#   - 改动 ios/native/ 下的脚本时自动
+# =============================================================================
+
+on:
+  workflow_dispatch:
+    inputs:
+      ios_min:
+        description: "最低 iOS 版本"
+        required: false
+        default: "14.0"
+  push:
+    paths:
+      - "ios/native/**"
+      - ".github/workflows/ios-xcframework.yml"
+
+jobs:
+  build:
+    # macos-14 = Apple Silicon，与 iOS 设备同为 arm64，交叉编译最省事
+    runs-on: macos-14
+    timeout-minutes: 120
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 环境信息
+        run: |
+          echo "Xcode: $(xcodebuild -version | head -1)"
+          echo "SDK: $(xcrun --sdk iphoneos --show-sdk-version)"
+          sw_vers
+
+      - name: 安装构建工具
+        run: |
+          brew install meson ninja pkg-config nasm || true
+
+      - name: 缓存构建产物
+        uses: actions/cache@v4
+        with:
+          path: build-ios
+          key: ios-xcf-${{ runner.os }}-${{ hashFiles('ios/native/build-xcframework-macos.sh') }}
+
+      - name: 交叉编译 libmpv / FFmpeg / uavs3d
+        env:
+          IOS_MIN: ${{ github.event.inputs.ios_min || '14.0' }}
+          WORK: ${{ github.workspace }}/build-ios
+        run: |
+          chmod +x ios/native/build-xcframework-macos.sh
+          bash ios/native/build-xcframework-macos.sh
+
+      - name: 校验产物
+        run: |
+          XCF="build-ios/xcf/LITVKit.xcframework"
+          test -d "$XCF" || { echo "xcframework 未生成"; exit 1; }
+          lipo -info "$XCF/ios-arm64/libLITVKit.a" || true
+          du -sh "$XCF"
+
+      - name: 上传 xcframework
+        uses: actions/upload-artifact@v4
+        with:
+          name: LITVKit-xcframework
+          path: build-ios/xcf/LITVKit.xcframework
+          retention-days: 30
+
+      - name: 构建日志（失败时）
+        if: failure()
+        run: |
+          echo "===== 失败，打印关键日志 ====="
+          find build-ios -name "*.log" -o -name "config.log" 2>/dev/null | head -10 | while read -r f; do
+            echo "--- $f ---"; tail -40 "$f"
+          done

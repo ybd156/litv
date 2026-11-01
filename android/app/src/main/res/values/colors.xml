@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 深色为主：客厅环境 + 长时间观看，浅色会刺眼 -->
+    <color name="bg">#FF0B0E11</color>
+    <color name="bg_panel">#FF151A21</color>
+    <color name="bg_card">#FF1C232C</color>
+    <color name="accent">#FF2DD4BF</color>
+    <color name="accent_dim">#FF14807A</color>
+    <color name="text_primary">#FFE6EDF3</color>
+    <color name="text_secondary">#FF8B949E</color>
+    <color name="focus_stroke">#FF2DD4BF</color>
+    <color name="danger">#FFF85149</color>
+</resources>

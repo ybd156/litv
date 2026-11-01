@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# =============================================================================
+# gradlew —— 本地 Gradle 启动器
+#
+# 为什么不用标准 wrapper：
+#   标准 `gradle wrapper` 任务会去 services.gradle.org 校验分发地址，
+#   国内基本必失败。这个 shim 直接用本地已解压的 Gradle，行为等价。
+#
+# 换机器/上 CI 时，跑一次真正的 wrapper 生成即可：
+#   gradle wrapper --gradle-version 8.7 --distribution-type bin
+# =============================================================================
+set -euo pipefail
+
+GRADLE_BIN="${GRADLE_BIN:-$HOME/android-dev/gradle-dist/gradle-8.7/bin/gradle}"
+
+if [ -f "$HOME/android-dev/env.sh" ]; then
+  # shellcheck disable=SC1091
+  source "$HOME/android-dev/env.sh"
+fi
+
+if [ ! -x "$GRADLE_BIN" ]; then
+  echo "找不到 Gradle：$GRADLE_BIN" >&2
+  echo "先执行：bash tools/setup-gradle-wsl.sh" >&2
+  exit 1
+fi
+
+exec "$GRADLE_BIN" "$@"

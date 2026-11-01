@@ -157,6 +157,23 @@ else
 fi
 
 echo
+echo "== 12.5 播放质量上报与统计 =="
+for i in 1 2 3; do
+  curl -sS -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+    -d "{\"channel_id\":1,\"event\":\"start\",\"startup_ms\":$((300 + i * 100))}" \
+    "http://127.0.0.1:$PORT/api/v1/tv/stats" >/dev/null
+done
+curl -sS -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"channel_id":1,"event":"stall","detail":"buffer"}' "http://127.0.0.1:$PORT/api/v1/tv/stats" >/dev/null
+R=$(gw "$GW/api/v1/stats/overview?days=7")
+chk "总览有起播次数" '"total_plays":3' "$R"
+chk "总览有平均起播" '"avg_startup_ms":500' "$R"
+chk "总览有卡顿率" '"stall_rate"' "$R"
+R=$(gw "$GW/api/v1/stats/channels?days=7")
+chk "频道统计可用" '"plays":3' "$R"
+chk "频道统计带名称" '"name"' "$R"
+
+echo
 echo "== 13. 吊销设备后应失效 =="
 gw -X DELETE "$GW/api/v1/devices/$DEV_ID" >/dev/null
 R=$(curl -sS -H "Authorization: Bearer $TOKEN" "http://127.0.0.1:$PORT/api/v1/tv/bootstrap")

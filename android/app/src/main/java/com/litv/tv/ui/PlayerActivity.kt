@@ -83,6 +83,8 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
     private var osdVisible = false
     private var panelVisible = false
     private var epgVisible = false
+    /** 起播计时起点（毫秒），0 表示已上报过 */
+    private var startAt = 0L
 
     // 长按判定：800ms（逆向实测值，不是 320ms）
     private val longPressRunnable = Runnable { onLongPressOk() }
@@ -217,6 +219,8 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
     private fun playChannel(ch: Channel, streamId: Long = 0) {
         current = ch
         app.prefs.lastChannelId = ch.id
+        // 起播计时：从按下换台到出第一帧，这是用户唯一能感知的"快不快"
+        startAt = System.currentTimeMillis()
 
         // 换台时先抓一帧盖住，避免黑屏闪烁
         player.snapshot()?.let {
@@ -508,6 +512,13 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         switchTip.visibility = View.GONE
         // 有画面了才撤掉快照遮罩
         snapshotView.postDelayed({ snapshotView.visibility = View.GONE }, 200)
+
+        // 上报起播耗时（只报第一次出画面，重连不重复计）
+        if (startAt > 0) {
+            val ms = (System.currentTimeMillis() - startAt).toInt()
+            startAt = 0
+            current?.let { app.api.reportStats(it.id, "start", ms) }
+        }
     }
 
     override fun onError(message: String) {

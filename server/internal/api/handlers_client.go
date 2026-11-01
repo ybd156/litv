@@ -528,6 +528,46 @@ func appendQueryToSegments(data []byte, query string) []byte {
 	return []byte(strings.Join(lines, "\n"))
 }
 
+// ---------- 播放质量上报 ----------
+
+// tvReportStats 终端上报播放事件（起播/卡顿/失败）。
+//
+// 为什么要客户端上报而不是服务端自己算：
+// 服务端只知道"有没有把字节发出去"，不知道"用户看到第一帧用了多久"、
+// "播放器有没有卡"。起播耗时和卡顿只有客户端能测准。
+func (a *API) tvReportStats(w http.ResponseWriter, r *http.Request) {
+	dev, okDev := deviceFrom(r.Context())
+	if !okDev {
+		fail(w, http.StatusUnauthorized, 2003, "设备未绑定")
+		return
+	}
+	var body struct {
+		ChannelID int64  `json:"channel_id"`
+		Event     string `json:"event"`
+		StartupMs int    `json:"startup_ms"`
+		Detail    string `json:"detail"`
+	}
+	if err := decode(r, &body); err != nil {
+		fail(w, http.StatusBadRequest, 1001, "参数错误: "+err.Error())
+		return
+	}
+	switch body.Event {
+	case "start", "stall", "error", "stop":
+	default:
+		fail(w, http.StatusBadRequest, 1001, "event 只能是 start/stall/error/stop")
+		return
+	}
+	// 上报失败不影响播放，所以这里不把错误往上抛
+	_ = a.st.AddPlayEvent(r.Context(), store.PlayEvent{
+		DeviceID:  dev.ID,
+		ChannelID: body.ChannelID,
+		Event:     body.Event,
+		StartupMs: body.StartupMs,
+		Detail:    body.Detail,
+	})
+	ok(w, map[string]any{"recorded": true})
+}
+
 // ---------- 流出口 ----------
 
 // verifyStream 校验签名，返回频道 ID 与设备标识。

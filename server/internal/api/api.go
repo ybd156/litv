@@ -111,6 +111,9 @@ func (a *API) Handler(viaGateway bool) http.Handler {
 		pr.Put("/api/v1/system/config", a.putConfig)
 		pr.Get("/api/v1/system/streams", a.activeStreams)
 		pr.Post("/api/v1/system/probe", a.runProbe)
+		// 播放质量统计
+		pr.Get("/api/v1/stats/overview", a.statsOverview)
+		pr.Get("/api/v1/stats/channels", a.statsChannels)
 
 		pr.Get("/api/v1/sources", a.listSources)
 		pr.Post("/api/v1/sources", a.createSource)
@@ -161,6 +164,8 @@ func (a *API) Handler(viaGateway bool) http.Handler {
 		pr.Get("/api/v1/tv/remote/targets", a.remoteTargets)
 		// 时移回看
 		pr.Get("/api/v1/tv/timeshift/{id}", a.tvTimeshift)
+		// 播放质量上报（起播耗时/卡顿/失败）
+		pr.Post("/api/v1/tv/stats", a.tvReportStats)
 	})
 
 	// ---- 流出口（签名 URL，不走身份中间件） ----

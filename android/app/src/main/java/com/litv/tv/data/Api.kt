@@ -227,6 +227,24 @@ class Api(private val prefs: Prefs) {
             onOk = { if (it != null) onOk(it) }, onErr = { /* 心跳失败不打扰用户 */ })
     }
 
+    /**
+     * 播放质量上报。
+     *
+     * 为什么由客户端报：服务端只知道"字节发出去了"，不知道
+     * "用户看到第一帧用了多久"、"播放器卡没卡"——这些只有客户端能测准。
+     */
+    fun reportStats(channelId: Long, event: String, startupMs: Int = 0, detail: String = "") {
+        call("/api/v1/tv/stats", "POST",
+            mapOf(
+                "channel_id" to channelId,
+                "event" to event,
+                "startup_ms" to startupMs,
+                "detail" to detail,
+            ),
+            clazz = Any::class.java,
+            onOk = { }, onErr = { /* 上报失败静默 */ })
+    }
+
     private companion object {
         val JSON = "application/json; charset=utf-8".toMediaType()
     }

@@ -171,6 +171,21 @@ CREATE TABLE IF NOT EXISTS audit_logs (
 );
 CREATE INDEX IF NOT EXISTS idx_audit_time ON audit_logs(created_at);
 
+-- 播放质量事件：起播/卡顿/失败。
+-- 这是"IPTV 体验好不好"的唯一客观依据——只看频道数没用，
+-- 用户真正在意的是"起播多快、卡不卡、哪个台老失败"。
+CREATE TABLE IF NOT EXISTS play_events (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  device_id  INTEGER NOT NULL DEFAULT 0,
+  channel_id INTEGER NOT NULL DEFAULT 0,
+  event      TEXT NOT NULL,                 -- start | stall | error | stop
+  startup_ms INTEGER NOT NULL DEFAULT 0,    -- 起播耗时（仅 start 事件有意义）
+  detail     TEXT NOT NULL DEFAULT '',
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_play_events_time ON play_events(created_at);
+CREATE INDEX IF NOT EXISTS idx_play_events_ch ON play_events(channel_id, created_at);
+
 CREATE TABLE IF NOT EXISTS kv (
   k TEXT PRIMARY KEY,
   v TEXT NOT NULL

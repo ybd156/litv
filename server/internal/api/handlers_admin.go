@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -28,25 +29,39 @@ func (a *API) health(w http.ResponseWriter, r *http.Request) {
 func (a *API) systemMe(w http.ResponseWriter, r *http.Request) {
 	id, _ := identityFrom(r.Context())
 	ok(w, map[string]any{
-		"user_id":    id.UserID,
-		"username":   id.Username,
-		"is_admin":   id.IsAdmin,
+		"uid":         id.UserID, // 前端契约字段名
+		"user_id":     id.UserID, // 兼容别名
+		"username":    id.Username,
+		"is_admin":    id.IsAdmin,
 		"via_gateway": id.ViaGateway,
 	})
 }
 
 func (a *API) systemInfo(w http.ResponseWriter, r *http.Request) {
-	ok(w, map[string]any{
-		"version":        a.version,
-		"uptime_s":       int(time.Since(a.startAt).Seconds()),
+	// 概览页需要的聚合数字一并返回，避免前端打 N 个接口
+	st, _ := a.st.Stats(r.Context())
+	data := map[string]any{
+		"version":         a.version,
+		"uptime_s":        int(time.Since(a.startAt).Seconds()),
 		"active_channels": a.hub.Count(),
-		"max_concurrent": a.cfg.Stream.MaxConcurrent,
-		"port":           a.cfg.Server.Port,
-		"gateway_socket": a.cfg.Server.GatewaySocket,
-		"prefix":         a.cfg.Server.Prefix,
-		"transcode":      a.cfg.Transcode.Enabled,
-		"db_path":        a.cfg.Database.Path,
-	})
+		"max_concurrent":  a.cfg.Stream.MaxConcurrent,
+		"port":            a.cfg.Server.Port,
+		"gateway_socket":  a.cfg.Server.GatewaySocket,
+		"prefix":          a.cfg.Server.Prefix,
+		"transcode":       a.cfg.Transcode.Enabled,
+		"db_path":         a.cfg.Database.Path,
+	}
+	if st != nil {
+		data["channels_total"] = st.ChannelsTotal
+		data["channels_enabled"] = st.ChannelsOn
+		data["devices_total"] = st.DevicesTotal
+		data["devices_online"] = st.DevicesOnline
+		data["devices_pending"] = st.DevicesPending
+		data["sources_total"] = st.SourcesTotal
+		data["sources_failed"] = st.SourcesFailed
+		data["plays_today"] = st.PlaysToday
+	}
+	ok(w, data)
 }
 
 func (a *API) systemLogs(w http.ResponseWriter, r *http.Request) {
@@ -61,21 +76,37 @@ func (a *API) systemLogs(w http.ResponseWriter, r *http.Request) {
 func (a *API) getConfig(w http.ResponseWriter, r *http.Request) {
 	// 只暴露可安全展示的字段，绝不返回 secret / 密码
 	ok(w, map[string]any{
-		"port":           a.cfg.Server.Port,
-		"prefix":         a.cfg.Server.Prefix,
-		"max_concurrent": a.cfg.Stream.MaxConcurrent,
-		"ring_size":      a.cfg.Stream.RingSize,
-		"transcode":      a.cfg.Transcode.Enabled,
-		"hwaccel":        a.cfg.Transcode.HWAccel,
-		"epg_enabled":    a.cfg.EPG.Enabled,
-		"token_hours":    a.cfg.Auth.TokenHours,
+		"port":               a.cfg.Server.Port,
+		"prefix":             a.cfg.Server.Prefix,
+		"max_concurrent":     a.cfg.Stream.MaxConcurrent,
+		"ring_size":          a.cfg.Stream.RingSize,
+		"transcode":          a.cfg.Transcode.Enabled,
+		"transcode_enabled":  a.cfg.Transcode.Enabled, // 前端字段名，与 transcode 同义
+		"hwaccel":            a.cfg.Transcode.HWAccel,
+		"epg_enabled":        a.cfg.EPG.Enabled,
+		"epg_refresh_hour":   epgRefreshHour(a.cfg.EPG.RefreshCron),
+		"token_hours":        a.cfg.Auth.TokenHours,
+		"log_level":          a.cfg.Log.Level,
+		"allow_lan":          a.cfg.Server.Host == "0.0.0.0",
 	})
+}
+
+// epgRefreshHour 从 cron 里粗取小时（"0 3 * * *" → 3），取不到给默认 3。
+func epgRefreshHour(cron string) int {
+	fields := strings.Fields(strings.TrimSpace(cron))
+	if len(fields) >= 2 {
+		if h, err := strconv.Atoi(fields[1]); err == nil && h >= 0 && h <= 23 {
+			return h
+		}
+	}
+	return 3
 }
 
 func (a *API) putConfig(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		MaxConcurrent *int  `json:"max_concurrent"`
-		Transcode     *bool `json:"transcode"`
+		MaxConcurrent    *int  `json:"max_concurrent"`
+		Transcode        *bool `json:"transcode"`
+		TranscodeEnabled *bool `json:"transcode_enabled"`
 	}
 	if err := decode(r, &body); err != nil {
 		fail(w, http.StatusBadRequest, 1001, "参数错误: "+err.Error())
@@ -85,7 +116,10 @@ func (a *API) putConfig(w http.ResponseWriter, r *http.Request) {
 	if body.MaxConcurrent != nil && *body.MaxConcurrent > 0 {
 		a.cfg.Stream.MaxConcurrent = *body.MaxConcurrent
 	}
-	if body.Transcode != nil {
+	// 两个字段名同义，前端用 transcode_enabled，老客户端用 transcode
+	if body.TranscodeEnabled != nil {
+		a.cfg.Transcode.Enabled = *body.TranscodeEnabled
+	} else if body.Transcode != nil {
 		a.cfg.Transcode.Enabled = *body.Transcode
 	}
 	a.st.Audit(r.Context(), 0, "config.update", "system", "", r.RemoteAddr)
@@ -572,11 +606,33 @@ func (a *API) listDevices(w http.ResponseWriter, r *http.Request) {
 		fail(w, http.StatusInternalServerError, 5001, err.Error())
 		return
 	}
-	// 不在列表里回传 token 哈希
-	for i := range items {
-		items[i].DeviceKey = ""
+	now := time.Now().Unix()
+	// 转成前端契约里的视图：补 online / last_heartbeat_at / ip / app_version，
+	// 并且不回传 device_key（那是客户端的稳定标识，属于敏感信息）。
+	out := make([]map[string]any, 0, len(items))
+	for _, d := range items {
+		var cfg map[string]any
+		if d.ConfigJSON != "" && d.ConfigJSON != "{}" {
+			_ = json.Unmarshal([]byte(d.ConfigJSON), &cfg)
+		}
+		online := d.Status == "bound" && now-d.LastSeen <= 90
+		out = append(out, map[string]any{
+			"id":                d.ID,
+			"name":              d.Name,
+			"platform":          d.Platform,
+			"model":             d.Model,
+			"status":            d.Status,
+			"online":            online,
+			"last_heartbeat_at": d.LastSeen,
+			"last_seen":         d.LastSeen,
+			"bound_at":          d.BoundAt,
+			"created_at":        d.CreatedAt,
+			"ip":                "",
+			"app_version":       "",
+			"config":            cfg,
+		})
 	}
-	ok(w, items)
+	ok(w, out)
 }
 
 func (a *API) createBindCode(w http.ResponseWriter, r *http.Request) {

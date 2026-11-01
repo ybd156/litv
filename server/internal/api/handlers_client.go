@@ -235,6 +235,9 @@ func (a *API) tvPlay(w http.ResponseWriter, r *http.Request) {
 		"expires":   exp,
 		"stream_id": st.ID,
 	})
+
+	// 记一次播放，供概览页的「今日起播次数」统计
+	a.st.Audit(r.Context(), 0, "play", fmt.Sprint(id), ch.Name, r.RemoteAddr)
 }
 
 // ---------- 流出口 ----------

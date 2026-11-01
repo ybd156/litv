@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 )
 
 // ErrNotFound 表示记录不存在。
@@ -229,23 +230,97 @@ func (s *Store) DeleteChannel(ctx context.Context, id int64) error {
 }
 
 // ReorderChannels 按给定顺序重排。
+//
+// 语义：只调整传入 id 之间的相对次序——它们占用「原有这些 id 的 sort 值集合」，
+// 其余频道不动。这样前端在「分页 + 分组筛选」下提交当前页的 id 也能正确工作，
+// 不需要为了排序把全库 id 都传上来。
 func (s *Store) ReorderChannels(ctx context.Context, ids []int64) error {
+	if len(ids) == 0 {
+		return nil
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
+
+	ph := strings.Repeat("?,", len(ids))
+	ph = ph[:len(ph)-1]
+	args := make([]any, 0, len(ids))
+	for _, id := range ids {
+		args = append(args, id)
+	}
+
+	// 1. 取这些 id 现有的 sort 值（升序），作为"槽位"
+	rows, err := tx.QueryContext(ctx, `SELECT sort FROM channels WHERE id IN (`+ph+`) ORDER BY sort`, args...)
+	if err != nil {
+		return err
+	}
+	slots := make([]int, 0, len(ids))
+	for rows.Next() {
+		var v int
+		if err := rows.Scan(&v); err != nil {
+			rows.Close()
+			return err
+		}
+		slots = append(slots, v)
+	}
+	rows.Close()
+	if len(slots) != len(ids) {
+		return fmt.Errorf("部分频道不存在（传入 %d 个，找到 %d 个）", len(ids), len(slots))
+	}
+
+	// 2. 把新顺序依次填回这些槽位
 	stmt, err := tx.PrepareContext(ctx, `UPDATE channels SET sort=? WHERE id=?`)
 	if err != nil {
 		return err
 	}
 	defer stmt.Close()
 	for i, id := range ids {
-		if _, err := stmt.ExecContext(ctx, i, id); err != nil {
+		if _, err := stmt.ExecContext(ctx, slots[i], id); err != nil {
 			return err
 		}
 	}
 	return tx.Commit()
+}
+
+// Stats 是概览页需要的聚合数字。
+type Stats struct {
+	ChannelsTotal  int `json:"channels_total"`
+	ChannelsOn     int `json:"channels_enabled"`
+	DevicesTotal   int `json:"devices_total"`
+	DevicesOnline  int `json:"devices_online"`
+	DevicesPending int `json:"devices_pending"`
+	SourcesTotal   int `json:"sources_total"`
+	SourcesFailed  int `json:"sources_failed"`
+	PlaysToday     int `json:"plays_today"`
+}
+
+// Stats 聚合统计。在线判定：最近 90 秒内有心跳。
+func (s *Store) Stats(ctx context.Context) (*Stats, error) {
+	out := &Stats{}
+	row := s.db.QueryRowContext(ctx, `
+		SELECT
+			(SELECT COUNT(*) FROM channels),
+			(SELECT COUNT(*) FROM channels WHERE enabled=1),
+			(SELECT COUNT(*) FROM devices),
+			(SELECT COUNT(*) FROM devices WHERE status='bound' AND last_seen >= ?),
+			(SELECT COUNT(*) FROM devices WHERE status='pending'),
+			(SELECT COUNT(*) FROM sources),
+			(SELECT COUNT(*) FROM sources WHERE last_error <> ''),
+			(SELECT COUNT(*) FROM audit_logs WHERE action='play' AND created_at >= ?)
+	`, Now()-90, startOfToday())
+	if err := row.Scan(&out.ChannelsTotal, &out.ChannelsOn, &out.DevicesTotal,
+		&out.DevicesOnline, &out.DevicesPending, &out.SourcesTotal,
+		&out.SourcesFailed, &out.PlaysToday); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func startOfToday() int64 {
+	n := time.Now()
+	return time.Date(n.Year(), n.Month(), n.Day(), 0, 0, 0, 0, n.Location()).Unix()
 }
 
 // BatchChannels 批量操作：enable/disable/delete/set_group。

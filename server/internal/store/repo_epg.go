@@ -98,17 +98,36 @@ func (s *Store) ReplacePrograms(ctx context.Context, epgChannelID int64, progs [
 	return tx.Commit()
 }
 
-// ListEPGChannels 列出 EPG 频道（供映射界面）。
-func (s *Store) ListEPGChannels(ctx context.Context) ([]EPGChannel, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id,source_id,xmltv_id,display_name,icon FROM epg_channels ORDER BY display_name`)
+// EPGChannelView 是给「频道↔EPG 映射」界面用的视图结构。
+// 前端需要 name / source / program_count 才能画出可拖拽的双列界面。
+type EPGChannelView struct {
+	ID           int64  `json:"id"`
+	XmltvID      string `json:"xmltv_id"`
+	Name         string `json:"name"`
+	DisplayName  string `json:"display_name"`
+	Icon         string `json:"icon"`
+	Source       string `json:"source"`
+	SourceID     int64  `json:"source_id"`
+	ProgramCount int    `json:"program_count"`
+}
+
+// ListEPGChannels 列出 EPG 频道（供映射界面），带来源名与节目数量。
+func (s *Store) ListEPGChannels(ctx context.Context) ([]EPGChannelView, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT c.id, c.xmltv_id, COALESCE(NULLIF(c.display_name,''), c.xmltv_id), c.display_name, c.icon,
+		       COALESCE(s.name,''), c.source_id,
+		       (SELECT COUNT(*) FROM epg_programs p WHERE p.epg_channel_id = c.id)
+		FROM epg_channels c LEFT JOIN epg_sources s ON s.id = c.source_id
+		ORDER BY c.display_name, c.xmltv_id`)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	out := []EPGChannel{}
+	out := []EPGChannelView{}
 	for rows.Next() {
-		var v EPGChannel
-		if err := rows.Scan(&v.ID, &v.SourceID, &v.XmltvID, &v.DisplayName, &v.Icon); err != nil {
+		var v EPGChannelView
+		if err := rows.Scan(&v.ID, &v.XmltvID, &v.Name, &v.DisplayName, &v.Icon,
+			&v.Source, &v.SourceID, &v.ProgramCount); err != nil {
 			return nil, err
 		}
 		out = append(out, v)

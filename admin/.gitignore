@@ -2,6 +2,7 @@ node_modules
 dist
 dist-mock
 dist-ssr
+screenshots
 *.local
 .DS_Store
 npm-debug.log*

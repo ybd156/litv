@@ -110,6 +110,81 @@ src/
 | `#/devices` | 终端设备 | 设备列表、待批准审批、生成 6 位绑定码（大字 + 倒计时）、远程配置覆盖、吊销 |
 | `#/settings` | 系统设置 | 端口 / 并发上限 / 转码 / 日志级别 / EPG 刷新时间 / 局域网访问、版本信息、日志 200 行 |
 
+## 验收记录（实际执行）
+
+### 1. 构建
+
+```bash
+$ cd admin && npm install --registry=https://registry.npmmirror.com   # added 75 packages in 2m
+$ npm run build                                                        # vue-tsc --noEmit && vite build
+✓ 2762 modules transformed.
+dist/index.html                          0.69 kB │ gzip:   0.37 kB
+dist/assets/style-C8R0fTGW.css          19.54 kB │ gzip:   4.52 kB
+dist/assets/devices-DoVPddKw.js          0.48 kB │ gzip:   0.24 kB
+dist/assets/sources-d7WZyMkF.js          0.60 kB │ gzip:   0.32 kB
+dist/assets/channels-_wJE6tkV.js         0.97 kB │ gzip:   0.46 kB
+dist/assets/format-BaGDHYRF.js           1.48 kB │ gzip:   0.82 kB
+dist/assets/StateBlock-qdl0Ht0p.js       1.83 kB │ gzip:   0.96 kB
+dist/assets/DashboardView-CGQatuE-.js    6.86 kB │ gzip:   3.18 kB
+dist/assets/SettingsView-B9M_ylbc.js     8.23 kB │ gzip:   3.63 kB
+dist/assets/SourcesView-Jq4arZMu.js     11.23 kB │ gzip:   4.66 kB
+dist/assets/EpgView-D70YD7tK.js         11.43 kB │ gzip:   4.68 kB
+dist/assets/DevicesView-Bi-VvnEr.js     11.50 kB │ gzip:   4.90 kB
+dist/assets/ChannelsView-O4DlYfQt.js    17.72 kB │ gzip:   6.90 kB
+dist/assets/index-Yzw4Jq9q.js           36.31 kB │ gzip:  14.33 kB
+dist/assets/vendor-UP856KlM.js         106.86 kB │ gzip:  41.60 kB
+dist/assets/ui-C0pJ1cHt.js             673.06 kB │ gzip: 186.08 kB
+✓ built in 24.83s
+```
+
+零报错、零 warning（`chunkSizeWarningLimit` 已按 naive-ui 单块体积设定）。`dist/` 共 922 KB，
+全量 gzip 单流 **268,079 B ≈ 262 KB**，分文件相加约 278 KB，都在 400 KB 预算内。
+
+### 2. 静态服务 + curl
+
+```bash
+$ npx vite preview --outDir dist --port 4174
+$ curl -sS -o /dev/null -w "%{http_code}\n" http://127.0.0.1:4174/app/litv/
+200
+$ curl -sS http://127.0.0.1:4174/app/litv/ | grep -o '/app/litv/assets/[A-Za-z0-9_.-]*'
+/app/litv/assets/index-Yzw4Jq9q.js
+/app/litv/assets/vendor-UP856KlM.js
+/app/litv/assets/ui-C0pJ1cHt.js
+/app/litv/assets/style-C8R0fTGW.css
+# 四个资源全部 200
+```
+
+`index.html` 里所有资源路径都带 `/app/litv/` 前缀，子路径部署没问题。
+
+### 3. 页面渲染 / 交互（headless Chrome 实测）
+
+用 `chrome --headless=new --dump-dom` 和 CDP 驱动真实点击，在 `?mock=1` 下逐页验证：
+
+| 检查 | 结果 |
+|---|---|
+| `#/` 概览：4 张指标卡 + 最近活动 + 服务状态 | PASS |
+| `#/sources` 列表 + 「添加源」弹窗 → 填表保存 → 新源入列表 + toast | PASS |
+| `#/sources` 删除前弹出二次确认 | PASS |
+| `#/channels` 列表/分组侧栏/分页（共 51 个频道）/台标缩略图 | PASS |
+| `#/channels` 下移排序 → 调 reorder 接口 → toast「顺序已保存」→ 行序变化 | PASS |
+| `#/channels` 展开行 → 线路面板（含「加线路」输入框） | PASS |
+| `#/channels` 勾选两行 → 批量操作条「已选 2 个」 | PASS |
+| `#/epg` EPG 源列表 / 刷新 / 新增 | PASS |
+| `#/epg?tab=mapping` 点选左频道 + 点右侧 EPG → toast「已对应到…」 | PASS |
+| `#/devices` 生成绑定码弹窗：6 位大字 + 倒计时「有效期还剩 4:59」 | PASS |
+| `#/devices` 待批准卡片 + 批准/拒绝 | PASS |
+| `#/settings` 运行配置 / 版本信息 / 日志 200 行 | PASS |
+| `?mock=unauth` → 「请从飞牛桌面打开本应用」说明页 | PASS |
+| 不带 mock 的真实构建（无服务端）→ 「没连上 LITV 服务」+ 重试，不白屏 | PASS |
+
+截图见 `admin/screenshots/`（dashboard / sources / channels / epg / epg-mapping / devices / settings / 绑定码弹窗 / 二次确认）。
+
+### 4. 只靠代码评审、没做自动化交互的部分
+
+- 真实鼠标拖拽行排序（HTML5 `dragstart/dragover/drop`）：自动化里用等价的「下移」按钮走了同一条 reorder 链路，
+  拖拽本身没有在浏览器里真实拖过，需要在真机上手动点一遍确认手感。
+- 源「预览前 50 条」抽屉、编辑类弹窗的字段回填：逻辑简单，未逐个自动化。
+
 ## 对 API 契约的疑问（已按最合理方式先实现，服务端可据此调整）
 
 1. **`GET /system/me` 不在 01-API.md 里**。前端需要一个「我是谁」的接口来决定进管理台还是显示说明页，

@@ -1,99 +1,88 @@
-# iOS 端构建：现状与卡点（2026-11-02）
+# iOS 端构建：现状与卡点（2026-11-02 更新）
 
-> 目标：在 WSL 里用 xtool 产出**未签名** iOS `.ipa`，播放内核走 libmpv。
-> 结论：**当前环境被 xtool 自身的编译问题挡住**，需要换一条路。下面把已排除的和剩下的选项写清楚。
+> 目标：在 iOS 上用 **libmpv** 做播放内核，产出**未签名** `.ipa`。
+> 现状：**ipa 已经能出、App 已经能用**（AVPlayer 内核）；**libmpv 的交叉编译卡在依赖链第 4 层**。
 
 ---
 
-## 一、已确认可行的部分
+## 一、已经交付的
 
-| 环节 | 状态 | 证据 |
+| 项 | 状态 |
+|---|---|
+| SwiftUI 客户端 | ✅ 7 个 Swift 文件，绑定/首页/播放/EPG/设置 |
+| 未签名 ipa | ✅ `LITV-unsigned.ipa`（Mach-O arm64，无 `_CodeSignature`） |
+| 构建通路 | ✅ GitHub Actions `macos-latest` + xcodegen + xcodebuild |
+| 播放内核 | ✅ AVPlayer（HLS / H.264 / HEVC / AAC） |
+| 服务端配合 | ✅ 裸 TS 自动转封装成 HLS，iOS 能播任何源 |
+
+仓库：<https://github.com/ybd156/litv>
+
+## 二、libmpv 的依赖链（这是难点所在）
+
+mpv 不是一个能独立编的库，它要求一整条链：
+
+```
+mpv 0.35.1
+ ├── libass          （字幕，**无条件必需**，0.35 之后没有关闭开关）
+ │    ├── fribidi    （双向文本，必需）
+ │    └── freetype   （字体解析，必需）
+ ├── libplacebo      （0.36+ 变成无条件必需；0.35.1 可关）
+ └── FFmpeg
+      └── libuavs3d  （AVS3 解码，可选）
+```
+
+## 三、逐个攻克的进度
+
+| 库 | 状态 | 踩过的坑 |
 |---|---|---|
-| Swift 工具链 | ✅ | `swiftly` 装的 Swift 6.4.1，`swift --version` 正常 |
-| xtool 源码 | ✅ | GitHub 克隆成功（经 `gh-proxy.com` 镜像，直连大仓库会被 TLS 重置） |
-| SwiftPM 依赖 | ✅ | 20+ 个包全部拉取成功（swift-nio / OpenAPIKit / SwiftyMobileDevice …） |
-| libimobiledevice 头文件 | ✅ | 用 `apt-get download` + `dpkg-deb -x` 解到 `~/android-dev/sysroot`，无需 root |
-| C 模块编译 | ✅ | `swift build -Xcc -I$HOME/android-dev/sysroot/usr/include` 后，`libimobiledevice` 模块能过 |
+| **libuavs3d** | ✅ 编出来了 | ① CMake 4 拒绝 `cmake_minimum_required(<3.5)` → `-DCMAKE_POLICY_VERSION_MINIMUM=3.5`<br>② 默认还会编命令行程序 `uavs3dec`，iOS 下链接失败 → `--target uavs3d`<br>③ 不生成 `.pc` 文件，ffmpeg 找不到 → 手写 `uavs3d.pc`<br>④ `CMAKE_SYSTEM_PROCESSOR` 没设成 arm64，SIMD 汇编被跳过，留下未定义符号 → 显式指定 |
+| **FFmpeg** | ✅ 编出来了 | ffmpeg.org 在 CI 上常超时 → 换 GitHub 归档 |
+| **mpv** | ⏳ 卡在依赖 | 0.39 的 libplacebo 是硬依赖 → 降到 0.35.1；0.35.1 的 libass 又是硬依赖 |
+| **fribidi** | ❌ **当前卡点** | meson 交叉编译时把代码生成器 `gen-unicode-version` 当目标平台产物编，iOS 上失败；而它**没有 CMakeLists**（只有 meson + autotools） |
+| freetype | ⏳ 未开始 | — |
+| libass | ⏳ 未开始 | — |
 
-## 二、卡点（唯一的）
-
-编译 **XKit 目标**时报：
-
-```
-error closing '.../XKit-t.build/Objects-normal/x86_64/RCodesignSigner.o'
-for output: '...RCodesignSigner-<hash>.o.tmp => ...RCodesignSigner.o':
-No such file or directory
-```
-
-即：swift-frontend 把 `.o.tmp` 重命名为 `.o` 时目标目录"不存在"。
-`SwiftyMobileDevice` 等目标都能编过，只有 XKit 这一批集中失败。
-
-### 已排除的原因
-
-| 猜测 | 验证 | 结论 |
-|---|---|---|
-| 磁盘满 | `/tmp` tmpfs 15G 用 2.5G，`/` 912G 可用 | 否 |
-| inode 耗尽 | 使用率 7% | 否 |
-| 路径含 `/tmp` 导致截断 | 挪到 `~/xtool` 重建（清掉 module cache） | 否，同样报错 |
-| 并发过高 | `-j 4` 重试 | 否，同样报错 |
-| module cache 路径失效 | `rm -rf .build/out .build/artifacts` 后重建 | 否 |
-| C 头文件缺失 | 加 `-Xcc -I...`，单独用 clang 验证头文件可 include | 已解决，不是当前卡点 |
-
-### 最可能的原因（判断，未证实）
-
-**Swift 6.4.1 太新**。xtool 的 `Package.swift` 与构建脚本按 5.10~6.1 量级验证；
-6.4 的 SwiftPM 在多目标并行编译的产物落盘路径处理上有变化。
-社区也有人反馈 6.x 上 SwiftPM 偶发 `error closing ... .tmp => .o`。
-
-## 三、四条可选路径
-
-### A. 用 GitHub Actions 的 macOS runner 直接出 ipa（推荐）
-runner 本身就是 macOS + Xcode，**不需要 xtool**，也不需要 Linux 系统头文件。
-现有 `.github/workflows/ios-xcframework.yml` 已经能编 xcframework，
-再加一个 job 用 `xcodebuild` 把 SwiftUI 工程打成未签名 `.ipa` 即可。
-- 优点：绕开全部环境问题，一次配好长期可用
-- 代价：需要把 iOS 工程写成 Xcode 能认的结构（`project.yml` + xcodegen，或手写 pbxproj）
-
-### B. 在 WSL 里降到 Swift 6.0 / 5.10 再编 xtool
-`swiftly install 6.0` 即可（不需要 root）。预期能过，但：
-- 要重新下 500MB+ 工具链
-- 编过之后 `xtool setup` 还要下 Darwin SDK（约 2GB）
-- 依然可能踩新坑
-
-### C. 放弃 xtool，WSL 里只做"能编出 .app 目录"的最小验证
-用 `swiftc -target arm64-apple-ios14.0` 直接编单个 Swift 文件验证工具链，
-但产不出可安装的 ipa，实际价值有限。
-
-### D. iOS 端后置
-先把 Android 双端 + 服务端打磨到可用，iOS 等前两条路之一条件具备再做。
-
-## 四、无论走哪条路，iOS 端代码可以先写
-
-iOS 端的业务逻辑（API 客户端、频道模型、播放器抽象）与 Android 端高度同构，
-可以先按 SwiftUI 结构写好，等构建通路打通后直接编译。
-
-已规划的 iOS 结构：
+## 四、当前卡点的具体形态
 
 ```
-ios/
-├── LITVKit/            # SwiftPM 包（业务逻辑，可独立测试）
-│   ├── Sources/
-│   │   ├── LITVAPI/    # 与服务端 docs/design/01-API.md 对齐
-│   │   ├── LITVModel/  # Channel / EpgProgram / PlayInfo …
-│   │   └── LITVPlayer/ # AVPlayer 与 libmpv 的统一抽象
-└── LITVApp/            # SwiftUI 界面
-    └── Sources/        # 首页 / 播放页 / 设置
+FAILED: gen.tab/gen-unicode-version.p/gen-unicode-version.c.o
+ninja: build stopped: subcommand failed.
 ```
 
-`LITVPlayer` 的抽象与 Android 的 `PlayerEngine` 接口一一对应
-（`prepare/play/pause/release/stats`），后端换成 AVPlayer 或 libmpv 不影响上层。
+`gen-unicode-version` 是个**构建期工具**（在宿主上跑，生成 Unicode 表），
+meson 交叉编译时把它当成了 iOS 目标产物，于是链接失败。
 
-## 五、当前建议
+### 三条出路
 
-**走 A**。理由：
-1. WSL 里已经证明"能编 xcframework"，剩下的只是"把 xcframework 和 SwiftUI 一起打包"
-2. macOS runner 上没有 libimobiledevice / Swift 版本这些坑
-3. 你要求"不签名"——CI 产出未签名 ipa 正好，用户自己侧载
-4. 唯一成本是写一份 `project.yml`（xcodegen），一次性工作
+**A. 给 fribidi 打补丁**：在 CI 里 `sed` 它的 `meson.build`，给那个 executable 加 `native: true`。
+- 成本：一次 sed，但要知道确切写法
+- 风险：低
 
-如果坚持"全流程在 WSL"，就走 B，我可以在后台装 Swift 6.0 重试。
+**B. 用 autotools 编 fribidi**：`./autogen.sh && ./configure --host=arm64-apple-darwin`
+- 成本：需要 brew 装 autoconf/automake/libtool，CI 时间 +2 分钟
+- 风险：中（autotools 交叉编译要传一堆变量）
+
+**C. 换内核：用 MobileVLCKit 替代 libmpv**
+- CocoaPods 上有预编译 xcframework，直接链接，**完全跳过整条依赖链**
+- VLC 支持 AC3/EAC3/DTS/TS/AVS3(部分)，能力覆盖甚至比 mpv 更全
+- License：LGPL-2.1+（比 mpv 的 GPL 更宽松）
+- 代价：不是 mpv（你最初指定的），但**达成的目的完全一样**：补 AVPlayer 解不了的格式
+
+## 五、我的判断
+
+**推荐 C**。理由：
+
+1. 依赖链还有 3 层（fribidi → freetype → libass），每层都有各自的交叉编译坑，
+   已经花了 8 次 CI 迭代才推进到第 4 层
+2. 这条链的产物**只为了补 AC3/AVS3 这类少数格式**——正常 HLS 直播 AVPlayer 已经能播
+3. VLCKit 是预编译 xcframework，一次链接搞定，且能力不弱于 mpv
+4. 维护成本差一个数量级：自编 mpv 意味着每次 ffmpeg/mpv 安全更新都要重跑整条链
+
+如果坚持要 mpv，走 A（打补丁），我再试 2-3 轮应该能通。
+
+## 六、无论哪条路，这些已经沉淀下来了
+
+- `ios/native/build-xcframework-macos.sh` 里 uavs3d + FFmpeg 的 iOS 交叉编译是**可用的**，
+  将来要做任何 iOS 媒体相关的东西都能复用
+- `.github/workflows/ios-xcframework.yml` 的 CI 骨架可用
+- 四个"反常识"的坑都写在脚本注释里了

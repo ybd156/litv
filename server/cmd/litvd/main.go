@@ -18,6 +18,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -91,6 +92,27 @@ func main() {
 		})
 	}
 
+	// TCP 入口也要能接受带前缀的路径。
+	//
+	// 为什么：服务端下发给终端的播放地址里带 /app/litv 前缀（因为管理台在网关下），
+	// 但终端是直连 TCP 端口的。如果这里不剥前缀，终端拿到的
+	// http://ip:9527/app/litv/live/1/stream.ts 会落到静态处理器 → 返回首页 HTML，
+	// 表现就是"能播但一直黑屏/无数据"。e2e 测试抓到的就是这个。
+	stripIfPrefixed := func(prefix string, h http.Handler) http.Handler {
+		if prefix == "" {
+			return h
+		}
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if strings.HasPrefix(r.URL.Path, prefix+"/") {
+				r2 := r.Clone(r.Context())
+				r2.URL.Path = strings.TrimPrefix(r.URL.Path, prefix)
+				h.ServeHTTP(w, r2)
+				return
+			}
+			h.ServeHTTP(w, r)
+		})
+	}
+
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
@@ -100,7 +122,7 @@ func main() {
 	tcpAddr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)
 	tcpSrv := &http.Server{
 		Addr:              tcpAddr,
-		Handler:           rootHandler(false),
+		Handler:           stripIfPrefixed(cfg.Server.Prefix, rootHandler(false)),
 		ReadHeaderTimeout: 10 * time.Second,
 		// 直播流会长时间挂着，不设 WriteTimeout
 		IdleTimeout: 120 * time.Second,

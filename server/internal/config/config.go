@@ -5,6 +5,8 @@
 package config
 
 import (
+	"crypto/rand"
+	"encoding/base64"
 	"fmt"
 	"log/slog"
 	"os"
@@ -29,6 +31,13 @@ type Config struct {
 	Alert     Alert     `yaml:"alert"`
 	DLNA      DLNA      `yaml:"dlna"`
 	Log       Log       `yaml:"log"`
+
+	// 以下字段不写进 YAML，只用于运行期协作。
+	//
+	// SecretGenerated：本次密钥是运行时生成的，main 要负责写回磁盘。
+	// secretPersistPath：写回的目标文件。
+	SecretGenerated   bool   `yaml:"-"`
+	secretPersistPath string `yaml:"-"`
 }
 
 // Server 网络监听相关。
@@ -52,30 +61,30 @@ type Database struct {
 
 // Emergency sessions are deliberately separate from long-lived device tokens.
 const (
-	DefaultAdminTokenHours = 8
-	MaxAdminTokenHours = 168
+	DefaultAdminTokenHours  = 8
+	MaxAdminTokenHours      = 168
 	DefaultAdminMaxSessions = 16
-	MaxAdminSessions = 128
+	MaxAdminSessions        = 128
 )
 
 // Auth 鉴权配置。
 type Auth struct {
-	Secret        string `yaml:"secret"`         // 流地址签名密钥
-	AdminPassword string `yaml:"admin_password"` // 兜底管理密码（网关不可用时应急登录）
+	Secret           string `yaml:"secret"`             // 流地址签名密钥
+	AdminPassword    string `yaml:"admin_password"`     // 兜底管理密码（网关不可用时应急登录）
 	TokenHours       int    `yaml:"token_hours"`        // 兼容旧配置；普通设备 token 仍需显式吊销，不施加管理员 TTL
 	AdminTokenHours  int    `yaml:"admin_token_hours"`  // 应急管理员会话有效期（1..168 小时，默认 8）
 	AdminMaxSessions int    `yaml:"admin_max_sessions"` // 有效管理员会话上限（1..128，默认 16）
-	DevMode       bool   `yaml:"dev_mode"`       // 开发模式：无网关头时降级为本地管理员
+	DevMode          bool   `yaml:"dev_mode"`           // 开发模式：无网关头时降级为本地管理员
 }
 
 // Stream 流媒体转发配置。
 type Stream struct {
-	CacheDir      string `yaml:"cache_dir"`
-	MaxConcurrent int    `yaml:"max_concurrent"` // 最大并发流
-	BufferSize    int    `yaml:"buffer_size"`    // 上游读取块大小（字节）
-	RingSize      int    `yaml:"ring_size"`      // 每频道环形缓冲大小（字节），新客户端从这里起播
-	UserAgent     string `yaml:"user_agent"`
-	UpstreamTimeout int  `yaml:"upstream_timeout"` // 秒
+	CacheDir        string `yaml:"cache_dir"`
+	MaxConcurrent   int    `yaml:"max_concurrent"` // 最大并发流
+	BufferSize      int    `yaml:"buffer_size"`    // 上游读取块大小（字节）
+	RingSize        int    `yaml:"ring_size"`      // 每频道环形缓冲大小（字节），新客户端从这里起播
+	UserAgent       string `yaml:"user_agent"`
+	UpstreamTimeout int    `yaml:"upstream_timeout"` // 秒
 
 	// DirectEnabled 允许客户端直连上游源地址（不经过服务端中转）。
 	//
@@ -89,10 +98,10 @@ type Stream struct {
 
 // Transcode 转码配置。默认关闭——N100 上纯转发才省电。
 type Transcode struct {
-	Enabled   bool   `yaml:"enabled"`
-	FFmpeg    string `yaml:"ffmpeg"`
-	HWAccel   string `yaml:"hwaccel"` // qsv | vaapi | none
-	Preset    string `yaml:"preset"`
+	Enabled bool   `yaml:"enabled"`
+	FFmpeg  string `yaml:"ffmpeg"`
+	HWAccel string `yaml:"hwaccel"` // qsv | vaapi | none
+	Preset  string `yaml:"preset"`
 }
 
 // EPG 电子节目单配置。
@@ -119,10 +128,10 @@ type Probe struct {
 // 实现方式：扇出层（stream.Hub）读到的字节顺手 tee 一份到磁盘，
 // 所以只要有人看过这个台，就有回看缓冲——不需要额外开录制任务。
 type Timeshift struct {
-	Enabled      bool   `yaml:"enabled"`
-	Dir          string `yaml:"dir"`
-	SegmentMB    int    `yaml:"segment_mb"`    // 单段大小
-	MaxSegments  int    `yaml:"max_segments"`  // 最多保留几段
+	Enabled     bool   `yaml:"enabled"`
+	Dir         string `yaml:"dir"`
+	SegmentMB   int    `yaml:"segment_mb"`   // 单段大小
+	MaxSegments int    `yaml:"max_segments"` // 最多保留几段
 }
 
 // Remux 把裸 TS 转封装成 HLS 的配置。
@@ -165,10 +174,10 @@ type Record struct {
 // 家里电视某个台放不出来，用户不会去看管理台。
 // 与其让人自己发现，不如服务端主动推一条。
 type Alert struct {
-	Enabled     bool   `yaml:"enabled"`
-	WebhookURL  string `yaml:"webhook_url"`
-	ChatID      string `yaml:"chat_id"`       // Telegram 用
-	MinIntervalMin int `yaml:"min_interval_minutes"`
+	Enabled        bool   `yaml:"enabled"`
+	WebhookURL     string `yaml:"webhook_url"`
+	ChatID         string `yaml:"chat_id"` // Telegram 用
+	MinIntervalMin int    `yaml:"min_interval_minutes"`
 }
 
 // DLNA 局域网发现配置。
@@ -243,22 +252,38 @@ func Default() *Config {
 		Record: Record{Enabled: true},
 		Alert:  Alert{Enabled: false, MinIntervalMin: 30},
 		DLNA:   DLNA{Enabled: false, FriendlyName: "LITV 直播"},
-		Log: Log{Level: "info", MaxMB: 10},
+		Log:    Log{Level: "info", MaxMB: 10},
 	}
 }
 
 // Load 读取配置文件；文件不存在时返回默认配置（不报错，方便首次启动）。
 func Load(path string) (*Config, error) {
 	cfg := Default()
+	// 关键：**每一条返回路径**都要先 normalize 再 Validate。
+	//
+	// 以前这里是 `return cfg, nil`，直接返回未校验的默认值，
+	// 导致"配置路径写错/文件不存在"这种最常见的情况反而完全绕过校验，
+	// -check 也会假通过。默认值本身也要过一遍校验，口径才一致。
 	if path == "" {
 		path = DiscoverPath()
 	}
 	if path == "" {
+		cfg.normalize()
+		if err := cfg.Validate(); err != nil {
+			return nil, err
+		}
 		return cfg, nil
 	}
+	cfg.BindSecretPersistPath(path)
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
+			// 首次启动、配置文件尚未生成：可以用默认值跑，
+			// 但必须走同样的校验，不能因为"文件不存在"就跳过。
+			cfg.normalize()
+			if err := cfg.Validate(); err != nil {
+				return nil, err
+			}
 			return cfg, nil
 		}
 		return nil, fmt.Errorf("读取配置 %s 失败: %w", path, err)
@@ -333,22 +358,74 @@ func (c *Config) Validate() error {
 	if c.Stream.RingSize < 64*1024 {
 		c.Stream.RingSize = 2 * 1024 * 1024
 	}
-	if c.Auth.Secret == "" {
-		// 没配密钥就用一个进程级随机值：能用，但重启后旧签名 URL 失效。
+	if secretIsPlaceholder(c.Auth.Secret) {
+		// 占位值（changeme / 过短 / 空）等于没有密钥，必须换掉。
+		// 用 crypto/rand 生成，并由调用方持久化，避免每次重启都变
+		// （那样所有已发出的播放地址都会立刻失效）。
 		c.Auth.Secret = randomSecret()
+		if c.Auth.Secret == "" {
+			return fmt.Errorf("无法生成签名密钥：crypto/rand 不可用")
+		}
+		c.SecretGenerated = true
 	}
 	return nil
 }
 
-func randomSecret() string {
-	const alphabet = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-	b := make([]byte, 48)
-	seed := os.Getpid()
-	for i := range b {
-		seed = seed*1103515245 + 12345
-		b[i] = alphabet[(seed>>16)&0x7fffffff%len(alphabet)]
+// SecretGenerated 标记本次密钥是运行时生成的（原配置里没有或不可用）。
+//
+// main 看到这个标记要把配置写回磁盘，否则重启后密钥又变一遍，
+// 用户正在看的播放地址、客户端缓存的地址全部失效。
+func (c *Config) NeedsSecretPersist() bool { return c.SecretGenerated && c.secretPersistPath != "" }
+
+// BindSecretPersistPath 告诉配置"密钥需要写回哪个文件"。
+func (c *Config) BindSecretPersistPath(path string) { c.secretPersistPath = path }
+
+// PersistSecret 把当前密钥写回配置文件。
+func (c *Config) PersistSecret() error {
+	if c.secretPersistPath == "" {
+		return fmt.Errorf("未绑定配置路径，无法保存密钥")
 	}
-	return string(b)
+	if err := c.Save(c.secretPersistPath); err != nil {
+		return err
+	}
+	c.SecretGenerated = false
+	return nil
+}
+
+// randomSecret 生成流签名密钥。
+//
+// 必须用 crypto/rand：签名密钥决定流地址不可伪造，
+// 用 PID 做种子的线性同余发生器可以被离线推导——
+// 攻击者只要知道进程号范围，就能算出密钥并自行签发任意播放地址。
+func randomSecret() string {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		// 拿不到密码学随机源时不能悄悄降级成弱密钥：
+		// 返回空串，让调用方按"密钥缺失"处理（Validate 会据此报错）。
+		return ""
+	}
+	return base64.RawURLEncoding.EncodeToString(b)
+}
+
+// secretIsPlaceholder 判断密钥是否是明显的占位值。
+//
+// 用户可能从示例配置里复制了 "changeme" / "secret" 之类，
+// 这种值等于没有密钥，必须拒绝。
+func secretIsPlaceholder(v string) bool {
+	s := strings.ToLower(strings.TrimSpace(v))
+	if s == "" {
+		return true
+	}
+	for _, bad := range []string{
+		"changeme", "change-me", "secret", "password", "your-secret",
+		"your_secret", "xxx", "todo", "test", "example", "placeholder",
+	} {
+		if s == bad {
+			return true
+		}
+	}
+	// 长度过短同样视为不安全。
+	return len(s) < 16
 }
 
 // 日志级别的合法取值。管理台保存设置时按这张表校验。

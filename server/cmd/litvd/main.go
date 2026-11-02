@@ -74,6 +74,19 @@ func main() {
 		fmt.Println("配置校验通过")
 		return
 	}
+	// 密钥是本次运行时生成的（配置里没有或不可用），必须立刻写回磁盘。
+	//
+	// 不写回的话，每次重启都会换一把新密钥，所有已发出的播放地址立刻失效：
+	// 用户正在看的流会断，客户端缓存的地址会 403，看起来像"服务不稳定"。
+	// 这里失败不致命（还能继续跑），但要让用户知道原因。
+	if cfg.NeedsSecretPersist() {
+		if perr := cfg.PersistSecret(); perr != nil {
+			slog.Warn("签名密钥未能写回配置，重启后已发出的播放地址会失效",
+				"path", resolvedCfgPath, "err", perr)
+		} else {
+			slog.Info("已生成并保存签名密钥", "path", resolvedCfgPath)
+		}
+	}
 	if err := cfg.EnsureDirs(); err != nil {
 		slog.Error("目录初始化失败", "err", err)
 		os.Exit(1)
@@ -389,9 +402,10 @@ func isAPIPath(p string) bool {
 // listenWithFallback 先试配置端口，被占用就顺延，最多试 tries 次。
 //
 // 为什么不在端口被占时直接退出：
-//   NAS 上端口冲突太常见（用户自己装过别的东西、装了两份 LITV、
-//   系统服务恰好用了 9527……）。直接退出的话用户只看到"启动失败"，
-//   根本不知道换个端口就好。
+//
+//	NAS 上端口冲突太常见（用户自己装过别的东西、装了两份 LITV、
+//	系统服务恰好用了 9527……）。直接退出的话用户只看到"启动失败"，
+//	根本不知道换个端口就好。
 //
 // 只有「端口被占用」才顺延；权限不足之类的错误立即返回，别掩盖真正的问题。
 func listenWithFallback(host string, port, tries int) (net.Listener, int, error) {

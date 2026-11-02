@@ -59,7 +59,12 @@ class PhoneChannelAdapter(
 
         holder.itemView.setOnClickListener { onClick(ch) }
         holder.star.setOnClickListener { onStarClick(ch) }
-        loadLogo(holder.logo, ch.logo)
+        holder.tvNo.text = if (ch.number > 0) ch.number.toString() else (position + 1).toString()
+        // 台标：先摆首字方块兜底，图真加载出来了再盖掉（外链台标失败很常见）
+        holder.logo.setImageDrawable(null)
+        holder.logoText.text = ch.name.take(2)
+        holder.logoText.visibility = View.VISIBLE
+        if (ch.logo.isNotBlank()) loadLogo(holder.logo, ch.logo)
     }
 
     /** 加载台标。公开出来是为了让首页的「正在热播」大卡片复用同一个缓存。 */
@@ -93,6 +98,8 @@ class PhoneChannelAdapter(
     }
 
     class VH(v: View) : RecyclerView.ViewHolder(v) {
+        val tvNo: TextView = v.findViewById(R.id.tvNo)
+        val logoText: TextView = v.findViewById(R.id.logoText)
         val logo: ImageView = v.findViewById(R.id.logo)
         val name: TextView = v.findViewById(R.id.name)
         val now: TextView = v.findViewById(R.id.now)

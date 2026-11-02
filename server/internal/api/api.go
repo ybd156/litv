@@ -211,6 +211,13 @@ func (a *API) Handler(viaGateway bool) http.Handler {
 		// A8：导入本地 XMLTV
 		pr.Post("/api/v1/epg/import", a.importEPG)
 		pr.Get("/api/v1/epg/channels", a.listEPGChannels)
+		// D1–D5：EPG 运维。
+		// 这些是静态路径，必须注册在 /epg/{id} 之前，
+		// 否则 chi 会把 "stats" 当成频道 id 匹配掉。
+		pr.Get("/api/v1/epg/stats", a.epgStats)
+		pr.Post("/api/v1/epg/cleanup", a.epgCleanup)
+		pr.Get("/api/v1/epg/refresh-log", a.epgRefreshLog)
+		pr.Get("/api/v1/epg/search", a.epgSearch)
 		// 某个频道某天的节目单（管理台频道详情页用）。
 		// 复用 TV 端那个 handler：它只依赖频道 id 和 day，跟设备无关。
 		pr.Get("/api/v1/epg/{id}", a.tvEPG)

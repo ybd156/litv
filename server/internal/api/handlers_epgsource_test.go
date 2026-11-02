@@ -35,7 +35,7 @@ func TestListEPGSourcesReturnsUIFields(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("写节目失败: %v", err)
 	}
-	if err := a.st.MarkEPGAttempt(ctx, srcID, ""); err != nil {
+	if _, err := a.st.MarkEPGAttempt(ctx, srcID, ""); err != nil {
 		t.Fatalf("标记同步失败: %v", err)
 	}
 
@@ -85,7 +85,7 @@ func TestFailedSyncDoesNotOverwriteLastSuccess(t *testing.T) {
 		t.Fatalf("建源失败: %v", err)
 	}
 	// 先成功一次
-	if err := a.st.MarkEPGAttempt(ctx, srcID, ""); err != nil {
+	if _, err := a.st.MarkEPGAttempt(ctx, srcID, ""); err != nil {
 		t.Fatalf("标记成功失败: %v", err)
 	}
 	before := epgSourceRow(t, a, srcID)
@@ -95,7 +95,7 @@ func TestFailedSyncDoesNotOverwriteLastSuccess(t *testing.T) {
 	}
 
 	// 再失败一次
-	if err := a.st.MarkEPGAttempt(ctx, srcID, "拉取超时"); err != nil {
+	if _, err := a.st.MarkEPGAttempt(ctx, srcID, "拉取超时"); err != nil {
 		t.Fatalf("标记失败失败: %v", err)
 	}
 	after := epgSourceRow(t, a, srcID)

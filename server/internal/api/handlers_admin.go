@@ -809,11 +809,8 @@ func (a *API) refreshEPGSource(w http.ResponseWriter, r *http.Request) {
 		fail(w, http.StatusInternalServerError, 5001, err.Error())
 		return
 	}
-	if !res.OK {
-		// 刷新失败不是 5xx：源本身有问题，返回 200 带明细让界面展示原因
-		ok(w, res)
-		return
-	}
+	// 刷新失败不是 5xx：源本身有问题，返回 200 带明细让界面展示原因
+	a.auditEPGRefresh(r, "one", []EPGRefreshResult{res})
 	ok(w, res)
 }
 
@@ -902,7 +899,9 @@ func (a *API) listEPGChannels(w http.ResponseWriter, r *http.Request) {
 func (a *API) refreshEPG(w http.ResponseWriter, r *http.Request) {
 	// 统一走 RefreshAllEPG：调度器（A1）与手动刷新共用同一套逻辑
 	// （重试、UA/Referer、体积上限、优先级、明细），避免两条路径行为漂移。
-	ok(w, a.RefreshAllEPG(r.Context()))
+	results := a.RefreshAllEPG(r.Context())
+	a.auditEPGRefresh(r, "all", results)
+	ok(w, results)
 }
 
 // ---------- 设备 ----------

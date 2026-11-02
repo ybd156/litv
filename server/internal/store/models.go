@@ -128,6 +128,8 @@ type EPGSource struct {
 	// LastAttempt 上次**尝试**同步的时间（不论成败）。
 	LastAttempt int64  `json:"last_attempt"`
 	LastError   string `json:"last_error"`
+	// FailStreak 连续失败次数（成功后清零）。用于"连续失败 N 次告警"。
+	FailStreak int `json:"fail_streak"`
 }
 
 // EPGChannel 是 XMLTV 里的频道。

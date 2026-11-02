@@ -9,7 +9,7 @@ import (
 // ---------- EPG sources ----------
 
 // epgSourceCols 是查询 EPG 源的统一列清单，避免各处 SELECT 漂移。
-const epgSourceCols = `id,name,url,enabled,priority,user_agent,referer,kind,last_sync,last_attempt,last_error`
+const epgSourceCols = `id,name,url,enabled,priority,user_agent,referer,kind,last_sync,last_attempt,last_error,fail_streak`
 
 func scanEPGSource(sc interface {
 	Scan(dest ...any) error
@@ -17,7 +17,7 @@ func scanEPGSource(sc interface {
 	var v EPGSource
 	var en int
 	err := sc.Scan(&v.ID, &v.Name, &v.URL, &en, &v.Priority, &v.UserAgent, &v.Referer,
-		&v.Kind, &v.LastSync, &v.LastAttempt, &v.LastError)
+		&v.Kind, &v.LastSync, &v.LastAttempt, &v.LastError, &v.FailStreak)
 	v.Enabled = en != 0
 	return v, err
 }
@@ -116,7 +116,8 @@ func (s *Store) DeleteEPGSource(ctx context.Context, id int64) error {
 
 // MarkEPGSynced 记录同步结果（保留旧名字，转调 MarkEPGAttempt）。
 func (s *Store) MarkEPGSynced(ctx context.Context, id int64, errMsg string) error {
-	return s.MarkEPGAttempt(ctx, id, errMsg)
+	_, err := s.MarkEPGAttempt(ctx, id, errMsg)
+	return err
 }
 
 // MarkEPGAttempt 记录一次同步尝试。
@@ -128,18 +129,26 @@ func (s *Store) MarkEPGSynced(ctx context.Context, id int64, errMsg string) erro
 // 以前不分成败，一律把 last_sync 写成当前时间，于是界面上「上次刷新」
 // 在失败后照样显示成刚刷新过，而错误信息又没被展示出来——
 // 用户看到的是「一切正常，但节目单是空的」。
-func (s *Store) MarkEPGAttempt(ctx context.Context, id int64, errMsg string) error {
+func (s *Store) MarkEPGAttempt(ctx context.Context, id int64, errMsg string) (int, error) {
 	now := Now()
 	if errMsg == "" {
+		// 成功：清空连续失败计数
 		_, err := s.db.ExecContext(ctx,
-			`UPDATE epg_sources SET last_attempt=?, last_sync=?, last_error='' WHERE id=?`,
+			`UPDATE epg_sources SET last_attempt=?, last_sync=?, last_error='', fail_streak=0 WHERE id=?`,
 			now, now, id)
-		return err
+		return 0, err
 	}
-	_, err := s.db.ExecContext(ctx,
-		`UPDATE epg_sources SET last_attempt=?, last_error=? WHERE id=?`,
-		now, errMsg, id)
-	return err
+	// 失败：累加连续失败次数，供"连续失败 N 次告警"判断
+	if _, err := s.db.ExecContext(ctx,
+		`UPDATE epg_sources SET last_attempt=?, last_error=?, fail_streak=fail_streak+1 WHERE id=?`,
+		now, errMsg, id); err != nil {
+		return 0, err
+	}
+	var streak int
+	if err := s.db.QueryRowContext(ctx, `SELECT fail_streak FROM epg_sources WHERE id=?`, id).Scan(&streak); err != nil {
+		return 0, err
+	}
+	return streak, nil
 }
 
 // EPGSourceStat 是一个 EPG 源的规模统计。

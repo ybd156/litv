@@ -68,8 +68,9 @@ func (a *API) refreshOneEPGSource(ctx context.Context, src store.EPGSource) EPGR
 	if err != nil {
 		res.Error = err.Error()
 		res.ElapsedMs = time.Since(start).Milliseconds()
-		_ = a.st.MarkEPGAttempt(ctx, src.ID, res.Error)
-		slog.Warn("EPG 拉取失败", "source", src.Name, "err", err)
+		streak, _ := a.st.MarkEPGAttempt(ctx, src.ID, res.Error)
+		slog.Warn("EPG 拉取失败", "source", src.Name, "err", err, "streak", streak)
+		a.alertEPGFailure(src, streak, res.Error)
 		return res
 	}
 
@@ -77,8 +78,9 @@ func (a *API) refreshOneEPGSource(ctx context.Context, src store.EPGSource) EPGR
 	if perr != nil && (parsed == nil || len(parsed.Programmes) == 0) {
 		res.Error = perr.Error()
 		res.ElapsedMs = time.Since(start).Milliseconds()
-		_ = a.st.MarkEPGAttempt(ctx, src.ID, res.Error)
-		slog.Warn("EPG 解析失败", "source", src.Name, "err", perr)
+		streak, _ := a.st.MarkEPGAttempt(ctx, src.ID, res.Error)
+		slog.Warn("EPG 解析失败", "source", src.Name, "err", perr, "streak", streak)
+		a.alertEPGFailure(src, streak, res.Error)
 		return res
 	}
 	if perr != nil {
@@ -113,7 +115,7 @@ func (a *API) refreshOneEPGSource(ctx context.Context, src store.EPGSource) EPGR
 	res.Channels = len(parsed.Channels)
 	res.OK = true
 	res.ElapsedMs = time.Since(start).Milliseconds()
-	_ = a.st.MarkEPGAttempt(ctx, src.ID, "")
+	_, _ = a.st.MarkEPGAttempt(ctx, src.ID, "")
 	slog.Info("EPG 同步完成",
 		"source", src.Name, "channels", res.Channels, "programs", res.Programs, "ms", res.ElapsedMs)
 	return res
@@ -175,3 +177,24 @@ func (a *API) fetchEPGBody(ctx context.Context, src store.EPGSource) ([]byte, er
 
 // errEPGNotFound 便于 handler 区分「源不存在」。
 var errEPGNotFound = errors.New("EPG 源不存在")
+
+// epgAlertStreakThreshold 连续失败多少次才告警。
+//
+// 取 3 而不是 1：EPG 源偶发超时很常见，一次失败就推消息会变成骚扰，
+// 用户很快就会把通知关掉，真正出问题时反而收不到。
+const epgAlertStreakThreshold = 3
+
+// alertEPGFailure 在源连续失败到阈值时发一条告警（D4）。
+//
+// 复用 alert.Notifier：它自带 30 分钟去重，所以即使定时任务每小时都失败，
+// 也不会把用户刷屏。a.alert 可能为 nil（未配置告警），此时静默跳过。
+func (a *API) alertEPGFailure(src store.EPGSource, streak int, msg string) {
+	if a.alert == nil || streak < epgAlertStreakThreshold {
+		return
+	}
+	_ = a.alert.Send(
+		"epg-source-"+fmt.Sprint(src.ID),
+		fmt.Sprintf("LITV：EPG 源「%s」连续 %d 次刷新失败", src.Name, streak),
+		fmt.Sprintf("最近一次错误：%s\n地址：%s\n请在管理台「EPG 源」页检查地址或网络。", msg, src.URL),
+	)
+}

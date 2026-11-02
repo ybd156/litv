@@ -256,6 +256,8 @@ func (s *Store) migrate(ctx context.Context) error {
 		`ALTER TABLE epg_sources ADD COLUMN user_agent TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE epg_sources ADD COLUMN referer TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE epg_sources ADD COLUMN kind TEXT NOT NULL DEFAULT 'url'`,
+		// D4：连续失败次数。成功清零，失败累加；到阈值就发告警。
+		`ALTER TABLE epg_sources ADD COLUMN fail_streak INTEGER NOT NULL DEFAULT 0`,
 	} {
 		if _, err := s.db.ExecContext(ctx, stmt); err != nil &&
 			!strings.Contains(strings.ToLower(err.Error()), "duplicate column") {

@@ -36,6 +36,10 @@ const loading = ref(false)
 const error = ref('')
 const loaded = ref(false)
 
+// B05：查询代号。快速切分组/翻页/搜索时，先发出的查询可能后返回，
+// 把界面覆盖成上一次的结果。响应回来时对不上号就丢弃。
+let queryGeneration = 0
+
 const group = ref('')
 const keyword = ref('')
 const page = ref(1)
@@ -90,6 +94,11 @@ async function loadSources(): Promise<void> {
 }
 
 async function loadChannels(silent = false): Promise<void> {
+  // B05：查询序列保护。
+  //
+  // 快速连续切分组/翻页/改关键词时，先发出的查询可能后返回，
+  // 把界面覆盖成上一次的结果——用户看到"切了分组但列表没变"。
+  const gen = ++queryGeneration
   loading.value = true
   if (!silent) error.value = ''
   try {
@@ -100,14 +109,17 @@ async function loadChannels(silent = false): Promise<void> {
       page: page.value,
       size: pageSize.value,
     })
+    // 过期响应：不要动 rows/total/error，也别关 loading（那是新请求的事）
+    if (gen !== queryGeneration) return
     rows.value = res.items
     total.value = res.total
     loaded.value = true
     error.value = ''
   } catch (e) {
+    if (gen !== queryGeneration) return
     error.value = toErrorMessage(e)
   } finally {
-    loading.value = false
+    if (gen === queryGeneration) loading.value = false
   }
 }
 

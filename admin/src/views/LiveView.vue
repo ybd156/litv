@@ -46,6 +46,10 @@ const videoEl = ref<HTMLVideoElement | null>(null)
 const stageEl = ref<HTMLElement | null>(null)
 const hls = shallowRef<Hls | null>(null)
 
+// B05：播放请求的代号。每点一次台就 +1，响应回来时对不上号就丢弃。
+// 用一个普通变量而不是 ref：它只用于判定"这份响应是否还有效"，不需要响应式。
+let playGeneration = 0
+
 const filtered = computed(() => {
   const k = keyword.value.trim().toLowerCase()
   if (!k) return channels.value
@@ -90,12 +94,20 @@ function destroyPlayer() {
 }
 
 async function play(ch: Channel) {
+  // B05：请求序列保护。
+  //
+  // 连续点 A、B 时，A 的响应可能比 B 晚到（服务端要拉上游清单），
+  // 后到的旧响应会把新选的频道覆盖掉——用户看到的是"点 B 却放了 A"。
+  // 每发起一次播放就递增 generation，回来时对不上号就直接丢弃。
+  const gen = ++playGeneration
   playing.value = ch
   playError.value = ''
   destroyPlayer()
 
   try {
     const info = await request<WebPlay>(`/web/play/${ch.id}`)
+    // 回来时已经切到别的台了：这份响应作废，绝不能碰播放器。
+    if (gen !== playGeneration) return
     const el = videoEl.value
     if (!el) return
 
@@ -109,6 +121,11 @@ async function play(ch: Channel) {
       })
       h.on(Hls.Events.ERROR, (_evt, data) => {
         if (!data.fatal) return
+        // 已经切台了：这个实例的报错不该影响当前画面
+        if (gen !== playGeneration) {
+          h.destroy()
+          return
+        }
         switch (data.type) {
           case Hls.ErrorTypes.NETWORK_ERROR:
             h.startLoad()
@@ -122,6 +139,7 @@ async function play(ch: Channel) {
         }
       })
       h.on(Hls.Events.MANIFEST_PARSED, () => {
+        if (gen !== playGeneration) return
         el.play().catch(() => {
           /* 浏览器可能要求先点一下，忽略 */
         })
@@ -136,6 +154,8 @@ async function play(ch: Channel) {
       playError.value = '这个浏览器不支持 HLS 播放'
     }
   } catch (e) {
+    // 失败也可能是过期的：别让旧请求的错误覆盖新台的状态
+    if (gen !== playGeneration) return
     playError.value = e instanceof Error ? e.message : '获取播放地址失败'
   }
 }

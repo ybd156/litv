@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/litv/litv/server/internal/config"
 	"github.com/litv/litv/server/internal/epg"
 	"github.com/litv/litv/server/internal/fetch"
 	"github.com/litv/litv/server/internal/parse"
@@ -119,17 +120,47 @@ func epgRefreshHour(cron string) int {
 }
 
 func (a *API) putConfig(w http.ResponseWriter, r *http.Request) {
+	// 字段必须与管理台 SettingsView 实际提交的 payload 对齐。
+	// 之前这里只认 3 个字段，而 decode() 开了 DisallowUnknownFields，
+	// 导致页面每次点「保存」都收到 400。
 	var body struct {
-		MaxConcurrent    *int  `json:"max_concurrent"`
-		Transcode        *bool `json:"transcode"`
-		TranscodeEnabled *bool `json:"transcode_enabled"`
+		Port             *int    `json:"port"`
+		MaxConcurrent    *int    `json:"max_concurrent"`
+		Transcode        *bool   `json:"transcode"`
+		TranscodeEnabled *bool   `json:"transcode_enabled"`
+		LogLevel         *string `json:"log_level"`
+		EPGRefreshHour   *int    `json:"epg_refresh_hour"`
+		AllowLAN         *bool   `json:"allow_lan"`
 	}
 	if err := decode(r, &body); err != nil {
 		fail(w, http.StatusBadRequest, 1001, "参数错误: "+err.Error())
 		return
 	}
-	// M1：运行期可改的只有这几项；改端口需要写配置文件 + 重启，放到后续版本
-	if body.MaxConcurrent != nil && *body.MaxConcurrent > 0 {
+
+	// 先整体校验，任一字段不合法就整体拒绝——不要出现"保存了一半"的配置。
+	if body.Port != nil && (*body.Port < 1 || *body.Port > 65535) {
+		fail(w, http.StatusBadRequest, 1001, "端口要在 1~65535 之间")
+		return
+	}
+	if body.MaxConcurrent != nil && (*body.MaxConcurrent < 1 || *body.MaxConcurrent > 1000) {
+		fail(w, http.StatusBadRequest, 1001, "最大并发流要在 1~1000 之间")
+		return
+	}
+	if body.EPGRefreshHour != nil && (*body.EPGRefreshHour < 0 || *body.EPGRefreshHour > 23) {
+		fail(w, http.StatusBadRequest, 1001, "EPG 刷新时间要在 0~23 点之间")
+		return
+	}
+	if body.LogLevel != nil && config.NormalizeLogLevel(*body.LogLevel) == "" {
+		fail(w, http.StatusBadRequest, 1001, "日志级别只能是 debug/info/warn/error")
+		return
+	}
+
+	// 记录改前的值，用于判断哪些需要重启才生效。
+	oldPort := a.cfg.Server.Port
+	oldHost := a.cfg.Server.Host
+	oldEPGCron := a.cfg.EPG.RefreshCron
+
+	if body.MaxConcurrent != nil {
 		a.cfg.Stream.MaxConcurrent = *body.MaxConcurrent
 	}
 	// 两个字段名同义，前端用 transcode_enabled，老客户端用 transcode
@@ -138,8 +169,53 @@ func (a *API) putConfig(w http.ResponseWriter, r *http.Request) {
 	} else if body.Transcode != nil {
 		a.cfg.Transcode.Enabled = *body.Transcode
 	}
-	a.st.Audit(r.Context(), 0, "config.update", "system", "", r.RemoteAddr)
-	ok(w, map[string]any{"saved": true, "note": "端口等配置需修改 config.yaml 后重启生效"})
+	if body.Port != nil {
+		a.cfg.Server.Port = *body.Port
+	}
+	if body.AllowLAN != nil {
+		if *body.AllowLAN {
+			a.cfg.Server.Host = "0.0.0.0"
+		} else {
+			a.cfg.Server.Host = "127.0.0.1"
+		}
+	}
+	if body.EPGRefreshHour != nil {
+		// cron 是 "分 时 日 月 周"；管理台只给一个整点，这里固定为整点触发。
+		a.cfg.EPG.RefreshCron = fmt.Sprintf("0 %d * * *", *body.EPGRefreshHour)
+	}
+	if body.LogLevel != nil {
+		lv := config.NormalizeLogLevel(*body.LogLevel)
+		a.cfg.Log.Level = lv
+		// 日志级别是少数能在运行期真正生效的项。
+		config.SetLogLevel(lv)
+	}
+
+	// 校验通过的配置要真正落盘，否则重启后全部丢失（这是之前的另一个缺陷）。
+	if err := a.cfg.Save(a.cfgPath); err != nil {
+		// 落盘失败就不要继续声称已保存：内存里改了但文件没改，
+		// 重启后会出现"设置看起来成功、实际回滚"的诡异状态。
+		fail(w, http.StatusInternalServerError, 5001, "保存配置失败: "+err.Error())
+		return
+	}
+
+	// 明确告诉前端哪些字段需要重启，不要用"保存成功"含糊带过。
+	restartNeeded := []string{}
+	if body.Port != nil && *body.Port != oldPort {
+		restartNeeded = append(restartNeeded, "port")
+	}
+	if body.AllowLAN != nil && a.cfg.Server.Host != oldHost {
+		restartNeeded = append(restartNeeded, "allow_lan")
+	}
+	if body.EPGRefreshHour != nil && a.cfg.EPG.RefreshCron != oldEPGCron {
+		restartNeeded = append(restartNeeded, "epg_refresh_hour")
+	}
+
+	a.st.Audit(r.Context(), 0, "config.update", "system", strings.Join(restartNeeded, ","), r.RemoteAddr)
+	ok(w, map[string]any{
+		"saved":          true,
+		"restart_needed": restartNeeded,
+		"note":           "已写入配置文件；端口与局域网访问需重启服务后生效",
+	})
 }
 
 func (a *API) activeStreams(w http.ResponseWriter, r *http.Request) {

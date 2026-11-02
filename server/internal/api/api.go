@@ -58,6 +58,13 @@ type API struct {
 	ffmpegPath string
 	startAt time.Time
 	version string
+
+	// cfgPath 是配置文件的真实路径（由 main 注入）。
+	//
+	// 管理台保存设置时要写回这个文件。路径不能靠 DiscoverPath 反推：
+	// 启动时可能是用 -config 显式指定的，反推会写到别的文件去，
+	// 表现就是"保存成功但重启后设置没了"。
+	cfgPath string
 }
 
 // New 创建 API。
@@ -103,6 +110,9 @@ func (a *API) SetRuntime(actualPort int, ffmpegPath string) {
 	a.actualPort = actualPort
 	a.ffmpegPath = ffmpegPath
 }
+
+// SetConfigPath 注入真实配置文件路径，供管理台保存设置时写回。
+func (a *API) SetConfigPath(path string) { a.cfgPath = path }
 
 // DLNASource 返回 DLNA 需要的数据源适配器。
 func (a *API) DLNASource() dlna.ChannelSource { return dlnaSource{a: a} }

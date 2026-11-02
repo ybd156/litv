@@ -6,6 +6,7 @@ package config
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -348,6 +349,115 @@ func randomSecret() string {
 		b[i] = alphabet[(seed>>16)&0x7fffffff%len(alphabet)]
 	}
 	return string(b)
+}
+
+// 日志级别的合法取值。管理台保存设置时按这张表校验。
+var allowedLogLevels = map[string]bool{
+	"debug": true,
+	"info":  true,
+	"warn":  true,
+	"error": true,
+}
+
+// NormalizeLogLevel 把任意大小写的级别归一化；不合法时返回空串。
+func NormalizeLogLevel(v string) string {
+	s := strings.ToLower(strings.TrimSpace(v))
+	if !allowedLogLevels[s] {
+		return ""
+	}
+	return s
+}
+
+// SlogLevel 把配置里的日志级别转成 slog.Level。
+func SlogLevel(v string) slog.Level {
+	switch NormalizeLogLevel(v) {
+	case "debug":
+		return slog.LevelDebug
+	case "warn":
+		return slog.LevelWarn
+	case "error":
+		return slog.LevelError
+	default:
+		return slog.LevelInfo
+	}
+}
+
+// 日志级别运行期可调：管理台保存设置后要用新级别继续输出，
+// 而 slog 默认 handler 的级别是建的时候就定死的。
+// 用 LevelVar 才能在不重建 handler 的前提下切级别。
+var logLevelVar slog.LevelVar
+
+// InstallLogger 用当前配置的级别安装全局 slog handler。
+//
+// 只装一次；之后再调用只会调整级别。这样管理台改 log_level 能立即生效，
+// 不需要重启服务（重启才生效的字段会在响应里明确标出来）。
+func InstallLogger(level string) {
+	logLevelVar.Set(SlogLevel(level))
+	h := slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: &logLevelVar})
+	slog.SetDefault(slog.New(h))
+}
+
+// SetLogLevel 运行期切换日志级别，返回是否接受该值。
+func SetLogLevel(level string) bool {
+	n := NormalizeLogLevel(level)
+	if n == "" {
+		return false
+	}
+	logLevelVar.Set(SlogLevel(n))
+	return true
+}
+
+// Save 把配置写回 YAML 文件。
+//
+// 写入前先在目标目录建临时文件再原子 rename，避免写一半断电留下破损配置
+// （fnOS 上服务起不来时，用户几乎没有办法自己修）。
+func (c *Config) Save(path string) error {
+	if path == "" {
+		return fmt.Errorf("配置路径为空，无法保存")
+	}
+	data, err := yaml.Marshal(c)
+	if err != nil {
+		return fmt.Errorf("序列化配置失败: %w", err)
+	}
+	dir := filepath.Dir(path)
+	tmp, err := os.CreateTemp(dir, ".config-*.yaml")
+	if err != nil {
+		return fmt.Errorf("创建临时配置文件失败: %w", err)
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName)
+
+	// 配置里可能有管理密码和签名密钥，权限必须收紧。
+	if err := tmp.Chmod(0o600); err != nil {
+		tmp.Close()
+		return fmt.Errorf("设置配置文件权限失败: %w", err)
+	}
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return fmt.Errorf("写入配置失败: %w", err)
+	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return fmt.Errorf("同步配置失败: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("关闭临时配置文件失败: %w", err)
+	}
+	if err := os.Rename(tmpName, path); err != nil {
+		return fmt.Errorf("替换配置文件失败: %w", err)
+	}
+	return nil
+}
+
+// MustLoadForTest 供测试读取配置；失败直接 panic，避免测试里充斥错误处理。
+//
+// 放在非 test 文件里是因为要被 api 包的测试跨包调用。
+func MustLoadForTest(t interface{ Fatalf(string, ...any) }, path string) *Config {
+	c, err := Load(path)
+	if err != nil {
+		t.Fatalf("加载配置 %s 失败: %v", path, err)
+	}
+	return c
 }
 
 // EnsureDirs 创建运行所需目录。

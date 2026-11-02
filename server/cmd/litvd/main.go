@@ -54,7 +54,18 @@ func main() {
 
 	setupLogger()
 
-	cfg, err := config.Load(*cfgPath)
+	// 配置路径要先确定下来，管理台保存设置时要写回这个文件。
+	// 没有显式 -config 时用 DiscoverPath，仍找不到就落到默认位置，
+	// 保证"首次安装、配置文件还不存在"时保存也能写出一个文件。
+	resolvedCfgPath := *cfgPath
+	if resolvedCfgPath == "" {
+		resolvedCfgPath = config.DiscoverPath()
+	}
+	if resolvedCfgPath == "" {
+		resolvedCfgPath = "config.yaml"
+	}
+
+	cfg, err := config.Load(resolvedCfgPath)
 	if err != nil {
 		slog.Error("配置加载失败", "err", err)
 		os.Exit(1)
@@ -100,6 +111,8 @@ func main() {
 
 	a := api.New(cfg, st, hub, version)
 	a.SetTimeshift(tsMgr)
+	// 管理台保存设置要写回真实配置文件，不能靠猜。
+	a.SetConfigPath(resolvedCfgPath)
 
 	// 裸 TS → HLS 转封装（给 iOS 和只认 HLS 的播放器）
 	rxDir := cfg.Remux.Dir
@@ -422,15 +435,6 @@ func writePortFile(cfgPath string, port int) {
 }
 
 func setupLogger() {
-	level := slog.LevelInfo
-	switch os.Getenv("LITV_LOG_LEVEL") {
-	case "debug":
-		level = slog.LevelDebug
-	case "warn":
-		level = slog.LevelWarn
-	case "error":
-		level = slog.LevelError
-	}
-	h := slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: level})
-	slog.SetDefault(slog.New(h))
+	// 级别用 LevelVar 持有：管理台改 log_level 后能立即生效，不必重启。
+	config.InstallLogger(os.Getenv("LITV_LOG_LEVEL"))
 }

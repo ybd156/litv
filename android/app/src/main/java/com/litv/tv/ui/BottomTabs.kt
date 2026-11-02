@@ -37,8 +37,8 @@ object BottomTabs {
         tabs[current]?.setTextColor(accent)
         tabs.filterKeys { it != current }.values.forEach { it?.setTextColor(dim) }
 
-        tabs[TAB_PLAY]?.setOnClickListener { backToHome(activity) }
-        tabs[TAB_CHANNEL]?.setOnClickListener { backToHome(activity) }
+        tabs[TAB_PLAY]?.setOnClickListener { backToHome(activity, TAB_PLAY) }
+        tabs[TAB_CHANNEL]?.setOnClickListener { backToHome(activity, TAB_CHANNEL) }
         tabs[TAB_REMOTE]?.setOnClickListener {
             if (current == TAB_REMOTE) return@setOnClickListener
             activity.startActivity(Intent(activity, RemoteActivity::class.java))
@@ -54,13 +54,16 @@ object BottomTabs {
     }
 
     /**
-     * 回首页。
+     * 回首页，并指定要落在哪个 Tab。
      *
-     * 首页可能是 HomeActivity（电视）或 PhoneHomeActivity（手机），
-     * 直接 finish 回到栈里的那个即可——不要重新 startActivity，
-     * 否则会多开一层。
+     * 只 finish 是不够的：首页按"上次停留的 Tab"恢复，于是用户在设置页
+     * 点「频道」，回到首页看到的却是上次那个 Tab（比如播放），
+     * 看起来就像"点了频道却跳到别的页"。
+     *
+     * 这里把目标 Tab 写进 prefs，首页 onResume 读它来决定显示哪个面板。
      */
-    private fun backToHome(activity: Activity) {
+    private fun backToHome(activity: Activity, tab: String) {
+        (activity.application as? com.litv.tv.LitvApp)?.prefs?.lastTab = tab
         activity.finish()
         activity.noTransition()
     }

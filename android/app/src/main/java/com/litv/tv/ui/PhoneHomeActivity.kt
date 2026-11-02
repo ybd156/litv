@@ -515,7 +515,8 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
         super.onResume()
         // 从遥控器/设置返回时重新应用一次当前 Tab，
         // 避免两个面板的可见性因为重建而错乱
-        if (::panelPlay.isInitialized) switchTab(currentTab)
+        // 以 prefs 为准：别的页面（遥控器/设置）可能改过目标 Tab
+        if (::panelPlay.isInitialized) switchTab(app.prefs.lastTab)
         if (::adapter.isInitialized && all.isNotEmpty()) load()
     }
 

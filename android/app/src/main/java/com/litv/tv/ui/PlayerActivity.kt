@@ -494,6 +494,20 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
                 // 要求 Referer / Origin 校验的源，只带 UA 会直接 403。
                 val headers = info.playHeaders("LITV/1.0 (Android TV)")
                 val abs = app.api.absolute(info.url)
+
+                // 时钟偏移检查：签名地址的过期时间是服务端按**自己的时钟**算的。
+                // 如果设备时间比服务器快，地址拿到手就已经过期，服务端会 403，
+                // 三个内核全部起不来——表现就是"所有播放内核都无法播放"。
+                // 这种情况换内核、换线路都没用，必须校准时间。
+                val nowSec = System.currentTimeMillis() / 1000
+                if (info.expires in 1 until nowSec) {
+                    val skewMin = (nowSec - info.expires) / 60
+                    loading.visibility = View.GONE
+                    switchTip.text = "设备时间比服务器快约 ${skewMin} 分钟，播放地址已过期，请校准时间"
+                    switchTip.visibility = View.VISIBLE
+                    toastTip("请在系统设置里开启自动校准时间")
+                    return@play
+                }
                 Log.i(TAG, "play 返回: mode=${info.mode} kind=${info.kind} 请求头=${headers.keys}")
                 Log.i(TAG, "实际播放地址: ${abs.take(160)}")
                 player.play(ch.id, abs, headers, app.prefs.engine)

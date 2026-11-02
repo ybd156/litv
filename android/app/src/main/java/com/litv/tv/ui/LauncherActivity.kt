@@ -38,7 +38,11 @@ class LauncherActivity : AppCompatActivity() {
 
         val target = when {
             app.prefs.token.isBlank() -> BindActivity::class.java
-            isTV -> HomeActivity::class.java
+            // 电视端没有「首页」这个概念：开机直接全屏播放上次的台，
+            // 返回就退出 App。频道列表是按 ← 呼出的浮层。
+            // 之前这里进 HomeActivity（三列首页），所以从播放页返回会掉回那个页面，
+            // 和参考实现（DIYP/TVBox 系）的操作逻辑不一致。
+            isTV -> PlayerActivity::class.java
             else -> PhoneHomeActivity::class.java
         }
         startActivity(Intent(this, target))

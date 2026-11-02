@@ -314,6 +314,9 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         app.api.epg(channelId, 0, onOk = { list ->
             programs = list
             renderOsdNow()
+            // 节目单是浮层里常显的一列，取到数据要立刻刷上去，
+            // 否则打开浮层时看到的永远是加载圈。
+            if (panelVisible) refreshEpgColumn()
         }, onErr = { programs = emptyList() })
     }
 

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"strings"
 	"time"
 )
@@ -113,9 +114,9 @@ func (s *Store) MarkSourceFetched(ctx context.Context, id int64, count int, errM
 
 // ChannelQuery 是频道列表查询条件。
 type ChannelQuery struct {
-	Group    string
-	Keyword  string
-	Enabled  *bool
+	Group   string
+	Keyword string
+	Enabled *bool
 	// SourceID > 0 时只看这个源导入的频道（管理台「按源分组」用）
 	SourceID int64
 	Offset   int
@@ -390,12 +391,42 @@ func (s *Store) ImportChannels(ctx context.Context, sourceID int64, items []Chan
 		err := tx.QueryRowContext(ctx, `SELECT id FROM channels WHERE name=? AND group_name=? LIMIT 1`, c.Name, c.Group).Scan(&existID)
 		switch {
 		case err == nil:
-			// 已存在：只补一条线路（同 URL 不重复加）
-			var n int
-			_ = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM streams WHERE channel_id=? AND url=?`, existID, c.firstURL()).Scan(&n)
-			if n == 0 && c.firstURL() != "" {
+			// 已存在：按「主机+路径」判重，命中就原地更新。
+			//
+			// 不能拿完整 URL 判重：源站地址带签名，每次刷新签名都变，
+			// 用完整 URL 比会一直不命中，于是每刷一次就多一条线路，
+			// 旧的那条带着过期签名留在库里变成死线路。
+			nu := c.firstURL()
+			if nu == "" {
+				continue
+			}
+			wantKey := urlKey(nu)
+			var existStreamID int64
+			var existURL string
+			rows, qerr := tx.QueryContext(ctx, `SELECT id,url FROM streams WHERE channel_id=?`, existID)
+			if qerr == nil {
+				for rows.Next() {
+					var sid int64
+					var u string
+					if rows.Scan(&sid, &u) == nil && urlKey(u) == wantKey {
+						existStreamID, existURL = sid, u
+						break
+					}
+				}
+				rows.Close()
+			}
+			if existStreamID > 0 {
+				if existURL != nu {
+					// 签名变了：更新地址，并把健康状态重置为未知等下次探测
+					if _, err := tx.ExecContext(ctx,
+						`UPDATE streams SET url=?, headers_json=?, health=0 WHERE id=?`,
+						nu, headersJSON, existStreamID); err != nil {
+						return inserted, err
+					}
+				}
+			} else {
 				if _, err := tx.ExecContext(ctx, `INSERT INTO streams(channel_id,url,priority,health,headers_json) VALUES(?,?,?,?,?)`,
-					existID, c.firstURL(), 0, -1, headersJSON); err != nil {
+					existID, nu, 0, -1, headersJSON); err != nil {
 					return inserted, err
 				}
 			}
@@ -419,6 +450,14 @@ func (s *Store) ImportChannels(ctx context.Context, sourceID int64, items []Chan
 			return inserted, err
 		}
 	}
+
+	// 清理历史重复：同一频道下「主机+路径」相同的多条线路只保留最新一条。
+	// 老版本用完整 URL 判重，签名一变就多插一条，积了一堆过期线路。
+	if derr := dedupeStreams(ctx, tx); derr != nil {
+		// 去重失败不影响导入本身
+		_ = derr
+	}
+
 	return inserted, tx.Commit()
 }
 
@@ -487,8 +526,18 @@ func (s *Store) UpdateStreamHealth(ctx context.Context, id int64, health, latenc
 
 // ---------- devices ----------
 
+// ErrReservedDevicePlatform prevents privileged roles entering device storage.
+var ErrReservedDevicePlatform = errors.New("reserved device platform")
+
+func IsReservedDevicePlatform(platform string) bool {
+	return strings.EqualFold(strings.TrimSpace(platform), "admin")
+}
+
 // CreateDevice 注册一台待绑定设备。
 func (s *Store) CreateDevice(ctx context.Context, key, tokenHash, name, platform, model string) (int64, error) {
+	if IsReservedDevicePlatform(platform) {
+		return 0, ErrReservedDevicePlatform
+	}
 	res, err := s.db.ExecContext(ctx, `INSERT INTO devices(device_key,token_hash,name,platform,model,status,created_at,last_seen)
 		VALUES(?,?,?,?,?,'pending',?,?)`, key, tokenHash, name, platform, model, Now(), Now())
 	if err != nil {
@@ -533,6 +582,9 @@ func (s *Store) GetDeviceByToken(ctx context.Context, tokenHash string) (*Device
 			return nil, ErrNotFound
 		}
 		return nil, err
+	}
+	if IsReservedDevicePlatform(d.Platform) {
+		return nil, ErrNotFound
 	}
 	return &d, nil
 }
@@ -634,4 +686,52 @@ func boolInt(b bool) int {
 		return 1
 	}
 	return 0
+}
+
+// urlKey 取 URL 的「主机+路径」，丢掉 query 和 fragment。
+//
+// 用途：源站地址的签名放在 query 里，每次刷新都会变；
+// 判重必须忽略签名，否则同一路信号会被当成新线路反复追加。
+func urlKey(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return raw
+	}
+	return u.Scheme + "://" + u.Host + u.Path
+}
+
+// dedupeStreams 清理同一频道下「主机+路径」相同的重复线路，只保留 id 最大的那条。
+//
+// 为什么会有重复：老版本按完整 URL 判重，而源站地址的签名在 query 里、
+// 每次刷新都变，于是每刷一次就多一条，旧的那条带着过期签名变成死线路。
+func dedupeStreams(ctx context.Context, tx *sql.Tx) error {
+	rows, err := tx.QueryContext(ctx, `SELECT id, channel_id, url FROM streams ORDER BY id`)
+	if err != nil {
+		return err
+	}
+	type key struct {
+		ch int64
+		k  string
+	}
+	keep := map[key]int64{}
+	var drop []int64
+	for rows.Next() {
+		var id, ch int64
+		var u string
+		if rows.Scan(&id, &ch, &u) != nil {
+			continue
+		}
+		kk := key{ch, urlKey(u)}
+		if prev, ok := keep[kk]; ok {
+			drop = append(drop, prev)
+		}
+		keep[kk] = id
+	}
+	rows.Close()
+	for _, id := range drop {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM streams WHERE id=?`, id); err != nil {
+			return err
+		}
+	}
+	return nil
 }

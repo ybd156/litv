@@ -11,6 +11,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"crypto/tls"
 	"fmt"
 	"io"
 	"net"
@@ -55,7 +56,13 @@ var client = &http.Client{
 		ResponseHeaderTimeout: 12 * time.Second,
 		MaxIdleConns:          32,
 		IdleConnTimeout:       60 * time.Second,
-		ForceAttemptHTTP2:     true,
+		// 关掉 HTTP/2：实测某些源站（live.ottiptv.cc 这类 Cloudflare 前置的）
+		// 对 Go 的 h2 客户端会一直挂着不返回响应头，报
+		// "http2: timeout awaiting response headers" 或 context deadline exceeded；
+		// 同一个地址用 curl（h1.1 或 h2）都是 200 秒回。
+		// 抓清单/分片这种小请求走 h1.1 没有任何损失。
+		ForceAttemptHTTP2: false,
+		TLSNextProto:      map[string]func(string, *tls.Conn) http.RoundTripper{},
 	},
 	// 不自动跟随无限重定向
 	CheckRedirect: func(req *http.Request, via []*http.Request) error {

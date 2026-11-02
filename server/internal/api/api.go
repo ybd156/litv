@@ -49,6 +49,9 @@ type API struct {
 	dlna    *dlna.Server
 	logos   *logo.Store
 	signer  *auth.Signer
+	loginLimiter *auth.LoginLimiter
+	authAudit *authAuditGate
+	now func() time.Time
 
 	// 运行时事实（由 main 注入）
 	actualPort int
@@ -65,6 +68,9 @@ func New(cfg *config.Config, st *store.Store, hub *stream.Hub, version string) *
 		hub:     hub,
 		remote:  remote.NewHub(),
 		signer:  auth.NewSigner(cfg.Auth.Secret),
+		loginLimiter: auth.NewLoginLimiter(),
+		authAudit: &authAuditGate{},
+		now: time.Now,
 		startAt: time.Now(),
 		version: version,
 	}
@@ -108,6 +114,8 @@ const (
 	ctxIdentity ctxKey = iota
 	ctxViaGateway
 	ctxDevice
+	ctxPeerIP
+	ctxAdminSession
 )
 
 func identityFrom(ctx context.Context) (auth.Identity, bool) {

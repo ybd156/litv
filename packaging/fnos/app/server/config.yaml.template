@@ -17,7 +17,7 @@
 server:
   host: "0.0.0.0"
   # 独立 TCP 端口：给 Android TV / 手机 / iOS 原生客户端直连（自建 device token 鉴权）
-  port: 9527                             # @@SERVER_PORT@@
+  port: 28027                            # @@SERVER_PORT@@
   # 统一网关 Unix Socket：必须与 app/ui/config 的 gatewaySocket 同名，且位于 target 目录
   gateway_socket: "/var/apps/litv/target/app.sock"   # @@GATEWAY_SOCKET@@
   # 网关公开前缀：必须与 app/ui/config 的 gatewayPrefix 完全一致，否则网关 404

@@ -1,72 +1,54 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  节目单条目：左时间、中节目名 + 简介走马灯、右「回看」角标。
+  节目单行。对齐 mediaplayer 的 item_epg：
 
-  参考 TVBox 系（酷9）的 item_epglist：
-    - 已播完的节目带「回看」角标（提示可以回看）
-    - 节目名下方用走马灯滚简介，一屏塞得下更多信息又不换行截断
+    [时间 固定宽] [节目名 占满] [回看标记]
+
+  之前是「节目名 + 回看角标 + 简介走马灯」两行，行高翻倍、右侧栏能看到的节目太少。
+  现在一行一个节目，一屏能看到十几个。
+  正在播的那档用颜色高亮，已播完的显示「回看」。
 -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
-    android:layout_marginBottom="4dp"
+    android:layout_marginHorizontal="2dp"
+    android:layout_marginVertical="1dp"
     android:background="@drawable/bg_focusable"
     android:clickable="true"
     android:focusable="true"
-    android:orientation="vertical"
-    android:paddingHorizontal="12dp"
+    android:gravity="center_vertical"
+    android:orientation="horizontal"
+    android:paddingHorizontal="10dp"
     android:paddingVertical="9dp">
 
-    <LinearLayout
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:gravity="center_vertical"
-        android:orientation="horizontal">
-
-        <TextView
-            android:id="@+id/time"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:textColor="@color/text_secondary"
-            android:textSize="12sp" />
-
-        <TextView
-            android:id="@+id/title"
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_marginStart="8dp"
-            android:layout_weight="1"
-            android:ellipsize="end"
-            android:maxLines="1"
-            android:textColor="@color/text_primary"
-            android:textSize="14sp" />
-
-        <TextView
-            android:id="@+id/replayBadge"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_marginStart="6dp"
-            android:background="@drawable/bg_card"
-            android:paddingHorizontal="6dp"
-            android:paddingVertical="1dp"
-            android:text="回看"
-            android:textColor="@color/accent"
-            android:textSize="10sp"
-            android:visibility="gone" />
-    </LinearLayout>
-
-    <!-- 简介走马灯：单行滚动，不换行 -->
     <TextView
-        android:id="@+id/desc"
-        android:layout_width="match_parent"
+        android:id="@+id/time"
+        android:layout_width="52dp"
         android:layout_height="wrap_content"
-        android:layout_marginTop="2dp"
-        android:ellipsize="marquee"
-        android:focusable="false"
-        android:marqueeRepeatLimit="marquee_forever"
-        android:scrollHorizontally="true"
-        android:singleLine="true"
-        android:textColor="#66FFFFFF"
-        android:textSize="11sp"
+        android:textColor="@color/text_secondary"
+        android:textSize="12sp" />
+
+    <TextView
+        android:id="@+id/title"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="6dp"
+        android:layout_weight="1"
+        android:ellipsize="end"
+        android:maxLines="1"
+        android:textColor="@color/text_primary"
+        android:textSize="15sp" />
+
+    <TextView
+        android:id="@+id/replayBadge"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="6dp"
+        android:background="@drawable/bg_card"
+        android:paddingHorizontal="6dp"
+        android:paddingVertical="1dp"
+        android:text="回看"
+        android:textColor="@color/accent"
+        android:textSize="10sp"
         android:visibility="gone" />
 </LinearLayout>

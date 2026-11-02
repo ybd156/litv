@@ -59,12 +59,19 @@ class ExoEngine : PlayerEngine {
             .setPrioritizeTimeOverSizeThresholds(false) // 优先按字节封顶，防低端盒子 OOM
             .build()
 
+        // ★ 源配置里的 UA 必须走 setUserAgent，不能只塞进请求头。
+        //   ExoPlayer 的 DefaultHttpDataSource 是「先应用 defaultRequestProperties、
+        //   再单独 setRequestProperty("User-Agent", userAgent)」——
+        //   写死的 UA 会把请求头里的源 UA 覆盖掉，表现为"硬解时源站校验 UA 失败"。
+        val ua = headers["User-Agent"]?.takeIf { it.isNotBlank() } ?: UA
         val httpFactory = DefaultHttpDataSource.Factory()
-            .setUserAgent(UA)
+            .setUserAgent(ua)
             .setAllowCrossProtocolRedirects(true)
             .setConnectTimeoutMs(8000)
             .setReadTimeoutMs(15000)
-        if (headers.isNotEmpty()) httpFactory.setDefaultRequestProperties(headers)
+        // 其余头（Referer 之类）照旧；User-Agent 已经在上面设过了
+        val extraHeaders = headers.filterKeys { !it.equals("User-Agent", ignoreCase = true) }
+        if (extraHeaders.isNotEmpty()) httpFactory.setDefaultRequestProperties(extraHeaders)
 
         val dsFactory = DefaultDataSource.Factory(ctx, httpFactory)
 

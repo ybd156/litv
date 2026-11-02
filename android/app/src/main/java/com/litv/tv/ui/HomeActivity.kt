@@ -60,7 +60,7 @@ class HomeActivity : AppCompatActivity() {
     private var autoPlayed = false
 
     private val favorites = mutableSetOf<Long>()
-    private val nowTitles = mutableMapOf<Long, String>()
+    private val nowTitles = mutableMapOf<Long, com.litv.tv.data.NowPlaying>()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -109,7 +109,11 @@ class HomeActivity : AppCompatActivity() {
             app.tier.logoMaxPx,
             onClick = { ch -> openPlayer(ch) },
             onLongClick = { ch -> toggleFavorite(ch) },
-            onFocus = { ch -> loadEpg(ch) },
+            onFocus = { ch ->
+                loadEpg(ch)
+                // 焦点到哪个台就预取哪个台的播放地址，按 OK 时直接起播
+                app.api.prefetchPlay(ch.id, app.prefs.directMode != "relay")
+            },
         )
         // 三列布局里中间是竖列表，不是网格
         list.layoutManager = LinearLayoutManager(this)
@@ -181,7 +185,7 @@ class HomeActivity : AppCompatActivity() {
         b.device?.config?.let { applyRemoteConfig(it) }
 
         nowTitles.clear()
-        nowTitles.putAll(b.now.associate { it.channelId to it.title })
+        nowTitles.putAll(b.now.associate { it.channelId to it })
         favorites.clear()
         favorites.addAll(b.favorites)
 

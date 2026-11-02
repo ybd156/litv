@@ -29,6 +29,7 @@ class RemoteActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_remote)
+        BottomTabs.wire(this, BottomTabs.TAB_REMOTE)
         app = application as LitvApp
 
         status = findViewById(R.id.status)

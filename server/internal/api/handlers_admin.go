@@ -14,7 +14,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/litv/litv/server/internal/auth"
 	"github.com/litv/litv/server/internal/epg"
 	"github.com/litv/litv/server/internal/fetch"
 	"github.com/litv/litv/server/internal/parse"
@@ -997,35 +996,6 @@ func (a *API) webPlay(w http.ResponseWriter, r *http.Request) {
 
 // webDeviceKey 是管理台播放用的固定标识（签名里带上，便于日志区分）。
 const webDeviceKey = "web-admin"
-
-// ---------- 密码登录（网关不可用时的应急入口） ----------
-
-func (a *API) passwordLogin(w http.ResponseWriter, r *http.Request) {
-	var body struct {
-		Password string `json:"password"`
-	}
-	if err := decode(r, &body); err != nil {
-		fail(w, http.StatusBadRequest, 1001, "参数错误")
-		return
-	}
-	if a.cfg.Auth.AdminPassword == "" || body.Password != a.cfg.Auth.AdminPassword {
-		fail(w, http.StatusUnauthorized, 2001, "密码错误")
-		return
-	}
-	plain, hash, err := auth.NewToken()
-	if err != nil {
-		fail(w, http.StatusInternalServerError, 5001, err.Error())
-		return
-	}
-	// 应急登录复用 device 表，platform=admin
-	id, err := a.st.CreateDevice(r.Context(), "admin-"+plain[:8], hash, "应急管理员", "admin", "server")
-	if err != nil {
-		fail(w, http.StatusInternalServerError, 5001, err.Error())
-		return
-	}
-	_ = a.st.ApproveDevice(r.Context(), id)
-	ok(w, map[string]any{"token": plain})
-}
 
 func randomCode(n int) string {
 	// 用 crypto/rand，避免时间种子溢出导致负下标 panic，同时防止绑定码被预测。

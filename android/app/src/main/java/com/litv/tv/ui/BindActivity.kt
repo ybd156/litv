@@ -10,7 +10,9 @@ import android.widget.EditText
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
+import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
+import com.litv.tv.data.ServerAddress
 import com.litv.tv.LitvApp
 import com.litv.tv.R
 

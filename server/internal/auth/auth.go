@@ -69,6 +69,21 @@ func HashToken(plain string) string {
 	return hex.EncodeToString(sum[:])
 }
 
+// MaxPasswordBytes bounds emergency-login passwords in bytes, not characters.
+const MaxPasswordBytes = 256
+
+// PasswordMatches hashes both operands before comparing fixed-size digests.
+// Empty/overlong configured passwords disable login; no secret is returned.
+func PasswordMatches(candidate, configured string) bool {
+	if len(candidate) > MaxPasswordBytes || len(configured) > MaxPasswordBytes {
+		return false
+	}
+	got := sha256.Sum256([]byte(candidate))
+	want := sha256.Sum256([]byte(configured))
+	matches := subtle.ConstantTimeCompare(got[:], want[:])
+	return matches == 1 && configured != "" && candidate != ""
+}
+
 // BearerToken 从 Authorization 头取 token。
 func BearerToken(r *http.Request) string {
 	h := r.Header.Get("Authorization")

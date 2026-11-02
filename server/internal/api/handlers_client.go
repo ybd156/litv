@@ -1,6 +1,8 @@
 package api
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -39,6 +41,11 @@ func (a *API) deviceRegister(w http.ResponseWriter, r *http.Request) {
 	}
 	if body.DeviceKey == "" {
 		fail(w, http.StatusBadRequest, 1001, "device_key 不能为空")
+		return
+	}
+	body.Platform = strings.ToLower(strings.TrimSpace(body.Platform))
+	if store.IsReservedDevicePlatform(body.Platform) {
+		fail(w, http.StatusBadRequest, 1001, "platform 为保留值")
 		return
 	}
 	if body.Platform == "" {
@@ -120,6 +127,14 @@ func (a *API) tvBootstrap(w http.ResponseWriter, r *http.Request) {
 		_ = json.Unmarshal([]byte(dev.ConfigJSON), &devCfg)
 	}
 
+	// 源列表：电视端列表按「源」分类用（参考实现的第一列）。
+	// 只给 id 和名称，不带 URL 等敏感字段。
+	srcs, _ := a.st.ListSources(ctx)
+	srcBrief := make([]map[string]any, 0, len(srcs))
+	for _, s := range srcs {
+		srcBrief = append(srcBrief, map[string]any{"id": s.ID, "name": s.Name})
+	}
+
 	ok(w, map[string]any{
 		"server": map[string]any{
 			"version": a.version,
@@ -131,6 +146,7 @@ func (a *API) tvBootstrap(w http.ResponseWriter, r *http.Request) {
 			"config": devCfg,
 		},
 		"groups":    groups,
+		"sources":   srcBrief,
 		"channels":  chans,
 		"favorites": favs,
 		"now":       nowList,
@@ -139,9 +155,9 @@ func (a *API) tvBootstrap(w http.ResponseWriter, r *http.Request) {
 
 func (a *API) tvChannels(w http.ResponseWriter, r *http.Request) {
 	chans, total, err := a.st.ListChannels(r.Context(), store.ChannelQuery{
-		Group:  r.URL.Query().Get("group"),
-		Limit:  queryInt(r, "limit", 500),
-		Offset: queryInt(r, "offset", 0),
+		Group:   r.URL.Query().Get("group"),
+		Limit:   queryInt(r, "limit", 500),
+		Offset:  queryInt(r, "offset", 0),
 		Enabled: boolPtr(true),
 	})
 	if err != nil {
@@ -163,7 +179,7 @@ func (a *API) tvEPG(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	day := queryInt(r, "day", 0)
-	base := time.Now().Truncate(24 * time.Hour).AddDate(0, 0, day)
+	base := time.Now().Truncate(24*time.Hour).AddDate(0, 0, day)
 	progs, err := a.st.ProgramsByXmltvID(r.Context(), ch.EpgID, base.Unix(), base.Add(24*time.Hour).Unix())
 	if err != nil {
 		fail(w, http.StatusInternalServerError, 5001, err.Error())
@@ -295,13 +311,13 @@ func (a *API) tvPlay(w http.ResponseWriter, r *http.Request) {
 	wantDirect := strings.EqualFold(r.URL.Query().Get("direct"), "1")
 	if wantDirect && a.cfg.Stream.DirectEnabled && kind != "remux" {
 		ok(w, map[string]any{
-			"channel": map[string]any{"id": ch.ID, "name": ch.Name, "logo": ch.Logo},
-			"kind":    kind,
-			"mode":    "direct",
-			"url":     st.URL, // 上游原始地址
-			"ua":      st.UserAgent(),
-			"headers": st.Headers(),
-			"expires": exp,
+			"channel":   map[string]any{"id": ch.ID, "name": ch.Name, "logo": ch.Logo},
+			"kind":      kind,
+			"mode":      "direct",
+			"url":       st.URL, // 上游原始地址
+			"ua":        st.UserAgent(),
+			"headers":   st.Headers(),
+			"expires":   exp,
 			"stream_id": st.ID,
 		})
 		a.st.Audit(r.Context(), 0, "play.direct", fmt.Sprint(id), ch.Name, r.RemoteAddr)
@@ -638,15 +654,15 @@ func (a *API) tvResume(w http.ResponseWriter, r *http.Request) {
 		tsAvail = a.ts.SpanSeconds(rp.ChannelID)
 	}
 	ok(w, map[string]any{
-		"available":          true,
-		"channel_id":         rp.ChannelID,
-		"channel_name":       rp.ChannelName,
-		"channel_logo":       rp.ChannelLogo,
-		"group":              rp.Group,
-		"position_sec":       rp.PositionSec,
-		"device_name":        rp.DeviceName,
-		"updated_at":         rp.UpdatedAt,
-		"age_seconds":        int(time.Now().Unix() - rp.UpdatedAt),
+		"available":           true,
+		"channel_id":          rp.ChannelID,
+		"channel_name":        rp.ChannelName,
+		"channel_logo":        rp.ChannelLogo,
+		"group":               rp.Group,
+		"position_sec":        rp.PositionSec,
+		"device_name":         rp.DeviceName,
+		"updated_at":          rp.UpdatedAt,
+		"age_seconds":         int(time.Now().Unix() - rp.UpdatedAt),
 		"timeshift_available": tsAvail,
 	})
 }
@@ -760,20 +776,52 @@ func (a *API) liveManifest(w http.ResponseWriter, r *http.Request) {
 		fail(w, http.StatusForbidden, 2002, "播放地址无效或已过期")
 		return
 	}
-	st, err := a.st.BestStream(r.Context(), id)
-	if err != nil {
+	// 逐条线路尝试：源里常有一批签名过期的死线路，
+	// 只试第一条的话，碰到死的就整个台播不了。
+	streams, serr := a.st.ListStreams(r.Context(), id)
+	if serr != nil || len(streams) == 0 {
 		fail(w, http.StatusNotFound, 3002, "该频道没有可用线路")
 		return
 	}
-	if !strings.Contains(strings.ToLower(st.URL), ".m3u8") {
-		fail(w, http.StatusBadRequest, 3002, "该频道是裸 TS 源，请使用 stream.ts")
-		return
-	}
 
-	// 必须带线路专属 UA，否则源站会返回演示内容或者直接拒绝
-	res, err := fetch.Get(r.Context(), st.URL, a.streamFetchOptions(r.Context(), id))
-	if err != nil {
-		fail(w, http.StatusBadGateway, 4001, "拉取清单失败: "+err.Error())
+	var (
+		res     *fetch.Result
+		st      *store.Stream
+		lastErr error
+	)
+	for i := range streams {
+		cand := &streams[i]
+		if !strings.Contains(strings.ToLower(cand.URL), ".m3u8") {
+			lastErr = fmt.Errorf("不是 HLS 线路")
+			continue
+		}
+		// 单条线路等 15 秒：源站冷请求有时要 8-10 秒，给太短会误判成死线路。
+		// 等满默认的 20 秒就没时间试下一条了。
+		cctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+		opt := fetch.DefaultOptions()
+		if ua := cand.UserAgent(); ua != "" {
+			opt.UserAgent = ua
+		} else if a.cfg.Stream.UserAgent != "" {
+			opt.UserAgent = a.cfg.Stream.UserAgent
+		}
+		got, ferr := fetch.Get(cctx, cand.URL, opt)
+		cancel()
+		if ferr != nil {
+			lastErr = ferr
+			// 记一笔不健康，让 BestStream 下次把它排后面
+			_ = a.st.UpdateStreamHealth(r.Context(), cand.ID, -1, 0)
+			continue
+		}
+		res, st = got, cand
+		_ = a.st.UpdateStreamHealth(r.Context(), cand.ID, 1, int(got.ElapsedMs))
+		break
+	}
+	if res == nil || st == nil {
+		msg := "拉取清单失败"
+		if lastErr != nil {
+			msg += ": " + lastErr.Error()
+		}
+		fail(w, http.StatusBadGateway, 4001, msg)
 		return
 	}
 	base, _ := url.Parse(res.FinalURL)
@@ -806,7 +854,7 @@ func (a *API) liveManifest(w http.ResponseWriter, r *http.Request) {
 
 // liveSegment 代理 HLS 分片（含子清单）。
 func (a *API) liveSegment(w http.ResponseWriter, r *http.Request) {
-	id, _, ok2 := a.verifyStream(r)
+	id, dk, ok2 := a.verifyStream(r)
 	if !ok2 {
 		fail(w, http.StatusForbidden, 2002, "播放地址无效或已过期")
 		return
@@ -840,6 +888,41 @@ func (a *API) liveSegment(w http.ResponseWriter, r *http.Request) {
 	}
 	defer resp.Body.Close()
 
+	// 嗅一下是不是子清单：源里很多台是「主清单 → 子清单 → 分片」的嵌套结构。
+	// 子清单里的分片地址是相对路径，必须像主清单一样改写，
+	// 否则 hls.js 会拿相对路径去拼，拼出来是坏地址 —— 表现就是「这个台播不了」。
+	br := bufio.NewReader(resp.Body)
+	if head, _ := br.Peek(7); bytes.HasPrefix(head, []byte("#EXTM3U")) {
+		body, _ := io.ReadAll(io.LimitReader(br, 4<<20))
+		base, perr := url.Parse(target)
+		if perr == nil {
+			lines := strings.Split(string(body), "\n")
+			out := make([]string, 0, len(lines))
+			for _, line := range lines {
+				trimmed := strings.TrimSpace(line)
+				if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+					out = append(out, rewriteURIAttr(trimmed, base, a, id, dk))
+					continue
+				}
+				if u, uerr := base.Parse(trimmed); uerr == nil {
+					out = append(out, a.segmentURL(u.String(), id, dk))
+				} else {
+					out = append(out, line)
+				}
+			}
+			w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
+			w.Header().Set("Cache-Control", "no-cache")
+			w.Header().Set("Access-Control-Allow-Origin", "*")
+			_, _ = io.WriteString(w, strings.Join(out, "\n"))
+			return
+		}
+		// 解析失败就退回普通分片处理
+		w.Header().Set("Content-Type", "video/mp2t")
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		_, _ = w.Write(body)
+		return
+	}
+
 	ct := resp.Header.Get("Content-Type")
 	if ct == "" {
 		ct = "video/mp2t"
@@ -847,8 +930,7 @@ func (a *API) liveSegment(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", ct)
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.WriteHeader(resp.StatusCode)
-	_, _ = io.Copy(w, resp.Body)
-	_ = id
+	_, _ = io.Copy(w, br)
 }
 
 func (a *API) segmentURL(abs string, channelID int64, dk string) string {

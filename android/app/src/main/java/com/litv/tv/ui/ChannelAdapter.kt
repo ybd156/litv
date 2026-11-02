@@ -34,14 +34,14 @@ class ChannelAdapter(
 ) : RecyclerView.Adapter<ChannelAdapter.VH>() {
 
     private val items = ArrayList<Channel>()
-    private val nowMap = HashMap<Long, String>()
+    private val nowMap = HashMap<Long, com.litv.tv.data.NowPlaying>()
     private val logoCache = LruCache<String, Bitmap>(32)
     private var favorites: Set<Long> = emptySet()
 
     private val executor = Executors.newFixedThreadPool(2)
     private val main = Handler(Looper.getMainLooper())
 
-    fun submit(list: List<Channel>, now: Map<Long, String>, favs: Set<Long> = favorites) {
+    fun submit(list: List<Channel>, now: Map<Long, com.litv.tv.data.NowPlaying>, favs: Set<Long> = favorites) {
         items.clear()
         items.addAll(list)
         nowMap.clear()
@@ -63,9 +63,31 @@ class ChannelAdapter(
     override fun onBindViewHolder(holder: VH, position: Int) {
         val ch = items[position]
         holder.name.text = ch.name
-        val now = nowMap[ch.id]
-        holder.now.text = now ?: ""
-        holder.now.visibility = if (now.isNullOrBlank()) View.GONE else View.VISIBLE
+        // 没台号就用序号，别留一格空白
+        holder.tvNo.text = if (ch.number > 0) ch.number.toString() else (position + 1).toString()
+        // 台标：先显示首字方块兜底，图真的加载成功了再盖上去。
+        // （源里的台标多是外链，加载失败很常见；只在 URL 为空时才兜底是不够的）
+        holder.logo.setImageDrawable(null)
+        holder.logoText.text = ch.name.take(2)
+        holder.logoText.visibility = View.VISIBLE
+        if (ch.logo.isNotBlank()) loadLogo(holder.logo, ch.logo)
+        // 走马灯必须 isSelected=true 才会滚（TV 上长台名不会截断）
+        holder.name.isSelected = true
+        holder.now.isSelected = true
+
+        val np = nowMap[ch.id]
+        holder.now.text = np?.title.orEmpty()
+        holder.now.visibility = if (np?.title.isNullOrBlank()) View.GONE else View.VISIBLE
+
+        // 行内节目进度：mediaplayer 的做法，2dp 细条
+        if (np != null && np.end > np.start) {
+            val nowSec = System.currentTimeMillis() / 1000
+            val pct = (((nowSec - np.start) * 100) / (np.end - np.start)).coerceIn(0, 100).toInt()
+            holder.prog.progress = pct
+            holder.prog.visibility = View.VISIBLE
+        } else {
+            holder.prog.visibility = View.GONE
+        }
 
         // 徽标：收藏星标优先，其次是线路数
         val fav = favorites.contains(ch.id)
@@ -92,9 +114,10 @@ class ChannelAdapter(
         }
         holder.itemView.setOnFocusChangeListener { v, hasFocus ->
             // 焦点放大：TV 上远距离也能分辨
-            v.animate().scaleX(if (hasFocus) 1.06f else 1f)
-                .scaleY(if (hasFocus) 1.06f else 1f)
+            v.animate().scaleX(if (hasFocus) 1.02f else 1f)
+                .scaleY(if (hasFocus) 1.02f else 1f)
                 .setDuration(120).start()
+            holder.selBar.visibility = if (hasFocus) View.VISIBLE else View.GONE
             // 三列联动：焦点到哪个台，右侧就显示哪个台的节目单
             if (hasFocus) onFocus?.invoke(ch)
         }
@@ -136,7 +159,13 @@ class ChannelAdapter(
                 logoCache.put(url, bmp)
                 main.post {
                     // 复用后可能已经滚走，做一次 URL 校验避免错图
-                    if (target.tag == url || target.tag == null) target.setImageBitmap(bmp)
+                    if (target.tag == url || target.tag == null) {
+                        target.setImageBitmap(bmp)
+                        // 图真的有了，把首字兜底藏掉
+                        (target.parent as? android.view.ViewGroup)
+                            ?.findViewById<TextView>(R.id.logoText)
+                            ?.visibility = View.GONE
+                    }
                 }
             }
         }
@@ -144,7 +173,11 @@ class ChannelAdapter(
     }
 
     class VH(v: View) : RecyclerView.ViewHolder(v) {
+        val selBar: View = v.findViewById(R.id.selBar)
+        val tvNo: TextView = v.findViewById(R.id.tvNo)
+        val prog: android.widget.ProgressBar = v.findViewById(R.id.prog)
         val logo: ImageView = v.findViewById(R.id.logo)
+        val logoText: TextView = v.findViewById(R.id.logoText)
         val name: TextView = v.findViewById(R.id.name)
         val now: TextView = v.findViewById(R.id.now)
         val badge: TextView = v.findViewById(R.id.badge)

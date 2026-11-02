@@ -33,6 +33,8 @@ data class Channel(
     val enabled: Boolean = true,
     val sort: Int = 0,
     @SerializedName("stream_count") val streamCount: Int = 0,
+    /** 所属源，电视端按源分类用 */
+    @SerializedName("source_id") val sourceId: Long = 0,
 )
 
 data class EpgProgram(
@@ -83,6 +85,7 @@ data class Bootstrap(
     val channels: List<Channel> = emptyList(),
     val favorites: List<Long> = emptyList(),
     val now: List<NowPlaying> = emptyList(),
+    val sources: List<SourceBrief> = emptyList(),
 )
 
 /** /tv/play/{id} 的返回。 */
@@ -174,4 +177,10 @@ data class RemoteTarget(
     val platform: String = "",
     val model: String = "",
     val online: Boolean = false,
+)
+
+/** /tv/bootstrap 里带的源清单（只有 id 和名称） */
+data class SourceBrief(
+    val id: Long = 0,
+    val name: String = "",
 )

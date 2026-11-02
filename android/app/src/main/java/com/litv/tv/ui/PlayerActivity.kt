@@ -60,6 +60,15 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
     private lateinit var panel: LinearLayout
     private lateinit var panelTitle: TextView
     private lateinit var panelList: RecyclerView
+    private lateinit var srcList: RecyclerView
+    private lateinit var grpList: RecyclerView
+    private val srcAdapter = GroupAdapter()
+    private val grpAdapter = GroupAdapter()
+    /** 当前选中的源 id，0 = 全部 */
+    private var selSource = 0L
+    /** 当前选中的分组，空 = 全部 */
+    private var selGroup = ""
+    private var srcNames: Map<Long, String> = emptyMap()
     private lateinit var numberTip: TextView
     private lateinit var epgPanel: LinearLayout
     private lateinit var epgTitle: TextView
@@ -125,6 +134,21 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         panel = findViewById(R.id.channelPanel)
         panelTitle = findViewById(R.id.panelTitle)
         panelList = findViewById(R.id.panelList)
+        srcList = findViewById(R.id.srcList)
+        grpList = findViewById(R.id.grpList)
+        srcList.layoutManager = LinearLayoutManager(this)
+        grpList.layoutManager = LinearLayoutManager(this)
+        srcList.adapter = srcAdapter
+        grpList.adapter = grpAdapter
+        srcAdapter.onPick = { name ->
+            selSource = srcAdapter.sourceIdOf(name)
+            selGroup = ""
+            rebuildColumns()
+        }
+        grpAdapter.onPick = { name ->
+            selGroup = if (name == null || name == "全部") "" else name
+            applyChannelFilter()
+        }
         numberTip = findViewById(R.id.numberTip)
         epgPanel = findViewById(R.id.epgPanel)
         epgTitle = findViewById(R.id.epgTitle)
@@ -173,20 +197,14 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
     }
 
     private fun applyGroupFilter() {
-        channels = when {
-            // 第 0 组是"全部"，有收藏时第 1 组是"收藏"
-            groupIdx <= 0 -> allChannels
-            hasFavGroup && groupIdx == 1 -> allChannels.filter { favoriteIds.contains(it.id) }
-            else -> {
-                val gi = if (hasFavGroup) groupIdx - 2 else groupIdx - 1
-                val g = groups.getOrNull(gi)
-                if (g == null) allChannels else allChannels.filter { it.group == g }
-            }
-        }
-        if (index >= channels.size) index = 0
+        // 四列模式下，过滤交给 rebuildColumns() + applyChannelFilter()。
+        //
+        // 这里原来还有一段单列时代的分组逻辑，其中 `allChannels = channels`
+        // 会把全量列表覆盖成过滤后的结果（越点越少），
+        // 后面再用 groupLabelText() 把四列的标题盖回去。整段删掉。
         if (::panelAdapter.isInitialized) {
-            panelAdapter.submit(channels, emptyMap(), favoriteIds)
-            panelTitle.text = groupLabelText()
+            rebuildColumns()
+            applyChannelFilter()
         }
     }
 
@@ -202,6 +220,17 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
             }
         }
         return "分组：$name（${channels.size}）  ←→ 切换"
+    }
+
+    /** 四列之间移动焦点：源 -> 分组 -> 频道，反向同理 */
+    private fun moveColumn(delta: Int) {
+        when {
+            panelList.hasFocus() && delta < 0 -> grpList.requestFocus()
+            grpList.hasFocus() && delta > 0 -> panelList.requestFocus()
+            grpList.hasFocus() && delta < 0 -> srcList.requestFocus()
+            srcList.hasFocus() && delta > 0 -> grpList.requestFocus()
+            else -> if (delta > 0) panelList.requestFocus() else srcList.requestFocus()
+        }
     }
 
     private fun switchGroup(delta: Int) {
@@ -328,8 +357,10 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
     private fun openPanel() {
         panelVisible = true
         panel.visibility = View.VISIBLE
-        panelAdapter.submit(channels, emptyMap())
-        panelTitle.text = groupLabelText()
+        // 四列：源 / 分组 / 频道。这里必须走 applyChannelFilter()，
+        // 原来直接 submit(channels) 会把还没加载的空列表刷进去，频道列就是空的。
+        rebuildColumns()
+        applyChannelFilter()
         val i = channels.indexOfFirst { it.id == current?.id }
         if (i >= 0) {
             panelList.scrollToPosition(i)
@@ -434,10 +465,12 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
                         closePanel(); return true
                     }
                     KeyEvent.KEYCODE_DPAD_LEFT -> {
-                        switchGroup(-1); return true
+                        moveColumn(-1); return true
                     }
                     KeyEvent.KEYCODE_DPAD_RIGHT -> {
-                        switchGroup(+1); return true
+                        // 规范：焦点在频道列表时按右 → 打开节目单
+                        if (panelList.hasFocus()) openEpg() else moveColumn(+1)
+                        return true
                     }
                 }
             }
@@ -560,5 +593,37 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
     companion object {
         const val EXTRA_CHANNEL_ID = "channel_id"
         const val EXTRA_CHANNEL_NAME = "channel_name"
+    }
+
+    /** 根据当前源选择，重建「源」和「分组」两列 */
+    private fun rebuildColumns() {
+        val srcRows = ArrayList<GroupAdapter.Row>()
+        srcRows.add(GroupAdapter.Row("全部源", allChannels.size))
+        val bySrc = allChannels.groupBy { it.sourceId }
+        for ((sid, list) in bySrc) {
+            val nm = srcNames[sid] ?: "源 $sid"
+            srcRows.add(GroupAdapter.Row(nm, list.size))
+        }
+        srcAdapter.submit(srcRows, if (selSource == 0L) "全部源" else srcNames[selSource])
+
+        val base = if (selSource == 0L) allChannels else allChannels.filter { it.sourceId == selSource }
+        val grpRows = ArrayList<GroupAdapter.Row>()
+        grpRows.add(GroupAdapter.Row("全部", base.size))
+        base.groupBy { it.group }.forEach { (g, list) ->
+            grpRows.add(GroupAdapter.Row(g.ifBlank { "未分组" }, list.size))
+        }
+        grpAdapter.submit(grpRows, if (selGroup.isEmpty()) "全部" else selGroup)
+    }
+
+    /** 按当前源+分组过滤，刷到频道列表 */
+    private fun applyChannelFilter() {
+        var list = if (selSource == 0L) allChannels else allChannels.filter { it.sourceId == selSource }
+        if (selGroup.isNotEmpty()) list = list.filter { it.group == selGroup }
+        panelAdapter.submit(list, emptyMap())
+        panelTitle.text = buildString {
+            append(if (selSource == 0L) "全部频道" else (srcNames[selSource] ?: "频道"))
+            if (selGroup.isNotEmpty()) append(" · ").append(selGroup)
+            append("  ").append(list.size).append(" 个")
+        }
     }
 }

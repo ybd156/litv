@@ -60,7 +60,9 @@ android {
         abi {
             isEnable = true
             reset()
-            include("armeabi-v7a", "arm64-v8a")
+            // arm 两个是发布用（电视/手机）；x86 只在模拟器上验证界面用
+            // （tv28 这个 AVD 是 32 位 x86），发布工作流只取 armv7/arm64。
+            include("armeabi-v7a", "arm64-v8a", "x86")
             isUniversalApk = false
         }
     }

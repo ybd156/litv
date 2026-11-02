@@ -60,14 +60,6 @@ class EpgAdapter : RecyclerView.Adapter<EpgAdapter.VH>() {
         val canReplay = p.endAt in 1 until now
         holder.replayBadge.visibility = if (canReplay) View.VISIBLE else View.GONE
 
-        // 简介走马灯：有简介才显示，且必须 isSelected=true 才会滚
-        if (p.description.isNotBlank()) {
-            holder.desc.visibility = View.VISIBLE
-            holder.desc.text = p.description
-            holder.desc.isSelected = true
-        } else {
-            holder.desc.visibility = View.GONE
-        }
 
         holder.itemView.setOnClickListener { onProgramClick?.invoke(p) }
         holder.itemView.setOnFocusChangeListener { v, hasFocus ->
@@ -81,6 +73,5 @@ class EpgAdapter : RecyclerView.Adapter<EpgAdapter.VH>() {
         val time: TextView = v.findViewById(R.id.time)
         val title: TextView = v.findViewById(R.id.title)
         val replayBadge: TextView = v.findViewById(R.id.replayBadge)
-        val desc: TextView = v.findViewById(R.id.desc)
     }
 }

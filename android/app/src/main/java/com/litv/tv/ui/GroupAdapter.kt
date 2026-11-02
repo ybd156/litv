@@ -60,4 +60,17 @@ class GroupAdapter : RecyclerView.Adapter<GroupAdapter.VH>() {
         val name: TextView = v.findViewById(R.id.name)
         val count: TextView = v.findViewById(R.id.count)
     }
+
+    /** 源列表用：名称 -> 源 id（「全部源」返回 0） */
+    private var srcIds: Map<String, Long> = emptyMap()
+
+    fun submitSources(rows: List<Row>, ids: Map<String, Long>, selectedName: String?) {
+        srcIds = ids
+        submit(rows, selectedName)
+    }
+
+    fun sourceIdOf(name: String?): Long {
+        if (name == null || name == "全部源") return 0L
+        return srcIds[name] ?: 0L
+    }
 }

@@ -166,6 +166,7 @@ class PlayerManager(
 
     private companion object {
         const val TAG = "PlayerManager"
-        const val START_TIMEOUT_MS = 6000L
+        // 起不来的内核不该拖 6 秒——3 秒足够判断，超时就换下一个
+        const val START_TIMEOUT_MS = 3000L
     }
 }

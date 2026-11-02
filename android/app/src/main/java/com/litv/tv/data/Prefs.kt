@@ -13,10 +13,31 @@ class Prefs(ctx: Context) {
 
     private val sp: SharedPreferences =
         ctx.applicationContext.getSharedPreferences("litv", Context.MODE_PRIVATE)
+    private val tokenStore = SecureTokenStore(
+        object : TokenStorage {
+            override fun encrypted(): String? = sp.getString(K_TOKEN_ENCRYPTED, null)
+            override fun legacyPlaintext(): String? = sp.getString(K_TOKEN, null)
+            override fun replace(encrypted: String?): Boolean {
+                val edit = sp.edit().remove(K_TOKEN)
+                if (encrypted == null) edit.remove(K_TOKEN_ENCRYPTED)
+                else edit.putString(K_TOKEN_ENCRYPTED, encrypted)
+                return edit.commit()
+            }
+        },
+        KeystoreTokenCipher(ctx),
+    )
 
     var serverBase: String
         get() = sp.getString(K_SERVER, "") ?: ""
-        set(v) = sp.edit().putString(K_SERVER, v.trimEnd('/')).apply()
+        set(v) {
+            val normalized = v.trimEnd('/')
+            if (serverBase != normalized) {
+                // Never forward a token issued by one server to a different origin.
+                clearSession()
+                sp.edit().remove(K_CACHE).apply()
+            }
+            sp.edit().putString(K_SERVER, normalized).apply()
+        }
 
     var deviceKey: String
         get() {
@@ -29,8 +50,8 @@ class Prefs(ctx: Context) {
         set(v) = sp.edit().putString(K_DEVICE_KEY, v).apply()
 
     var token: String
-        get() = sp.getString(K_TOKEN, "") ?: ""
-        set(v) = sp.edit().putString(K_TOKEN, v).apply()
+        get() = tokenStore.read()
+        set(v) = tokenStore.write(v)
 
     var deviceId: Long
         get() = sp.getLong(K_DEVICE_ID, 0)
@@ -112,12 +133,18 @@ class Prefs(ctx: Context) {
         get() = sp.getString(K_CACHE, "") ?: ""
         set(v) = sp.edit().putString(K_CACHE, v).apply()
 
-    fun clearSession() = sp.edit().remove(K_TOKEN).remove(K_DEVICE_ID).apply()
+    fun clearSession() {
+        tokenStore.clear()
+        sp.edit().remove(K_DEVICE_ID).remove(K_CACHE).apply()
+    }
 
     private companion object {
         const val K_SERVER = "server_base"
         const val K_DEVICE_KEY = "device_key"
         const val K_TOKEN = "token"
+
+        /** 加密后的 token（SecureTokenStore 用；老的明文 token 会迁移过来） */
+        const val K_TOKEN_ENCRYPTED = "token_enc"
         const val K_DEVICE_ID = "device_id"
         const val K_DEVICE_NAME = "device_name"
         const val K_LAST_CH = "last_channel"

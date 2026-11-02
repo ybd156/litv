@@ -117,4 +117,18 @@
         <item name="android:textColor">@color/text_secondary</item>
         <item name="android:textSize">20sp</item>
     </style>
+
+    <!-- 四列浮层最左侧的图标/文字栏 -->
+    <style name="RailItem">
+        <item name="android:layout_width">match_parent</item>
+        <item name="android:layout_height">wrap_content</item>
+        <item name="android:layout_marginBottom">6dp</item>
+        <item name="android:paddingVertical">12dp</item>
+        <item name="android:gravity">center</item>
+        <item name="android:textColor">@color/text_primary</item>
+        <item name="android:textSize">13sp</item>
+        <item name="android:background">@drawable/bg_focusable</item>
+        <item name="android:focusable">true</item>
+        <item name="android:clickable">true</item>
+    </style>
 </resources>

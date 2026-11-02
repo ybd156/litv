@@ -212,7 +212,30 @@ class Api(private val prefs: Prefs) {
     }
 
     /**
-     * 取播放地址。
+     * 播放地址缓存：聚焦时预取，按 OK 直接用。
+     *
+     * 换台的感知延迟主要是「一次网络往返 + 引擎 prepare」。
+     * 焦点在列表上移动时就把地址取回来，按 OK 时只剩 prepare，快一截。
+     * 服务端签名有效期 12 小时，这里只缓存 5 分钟，够用且不会用到过期地址。
+     */
+    private val playCache = HashMap<Long, Pair<PlayInfo, Long>>()
+
+    /** 预取播放地址（失败静默，按 OK 时还会再取一次） */
+    fun prefetchPlay(channelId: Long, direct: Boolean) {
+        val hit = playCache[channelId]
+        if (hit != null && System.currentTimeMillis() - hit.second < 5 * 60_000) return
+        val params = buildList {
+            if (direct) add("direct=1")
+        }
+        val q = if (params.isEmpty()) "" else "?" + params.joinToString("&")
+        call("/api/v1/tv/play/$channelId$q", clazz = PlayInfo::class.java,
+            onOk = { info ->
+                if (info != null) playCache[channelId] = info to System.currentTimeMillis()
+            },
+            onErr = { /* 预取失败不影响正常流程 */ })
+    }
+
+    /** 取播放地址。
      *
      * direct=true 时服务端会把**上游原始地址**直接给回来（mode=direct），
      * 客户端自己连源站——省掉 NAS 的带宽和 CPU，起播也更快。
@@ -225,13 +248,27 @@ class Api(private val prefs: Prefs) {
         onOk: (PlayInfo) -> Unit,
         onErr: (String) -> Unit,
     ) {
+        // 有预取的地址就直接用，省一次网络往返
+        if (streamId == 0L) {
+            val hit = playCache[channelId]
+            if (hit != null && System.currentTimeMillis() - hit.second < 5 * 60_000) {
+                onOk(hit.first)
+                return
+            }
+        }
         val params = buildList {
             if (streamId > 0) add("stream_id=$streamId")
             if (direct) add("direct=1")
         }
         val q = if (params.isEmpty()) "" else "?" + params.joinToString("&")
         call("/api/v1/tv/play/$channelId$q", clazz = PlayInfo::class.java,
-            onOk = { if (it != null) onOk(it) else onErr("空数据") }, onErr = onErr)
+            onOk = { info ->
+                if (info != null) {
+                    // 顺手写缓存：下次切回这个台不用再请求
+                    if (streamId == 0L) playCache[channelId] = info to System.currentTimeMillis()
+                    onOk(info)
+                } else onErr("空数据")
+            }, onErr = onErr)
     }
 
     /** 线路列表（手动切线路用）。 */

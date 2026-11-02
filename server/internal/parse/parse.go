@@ -25,12 +25,15 @@ import (
 
 // Item 是解析出来的一个频道条目（可能对应多条线路）。
 type Item struct {
-	Name   string
-	Group  string
-	URL    string
-	Logo   string
-	TvgID  string
-	Number int
+	// json tag 必须和管理台的 TS 类型（admin/src/api/types.ts 的 PreviewItem）一致。
+	// 之前没写 tag，Go 默认序列化成 Name/Group/URL/Logo，
+	// 前端读 item.name 全是 undefined —— 表现就是「源预览列表一片空白」。
+	Name   string `json:"name"`
+	Group  string `json:"group"`
+	URL    string `json:"url"`
+	Logo   string `json:"logo"`
+	TvgID  string `json:"tvg_id"`
+	Number int    `json:"number"`
 }
 
 // ToUTF8 把可能的 GBK/BOM 内容转成 UTF-8。

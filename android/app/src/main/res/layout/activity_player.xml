@@ -50,10 +50,11 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_gravity="bottom"
-        android:background="#CC0B0E11"
+        android:background="@drawable/bg_osd_gradient"
         android:orientation="vertical"
         android:paddingHorizontal="40dp"
-        android:paddingVertical="20dp"
+        android:paddingTop="48dp"
+        android:paddingBottom="24dp"
         android:visibility="gone">
 
         <LinearLayout
@@ -62,19 +63,50 @@
             android:gravity="center_vertical"
             android:orientation="horizontal">
 
+            <!-- 台标 -->
+            <ImageView
+                android:id="@+id/osdLogo"
+                android:layout_width="64dp"
+                android:layout_height="40dp"
+                android:contentDescription="@null"
+                android:scaleType="fitCenter" />
+
+            <!-- 台号 -->
+            <TextView
+                android:id="@+id/osdNo"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="12dp"
+                android:textColor="@color/text_primary"
+                android:textSize="22sp"
+                android:textStyle="bold" />
+
             <TextView
                 android:id="@+id/osdName"
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
+                android:layout_marginStart="10dp"
                 android:layout_weight="1"
+                android:ellipsize="end"
+                android:maxLines="1"
                 android:textColor="@color/text_primary"
-                android:textSize="24sp"
+                android:textSize="22sp"
                 android:textStyle="bold" />
+
+            <!-- 标签：[FHD][立体声][IPV4][线路1/1] -->
+            <TextView
+                android:id="@+id/osdTags"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="10dp"
+                android:textColor="#CCFFFFFF"
+                android:textSize="12sp" />
 
             <TextView
                 android:id="@+id/osdEngine"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
+                android:layout_marginStart="10dp"
                 android:textColor="@color/accent"
                 android:textSize="13sp" />
         </LinearLayout>
@@ -119,30 +151,107 @@
     </LinearLayout>
 
     <!-- 左侧频道列表 -->
+    <!-- 频道列表浮层：图标栏 / 源分类 / 分组 / 频道列表（对齐参考实现） -->
     <LinearLayout
         android:id="@+id/channelPanel"
-        android:layout_width="360dp"
+        android:layout_width="match_parent"
         android:layout_height="match_parent"
-        android:layout_gravity="start"
-        android:background="#EE0B0E11"
-        android:orientation="vertical"
-        android:padding="16dp"
+        android:background="#F20B0E11"
+        android:orientation="horizontal"
+        android:paddingVertical="16dp"
         android:visibility="gone">
 
-        <TextView
-            android:id="@+id/panelTitle"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:paddingBottom="10dp"
-            android:textColor="@color/accent"
-            android:textSize="16sp" />
+        <!-- 1. 图标竖栏 -->
+        <LinearLayout
+            android:layout_width="88dp"
+            android:layout_height="match_parent"
+            android:gravity="center_horizontal"
+            android:orientation="vertical"
+            android:paddingHorizontal="8dp">
 
-        <androidx.recyclerview.widget.RecyclerView
-            android:id="@+id/panelList"
-            android:layout_width="match_parent"
-            android:layout_height="0dp"
+            <TextView
+                android:id="@+id/railAll"
+                style="@style/RailItem"
+                android:text="全部" />
+
+            <TextView
+                android:id="@+id/railFav"
+                style="@style/RailItem"
+                android:text="收藏" />
+
+            <TextView
+                android:id="@+id/railSet"
+                style="@style/RailItem"
+                android:text="设置" />
+        </LinearLayout>
+
+        <!-- 2. 源分类 -->
+        <LinearLayout
+            android:layout_width="200dp"
+            android:layout_height="match_parent"
+            android:orientation="vertical">
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:paddingBottom="8dp"
+                android:text="源"
+                android:textColor="@color/text_secondary"
+                android:textSize="12sp" />
+
+            <androidx.recyclerview.widget.RecyclerView
+                android:id="@+id/srcList"
+                android:layout_width="match_parent"
+                android:layout_height="0dp"
+                android:layout_weight="1"
+                android:scrollbars="none" />
+        </LinearLayout>
+
+        <!-- 3. 分组 -->
+        <LinearLayout
+            android:layout_width="170dp"
+            android:layout_height="match_parent"
+            android:orientation="vertical">
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:paddingBottom="8dp"
+                android:text="分组"
+                android:textColor="@color/text_secondary"
+                android:textSize="12sp" />
+
+            <androidx.recyclerview.widget.RecyclerView
+                android:id="@+id/grpList"
+                android:layout_width="match_parent"
+                android:layout_height="0dp"
+                android:layout_weight="1"
+                android:scrollbars="none" />
+        </LinearLayout>
+
+        <!-- 4. 频道列表 -->
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
             android:layout_weight="1"
-            android:scrollbars="none" />
+            android:orientation="vertical"
+            android:paddingHorizontal="12dp">
+
+            <TextView
+                android:id="@+id/panelTitle"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:paddingBottom="8dp"
+                android:textColor="@color/accent"
+                android:textSize="14sp" />
+
+            <androidx.recyclerview.widget.RecyclerView
+                android:id="@+id/panelList"
+                android:layout_width="match_parent"
+                android:layout_height="0dp"
+                android:layout_weight="1"
+                android:scrollbars="none" />
+        </LinearLayout>
     </LinearLayout>
 
     <!-- 右侧节目单面板 -->

@@ -85,6 +85,9 @@ type Upstream struct {
 	lastErr string
 	started time.Time
 	bytesIn atomic.Int64
+	// 最后一次收到上游数据的 UnixNano。0 = 还没收到过。
+	// 用来判断「连接还开着但已经不推数据了」这种半死状态。
+	lastData atomic.Int64
 
 	cancel context.CancelFunc
 	nextID atomic.Int64
@@ -94,7 +97,21 @@ type Upstream struct {
 func (h *Hub) Subscribe(ctx context.Context, channelID int64, url string, headers map[string]string) (*Subscriber, error) {
 	h.mu.Lock()
 	up, ok := h.ups[channelID]
-	if !ok || up.closed || up.URL != url {
+
+	// 上游卡死判定：连接还开着，但已经不推数据了。
+	// 不重建的话，新订阅者会挂在这个死连接上一直转圈。
+	stale := false
+	if ok && up != nil && !up.closed {
+		now := time.Now()
+		if last := up.lastData.Load(); last > 0 {
+			stale = now.Sub(time.Unix(0, last)) > 15*time.Second
+		} else if now.Sub(up.started) > 20*time.Second {
+			// 建了 20 秒一个字节都没收到
+			stale = true
+		}
+	}
+
+	if !ok || up.closed || up.URL != url || stale {
 		// 新建（或替换：源换了地址）
 		if up != nil {
 			up.close()
@@ -127,12 +144,12 @@ func (h *Hub) Stats() []map[string]any {
 	for _, up := range h.ups {
 		up.mu.RLock()
 		out = append(out, map[string]any{
-			"channel_id": up.ChannelID,
-			"url":        up.URL,
+			"channel_id":  up.ChannelID,
+			"url":         up.URL,
 			"subscribers": len(up.subs),
-			"uptime_s":   int(time.Since(up.started).Seconds()),
-			"bytes_in":   up.bytesIn.Load(),
-			"last_error": up.lastErr,
+			"uptime_s":    int(time.Since(up.started).Seconds()),
+			"bytes_in":    up.bytesIn.Load(),
+			"last_error":  up.lastErr,
 		})
 		up.mu.RUnlock()
 	}
@@ -320,6 +337,7 @@ func (u *Upstream) readOnce(ctx context.Context) error {
 		n, err := resp.Body.Read(buf)
 		if n > 0 {
 			u.bytesIn.Add(int64(n))
+			u.lastData.Store(time.Now().UnixNano())
 			// 拷贝一份给订阅者共享（buf 会被下一轮覆盖）
 			chunk := make([]byte, n)
 			copy(chunk, buf[:n])

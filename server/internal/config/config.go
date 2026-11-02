@@ -49,11 +49,21 @@ type Database struct {
 	Path string `yaml:"path"`
 }
 
+// Emergency sessions are deliberately separate from long-lived device tokens.
+const (
+	DefaultAdminTokenHours = 8
+	MaxAdminTokenHours = 168
+	DefaultAdminMaxSessions = 16
+	MaxAdminSessions = 128
+)
+
 // Auth 鉴权配置。
 type Auth struct {
 	Secret        string `yaml:"secret"`         // 流地址签名密钥
 	AdminPassword string `yaml:"admin_password"` // 兜底管理密码（网关不可用时应急登录）
-	TokenHours    int    `yaml:"token_hours"`    // 终端 token 有效期
+	TokenHours       int    `yaml:"token_hours"`        // 兼容旧配置；普通设备 token 仍需显式吊销，不施加管理员 TTL
+	AdminTokenHours  int    `yaml:"admin_token_hours"`  // 应急管理员会话有效期（1..168 小时，默认 8）
+	AdminMaxSessions int    `yaml:"admin_max_sessions"` // 有效管理员会话上限（1..128，默认 16）
 	DevMode       bool   `yaml:"dev_mode"`       // 开发模式：无网关头时降级为本地管理员
 }
 
@@ -182,14 +192,16 @@ func Default() *Config {
 	return &Config{
 		Server: Server{
 			Host:         "0.0.0.0",
-			Port:         9527,
+			Port:         28027,
 			Prefix:       "/app/litv",
 			ReadTimeout:  30,
 			WriteTimeout: 0,
 		},
 		Database: Database{Path: "./data/litv.db"},
 		Auth: Auth{
-			TokenHours: 24 * 365,
+			TokenHours:       24 * 365,
+			AdminTokenHours:  DefaultAdminTokenHours,
+			AdminMaxSessions: DefaultAdminMaxSessions,
 		},
 		Stream: Stream{
 			CacheDir:        "./data/cache",
@@ -302,6 +314,15 @@ func (c *Config) normalize() {
 
 // Validate 做最小必要校验，宁可启动失败也不要带病运行。
 func (c *Config) Validate() error {
+	if c.Auth.AdminTokenHours < 1 || c.Auth.AdminTokenHours > MaxAdminTokenHours {
+		return fmt.Errorf("auth.admin_token_hours must be between 1 and 168")
+	}
+	if c.Auth.AdminMaxSessions < 1 || c.Auth.AdminMaxSessions > MaxAdminSessions {
+		return fmt.Errorf("auth.admin_max_sessions must be between 1 and 128")
+	}
+	if len(c.Auth.AdminPassword) > 256 {
+		return fmt.Errorf("auth.admin_password must not exceed 256 bytes")
+	}
 	if c.Server.Port <= 0 || c.Server.Port > 65535 {
 		return fmt.Errorf("server.port 非法: %d", c.Server.Port)
 	}

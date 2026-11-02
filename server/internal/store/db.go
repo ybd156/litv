@@ -120,6 +120,16 @@ CREATE TABLE IF NOT EXISTS devices (
 );
 CREATE INDEX IF NOT EXISTS idx_devices_status ON devices(status);
 
+-- Password-login administrator sessions have a separate privilege namespace.
+-- Only the hash is persisted. Device tokens remain explicitly revocable/long-lived.
+CREATE TABLE IF NOT EXISTS admin_sessions (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  token_hash TEXT UNIQUE NOT NULL CHECK(length(token_hash)=64),
+  created_at INTEGER NOT NULL,
+  expires_at INTEGER NOT NULL CHECK(expires_at>created_at)
+);
+CREATE INDEX IF NOT EXISTS idx_admin_sessions_expiry ON admin_sessions(expires_at);
+
 CREATE TABLE IF NOT EXISTS bind_codes (
   code       TEXT PRIMARY KEY,
   device_id  INTEGER NOT NULL,
@@ -235,6 +245,9 @@ func (s *Store) migrate(ctx context.Context) error {
 			// 不当作致命错误：建表已经成功，缺列最多是功能降级
 			slog.Warn("增量迁移失败（可忽略）", "stmt", stmt, "err", err)
 		}
+	}
+	if err := s.migrateAdminSessions(ctx); err != nil {
+		return fmt.Errorf("管理员会话迁移失败: %w", err)
 	}
 	return nil
 }

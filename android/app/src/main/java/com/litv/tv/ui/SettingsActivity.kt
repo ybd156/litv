@@ -43,6 +43,7 @@ class SettingsActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_settings)
+        BottomTabs.wire(this, BottomTabs.TAB_SETTINGS)
         app = application as LitvApp
 
         valueEngine = findViewById(R.id.valueEngine)

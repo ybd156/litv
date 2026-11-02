@@ -135,6 +135,19 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
 
         player = PlayerManager(this, app.prefs).also { it.callback = this }
 
+        // 直连第一个内核就失败 → 立刻改走中转重播，不轮完所有内核（那要 20 秒）。
+        // 直连失败基本都是网络层问题（源站在这个网络里不可达），换内核修不好。
+        player.onDirectFailed = { reason ->
+            main.post {
+                if (!relayRetried) {
+                    relayRetried = true
+                    forceRelayOnce = true
+                    toastTip("直连不通（$reason），改走服务端中转")
+                    current?.let { playChannel(it, currentStreamId) }
+                }
+            }
+        }
+
         player.playerView = playerView
         setupRenderTarget()
 
@@ -472,8 +485,11 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         if (triedForChannel != ch.id) {
             triedStreams.clear()
             triedForChannel = ch.id
+            relayRetried = false
+            forceRelayOnce = false
         }
         triedStreams += streamId
+        currentStreamId = streamId
         app.prefs.lastChannelId = ch.id
         // 起播计时：从按下换台到出第一帧，这是用户唯一能感知的"快不快"
         startAt = System.currentTimeMillis()
@@ -488,7 +504,11 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         switchTip.visibility = View.VISIBLE
         osdName.text = ch.name
 
-        app.api.play(ch.id, streamId, direct = app.prefs.directMode != "relay",
+        // 直连失败一次后，这次强制走服务端中转
+        val wantDirect = app.prefs.directMode != "relay" && !forceRelayOnce
+        player.directMode = wantDirect
+        app.api.play(ch.id, streamId,
+            direct = wantDirect,
             onOk = { info ->
                 // R09：用服务端下发的整份线路头（已清洗），不再只带 UA。
                 // 要求 Referer / Origin 校验的源，只带 UA 会直接 403。
@@ -508,6 +528,8 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
                     toastTip("请在系统设置里开启自动校准时间")
                     return@play
                 }
+                currentPlayMode = info.mode
+                currentPlayMode = info.mode
                 Log.i(TAG, "play 返回: mode=${info.mode} kind=${info.kind} 请求头=${headers.keys}")
                 Log.i(TAG, "实际播放地址: ${abs.take(160)}")
                 player.play(ch.id, abs, headers, app.prefs.engine)
@@ -902,6 +924,21 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
 
     override fun onError(message: String) {
         loading.visibility = View.GONE
+
+        // 直连失败 → 改走服务端中转再试。
+        //
+        // 这是"电视播不了、手机能播"最常见的原因：
+        // 直连时是电视自己去连源站，电视所在网络连不上源站（CDN 被墙、
+        // 源站限 IP、DNS 不通）就全内核失败；而中转是 NAS 去拉，
+        // NAS 能连就一定能播。
+        if (currentPlayMode == "direct" && !relayRetried) {
+            relayRetried = true
+            forceRelayOnce = true
+            toastTip("直连失败，改走服务端中转重试")
+            playChannel(current ?: return, currentStreamId)
+            return
+        }
+
         // 所有内核都失败时，先自动换这个台的下一条线路再试。
         // 源里同一个台常有多条线路（如 cctv1-MCP / cctv1-AV3A），
         // 其中一条编码不支持，不代表别的也不行。
@@ -909,6 +946,15 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         switchTip.text = "播放出错：$message"
         switchTip.visibility = View.VISIBLE
     }
+
+    /** 上一次播放实际用的模式（direct / relay），用于直连失败后改走中转 */
+    private var currentPlayMode: String = ""
+    /** 本次选台是否已经因为直连失败改走过中转 */
+    private var relayRetried = false
+    /** 这一次 play 请求强制走中转 */
+    private var forceRelayOnce = false
+    /** 当前正在播的线路 id，重试时要用 */
+    private var currentStreamId: Long = 0
 
     /** 本次选台已经试过的线路，避免来回死循环 */
     private val triedStreams = mutableSetOf<Long>()

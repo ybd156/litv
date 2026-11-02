@@ -85,6 +85,18 @@ class PlayerManager(
      */
     private val failLog = mutableListOf<String>()
 
+    /**
+     * 本次播放是否用的直连。
+     *
+     * 直连失败几乎都是网络问题（源站在这个网络里不可达），
+     * 换内核不可能修好——所以第一个内核失败就立刻通知上层改走中转，
+     * 不要傻等 exo 超时 + vlc + mpv 轮一圈（那要 20 秒）。
+     */
+    var directMode: Boolean = false
+
+    /** 直连第一个内核就失败时回调，上层据此改用中转重播 */
+    var onDirectFailed: ((String) -> Unit)? = null
+
     /** 把各内核的失败原因拼成一句话（过长时截断，电视上放不下）。 */
     private fun chainFailMessage(): String {
         if (failLog.isEmpty()) return "所有播放内核都无法播放这个频道"
@@ -168,6 +180,14 @@ class PlayerManager(
         main.removeCallbacks(startTimeout)
         Log.w(TAG, "内核 ${currentKind?.key} 失败($reason)，尝试下一个")
         failLog += "${currentKind?.key ?: "?"}: $reason"
+
+        // 直连模式下第一个内核就失败：别轮了，直接让上层改走中转
+        if (directMode && chainIndex == 0) {
+            Log.w(TAG, "直连首个内核失败，跳过其余内核，改走中转")
+            directMode = false
+            onDirectFailed?.invoke(reason)
+            return
+        }
         chainIndex++
         if (chainIndex >= chain.size) {
             callback?.onError(chainFailMessage())

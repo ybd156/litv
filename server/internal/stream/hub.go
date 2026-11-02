@@ -29,6 +29,13 @@ type Options struct {
 	Timeout     time.Duration // 上游连接超时
 	IdleTimeout time.Duration // 无订阅者多久后回收上游
 
+	// MaxUpstreams 同时在跑的上游连接上限（B02）。<=0 表示不限制。
+	//
+	// 修复前 MaxConcurrent 只是个配置项和界面上的一行数字，
+	// 从没在创建上游处真正生效。NAS 的上行带宽、fd 和内存都是有限的，
+	// 用户把几百个台点一遍就能把整台机器拖垮。
+	MaxUpstreams int
+
 	// OnData 每读到一块上游数据时回调（用于时移录制）。
 	// 必须快速返回，不要在里面做阻塞 IO——它在扇出热路径上。
 	OnData func(channelID int64, data []byte)
@@ -126,6 +133,16 @@ func (h *Hub) Subscribe(ctx context.Context, channelID int64, url string, header
 
 	if !ok || up.isClosed() || up.URL != url || stale {
 		// 新建（或替换：源换了地址）
+		//
+		// B02：在真正创建之前原子地检查全局上限。
+		// 检查与插入都在 h.mu 内完成，所以并发请求不会同时越过限制。
+		// 只有"新增"才受限；替换同频道的上游不算涨数（它本来就在 map 里）。
+		if up == nil && h.opts.MaxUpstreams > 0 {
+			if h.liveCountLocked() >= h.opts.MaxUpstreams {
+				h.mu.Unlock()
+				return nil, ErrTooManyStreams
+			}
+		}
 		if up != nil {
 			up.close()
 		}
@@ -180,10 +197,26 @@ func (h *Hub) Close() {
 }
 
 // Count 返回活跃频道数。
+//
+// B02：以前直接 return len(h.ups)，但 map 里会残留已经 close 却尚未
+// 从表中删除的条目（close 在上游 goroutine 里异步收尾），
+// 于是这个数字虚高。拿它做限额判断会出现"明明没超额却报满了"。
+// 这里只统计真正还在跑的上游。
 func (h *Hub) Count() int {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	return len(h.ups)
+	return h.liveCountLocked()
+}
+
+// liveCountLocked 统计未关闭的上游。调用方必须已持有 h.mu。
+func (h *Hub) liveCountLocked() int {
+	n := 0
+	for _, u := range h.ups {
+		if u != nil && !u.isClosed() {
+			n++
+		}
+	}
+	return n
 }
 
 // ---------- Upstream 内部 ----------

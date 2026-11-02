@@ -23,6 +23,7 @@ import (
 	"github.com/litv/litv/server/internal/fetch"
 	"github.com/litv/litv/server/internal/remote"
 	"github.com/litv/litv/server/internal/store"
+	"github.com/litv/litv/server/internal/stream"
 )
 
 // ---------- 终端注册 ----------
@@ -805,20 +806,32 @@ func (a *API) liveTS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// B02：先订阅再写响应头。
+	//
+	// 原来的顺序是 WriteHeader(200) 之后才 Subscribe，于是订阅失败
+	// （比如并发流已达上限）只能静默 return——用户看到的是 200 加一片空白，
+	// 完全不知道发生了什么。现在把订阅挪到写头之前，失败能返回正确的状态码。
+	//
+	// 带上这条线路专属的头：不传的话源站校验 UA 会直接 403，
+	// 表现为"有画面没声音"或直接黑屏。
+	sub, subErr := a.hub.Subscribe(r.Context(), id, st.URL, st.Headers())
+	if subErr != nil {
+		if errors.Is(subErr, stream.ErrTooManyStreams) {
+			fail(w, http.StatusServiceUnavailable, 3003,
+				"并发流已达上限，请稍后再试或调高「并发上限」")
+			return
+		}
+		fail(w, http.StatusBadGateway, 4001, "订阅上游失败: "+subErr.Error())
+		return
+	}
+	_ = dk
+
 	flusher, canFlush := w.(http.Flusher)
 	w.Header().Set("Content-Type", "video/mp2t")
 	w.Header().Set("Cache-Control", "no-cache, no-store")
 	w.Header().Set("Connection", "keep-alive")
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.WriteHeader(http.StatusOK)
-
-	// 带上这条线路专属的头（主要是源配置里的 User-Agent）。
-	// 不传的话源站校验 UA 会直接 403，表现为"有画面没声音"或直接黑屏。
-	sub, err := a.hub.Subscribe(r.Context(), id, st.URL, st.Headers())
-	if err != nil {
-		return
-	}
-	_ = dk
 
 	for {
 		select {

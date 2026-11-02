@@ -1,6 +1,7 @@
 package com.litv.tv.ui
 
 import android.annotation.SuppressLint
+import android.content.Intent
 import android.graphics.Bitmap
 import android.os.Bundle
 import android.util.Log
@@ -110,6 +111,15 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
     private var autoPlayPending = true
     /** 进播放页时想播的频道 id（0 = 上次那个） */
     private var pendingChannelId = 0L
+    /**
+     * 遥控发来的待切频道 id。
+     *
+     * singleTask 下 Activity 不会重建，只是收到 onNewIntent，
+     * 所以换台不能再依赖 onCreate 的 intent。
+     * 如果收到指令时频道列表还没 bootstrap 完，就先记下来，
+     * 等列表就绪后再执行——否则会出现"遥控没反应"。
+     */
+    private var pendingRemoteChannelId = 0L
 
     private val hideOsdRunnable = Runnable { hideOsd() }
     private val numberJumpRunnable = Runnable { jumpByNumber() }
@@ -132,6 +142,48 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         // 这一刻 channels 还是空的，直接判断会永远不播。交给 applyBootstrap 触发。
         pendingChannelId = intent.getLongExtra(EXTRA_CHANNEL_ID, 0)
         Log.i(TAG, "onCreate: 初始 channels=${channels.size} 待播=$pendingChannelId")
+    }
+
+    /**
+     * 遥控换台的入口。
+     *
+     * 为什么必须实现：PlayerActivity 在 manifest 里是 singleTask，
+     * 已经在播时 startActivity 不会新建实例，只会回调 onNewIntent。
+     * 没有这个方法，遥控指令虽然发出去了（服务端也显示已转发），
+     * 电视却停在原来的台上——用户看到的就是"遥控换台没反应"。
+     */
+    override fun onNewIntent(intent: Intent?) {
+        super.onNewIntent(intent)
+        // 必须更新 Activity 持有的 intent，否则后续 getIntent() 还是旧的
+        setIntent(intent)
+        val targetId = intent?.getLongExtra(EXTRA_CHANNEL_ID, 0) ?: 0
+        if (targetId <= 0) return
+        Log.i(TAG, "onNewIntent: 遥控换台 -> $targetId")
+        switchToChannelById(targetId)
+    }
+
+    /**
+     * 按 id 换台。频道列表可能还没就绪，这种情况先记账。
+     *
+     * 只接受列表里真实存在的频道：遥控传的是不可信输入，
+     * 指向不存在的 id 应当安静忽略，而不是让播放器去请求一个空频道。
+     */
+    private fun switchToChannelById(id: Long) {
+        val idx = channels.indexOfFirst { it.id == id }
+        if (idx < 0) {
+            if (channels.isEmpty()) {
+                // 列表还没加载完：等 applyBootstrap 再处理
+                pendingRemoteChannelId = id
+                Log.i(TAG, "onNewIntent: 列表未就绪，暂存 $id")
+            } else {
+                // 列表已就绪但没有这个频道：拒绝，不改变当前播放
+                Log.w(TAG, "onNewIntent: 频道 $id 不存在，忽略")
+            }
+            return
+        }
+        pendingRemoteChannelId = 0L
+        index = idx
+        playChannel(channels[idx])
     }
 
     /**
@@ -281,6 +333,13 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
             index = if (idx >= 0) idx else 0
             Log.i(TAG, "开始自动播放: ${channels[index].name}")
             playChannel(channels[index])
+        } else if (pendingRemoteChannelId > 0) {
+            // 遥控指令在 bootstrap 完成前就到了：现在补执行。
+            // 不补的话，用户开机瞬间按遥控换台会"按了没反应"。
+            val want = pendingRemoteChannelId
+            pendingRemoteChannelId = 0L
+            Log.i(TAG, "bootstrap 后补执行遥控换台: $want")
+            switchToChannelById(want)
         }
     }
 

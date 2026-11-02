@@ -364,6 +364,7 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         // 四列：源 / 分组 / 频道。这里必须走 applyChannelFilter()，
         // 原来直接 submit(channels) 会把还没加载的空列表刷进去，频道列就是空的。
         applyChannelFilter()
+        refreshEpgColumn()
         val i = channels.indexOfFirst { it.id == current?.id }
         if (i >= 0) {
             panelList.scrollToPosition(i)
@@ -375,6 +376,20 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
     private fun closePanel() {
         panelVisible = false
         panel.visibility = View.GONE
+    }
+
+    /**
+     * 刷新节目单列。
+     *
+     * 参考实现里节目单是紧挨频道列表常显的第三列，不是抽屉，
+     * 所以开浮层时要跟着一起刷，切台时也要跟着换。
+     */
+    private fun refreshEpgColumn() {
+        epgPanel.visibility = View.VISIBLE
+        epgTitle.text = "${current?.name ?: "节目单"}"
+        epgAdapter.submit(programs)
+        val pos = epgAdapter.currentPosition()
+        if (pos >= 0) epgList.scrollToPosition(pos)
     }
 
     /** 呼出节目单面板（右侧）。数据是进频道时就预取的，所以这里是瞬开。 */
@@ -393,8 +408,9 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
     }
 
     private fun closeEpg() {
+        // 节目单现在是浮层里常显的一列，不单独隐藏，把焦点还给频道列表即可
         epgVisible = false
-        epgPanel.visibility = View.GONE
+        panelList.requestFocus()
     }
 
     /**

@@ -686,6 +686,9 @@ func (a *API) refreshEPG(w http.ResponseWriter, r *http.Request) {
 		_ = a.st.MarkEPGSynced(r.Context(), src.ID, "")
 		results = append(results, r0)
 	}
+	// 同步完立刻按频道名自动匹配一次：源 M3U 大多没有 tvg-id，
+	// 不自动匹配的话 channels.epg_id 全空，电视端节目单永远是空的。
+	_, _ = a.st.AutoMapChannels(r.Context())
 	ok(w, results)
 }
 

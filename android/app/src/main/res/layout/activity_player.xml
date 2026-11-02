@@ -212,8 +212,7 @@
             android:layout_weight="0.34"
             android:background="#D90B0E11"
             android:orientation="vertical"
-            android:paddingHorizontal="8dp"
-            android:visibility="gone">
+            android:paddingHorizontal="8dp">
 
             <TextView
                 android:id="@+id/epgTitle"

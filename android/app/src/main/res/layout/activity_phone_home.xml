@@ -249,6 +249,7 @@
 
     <!-- 底部 Tab -->
     <LinearLayout
+        android:id="@+id/bottomTabs"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:background="@color/bg_panel"

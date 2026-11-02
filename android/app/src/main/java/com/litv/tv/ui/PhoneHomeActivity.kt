@@ -10,6 +10,7 @@ import android.os.Looper
 import android.view.Gravity
 import android.view.SurfaceView
 import android.view.View
+import android.view.ViewGroup
 import android.widget.EditText
 import android.widget.ImageView
 import android.widget.LinearLayout
@@ -200,7 +201,14 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
         surface.setOnClickListener { btnPlayPause.performClick() }
     }
 
-    /** 全屏 = 切横屏；再点切回竖屏。 */
+    /**
+     * 全屏 = 切横屏并让画面铺满整屏；再点切回竖屏。
+     *
+     * 只切方向是不够的：竖屏布局是「播放器 + 频道列表 + 底部栏」三段，
+     * 转到横屏后这三段还在，画面只占上面一小块——用户看到的就是
+     * 「点了全屏但没全屏」。所以横屏时必须把频道列表和底部栏藏掉，
+     * 并把播放器容器撑满。
+     */
     private fun toggleOrientation() {
         landscape = !landscape
         requestedOrientation = if (landscape) {
@@ -208,6 +216,21 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
         } else {
             ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
         }
+        applyFullscreen(landscape)
+    }
+
+    /** 按是否全屏调整可见性与播放器高度。 */
+    private fun applyFullscreen(on: Boolean) {
+        findViewById<View>(R.id.bottomTabs)?.visibility = if (on) View.GONE else View.VISIBLE
+        findViewById<View>(R.id.panelChannel)?.visibility =
+            if (on) View.GONE else if (currentTab == TAB_CHANNEL) View.VISIBLE else View.GONE
+
+        val box = findViewById<View>(R.id.videoBox) ?: return
+        val lp = box.layoutParams ?: return
+        // 横屏铺满：高度改成 MATCH_PARENT；竖屏恢复原来的自适应（16:9）
+        lp.height = if (on) ViewGroup.LayoutParams.MATCH_PARENT
+        else ViewGroup.LayoutParams.WRAP_CONTENT
+        box.layoutParams = lp
     }
 
     private fun setupList() {

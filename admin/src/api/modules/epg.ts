@@ -1,6 +1,15 @@
 import { http } from '../http'
 import { asArray } from '../normalize'
-import type { EpgChannel, EpgProgram, EpgRefreshResult, EpgSource, EpgSourceInput } from '../types'
+import type {
+  EpgAuditEntry,
+  EpgChannel,
+  EpgProgram,
+  EpgProgramHit,
+  EpgRefreshResult,
+  EpgSource,
+  EpgSourceInput,
+  EpgStats,
+} from '../types'
 
 export async function listEpgSources(): Promise<EpgSource[]> {
   const raw = await http.get<unknown>('epg/sources')
@@ -62,4 +71,32 @@ export async function listPrograms(channelId: number, day = 0): Promise<EpgProgr
   }
   // 兼容旧形状（裸数组）
   return asArray<EpgProgram>(raw)
+}
+
+/** EPG 总览统计（D1）。 */
+export function fetchEpgStats(): Promise<EpgStats> {
+  return http.get<EpgStats>('epg/stats')
+}
+
+/** 清理过期节目（D2）。 */
+export function cleanupEpg(keepDays?: number): Promise<{ deleted: number; keep_days: number; note: string }> {
+  return http.post<{ deleted: number; keep_days: number; note: string }>('epg/cleanup',
+    keepDays === undefined ? {} : { keep_days: keepDays })
+}
+
+/** EPG 操作审计（D3）。 */
+export async function fetchEpgLog(limit = 100): Promise<EpgAuditEntry[]> {
+  const raw = await http.get<unknown>('epg/refresh-log', { limit })
+  return asArray<EpgAuditEntry>(raw)
+}
+
+/** 按节目名搜索（D5）。 */
+export async function searchEpg(q: string, limit = 50): Promise<EpgProgramHit[]> {
+  const raw = await http.get<unknown>('epg/search', { q, limit })
+  if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+    const obj = raw as { items?: unknown }
+    if (Array.isArray(obj.items)) return obj.items as EpgProgramHit[]
+    return []
+  }
+  return asArray<EpgProgramHit>(raw)
 }

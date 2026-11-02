@@ -15,7 +15,7 @@ import StateBlock from './StateBlock.vue'
 import Icon from './Icon.vue'
 import { useAsyncData } from '@/composables/useAsyncData'
 import * as epgApi from '@/api/modules/epg'
-import type { EpgSource } from '@/api/types'
+import type { EpgProgramHit, EpgSource, EpgStats } from '@/api/types'
 import { toErrorMessage } from '@/api/errors'
 import { confirmAction, toast } from '@/utils/feedback'
 import { fmtCount, fmtDateTime, timeAgo } from '@/utils/format'
@@ -32,6 +32,67 @@ const importing = ref(false)
 const editing = ref<EpgSource | null>(null)
 /** 隐藏的文件输入，供「导入本地 XMLTV」触发 */
 const importInput = ref<HTMLInputElement | null>(null)
+
+// ---- D1 统计 / D2 清理 / D5 搜索 ----
+const stats = ref<EpgStats | null>(null)
+const cleaning = ref(false)
+const searchQ = ref('')
+const searching = ref(false)
+const searchHits = ref<EpgProgramHit[]>([])
+const showSearch = ref(false)
+
+async function loadStats(): Promise<void> {
+  try {
+    stats.value = await epgApi.fetchEpgStats()
+  } catch {
+    stats.value = null
+  }
+}
+
+function fmtBytes(n?: number): string {
+  if (!n || n <= 0) return '—'
+  const mb = n / (1024 * 1024)
+  return mb >= 1024 ? `${(mb / 1024).toFixed(1)} GB` : `${mb.toFixed(1)} MB`
+}
+
+async function cleanup(): Promise<void> {
+  const keep = stats.value?.keep_days ?? 3
+  confirmAction({
+    title: `清理 ${keep} 天前的节目？`,
+    content: '只删除已经结束的旧节目，不影响正在播和未来的节目单。清理后需要重新刷新才能恢复。',
+    positiveText: '清理',
+    onConfirm: async () => {
+      cleaning.value = true
+      try {
+        const r = await epgApi.cleanupEpg(keep)
+        toast.success(r?.note || `已删除 ${r?.deleted ?? 0} 条`)
+        await Promise.all([run(true), loadStats()])
+      } catch (e) {
+        toast.error(toErrorMessage(e))
+      } finally {
+        cleaning.value = false
+      }
+    },
+  })
+}
+
+async function doSearch(): Promise<void> {
+  const q = searchQ.value.trim()
+  if (!q) {
+    toast.warning('先输入要搜的节目名')
+    return
+  }
+  searching.value = true
+  showSearch.value = true
+  try {
+    searchHits.value = await epgApi.searchEpg(q)
+  } catch (e) {
+    toast.error(toErrorMessage(e))
+    searchHits.value = []
+  } finally {
+    searching.value = false
+  }
+}
 
 const form = ref({
   name: '',
@@ -75,7 +136,7 @@ async function refreshAll(): Promise<void> {
     } else {
       toast.success('没有启用的 EPG 源')
     }
-    await run(true)
+    await Promise.all([run(true), loadStats()])
   } catch (e) {
     toast.error(toErrorMessage(e))
   } finally {
@@ -93,7 +154,7 @@ async function refreshRow(row: EpgSource): Promise<void> {
     } else {
       toast.error(`${row.name} 刷新失败：${r?.error || '未知原因'}`)
     }
-    await run(true)
+    await Promise.all([run(true), loadStats()])
   } catch (e) {
     toast.error(toErrorMessage(e))
   } finally {
@@ -247,7 +308,10 @@ const columns: DataTableColumns<EpgSource> = [
   },
 ]
 
-onMounted(() => void run())
+onMounted(() => {
+  void run()
+  void loadStats()
+})
 </script>
 
 <template>
@@ -273,8 +337,31 @@ onMounted(() => void run())
         style="display: none"
         @change="onImport"
       />
+      <!-- D2：手动清理过期节目 -->
+      <NButton size="small" secondary :loading="cleaning" @click="cleanup">
+        清理过期节目
+      </NButton>
       <span class="spacer" />
-      <span class="hint-text">EPG 就是电视上的「节目单」，刷新会重新下载 XMLTV 并解析。</span>
+      <!-- D5：按节目名搜索 -->
+      <NInput
+        v-model:value="searchQ"
+        size="small"
+        clearable
+        placeholder="搜节目名，如「新闻」"
+        style="width: 200px"
+        @keyup.enter="doSearch"
+      />
+      <NButton size="small" secondary :loading="searching" @click="doSearch">搜索</NButton>
+    </div>
+
+    <!-- D1：总览统计 -->
+    <div v-if="stats" class="stats-bar">
+      <span>源 <b>{{ stats.enabled_sources }}/{{ stats.sources }}</b></span>
+      <span>EPG 频道 <b>{{ fmtCount(stats.channels) }}</b></span>
+      <span>节目 <b>{{ fmtCount(stats.programs) }}</b></span>
+      <span>覆盖 <b>{{ stats.covered_days }}</b> 天</span>
+      <span>占用 <b>{{ fmtBytes(stats.db_bytes) }}</b></span>
+      <span>最近同步 <b>{{ stats.last_sync ? timeAgo(stats.last_sync) : '从未' }}</b></span>
     </div>
 
     <div class="card-panel table-wrap">
@@ -302,6 +389,33 @@ onMounted(() => void run())
         />
       </StateBlock>
     </div>
+
+    <!-- D5：搜索结果 -->
+    <NModal
+      v-model:show="showSearch"
+      preset="card"
+      :title="`搜索结果：${searchHits.length} 条`"
+      style="width: 720px; max-width: 94vw"
+      :bordered="false"
+    >
+      <div v-if="searching" class="muted">搜索中…</div>
+      <div v-else-if="searchHits.length === 0" class="muted">没有匹配的节目</div>
+      <div v-else class="hits">
+        <div v-for="(h, i) in searchHits" :key="i" class="hit">
+          <div class="hit-title">{{ h.title }}</div>
+          <div class="hit-meta">
+            <span>{{ h.channel_name || h.xmltv_id }}</span>
+            <span v-if="h.category">· {{ h.category }}</span>
+            <span>· {{ fmtDateTime(h.start_at) }} ~ {{ fmtDateTime(h.end_at) }}</span>
+          </div>
+        </div>
+      </div>
+      <template #footer>
+        <NSpace justify="end">
+          <NButton quaternary @click="showSearch = false">关闭</NButton>
+        </NSpace>
+      </template>
+    </NModal>
 
     <NModal
       v-model:show="showAdd"
@@ -344,6 +458,39 @@ onMounted(() => void run())
 </template>
 
 <style scoped>
+.stats-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 18px;
+  padding: 8px 14px 10px;
+  font-size: 12.5px;
+  color: var(--text-2, #8b949e);
+}
+.stats-bar b {
+  color: var(--text-1, #e6edf3);
+  font-weight: 600;
+}
+.hits {
+  max-height: 52vh;
+  overflow: auto;
+}
+.hit {
+  padding: 8px 2px;
+  border-bottom: 1px solid rgba(139, 148, 158, 0.15);
+}
+.hit-title {
+  color: #e2ecf1;
+  font-size: 13.5px;
+}
+.hit-meta {
+  margin-top: 2px;
+  font-size: 12px;
+  color: #8b949e;
+}
+.muted {
+  color: #8b949e;
+  font-size: 13px;
+}
 .table-wrap {
   padding: 6px 6px 2px;
   overflow: hidden;

@@ -149,6 +149,40 @@ export interface EpgSourceInput {
   kind?: string
 }
 
+/** EPG 总览统计（D1）。 */
+export interface EpgStats {
+  sources: number
+  enabled_sources: number
+  channels: number
+  programs: number
+  earliest_start: number
+  latest_end: number
+  covered_days: number
+  last_sync: number
+  db_bytes: number
+  keep_days: number
+}
+
+/** 节目搜索结果（D5）。 */
+export interface EpgProgramHit {
+  epg_channel_id: number
+  xmltv_id: string
+  channel_name: string
+  title: string
+  start_at: number
+  end_at: number
+  category: string
+}
+
+/** EPG 操作审计（D3）。 */
+export interface EpgAuditEntry {
+  id: number
+  action: string
+  target: string
+  detail: string
+  created_at: number
+}
+
 /** 单个源的刷新明细（A3）。 */
 export interface EpgRefreshResult {
   id: number

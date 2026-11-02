@@ -31,7 +31,7 @@ targets:
       path: LITVApp/Info.plist
       properties:
         CFBundleDisplayName: LITV
-        CFBundleShortVersionString: "0.0.5"
+        CFBundleShortVersionString: "0.1.0"
         CFBundleVersion: "1"
         UILaunchScreen: {}
         UISupportedInterfaceOrientations:

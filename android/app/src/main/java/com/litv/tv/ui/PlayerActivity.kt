@@ -197,10 +197,21 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         val useTexture = mode != "surface"
         Log.i(TAG, "渲染方式=$mode 使用=" + if (useTexture) "TextureView" else "SurfaceView")
 
-        // PlayerView 是主渲染目标（Exo 用它）；只有显式选 surface 才退回 SurfaceView
-        playerView.visibility = if (useTexture) android.view.View.VISIBLE else android.view.View.GONE
-        surface.visibility = android.view.View.GONE
-        surfaceTex.visibility = android.view.View.GONE
+        // 渲染目标必须真正 VISIBLE。
+        //
+        // 这里曾经把 surfaceTex 设成 GONE，而 GONE 的视图**不参与布局**，
+        // onSurfaceTextureAvailable 永远不会回调 —— videoSurface 一直是 null，
+        // VLC / mpv 拿不到 Surface，画面全黑。
+        // 这台电视的 Exo 硬解会失败并回退到 VLC，于是表现为「电视无法播放」。
+        //
+        // 两个目标互斥：按「渲染方式」只显示一个，另一个 GONE。
+        surface.visibility = if (useTexture) android.view.View.GONE else android.view.View.VISIBLE
+        surfaceTex.visibility = if (useTexture) android.view.View.VISIBLE else android.view.View.GONE
+
+        // PlayerView 只给 Exo 用。它在布局里位于最上层，
+        // 给 VLC / mpv 时必须隐藏，否则会盖住下面的渲染目标。
+        // 初始显示它（默认链首选 Exo），真正的切换在 onEngineChanged 里做。
+        playerView.visibility = android.view.View.VISIBLE
 
         if (useTexture) {
             surfaceTex.surfaceTextureListener = object : android.view.TextureView.SurfaceTextureListener {
@@ -701,6 +712,13 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
 
     override fun onEngineChanged(kind: EngineKind) {
         osdEngine.text = kind.label
+        // 按实际选中的内核切换渲染目标。
+        //
+        // Exo 用 media3 的 PlayerView（它自己管 Surface）；
+        // VLC / mpv 用外部 Surface（TextureView / SurfaceView）。
+        // PlayerView 在布局里 z 序最高，给 VLC / mpv 时不隐藏就会盖住画面。
+        val isExo = kind == EngineKind.EXO
+        playerView.visibility = if (isExo) View.VISIBLE else View.GONE
     }
 
     override fun onPrepared(width: Int, height: Int) = Unit

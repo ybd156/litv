@@ -77,6 +77,18 @@ type Subscriber struct {
 // Dropped 返回因下游太慢而丢弃的块数（用于诊断卡顿）。
 func (s *Subscriber) Dropped() int64 { return s.dropped.Load() }
 
+// subscriberCount 返回当前订阅者数量。
+//
+// 用于判断上游是否「空闲」（可以为了腾名额而回收）。
+// subs 由 u.mu 保护，这里必须走同一把锁，否则 -race 会报 DATA RACE。
+// 锁顺序：调用方持 h.mu，这里再取 u.mu —— 与 close()/isClosed() 的顺序一致，
+// 不会形成反向依赖。
+func (u *Upstream) subscriberCount() int {
+	u.mu.RLock()
+	defer u.mu.RUnlock()
+	return len(u.subs)
+}
+
 // isClosed 报上游是否已经收尾。
 //
 // 为什么要包一层而不是直接读 u.closed：closed 由 u.mu 保护，
@@ -137,8 +149,14 @@ func (h *Hub) Subscribe(ctx context.Context, channelID int64, url string, header
 		// B02：在真正创建之前原子地检查全局上限。
 		// 检查与插入都在 h.mu 内完成，所以并发请求不会同时越过限制。
 		// 只有"新增"才受限；替换同频道的上游不算涨数（它本来就在 map 里）。
-		if up == nil && h.opts.MaxUpstreams > 0 {
-			if h.liveCountLocked() >= h.opts.MaxUpstreams {
+		if up == nil && h.opts.MaxUpstreams > 0 && h.liveCountLocked() >= h.opts.MaxUpstreams {
+			// 先尝试回收一个**空闲**上游，再决定是否拒绝。
+			//
+			// 为什么必须这样：上游在最后一个订阅者离开后还要等 IdleTimeout
+			// （默认 60 秒）才真正回收。若把"等待回收的空闲连接"也算满，
+			// 用户连换几个台就会撞上限——表现为"换到某个台突然播不了"。
+			// 限额的本意是限制**同时在看的流**，不是限制历史残留。
+			if !h.evictIdleLocked() {
 				h.mu.Unlock()
 				return nil, ErrTooManyStreams
 			}
@@ -217,6 +235,29 @@ func (h *Hub) liveCountLocked() int {
 		}
 	}
 	return n
+}
+
+// evictIdleLocked 关闭并移除一个空闲上游，给新请求腾出名额。
+//
+// 判定「空闲」要带宽限期：刚创建、尚未完成首次订阅的上游同样是 0 订阅者，
+// 若立刻回收会误伤刚刚发起的播放。所以只回收「存在了一段时间且确实没人看」的。
+//
+// 已关闭但仍留在 map 里的条目也顺手清掉：它不占资源，但会污染计数。
+// 返回 true 表示腾出了名额。
+func (h *Hub) evictIdleLocked() bool {
+	const grace = 3 * time.Second
+	for id, u := range h.ups {
+		if u == nil || u.isClosed() {
+			delete(h.ups, id)
+			return true
+		}
+		if u.subscriberCount() == 0 && time.Since(u.started) > grace {
+			delete(h.ups, id)
+			u.close()
+			return true
+		}
+	}
+	return false
 }
 
 // ---------- Upstream 内部 ----------

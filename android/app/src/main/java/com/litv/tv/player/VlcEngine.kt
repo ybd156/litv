@@ -42,6 +42,20 @@ class VlcEngine : PlayerEngine {
     override fun attach(context: Context, surface: android.view.Surface?, container: ViewGroup?) {
         videoSurface = surface
         appCtx = context.applicationContext
+
+        // Surface 可能**晚于** prepare 就绪（TextureView 要等一次布局）。
+        // 那种情况下 prepare 里拿不到 Surface，vlcVout 没挂上，
+        // 画面永远出不来。Surface 到达后必须补挂一次。
+        val mp = player
+        if (mp != null && surface != null) {
+            try {
+                mp.vlcVout.setVideoSurface(surface, null)
+                mp.vlcVout.attachViews()
+                Log.i(TAG, "Surface 晚到，已补挂 VLC 画面")
+            } catch (t: Throwable) {
+                Log.w(TAG, "补挂 VLC 画面出错", t)
+            }
+        }
     }
 
     private fun ensureLib(context: Context): LibVLC {

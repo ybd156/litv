@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sync"
 	"testing"
+	"time"
 )
 
 // sub 是测试里订阅的简写，统一补齐 headers 参数。
@@ -178,5 +179,64 @@ func TestReleasedSlotCanBeReused(t *testing.T) {
 
 	if _, err := sub(h, 2, "http://127.0.0.1:1/new.ts"); err != nil {
 		t.Fatalf("释放额度后仍被拒: %v", err)
+	}
+}
+
+// TestIdleUpstreamEvictedInsteadOfRejecting 是 B02 限额语义的回归测试。
+//
+// 背景：上游在最后一个订阅者离开后还要等 IdleTimeout（默认 60 秒）才回收。
+// 如果直接把"等待回收的空闲连接"也算满，用户连换几个台就会撞上限——
+// 表现为"换到某个台突然播不了"。限额的本意是限制**同时在看的流**，
+// 所以满额时应当先回收空闲上游，而不是直接拒绝。
+func TestIdleUpstreamEvictedInsteadOfRejecting(t *testing.T) {
+	opts := testOptions()
+	opts.MaxUpstreams = 2
+	h := NewHub(opts)
+	defer h.Close()
+
+	// 造两个"空闲已久"的上游：没有订阅者，且 started 已在宽限期之外
+	for i := 0; i < 2; i++ {
+		u := makeTestUpstream(opts, int64(i+1), fmt.Sprintf("http://x/%d.ts", i))
+		u.started = time.Now().Add(-time.Minute)
+		h.mu.Lock()
+		h.ups[int64(i+1)] = u
+		h.mu.Unlock()
+	}
+	if got := h.Count(); got != 2 {
+		t.Fatalf("初始应有 2 个上游，实际 %d", got)
+	}
+
+	// 满额，但都是空闲的：应当回收一个，让新请求通过
+	if _, err := sub(h, 99, "http://127.0.0.1:1/new.ts"); err != nil {
+		t.Fatalf("空闲上游没有被回收，新请求被拒: %v（换台会撞上限）", err)
+	}
+}
+
+// TestActiveUpstreamsNotEvicted 确认"有人在看"的上游不会被回收。
+//
+// 这是上一条的反面：不能为了接新请求就把正在播的流踢掉。
+func TestActiveUpstreamsNotEvicted(t *testing.T) {
+	opts := testOptions()
+	opts.MaxUpstreams = 2
+	h := NewHub(opts)
+	defer h.Close()
+
+	// 两个都有订阅者的上游（通过 sub 建立，subs 非空）
+	for i := 0; i < 2; i++ {
+		u := fmt.Sprintf("http://127.0.0.1:1/a%d.ts", i)
+		if _, err := sub(h, int64(i+1), u); err != nil {
+			t.Fatalf("建立第 %d 个上游失败: %v", i+1, err)
+		}
+	}
+	// 把 started 拨到宽限期之外，确保不是"因为太新"才没被回收
+	h.mu.Lock()
+	for _, u := range h.ups {
+		u.started = time.Now().Add(-time.Minute)
+	}
+	h.mu.Unlock()
+
+	// 满额且都在用：必须拒绝
+	if _, err := sub(h, 99, "http://127.0.0.1:1/new.ts"); err == nil {
+		t.Fatal("正在播放的上游被回收了，新请求挤掉了别人的流")
 	}
 }

@@ -37,6 +37,18 @@ class MpvEngine(private val avs3Mode: Boolean = false) : PlayerEngine, MPVLib.Li
     override fun attach(context: Context, surface: android.view.Surface?, container: ViewGroup?) {
         appContext = context.applicationContext
         videoSurface = surface
+
+        // Surface 可能晚于 prepare 就绪（TextureView 要等一次布局）。
+        // prepare 里拿不到 Surface 就不会 attachSurface，画面永远出不来。
+        // 只在 mpv 已经创建之后补挂，避免在未初始化时调 native。
+        if (surface != null && created) {
+            try {
+                MPVLib.attachSurface(surface)
+                Log.i(TAG, "Surface 晚到，已补挂 mpv 画面")
+            } catch (t: Throwable) {
+                Log.w(TAG, "补挂 mpv 画面出错", t)
+            }
+        }
     }
 
     override fun prepare(url: String, headers: Map<String, String>, bufferMs: Int, decode: String) {

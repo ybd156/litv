@@ -75,9 +75,13 @@ struct PlayerView: View {
                         }
                     }
                 }
+                // 必须显式撑满：UIViewRepresentable 默认按 UIView 的理想尺寸布局，
+                // 而裸 UIView 没有 intrinsic size，结果画面缩成一小块。
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .ignoresSafeArea()
             } else if let p = player {
                 VideoPlayer(player: p)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .ignoresSafeArea()
             }
 

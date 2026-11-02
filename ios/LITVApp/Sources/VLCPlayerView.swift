@@ -62,6 +62,9 @@ struct VLCPlayerView: UIViewRepresentable {
     func makeUIView(context: Context) -> UIView {
         let view = UIView()
         view.backgroundColor = .black
+        // 让 UIView 跟着 SwiftUI 给的尺寸走。不设这个的话，
+        // 画面会保持一个很小的初始尺寸，看起来"播放框缩在角落/下方"。
+        view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
 
         let player = VLCMediaPlayer()
         player.drawable = view

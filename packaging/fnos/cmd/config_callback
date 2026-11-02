@@ -43,6 +43,31 @@ replace_line_marked() {
     mv -f "${file}.tmp" "${file}"
 }
 
+# yaml_dq() —— 把任意字符串编码成可安全嵌入 YAML 双引号标量的形式。
+#
+# R18：旧实现把密码直接塞进引号里。合法密码只要含一个 " 或 \，
+# 写出的 YAML 就变成另一个值，甚至解析失败、服务起不来——
+# 用户看到的是"改个密码就装不上"，而且要到重启才发现。
+#
+# 双引号标量里 \ 和 " 必须转义；换行会让标量跨行，直接拒绝。
+yaml_dq() {
+    local s="$1"
+    case "${s}" in
+        *$'\n'*) return 1 ;;
+    esac
+    local out="" i=0 n=${#s} ch
+    while [ "$i" -lt "$n" ]; do
+        ch="${s:$i:1}"
+        case "${ch}" in
+            \\) out="${out}\\\\" ;;
+            \")  out="${out}\\\"" ;;
+            *)  out="${out}${ch}" ;;
+        esac
+        i=$((i + 1))
+    done
+    printf '"%s"' "${out}"
+}
+
 if [ ! -f "${CONFIG}" ]; then
     echo "配置文件不存在: ${CONFIG}，请重新安装应用" >"${TRIM_TEMP_LOGFILE:-/dev/null}" 2>/dev/null || true
     log "错误: 配置文件不存在 ${CONFIG}"
@@ -80,7 +105,12 @@ case "${NEW_PWD}" in
         ;;
 esac
 if [ -n "${NEW_PWD}" ]; then
-    if replace_line_marked "${CONFIG}" '@@ADMIN_PASSWORD@@' "  admin_password: \"${NEW_PWD}\"     # @@ADMIN_PASSWORD@@"; then
+    # R18：编码后再写，避免 " 与 \ 破坏 YAML
+    if ! PWD_ENC="$(yaml_dq "${NEW_PWD}")"; then
+        log "密码含换行符，拒绝"
+        exit 1
+    fi
+    if replace_line_marked "${CONFIG}" '@@ADMIN_PASSWORD@@' "  admin_password: ${PWD_ENC}     # @@ADMIN_PASSWORD@@"; then
         log "管理员密码已更新（长度 ${#NEW_PWD}）"
         # 用户已自行设置密码，初始随机密码文件就没用了
         rm -f "${TRIM_PKGVAR}/initial_admin_password" 2>/dev/null || true

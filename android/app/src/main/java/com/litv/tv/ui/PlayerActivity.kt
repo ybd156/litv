@@ -514,10 +514,28 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         // 原来直接 submit(channels) 会把还没加载的空列表刷进去，频道列就是空的。
         applyChannelFilter()
         refreshEpgColumn()
-        val i = channels.indexOfFirst { it.id == current?.id }
-        if (i >= 0) {
-            panelList.scrollToPosition(i)
-            panelList.post { panelList.getChildAt(i)?.requestFocus() }
+
+        // 把焦点放到当前频道上。
+        //
+        // 这里原来用 panelList.getChildAt(i) —— 但 getChildAt 收的是
+        // **可视区子索引**，不是适配器位置。频道在列表靠后时它返回 null，
+        // 焦点就没落到任何一项上：面板打开了，但 OK 键按下去没有任何反应，
+        // 用户看到的就是「频道页无法换台」。
+        //
+        // 正确做法：先按适配器位置滚动，再用 findViewHolderForAdapterPosition
+        // 取真正的 itemView；取不到就退回到让列表本身获得焦点。
+        val idx = channels.indexOfFirst { it.id == current?.id }
+        val pos = if (idx >= 0) idx else 0
+        if (channels.isNotEmpty()) {
+            (panelList.layoutManager as? LinearLayoutManager)?.scrollToPositionWithOffset(pos, 0)
+            panelList.post {
+                val vh = panelList.findViewHolderForAdapterPosition(pos)
+                if (vh != null) {
+                    vh.itemView.requestFocus()
+                } else {
+                    panelList.requestFocus()
+                }
+            }
         }
         hideOsd()
     }

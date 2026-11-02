@@ -135,6 +135,15 @@ struct HomeView: View {
 
     private func row(_ ch: Channel) -> some View {
         HStack(spacing: 12) {
+            // 台号：和 Android 端一致，方便按数字找台
+            if ch.number > 0 {
+                Text("\(ch.number)")
+                    .font(.system(size: 12, weight: .medium))
+                    .monospacedDigit()
+                    .foregroundColor(Color(red: 0.176, green: 0.831, blue: 0.749))
+                    .frame(minWidth: 26, alignment: .trailing)
+            }
+
             AsyncImage(url: URL(string: ch.logo)) { img in
                 img.resizable().scaledToFit()
             } placeholder: {

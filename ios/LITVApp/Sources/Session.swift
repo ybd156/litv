@@ -23,6 +23,10 @@ final class Session: ObservableObject {
     @Published var favorites: Set<Int64> = []
     @Published var nowTitles: [Int64: String] = [:]
 
+    /// 最近一次播放的频道。底部「播放」tab 靠它决定显示什么：
+    /// 有就继续播这个台，没有就提示去「频道」页选一个。
+    @Published var lastChannel: Channel?
+
     // 状态
     @Published var loading = false
     @Published var statusText = ""

@@ -35,7 +35,9 @@ struct RootView: View {
             // 设备注册后服务端**立刻返回 token**，但状态还是 pending——
             // 拿这个 token 调接口一律被拒（2003）。必须等管理员批准。
             if session.isBound {
-                HomeView()
+                // 底部四 tab，与 Android 端保持一致：
+                // 播放 / 频道 / 遥控器 / 设置
+                RootTabs()
             } else {
                 BindView()
             }

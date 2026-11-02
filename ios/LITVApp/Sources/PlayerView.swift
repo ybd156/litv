@@ -242,6 +242,8 @@ struct PlayerView: View {
     // ---------------------------------------------------------------- 播放
 
     private func start() async {
+        // 记录当前台：底部「播放」tab 下次打开时直接续上
+        session.lastChannel = active
         loading = true
         errorText = nil
         fallbackInFlight = false

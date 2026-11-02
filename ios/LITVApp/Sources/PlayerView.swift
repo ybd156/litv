@@ -142,27 +142,30 @@ struct PlayerView: View {
     /// 之前只有 OSD 显示信息，没有任何操作控件——用户只能靠手势，
     /// 而且不知道能干什么。这里补齐成常规播放器的样子。
     private var controls: some View {
-        HStack(spacing: 22) {
-            Button { switchBy(-1) } label: {
-                Image(systemName: "backward.end.fill").font(.system(size: 20))
-            }
-            Button { togglePause() } label: {
-                Image(systemName: paused ? "play.fill" : "pause.fill").font(.system(size: 26))
-            }
-            Button { switchBy(+1) } label: {
-                Image(systemName: "forward.end.fill").font(.system(size: 20))
-            }
-            Button { toggleMute() } label: {
-                Image(systemName: muted ? "speaker.slash.fill" : "speaker.wave.2.fill")
-                    .font(.system(size: 20))
-            }
+        HStack(spacing: 18) {
+            ctlButton("backward.end.fill", "上一台", size: 18) { switchBy(-1) }
+            ctlButton(paused ? "play.fill" : "pause.fill", paused ? "播放" : "暂停", size: 22) { togglePause() }
+            ctlButton("forward.end.fill", "下一台", size: 18) { switchBy(+1) }
+            ctlButton(muted ? "speaker.slash.fill" : "speaker.wave.2.fill", muted ? "取消静音" : "静音", size: 18) { toggleMute() }
         }
         .foregroundColor(.white)
-        .padding(.horizontal, 22)
-        .padding(.vertical, 12)
+        .padding(.horizontal, 18)
+        .padding(.vertical, 10)
         .background(.ultraThinMaterial)
-        .cornerRadius(24)
+        .cornerRadius(20)
         .padding(.bottom, 18)
+    }
+
+    /// 图标 + 文字两行。只有图标的话不看说明书不知道哪个是换台、哪个是静音。
+    private func ctlButton(_ icon: String, _ label: String, size: CGFloat,
+                           _ action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            VStack(spacing: 3) {
+                Image(systemName: icon).font(.system(size: size))
+                Text(label).font(.system(size: 10))
+            }
+            .frame(minWidth: 52)
+        }
     }
 
     private func togglePause() {

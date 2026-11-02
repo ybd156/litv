@@ -4,7 +4,7 @@
     <string name="home_title">LITV 直播</string>
     <string name="loading">正在加载频道…</string>
     <string name="empty_channels">还没有频道\n请先在管理台导入直播源</string>
-    <string name="bind_title">绑定这台电视</string>
+    <string name="bind_title">绑定这台设备</string>
     <string name="bind_hint">在管理台「终端设备」页批准这台设备，或输入 6 位绑定码</string>
     <string name="bind_code_label">绑定码</string>
     <string name="bind_server_label">服务器地址</string>

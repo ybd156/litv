@@ -161,7 +161,7 @@ class BindActivity : AppCompatActivity() {
     }
 
     private companion object {
-        const val DEFAULT_PORT = "9527"
+        const val DEFAULT_PORT = "28027"
     }
 
     /** 显示管理台二维码：手机扫完直接进「终端设备」页批准这台电视。 */

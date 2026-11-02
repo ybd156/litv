@@ -25,7 +25,7 @@ struct BindView: View {
 
     @FocusState private var focusedField: Int?
 
-    private static let defaultPort = "9527"
+    private static let defaultPort = "28027"
 
     var body: some View {
         VStack(spacing: 20) {

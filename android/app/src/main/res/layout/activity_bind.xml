@@ -78,6 +78,8 @@
             <EditText
                 android:id="@+id/portInput"
                 style="@style/AddrBox"
+                android:layout_width="88dp"
+                android:layout_weight="0"
                 android:maxLength="5" />
         </LinearLayout>
 
@@ -86,7 +88,7 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="8dp"
-            android:text="端口默认 9527。若服务端提示端口被占用，用管理台概览页显示的实际端口。"
+            android:text="端口默认 28027。若服务端提示端口被占用，用管理台概览页显示的实际端口。"
             android:textColor="#66FFFFFF"
             android:textSize="12sp" />
 
@@ -98,7 +100,7 @@
             android:layout_marginTop="10dp"
             android:autofillHints="none"
             android:background="@drawable/bg_card"
-            android:hint="tv.example.com 或 tv.example.com:9527"
+            android:hint="tv.example.com 或 tv.example.com:28027"
             android:inputType="textUri"
             android:paddingHorizontal="14dp"
             android:paddingVertical="12dp"

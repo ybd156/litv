@@ -28,7 +28,7 @@ permissions:
   contents: write
 
 env:
-  DEFAULT_VERSION: "0.1.4"
+  DEFAULT_VERSION: "0.1.5"
 
 jobs:
   # ---------------------------------------------------------------- Android

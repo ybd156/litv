@@ -188,6 +188,13 @@ func (r *Ring) Open(backSeconds int) (*Reader, error) {
 		offset = 0
 	}
 
+	// 关键：把估算出来的字节偏移对齐到关键帧。
+	//
+	// 上面的 offset 是「按时间比例 × 段大小」估出来的，必然落在 GOP 中间。
+	// 从 GOP 中间开始喂给播放器，解码器拿不到 IDR，画面就是黑的——
+	// 直到下一个关键帧到来（可能好几秒）。这就是「点回看直接黑屏」的原因。
+	offset = alignToKeyframe(seg.Path, offset)
+
 	paths := make([]string, 0, len(r.segs)-idx)
 	for _, s := range r.segs[idx:] {
 		if s.Bytes > 0 {
@@ -221,6 +228,76 @@ func (r *Ring) Cleanup() {
 	for _, s := range segs {
 		_ = os.Remove(s.Path)
 	}
+}
+
+// alignToKeyframe 把近似字节偏移对齐到 H.264 的关键帧（IDR）。
+//
+// 为什么必须做：时移段是按字节截断的（默认 64MB 一段），段内偏移又是
+// 按「时间比例 × 段大小」估出来的，几乎不可能正好落在关键帧上。
+// 从 GOP 中间开始解码，解码器拿不到 IDR，画面就是黑的——要等下一个关键帧，
+// 用户看到的就是「点回看直接黑屏，过一会儿才出画面」。
+//
+// 做法：往前回退一个余量（估算可能已经越过关键帧），向后扫 IDR 起始码
+// （00 00 01 65 / 00 00 00 01 65），找到后把偏移退到该 TS 包的 0x47 同步字节，
+// 让解复用器能从包边界开始同步。
+//
+// 扫不到就退回原偏移——宁可黑一下，也不要读错位置。
+func alignToKeyframe(path string, approx int64) int64 {
+	const (
+		backScan = 1 << 20 // 往前回退 1MB（覆盖一个较长 GOP）
+		fwdScan  = 4 << 20 // 往后最多扫 4MB
+		tsPacket = 188
+	)
+	f, err := os.Open(path)
+	if err != nil {
+		return approx
+	}
+	defer f.Close()
+
+	start := approx - backScan
+	if start < 0 {
+		start = 0
+	}
+	if _, err := f.Seek(start, io.SeekStart); err != nil {
+		return approx
+	}
+	buf := make([]byte, fwdScan)
+	n, _ := io.ReadFull(f, buf)
+	if n < 5 {
+		return approx
+	}
+	buf = buf[:n]
+
+	// 找 IDR 起始码
+	idr := -1
+	for i := 0; i+4 < n; i++ {
+		// 00 00 01 65
+		if buf[i] == 0 && buf[i+1] == 0 && buf[i+2] == 1 && buf[i+3] == 0x65 {
+			idr = i
+			break
+		}
+		// 00 00 00 01 65
+		if i+5 < n && buf[i] == 0 && buf[i+1] == 0 && buf[i+2] == 0 && buf[i+3] == 1 && buf[i+4] == 0x65 {
+			idr = i
+			break
+		}
+	}
+	if idr < 0 {
+		return approx
+	}
+
+	// 退到该关键帧所在的 TS 包边界（往前找 0x47 同步字节）
+	pkt := idr
+	for back := 0; back < tsPacket && pkt > 0; back++ {
+		if buf[pkt] == 0x47 {
+			break
+		}
+		pkt--
+	}
+	if buf[pkt] != 0x47 {
+		pkt = idr // 没找到同步字节就用关键帧位置本身
+	}
+	return start + int64(pkt)
 }
 
 // Reader 顺序读多段录制文件。

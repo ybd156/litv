@@ -10,7 +10,7 @@
                 "type": "text",
                 "field": "wizard_port",
                 "label": "${install.portLabel}",
-                "initValue": "9527",
+                "initValue": "28027",
                 "placeholder": "${install.portPlaceholder}",
                 "rules": [
                     { "required": true, "message": "${install.portRequiredMsg}" },

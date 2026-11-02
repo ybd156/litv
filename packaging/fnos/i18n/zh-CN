@@ -13,9 +13,9 @@ title="LITV 直播管理"
 
 [install]
 stepTitle="LITV 安装配置"
-helpText="LITV 需要设置一个独立服务端口（供 Android TV / 手机等原生客户端直连，管理台本身走飞牛统一网关，不占用该端口）和管理员密码。不确定端口就保持默认 9527。"
+helpText="LITV 需要设置一个独立服务端口（供 Android TV / 手机等原生客户端直连，管理台本身走飞牛统一网关，不占用该端口）和管理员密码。不确定端口就保持默认 28027。"
 portLabel="服务端口（原生客户端直连）"
-portPlaceholder="默认 9527"
+portPlaceholder="默认 28027"
 portRequiredMsg="端口不能为空"
 portPatternMsg="端口必须是数字（1-65535）"
 passwordLabel="管理员密码"

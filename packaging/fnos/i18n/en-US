@@ -12,9 +12,9 @@ title="LITV Live"
 
 [install]
 stepTitle="LITV setup"
-helpText="Choose a standalone service port for native clients (Android TV / mobile). The admin console itself is served through the fnOS unified gateway and does not use this port. Keep the default 9527 if unsure."
+helpText="Choose a standalone service port for native clients (Android TV / mobile). The admin console itself is served through the fnOS unified gateway and does not use this port. Keep the default 28027 if unsure."
 portLabel="Service port (native clients)"
-portPlaceholder="Default 9527"
+portPlaceholder="default 28027"
 portRequiredMsg="Port is required"
 portPatternMsg="Port must be numeric (1-65535)"
 passwordLabel="Admin password"

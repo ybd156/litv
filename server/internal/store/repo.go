@@ -622,24 +622,114 @@ func (s *Store) CreateBindCode(ctx context.Context, code string, deviceID, ttlSe
 	return err
 }
 
-// ConsumeBindCode 消费绑定码，返回对应设备 ID。
-func (s *Store) ConsumeBindCode(ctx context.Context, code string) (int64, error) {
+// 绑定码相关的错误。调用方要能区分"码错了"和"码是对的但不是给你的"，
+// 否则会出现"错设备消费了码、真正该消费的设备反而绑不上"。
+var (
+	ErrBindCodeNotFound = errors.New("绑定码不存在")
+	ErrBindCodeUsed     = errors.New("绑定码已被使用")
+	ErrBindCodeExpired  = errors.New("绑定码已过期")
+	ErrBindCodeMismatch = errors.New("绑定码不属于这台设备")
+)
+
+// BindCodeDeviceID 读出绑定码应绑定的设备 ID（0 表示通用邀请码）。
+//
+// 只读校验，不消费。注册流程先用它判断"这个码是不是给我的"，
+// 确认后再走事务消费——不能像以前那样先标 used 再比对。
+func (s *Store) BindCodeDeviceID(ctx context.Context, code string) (int64, error) {
 	var deviceID, exp int64
 	var used int
-	err := s.db.QueryRowContext(ctx, `SELECT device_id,expires_at,used FROM bind_codes WHERE code=?`, code).Scan(&deviceID, &exp, &used)
+	err := s.db.QueryRowContext(ctx, `SELECT device_id,expires_at,used FROM bind_codes WHERE code=?`, code).
+		Scan(&deviceID, &exp, &used)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return 0, ErrNotFound
+			return 0, ErrBindCodeNotFound
 		}
 		return 0, err
 	}
-	if used != 0 || exp < Now() {
-		return 0, fmt.Errorf("绑定码已使用或已过期")
+	if used != 0 {
+		return 0, ErrBindCodeUsed
 	}
-	if _, err := s.db.ExecContext(ctx, `UPDATE bind_codes SET used=1 WHERE code=?`, code); err != nil {
-		return 0, err
+	if exp < Now() {
+		return 0, ErrBindCodeExpired
 	}
 	return deviceID, nil
+}
+
+// RegisterWithBindCode 在一个事务里完成「建建设备 → 消费码 → 批准」。
+//
+// 这是绑定链路的唯一正确入口，解决三个原有缺陷：
+//  1. 通用邀请码（device_id=0）以前永远匹配不上新设备自增 ID，绑不上；
+//  2. 码在比对之前就被标 used，错的设备会把码白白吃掉；
+//  3. 建建设备和消费码分两次写，中途失败会留下半成品状态。
+//
+// code 为空时等价于普通注册（只建设备、状态 pending）。
+func (s *Store) RegisterWithBindCode(ctx context.Context, key, tokenHash, name, platform, model, code string) (int64, string, error) {
+	if IsReservedDevicePlatform(platform) {
+		return 0, "", ErrReservedDevicePlatform
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, "", err
+	}
+	defer tx.Rollback()
+
+	now := Now()
+	res, err := tx.ExecContext(ctx, `INSERT INTO devices(device_key,token_hash,name,platform,model,status,created_at,last_seen)
+		VALUES(?,?,?,?,?,'pending',?,?)`, key, tokenHash, name, platform, model, now, now)
+	if err != nil {
+		return 0, "", err
+	}
+	id, err := res.LastInsertId()
+	if err != nil {
+		return 0, "", err
+	}
+
+	status := "pending"
+	if code != "" {
+		// 条件更新：只有未使用且未过期的码才能被消费，且必须成功一次。
+		// 用 UPDATE ... WHERE used=0 AND expires_at>=? 保证并发兑换只有一个赢家。
+		var owner int64
+		var used int
+		err := tx.QueryRowContext(ctx, `SELECT device_id,used FROM bind_codes WHERE code=?`, code).Scan(&owner, &used)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return 0, "", ErrBindCodeNotFound
+			}
+			return 0, "", err
+		}
+		if used != 0 {
+			return 0, "", ErrBindCodeUsed
+		}
+		// device_id=0 是通用邀请码，谁都能用；非 0 只允许码上指定的设备。
+		if owner != 0 {
+			// 专有码：码里记录的设备必须是"已存在且属于这台设备 key"的，
+			// 或者直接由管理员针对某台存量设备生成、现在由同 key 设备重新兑换。
+			var existingKey string
+			if qerr := tx.QueryRowContext(ctx, `SELECT device_key FROM devices WHERE id=?`, owner).Scan(&existingKey); qerr == nil {
+				if existingKey != key {
+					return 0, "", ErrBindCodeMismatch
+				}
+			}
+		}
+		upd, uerr := tx.ExecContext(ctx, `UPDATE bind_codes SET used=1 WHERE code=? AND used=0 AND expires_at>=?`, code, now)
+		if uerr != nil {
+			return 0, "", uerr
+		}
+		if n, _ := upd.RowsAffected(); n != 1 {
+			// 并发下被别人先兑换了：整个事务回滚，不留下设备。
+			return 0, "", ErrBindCodeUsed
+		}
+		if _, aerr := tx.ExecContext(ctx, `UPDATE devices SET status='bound', bound_at=? WHERE id=?`, now, id); aerr != nil {
+			return 0, "", aerr
+		}
+		status = "bound"
+	}
+
+	if err := tx.Commit(); err != nil {
+		return 0, "", err
+	}
+	return id, status, nil
 }
 
 // ---------- favorites ----------

@@ -5,8 +5,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -57,19 +59,30 @@ func (a *API) deviceRegister(w http.ResponseWriter, r *http.Request) {
 		fail(w, http.StatusInternalServerError, 5001, err.Error())
 		return
 	}
-	id, err := a.st.CreateDevice(r.Context(), body.DeviceKey, hash, body.Name, body.Platform, body.Model)
-	if err != nil {
-		// 已存在同一 device_key：说明是重装/重启，直接返回 pending 让用户重新审批
-		fail(w, http.StatusConflict, 2003, "该设备已注册，请在管理台重新批准或使用绑定码")
-		return
-	}
 
-	status := "pending"
-	if body.Code != "" {
-		if did, cerr := a.st.ConsumeBindCode(r.Context(), body.Code); cerr == nil && did == id {
-			_ = a.st.ApproveDevice(r.Context(), id)
-			status = "bound"
+	// 设备注册 + 绑定码消费必须在同一个事务里完成。
+	// 以前是"先 INSERT 设备、再单独消费码、最后批准"，中间任何一步失败
+	// 都会留下半成品（设备在、码被吃、状态还是 pending）。
+	id, status, err := a.st.RegisterWithBindCode(
+		r.Context(), body.DeviceKey, hash, body.Name, body.Platform, body.Model, body.Code)
+	if err != nil {
+		switch {
+		case errors.Is(err, store.ErrReservedDevicePlatform):
+			fail(w, http.StatusBadRequest, 1001, "platform 为保留值")
+		case errors.Is(err, store.ErrBindCodeNotFound):
+			fail(w, http.StatusBadRequest, 2004, "绑定码不存在")
+		case errors.Is(err, store.ErrBindCodeUsed):
+			fail(w, http.StatusBadRequest, 2004, "绑定码已被使用")
+		case errors.Is(err, store.ErrBindCodeExpired):
+			fail(w, http.StatusBadRequest, 2004, "绑定码已过期")
+		case errors.Is(err, store.ErrBindCodeMismatch):
+			fail(w, http.StatusBadRequest, 2004, "绑定码不属于这台设备")
+		default:
+			// 已存在同一 device_key（UNIQUE 冲突）：说明是重装/重启。
+			// 事务已回滚，设备表保持原样，让用户去管理台重新批准或换绑定码。
+			fail(w, http.StatusConflict, 2003, "该设备已注册，请在管理台重新批准或使用绑定码")
 		}
+		return
 	}
 
 	ok(w, map[string]any{
@@ -248,6 +261,7 @@ func (a *API) tvStreams(w http.ResponseWriter, r *http.Request) {
 
 // tvPlay 返回一个带签名的播放地址。终端不需要知道上游长什么样。
 func (a *API) tvPlay(w http.ResponseWriter, r *http.Request) {
+	slog.Info("tvPlay", "channel", pathInt64(r, "id"), "direct", r.URL.Query().Get("direct"))
 	dev, _ := deviceFrom(r.Context())
 	id := pathInt64(r, "id")
 
@@ -682,6 +696,7 @@ func (a *API) verifyStream(r *http.Request) (int64, string, bool) {
 
 // livePlay 是个分发器：告诉客户端该走 TS 还是 HLS。
 func (a *API) livePlay(w http.ResponseWriter, r *http.Request) {
+	slog.Info("livePlay", "path", r.URL.Path)
 	id, _, ok2 := a.verifyStream(r)
 	if !ok2 {
 		fail(w, http.StatusForbidden, 2002, "播放地址无效或已过期")
@@ -821,9 +836,11 @@ func (a *API) liveManifest(w http.ResponseWriter, r *http.Request) {
 		if lastErr != nil {
 			msg += ": " + lastErr.Error()
 		}
+		slog.Warn("manifest 失败", "channel", id, "err", msg)
 		fail(w, http.StatusBadGateway, 4001, msg)
 		return
 	}
+	slog.Info("manifest 成功", "channel", id, "stream", st.ID, "size", len(res.Body))
 	base, _ := url.Parse(res.FinalURL)
 	lines := strings.Split(string(res.Body), "\n")
 	out := make([]string, 0, len(lines))

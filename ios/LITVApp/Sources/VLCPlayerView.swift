@@ -44,9 +44,20 @@ struct VLCPlayerView: UIViewRepresentable {
     var autoplay: Bool = true
     /// 源配置里指定的 User-Agent（空 = 用 VLC 默认）
     var userAgent: String = ""
+    /// 这条线路的完整请求头（R09）。VLCKit 只对 UA / Referer 提供专用 option，
+    /// 其余头没有通用入口，所以这里映射这两类最常见的防盗链校验项。
+    var headers: [String: String] = [:]
     /// 控制条通过它拿到底层播放器
     var control: VLCControl? = nil
     var onState: ((VLCPlaybackState) -> Void)?
+
+    /// 大小写不敏感地在 headers 里找一个头。
+    private func headerValue(_ name: String) -> String {
+        for (k, v) in headers where k.caseInsensitiveCompare(name) == .orderedSame {
+            if !v.isEmpty { return v }
+        }
+        return ""
+    }
 
     func makeUIView(context: Context) -> UIView {
         let view = UIView()
@@ -64,9 +75,17 @@ struct VLCPlayerView: UIViewRepresentable {
         media.addOption("--network-caching=1500")
         media.addOption("--live-caching=1500")
         media.addOption("--avcodec-hw=any")
-        // 源站校验 UA 时必须带，否则 403
-        if !userAgent.isEmpty {
+        // 源站校验 UA 时必须带，否则 403。headers 里的优先级高于历史 ua 字段。
+        let ua = headerValue("User-Agent")
+        if !ua.isEmpty {
+            media.addOption(":http-user-agent=\(ua)")
+        } else if !userAgent.isEmpty {
             media.addOption(":http-user-agent=\(userAgent)")
+        }
+        // R09：Referer 也是常见的防盗链校验项，VLCKit 有专用 option。
+        let ref = headerValue("Referer")
+        if !ref.isEmpty {
+            media.addOption(":http-referrer=\(ref)")
         }
         player.media = media
 
@@ -125,11 +144,15 @@ struct VLCPlayerView: UIViewRepresentable {
 #else
 
 /// 没装 VLCKit 时的占位实现：PlayerView 会据此退回 AVPlayer。
+/// 构造参数必须与 VLCKit 版本保持完全一致，否则 PlayerView 里那处调用
+/// 在"没有 Pod"的构建下编译不过。
 struct VLCPlayerView: View {
     let url: URL
     var autoplay: Bool = true
     /// 源配置里指定的 User-Agent（空 = 用 VLC 默认）
     var userAgent: String = ""
+    /// 这条线路的完整请求头（R09），占位实现不使用，仅为保持签名一致。
+    var headers: [String: String] = [:]
     /// 控制条通过它拿到底层播放器
     var control: VLCControl? = nil
     var onState: ((VLCPlaybackState) -> Void)?

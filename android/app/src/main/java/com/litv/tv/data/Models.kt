@@ -103,7 +103,36 @@ data class PlayInfo(
     val ua: String = "",
     /** direct = 客户端直连源站；relay = 走服务端中转 */
     val mode: String = "relay",
-)
+    /**
+     * 这条线路的完整请求头（服务端已清洗过：去掉了 Authorization / Cookie /
+     * X-Trim-* 等身份头与逐跳头）。
+     *
+     * R09：以前只解码 ua，遇到"要求 Referer 才给流"的源，direct 直连必然 403，
+     * 而 relay 却因为服务端带了头而正常——表现为"直连打不开、中转能看"。
+     * 现在把整份头交给各播放内核。
+     */
+    val headers: Map<String, String> = emptyMap(),
+) {
+    /**
+     * 交给播放内核的最终请求头。
+     *
+     * 内核各自只支持一部分头（Exo 支持任意自定义头，VLC/mpv 走 options），
+     * 但至少先把 UA 和 Referer 这类最常见的校验头带全。
+     * ua 字段是历史字段，headers 里已有 User-Agent 时以 headers 为准。
+     */
+    fun playHeaders(defaultUA: String): Map<String, String> {
+        val out = LinkedHashMap<String, String>()
+        headers.forEach { (k, v) ->
+            if (k.isNotBlank() && v.isNotBlank() && !v.contains('\n') && !v.contains('\r')) {
+                out[k] = v
+            }
+        }
+        if (out.keys.none { it.equals("User-Agent", ignoreCase = true) }) {
+            out["User-Agent"] = ua.ifBlank { defaultUA }
+        }
+        return out
+    }
+}
 
 data class PlayChannel(
     val id: Long = 0,

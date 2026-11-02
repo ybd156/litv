@@ -131,7 +131,7 @@ func resolveFFmpeg(name string) string {
 		"/usr/local/bin",
 		"/opt/ffmpeg/bin",
 		"/opt/bin",
-		"/usr/trim/bin",   // 飞牛 fnOS 自带的组件目录
+		"/usr/trim/bin", // 飞牛 fnOS 自带的组件目录
 		"/vol1/@appstore",
 		"/volume1/@appstore",
 	} {
@@ -146,10 +146,20 @@ func resolveFFmpeg(name string) string {
 // Playlist 返回某频道的 m3u8 内容（必要时先拉起 ffmpeg）。
 // segPrefix 用于把切片 URI 改写成我们自己的出口路径。
 func (m *Manager) Playlist(channelID int64, upstream string, segPrefix string) ([]byte, error) {
+	return m.PlaylistWithHeaders(channelID, upstream, segPrefix, nil)
+}
+
+// PlaylistWithHeaders 与 Playlist 相同，但把线路请求头交给 ffmpeg。
+//
+// R09：源站可能要求特定 UA / Referer 才给流。ffmpeg 默认带自己的 UA，
+// 于是裸 TS 源在 NAS 转封装这一步就被 403，用户看到的是
+// "iOS 播不了、但电视能播"——因为电视走的是另一条链路。
+// 这里把与 relay/分片完全相同的一份头喂给 ffmpeg。
+func (m *Manager) PlaylistWithHeaders(channelID int64, upstream string, segPrefix string, headers map[string]string) ([]byte, error) {
 	if !m.Available() {
 		return nil, fmt.Errorf("服务端未配置 ffmpeg，无法转封装（可在 config.yaml 的 transcode.ffmpeg 指定路径）")
 	}
-	j, err := m.ensure(channelID, upstream)
+	j, err := m.ensure(channelID, upstream, headers)
 	if err != nil {
 		return nil, err
 	}
@@ -232,7 +242,40 @@ func (m *Manager) Stats() []map[string]any {
 
 // ---------------------------------------------------------------- 内部
 
-func (m *Manager) ensure(channelID int64, upstream string) (*Job, error) {
+// buildFFmpegHeaders 把 map 拼成 ffmpeg 的 -headers 参数值。
+//
+// ffmpeg 要求的格式是每条 "Key: value\r\n"，整体作为一个参数字符串。
+// 键必须稳定排序，否则同样的头每次拼出不同顺序，会让 ffmpeg 的缓存
+// 和日志出现无意义的抖动。
+//
+// 含 CRLF 的值直接丢弃：用户导入的源文件是不可信输入，
+// 放行就等于允许往 ffmpeg 的请求里注入额外头。
+func buildFFmpegHeaders(headers map[string]string) string {
+	if len(headers) == 0 {
+		return ""
+	}
+	keys := make([]string, 0, len(headers))
+	for k, v := range headers {
+		if k == "" || strings.ContainsAny(k, ":\r\n") || strings.ContainsAny(v, "\r\n\x00") {
+			continue
+		}
+		keys = append(keys, k)
+	}
+	if len(keys) == 0 {
+		return ""
+	}
+	sort.Strings(keys)
+	var b strings.Builder
+	for _, k := range keys {
+		b.WriteString(k)
+		b.WriteString(": ")
+		b.WriteString(headers[k])
+		b.WriteString("\r\n")
+	}
+	return b.String()
+}
+
+func (m *Manager) ensure(channelID int64, upstream string, headers map[string]string) (*Job, error) {
 	m.mu.Lock()
 	if j, ok := m.jobs[channelID]; ok && !j.exited {
 		m.mu.Unlock()
@@ -252,6 +295,13 @@ func (m *Manager) ensure(channelID int64, upstream string) (*Job, error) {
 		"-hide_banner", "-loglevel", "warning",
 		"-fflags", "nobuffer",
 		"-flags", "low_delay",
+	}
+	// R09：ffmpeg 的 -headers 必须写在 -i 之前，否则对输入不生效。
+	// 值里不能有 CRLF：那是请求头注入。
+	if h := buildFFmpegHeaders(headers); h != "" {
+		args = append(args, "-headers", h)
+	}
+	args = append(args,
 		"-i", upstream,
 		"-c", "copy", // 关键：只转封装不转码
 		"-f", "hls",
@@ -260,7 +310,7 @@ func (m *Manager) ensure(channelID int64, upstream string) (*Job, error) {
 		"-hls_flags", "delete_segments+omit_endlist+independent_segments",
 		"-hls_segment_filename", filepath.Join(dir, "seg%05d.ts"),
 		filepath.Join(dir, "index.m3u8"),
-	}
+	)
 	cmd := exec.CommandContext(ctx, resolveFFmpeg(m.opt.FFmpeg), args...)
 	cmd.Dir = dir
 	if err := cmd.Start(); err != nil {

@@ -348,6 +348,9 @@ func (a *API) tvPlay(w http.ResponseWriter, r *http.Request) {
 		// ua：这条线路专属的 UA（来自源配置）。客户端直连上游时要带上，
 		// 否则源站会 403。为空表示用默认 UA。
 		"ua": st.UserAgent(),
+		// headers：整条线路的请求头（已清洗）。R09 之后两端 DTO 都要解码它，
+		// 让 direct/relay 的自适应切换不至于因为缺头而失败。
+		"headers": a.streamHeaders(id, st),
 	})
 
 	// 记一次播放，供概览页的「今日起播次数」统计
@@ -528,7 +531,9 @@ func (a *API) liveRemuxPlaylist(w http.ResponseWriter, r *http.Request) {
 	// 切片 URI 会被改写为 /live/{id}/remux/{seg}，签名通过查询串补到每个 URI 上
 	segPrefix := fmt.Sprintf("%s/live/%d/remux/", a.cfg.Server.Prefix, id)
 
-	data, err := a.rx.Playlist(id, st.URL, segPrefix)
+	// R09：转封装也必须用同一份线路头。源站校验覆盖整条链路，
+	// ffmpeg 用自己的默认 UA 会被 403，表现为"iOS 播不了但电视能播"。
+	data, err := a.rx.PlaylistWithHeaders(id, st.URL, segPrefix, a.streamHeaders(id, st))
 	if err != nil {
 		fail(w, http.StatusBadGateway, 4001, err.Error())
 		return
@@ -776,9 +781,94 @@ func (a *API) streamUA(ctx context.Context, channelID int64) string {
 	return a.cfg.Stream.UserAgent
 }
 
-// streamFetchOptions 用线路专属的 UA 去抓上游。
+// sanitizedHeaders 把线路配置里的头清洗成可安全外发的形式。
+//
+// 为什么必须清洗：headers_json 来自用户导入的源文件，属于不可信输入。
+//
+// 两类必须去掉的头：
+//  1. 逐跳（hop-by-hop）头，比如 Connection / Host / Content-Length /
+//     Transfer-Encoding。转发它们会让上游行为和预期不符，甚至破坏请求。
+//  2. 身份类头，比如 Authorization / Cookie / X-Trim-*。
+//     我们自己的设备 Bearer token 和管理员身份头**绝对不能**泄露给源站
+//     —— 源站是第三方，给它就等于把凭据送出去。
+func sanitizedHeaders(raw map[string]string) map[string]string {
+	if len(raw) == 0 {
+		return nil
+	}
+	blocked := map[string]bool{
+		"connection":        true,
+		"host":              true,
+		"content-length":    true,
+		"transfer-encoding": true,
+		"upgrade":           true,
+		"proxy-connection":  true,
+		"te":                true,
+		"trailer":           true,
+		"authorization":     true,
+		"cookie":            true,
+		"set-cookie":        true,
+	}
+	out := make(map[string]string, len(raw))
+	for k, v := range raw {
+		lk := strings.ToLower(strings.TrimSpace(k))
+		if lk == "" || blocked[lk] || strings.HasPrefix(lk, "x-trim-") || strings.HasPrefix(lk, "x-litv-") {
+			continue
+		}
+		// 值里不允许换行：防止把用户可控内容注入成额外的头（CRLF 注入）。
+		if strings.ContainsAny(v, "\r\n\x00") {
+			continue
+		}
+		out[k] = strings.TrimSpace(v)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// streamHeaders 返回某条线路该带的请求头（已清洗）。
+//
+// 这是 R09 的统一入口。以前 direct/relay/remux/分片 四条路径各自为政，
+// 有的只传 UA、有的完全不传，导致"只在 UA=X 且 Referer=Y 时才给流"的源
+// 只有其中某一条路径能播，用户看到的是"换个内核就好了/换个入口就好了"。
+func (a *API) streamHeaders(channelID int64, st *store.Stream) map[string]string {
+	var raw map[string]string
+	if st != nil {
+		raw = st.Headers()
+	} else if s, err := a.st.BestStream(context.Background(), channelID); err == nil && s != nil {
+		raw = s.Headers()
+	}
+	h := sanitizedHeaders(raw)
+
+	// UA 单独兜一层：线路没配 UA 时用全局配置，保证总有值。
+	if h == nil {
+		h = map[string]string{}
+	}
+	if _, okUA := findHeaderKey(h, "user-agent"); !okUA {
+		if ua := a.cfg.Stream.UserAgent; ua != "" {
+			h["User-Agent"] = ua
+		}
+	}
+	if len(h) == 0 {
+		return nil
+	}
+	return h
+}
+
+// findHeaderKey 大小写不敏感地找一个头，返回真实键名。
+func findHeaderKey(h map[string]string, want string) (string, bool) {
+	for k := range h {
+		if strings.EqualFold(k, want) {
+			return k, true
+		}
+	}
+	return "", false
+}
+
+// streamFetchOptions 用线路专属的 UA 与全部请求头去抓上游。
 func (a *API) streamFetchOptions(ctx context.Context, channelID int64) fetch.Options {
 	opt := fetch.DefaultOptions()
+	opt.Headers = a.streamHeaders(channelID, nil)
 	if ua := a.streamUA(ctx, channelID); ua != "" {
 		opt.UserAgent = ua
 	}
@@ -814,6 +904,9 @@ func (a *API) liveManifest(w http.ResponseWriter, r *http.Request) {
 		// 等满默认的 20 秒就没时间试下一条了。
 		cctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 		opt := fetch.DefaultOptions()
+		// R09：整条线路的请求头都要带上，不只是 UA。
+		// 只在 UA=X 且 Referer=Y 时才给流的源，缺任何一条都是 403。
+		opt.Headers = a.streamHeaders(id, cand)
 		if ua := cand.UserAgent(); ua != "" {
 			opt.UserAgent = ua
 		} else if a.cfg.Stream.UserAgent != "" {
@@ -893,9 +986,12 @@ func (a *API) liveSegment(w http.ResponseWriter, r *http.Request) {
 		fail(w, http.StatusBadGateway, 4001, err.Error())
 		return
 	}
-	// 分片也要带同一个 UA：源站校验是整条链路的，不只是清单
-	ua := a.streamUA(r.Context(), id)
-	req.Header.Set("User-Agent", ua)
+	// R09：分片也要带整条线路的头。源站校验是覆盖整条链路的，
+	// 不只是清单请求；只带 UA 时，要求 Referer 的源会在分片这一步 403，
+	// 表现是清单能取到、画面却一片黑。
+	for k, v := range a.streamHeaders(id, nil) {
+		req.Header.Set(k, v)
+	}
 	req.Header.Set("Accept", "*/*")
 	req.Header.Set("Cache-Control", "no-cache")
 	resp, err := http.DefaultClient.Do(req)

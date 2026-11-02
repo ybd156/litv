@@ -312,9 +312,28 @@ struct PlayInfo: Codable {
     var ua: String = ""
     /// direct = 客户端直连源站；relay = 走服务端中转
     var mode: String = "relay"
+    /// 这条线路的完整请求头（服务端已清洗，剔除了 Authorization / Cookie / X-Trim-*）。
+    ///
+    /// R09：以前只解 ua。要求 Referer / Origin 校验的源，
+    /// direct 直连只带 UA 必然 403，而 relay 因为服务端带头反而正常
+    /// ——表现就是"直连打不开、中转能看"，用户完全猜不到原因。
+    var headers: [String: String] = [:]
 
     enum CodingKeys: String, CodingKey {
-        case kind, url, expires, channel, ua, mode
+        case kind, url, expires, channel, ua, mode, headers
+    }
+
+    /// 交给播放内核的最终请求头。
+    ///
+    /// ua 是历史字段；headers 里已有 User-Agent 时以 headers 为准。
+    /// 含换行的值一律丢弃，避免头注入。
+    func playHeaders(defaultUA: String) -> [String: String] {
+        var out = headers.filter { !$0.key.isEmpty && !$0.value.isEmpty
+            && !$0.value.contains("\n") && !$0.value.contains("\r") }
+        if !out.keys.contains(where: { $0.caseInsensitiveCompare("User-Agent") == .orderedSame }) {
+            out["User-Agent"] = ua.isEmpty ? defaultUA : ua
+        }
+        return out
     }
 
     struct PlayChannel: Codable {
@@ -337,6 +356,7 @@ extension PlayInfo {
         channel = try c.litv(.channel, PlayChannel())
         ua = try c.litv(.ua, "")
         mode = try c.litv(.mode, "relay")
+        headers = try c.litv(.headers, [:])
     }
 }
 

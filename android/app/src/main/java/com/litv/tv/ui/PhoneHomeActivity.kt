@@ -159,7 +159,7 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
 
     private fun setupPlayer() {
         player = PlayerManager(this, app.prefs).also { it.callback = this }
-        player.attach(surface, findViewById(android.R.id.content))
+        player.attach(surface.holder.surface, findViewById(android.R.id.content))
     }
 
     private fun setupTabs() {
@@ -350,8 +350,8 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
             ch.id,
             direct = app.prefs.directMode != "relay",
             onOk = { info ->
-                // 源配置里带了 UA 就用它，否则用默认
-                val headers = mapOf("User-Agent" to info.ua.ifBlank { "LITV/1.0 (Android)" })
+                // R09：带整份线路头，不再只带 UA
+                val headers = info.playHeaders("LITV/1.0 (Android)")
                 // 把链路和实际用的 UA 显示出来，方便确认源站校验的 UA 到底带没带
                 val modeText = if (info.mode == "direct") "直连源站" else "服务端中转"
                 val uaText = if (info.ua.isBlank()) "默认 UA" else "UA: " + info.ua.take(30)

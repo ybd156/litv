@@ -100,7 +100,7 @@ class PhonePlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         gestureTip = findViewById(R.id.gestureTip)
 
         player = PlayerManager(this, app.prefs).also { it.callback = this }
-        player.attach(surface, findViewById(android.R.id.content))
+        player.attach(surface.holder.surface, findViewById(android.R.id.content))
 
         loadChannels()
         setupGestures()
@@ -187,10 +187,10 @@ class PhonePlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         osdName.text = ch.name
         app.api.play(ch.id, direct = app.prefs.directMode != "relay",
             onOk = { info ->
-                // 源配置里带了 UA 就用它，否则用默认
+                // R09：带整份线路头，不再只带 UA
                 player.play(
                     ch.id, app.api.absolute(info.url),
-                    mapOf("User-Agent" to info.ua.ifBlank { "LITV/1.0 (Android)" }),
+                    info.playHeaders("LITV/1.0 (Android)"),
                     app.prefs.engine,
                 )
                 app.api.epg(ch.id, 0, onOk = { p ->
@@ -230,7 +230,7 @@ class PhonePlayerActivity : AppCompatActivity(), PlayerManager.Callback {
                     val s = list[which]
                     app.api.play(ch.id, s.id, direct = app.prefs.directMode != "relay", onOk = { info ->
                         player.play(ch.id, app.api.absolute(info.url),
-                            mapOf("User-Agent" to info.ua.ifBlank { "LITV/1.0 (Android)" }),
+                            info.playHeaders("LITV/1.0 (Android)"),
                             app.prefs.engine)
                     }, onErr = { tip("切换失败：$it") })
                 }

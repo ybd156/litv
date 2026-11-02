@@ -17,6 +17,9 @@ struct PlayerView: View {
     @State private var playURL: URL?
     /// 源配置里指定的 UA（空 = 用默认）
     @State private var playUA = ""
+    /// R09：这条线路的完整请求头（服务端已清洗）。
+    /// VLC 映射 UA/Referer，AVPlayer 整份塞进 AVURLAssetHTTPHeaderFieldsKey。
+    @State private var playHeaders: [String: String] = [:]
     @State private var usingVLC = false
     @State private var errorText: String?
     @State private var loading = true
@@ -49,7 +52,7 @@ struct PlayerView: View {
 
             // VLCKit 可用就用它（能解 AC3/裸 TS），否则退回 AVPlayer
             if usingVLC, let u = playURL {
-                VLCPlayerView(url: u, userAgent: playUA, control: vlc) { st in
+                VLCPlayerView(url: u, userAgent: playUA, headers: playHeaders, control: vlc) { st in
                     // VLCKit 的状态通知是在它自己的线程上发出的，直接改 @State
                     // 属于跨线程写 UI 状态；统一切回主线程再处理。
                     Task { @MainActor in
@@ -264,6 +267,7 @@ struct PlayerView: View {
                 // 那只是表示 url 指向 remux.m3u8，VLC 一样能播，不需要区别对待。
                 playURL = u
                 playUA = info.ua
+                playHeaders = info.playHeaders(defaultUA: "LITV/1.0 (iOS)")
                 playMode = info.mode
                 usingVLC = true
                 player = nil
@@ -278,6 +282,7 @@ struct PlayerView: View {
                 }
                 playURL = u
                 playUA = info.ua
+                playHeaders = info.playHeaders(defaultUA: "LITV/1.0 (iOS)")
                 playMode = info.mode
                 usingVLC = false
                 startAVPlayer(u)
@@ -323,6 +328,7 @@ struct PlayerView: View {
             }
             playURL = u
             playUA = info.ua
+            playHeaders = info.playHeaders(defaultUA: "LITV/1.0 (iOS)")
             playMode = info.mode
             startAVPlayer(u)
         } catch {
@@ -334,15 +340,16 @@ struct PlayerView: View {
     /// AVPlayer 兜底路径（也是 VLCKit 不可用时的唯一路径）。
     private func startAVPlayer(_ u: URL) {
         let item: AVPlayerItem
-        if playUA.isEmpty {
+        // R09：AVPlayer 支持一次带多个自定义请求头。
+        // 以前只带 User-Agent，遇到校验 Referer / Origin 的源就 403。
+        // AVURLAssetHTTPHeaderFieldsKey 是 AVFoundation 未公开但长期稳定的用法。
+        let hdrs = playHeaders.filter { k, v in
+            !k.isEmpty && !v.isEmpty && !v.contains("\n") && !v.contains("\r")
+        }
+        if hdrs.isEmpty {
             item = AVPlayerItem(url: u)
         } else {
-            // 源站校验 UA 时，AVPlayer 也得带上，否则 403。
-            // AVURLAssetHTTPHeaderFieldsKey 是 AVFoundation 未公开但长期稳定的用法。
-            let asset = AVURLAsset(
-                url: u,
-                options: ["AVURLAssetHTTPHeaderFieldsKey": ["User-Agent": playUA]]
-            )
+            let asset = AVURLAsset(url: u, options: ["AVURLAssetHTTPHeaderFieldsKey": hdrs])
             item = AVPlayerItem(asset: asset)
         }
         let p = AVPlayer(playerItem: item)

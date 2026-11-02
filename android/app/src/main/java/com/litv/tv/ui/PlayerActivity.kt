@@ -3,6 +3,7 @@ package com.litv.tv.ui
 import android.annotation.SuppressLint
 import android.graphics.Bitmap
 import android.os.Bundle
+import android.util.Log
 import android.os.Handler
 import android.os.Looper
 import android.view.KeyEvent
@@ -45,9 +46,14 @@ import java.util.Locale
  *   3. OSD 5 秒自动隐藏，但换台时立刻刷新内容
  */
 class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
+    private val TAG = "LITV"
+
 
     private lateinit var app: LitvApp
     private lateinit var surface: SurfaceView
+    private lateinit var surfaceTex: android.view.TextureView
+    private lateinit var playerView: androidx.media3.ui.PlayerView
+    private var videoSurface: android.view.Surface? = null
     private lateinit var snapshotView: ImageView
     private lateinit var loading: ProgressBar
     private lateinit var switchTip: TextView
@@ -100,6 +106,10 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
     private var okDownTime = 0L
     /** 上一次按返回的时间，用于「再按一次退出」 */
     private var lastBackAt = 0L
+    /** 首次进入还没自动播放过 */
+    private var autoPlayPending = true
+    /** 进播放页时想播的频道 id（0 = 上次那个） */
+    private var pendingChannelId = 0L
 
     private val hideOsdRunnable = Runnable { hideOsd() }
     private val numberJumpRunnable = Runnable { jumpByNumber() }
@@ -114,16 +124,69 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         loadChannels()
 
         player = PlayerManager(this, app.prefs).also { it.callback = this }
-        player.attach(surface, findViewById(android.R.id.content))
 
-        val id = intent.getLongExtra(EXTRA_CHANNEL_ID, 0)
-        val idx = channels.indexOfFirst { it.id == id }
-        index = if (idx >= 0) idx else 0
-        if (channels.isNotEmpty()) playChannel(channels[index])
+        player.playerView = playerView
+        setupRenderTarget()
+
+        // 自动播放不能在这里做：没有本地缓存时 loadChannels() 走的是异步 bootstrap，
+        // 这一刻 channels 还是空的，直接判断会永远不播。交给 applyBootstrap 触发。
+        pendingChannelId = intent.getLongExtra(EXTRA_CHANNEL_ID, 0)
+        Log.i(TAG, "onCreate: 初始 channels=${channels.size} 待播=$pendingChannelId")
+    }
+
+    /**
+     * 按「渲染方式」设置选一套渲染目标并绑定播放器。
+     *
+     * 自动 = 优先 TextureView：实测这台 Amlogic 盒子用 SurfaceView 时
+     * 解码器不往 Surface 写帧（DequeueBuffer time out），画面全黑。
+     */
+    private fun setupRenderTarget() {
+        val mode = app.prefs.renderView
+        val useTexture = mode != "surface"
+        Log.i(TAG, "渲染方式=$mode 使用=" + if (useTexture) "TextureView" else "SurfaceView")
+
+        // PlayerView 是主渲染目标（Exo 用它）；只有显式选 surface 才退回 SurfaceView
+        playerView.visibility = if (useTexture) android.view.View.VISIBLE else android.view.View.GONE
+        surface.visibility = android.view.View.GONE
+        surfaceTex.visibility = android.view.View.GONE
+
+        if (useTexture) {
+            surfaceTex.surfaceTextureListener = object : android.view.TextureView.SurfaceTextureListener {
+                override fun onSurfaceTextureAvailable(st: android.graphics.SurfaceTexture, w: Int, h: Int) {
+                    Log.i(TAG, "TextureView 就绪 ${w}x$h")
+                    videoSurface = android.view.Surface(st)
+                    player.attach(videoSurface, findViewById(android.R.id.content))
+                    if (!player.isPlaying) current?.let { playChannel(it) }
+                }
+
+                override fun onSurfaceTextureSizeChanged(st: android.graphics.SurfaceTexture, w: Int, h: Int) {}
+
+                override fun onSurfaceTextureDestroyed(st: android.graphics.SurfaceTexture): Boolean {
+                    videoSurface?.release()
+                    videoSurface = null
+                    return true
+                }
+
+                override fun onSurfaceTextureUpdated(st: android.graphics.SurfaceTexture) {}
+            }
+        } else {
+            surface.holder.addCallback(object : android.view.SurfaceHolder.Callback {
+                override fun surfaceCreated(h: android.view.SurfaceHolder) {
+                    Log.i(TAG, "SurfaceView 就绪，绑定播放器")
+                    player.attach(surface.holder.surface, findViewById(android.R.id.content))
+                    if (!player.isPlaying) current?.let { playChannel(it) }
+                }
+
+                override fun surfaceChanged(h: android.view.SurfaceHolder, f: Int, w: Int, hh: Int) {}
+                override fun surfaceDestroyed(h: android.view.SurfaceHolder) {}
+            })
+        }
     }
 
     private fun bindViews() {
         surface = findViewById(R.id.surface)
+        surfaceTex = findViewById(R.id.surfaceTex)
+        playerView = findViewById(R.id.playerView)
         snapshotView = findViewById(R.id.snapshot)
         loading = findViewById(R.id.loading)
         switchTip = findViewById(R.id.switchTip)
@@ -211,6 +274,14 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         favoriteIds.addAll(b.favorites)
         groups = allChannels.map { it.group }.filter { it.isNotBlank() }.distinct()
         applyGroupFilter()
+        Log.i(TAG, "bootstrap 完成: 频道=${allChannels.size} 待播=$pendingChannelId 待自动播放=$autoPlayPending")
+        if (autoPlayPending && channels.isNotEmpty()) {
+            autoPlayPending = false
+            val idx = channels.indexOfFirst { it.id == pendingChannelId }
+            index = if (idx >= 0) idx else 0
+            Log.i(TAG, "开始自动播放: ${channels[index].name}")
+            playChannel(channels[index])
+        }
     }
 
     private fun applyGroupFilter() {
@@ -252,6 +323,7 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
     // ---------------------------------------------------------------- 播放
 
     private fun playChannel(ch: Channel, streamId: Long = 0) {
+        Log.i(TAG, "playChannel: ${ch.name} streamId=$streamId direct=${app.prefs.directMode}")
         current = ch
         app.prefs.lastChannelId = ch.id
         // 起播计时：从按下换台到出第一帧，这是用户唯一能感知的"快不快"
@@ -269,11 +341,13 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
 
         app.api.play(ch.id, streamId, direct = app.prefs.directMode != "relay",
             onOk = { info ->
-                // 源配置里带了 UA 就用它（源站校验 UA 时没它直接 403），否则用默认
-                val headers = mapOf(
-                    "User-Agent" to info.ua.ifBlank { "LITV/1.0 (Android TV)" },
-                )
-                player.play(ch.id, app.api.absolute(info.url), headers, app.prefs.engine)
+                // R09：用服务端下发的整份线路头（已清洗），不再只带 UA。
+                // 要求 Referer / Origin 校验的源，只带 UA 会直接 403。
+                val headers = info.playHeaders("LITV/1.0 (Android TV)")
+                val abs = app.api.absolute(info.url)
+                Log.i(TAG, "play 返回: mode=${info.mode} kind=${info.kind} 请求头=${headers.keys}")
+                Log.i(TAG, "实际播放地址: ${abs.take(160)}")
+                player.play(ch.id, abs, headers, app.prefs.engine)
                 refreshEpg(ch.id)
                 app.api.heartbeat(ch.id, "playing")
             },
@@ -654,6 +728,10 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
     private fun applyChannelFilter() {
         var list = if (selSource == 0L) allChannels else allChannels.filter { it.sourceId == selSource }
         if (selGroup.isNotEmpty()) list = list.filter { it.group == selGroup }
+        // 必须写回 channels：切台、自动播放、上下一台全靠它。
+        // 改成四列浮层时这里漏了赋值，导致 channels 永远为空、自动播放从不触发，
+        // 表现就是黑屏转圈、服务端收不到 /tv/play。
+        channels = list
         panelAdapter.submit(list, emptyMap())
         panelTitle.text = buildString {
             append(if (selSource == 0L) "全部频道" else (srcNames[selSource] ?: "频道"))

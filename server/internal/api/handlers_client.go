@@ -192,13 +192,38 @@ func (a *API) tvEPG(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	day := queryInt(r, "day", 0)
-	base := time.Now().Truncate(24*time.Hour).AddDate(0, 0, day)
-	progs, err := a.st.ProgramsByXmltvID(r.Context(), ch.EpgID, base.Unix(), base.Add(24*time.Hour).Unix())
+	// B01：按**频道所在地的日历日**取节目，不能按 UTC 零点截断。
+	//
+	// time.Truncate(24*time.Hour) 是从 Unix 纪元起的整 24 小时分片，
+	// 等价于 UTC 零点。东八区用户看到的是"节目单错位 8 小时"：
+	// 早上 8 点前查当天，拿到的其实是本地前一天的节目。
+	// 用 time.Date 在指定时区里构造当地午夜，跨日、跨月、跨年才正确。
+	start, end := localDayRange(a.now(), a.cfg.Server.Timezone, day)
+	progs, err := a.st.ProgramsByXmltvID(r.Context(), ch.EpgID, start.Unix(), end.Unix())
 	if err != nil {
 		fail(w, http.StatusInternalServerError, 5001, err.Error())
 		return
 	}
 	ok(w, map[string]any{"channel": ch, "programs": progs})
+}
+
+// localDayRange 返回指定时区里第 day 天的 [00:00, 次日00:00)。
+//
+// 用 time.Date 而不是 Truncate：
+//   - Truncate 是 UTC 分片，在 UTC+8/UTC-5 都会错位；
+//   - 夏令时切换日实际不是 24 小时（可能是 23 或 25 小时），
+//     只有按日历构造次日零点才能拿到正确的区间。
+func localDayRange(now time.Time, tz string, day int) (time.Time, time.Time) {
+	loc := time.UTC
+	if tz != "" {
+		if l, err := time.LoadLocation(tz); err == nil {
+			loc = l
+		}
+	}
+	y, m, d := now.In(loc).Date()
+	start := time.Date(y, m, d+day, 0, 0, 0, 0, loc)
+	end := time.Date(y, m, d+day+1, 0, 0, 0, 0, loc)
+	return start, end
 }
 
 func (a *API) tvFavorite(w http.ResponseWriter, r *http.Request) {

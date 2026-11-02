@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -52,6 +53,12 @@ type Server struct {
 	Prefix        string `yaml:"prefix"`         // 例如 /app/litv
 	ReadTimeout   int    `yaml:"read_timeout"`   // 秒
 	WriteTimeout  int    `yaml:"write_timeout"`  // 秒；流式接口设为 0 表示不限制
+	// Timezone 用户/频道所在地的 IANA 时区（如 Asia/Shanghai）。
+	//
+	// 必须有显式时区：节目单按"当地日历日"查询，
+	// 用 UTC 零点截断会让东八区用户看到错位 8 小时的节目单。
+	// 留空按 UTC 处理（行为确定，不猜）。
+	Timezone string `yaml:"timezone"`
 }
 
 // Database 数据库配置。当前只支持 SQLite（单机 NAS 最省事）。
@@ -206,6 +213,7 @@ func Default() *Config {
 			Prefix:       "/app/litv",
 			ReadTimeout:  30,
 			WriteTimeout: 0,
+			Timezone:     "Asia/Shanghai",
 		},
 		Database: Database{Path: "./data/litv.db"},
 		Auth: Auth{
@@ -351,6 +359,13 @@ func (c *Config) Validate() error {
 	}
 	if c.Server.Port <= 0 || c.Server.Port > 65535 {
 		return fmt.Errorf("server.port 非法: %d", c.Server.Port)
+	}
+	// B01：时区必须是合法的 IANA 名称。写错了不该静默退化成 UTC——
+	// 那会让节目单整体错位，而且用户完全看不出原因。
+	if c.Server.Timezone != "" {
+		if _, err := time.LoadLocation(c.Server.Timezone); err != nil {
+			return fmt.Errorf("server.timezone 非法: %q（需 IANA 名称，如 Asia/Shanghai）", c.Server.Timezone)
+		}
 	}
 	if c.Stream.MaxConcurrent <= 0 {
 		c.Stream.MaxConcurrent = 100

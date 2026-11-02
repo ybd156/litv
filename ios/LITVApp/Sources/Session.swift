@@ -27,6 +27,17 @@ final class Session: ObservableObject {
     /// 有就继续播这个台，没有就提示去「频道」页选一个。
     @Published var lastChannel: Channel?
 
+    /// 频道页点台时发出的「请播放这个台」请求。
+    ///
+    /// 不直接在频道页 push 播放器：TabView 会把「播放」tab 一起保留在视图树里，
+    /// 两个播放器同时存在就会**同时出声**。改成请求 → 由「播放」tab 独占播放器。
+    @Published var playRequest: Channel?
+
+    func requestPlay(_ ch: Channel) {
+        lastChannel = ch
+        playRequest = ch
+    }
+
     // 状态
     @Published var loading = false
     @Published var statusText = ""

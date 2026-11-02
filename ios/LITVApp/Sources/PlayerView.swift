@@ -36,6 +36,8 @@ struct PlayerView: View {
 
     // 控制条状态
     @State private var paused = false
+    /// 转圈超时兜底任务（见 start() 里的说明）
+    @State private var loadingWatchdog: Task<Void, Never>?
     @State private var muted = false
     @StateObject private var vlc = VLCControl()
     /// 换台用：切了台就换这个，nil 表示还是进来时那个
@@ -130,7 +132,12 @@ struct PlayerView: View {
         }
         .sheet(isPresented: $showEpg) { epgSheet }
         .onAppear { Task { await start() } }
-        .onDisappear { player?.pause(); player = nil }
+        .onDisappear {
+            player?.pause()
+            player = nil
+            loadingWatchdog?.cancel()
+            loadingWatchdog = nil
+        }
     }
 
     private var routeText: String {
@@ -149,6 +156,25 @@ struct PlayerView: View {
             if let now = programs.first(where: { $0.isNow }) {
                 Text("\(now.timeText) \(now.title)")
                     .font(.caption).foregroundColor(.gray).lineLimit(1)
+                // 当前节目进度：和 Android 端一致，一眼看出还剩多久
+                if now.endAt > now.startAt {
+                    let nowTS = Int64(Date().timeIntervalSince1970)
+                    let total = Double(now.endAt - now.startAt)
+                    let done = Double(max(0, min(now.endAt - now.startAt, nowTS - now.startAt)))
+                    ProgressView(value: done, total: total)
+                        .tint(Color(red: 0.176, green: 0.831, blue: 0.749))
+                }
+            }
+            if programs.isEmpty {
+                // 空着什么都不显示，用户会以为"坏了"。
+                // 明确告诉他大概率是没关联 EPG，好去管理台处理。
+                Text("没有节目单（该频道可能未关联 EPG）")
+                    .font(.caption2).foregroundColor(.gray.opacity(0.8))
+            }
+            // 下一档节目：Android 的 OSD 有这一行
+            if let next = programs.first(where: { $0.startAt > Int64(Date().timeIntervalSince1970) }) {
+                Text("下一档 \(next.timeText) \(next.title)")
+                    .font(.caption2).foregroundColor(.gray.opacity(0.85)).lineLimit(1)
             }
             // 播放链路 + 实际用的 UA：排查源站校验时一眼能看到
             Text(routeText)
@@ -249,6 +275,19 @@ struct PlayerView: View {
         fallbackInFlight = false
         // 换台/重试时清掉上一次的降级请求，否则新旧两个标志会互相打架
         fallbackRequested = false
+        // 节目单先拉：它和播放是两件独立的事。
+        // 之前放在播放成功之后，一旦取流失败（或 VLC 卡住不回调），
+        // 节目单就永远是空的——用户看到的就是"视频里没有节目单"。
+        programs = (try? await session.api.epg(channelId: active.id)) ?? []
+
+        // 转圈兜底：VLC 的 .playing 回调在个别源/机型上可能一直不来，
+        // 那样中间的圈会永远转下去。这里加一个超时，到点无论如何都收起。
+        loadingWatchdog?.cancel()
+        loadingWatchdog = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 8_000_000_000)
+            if !Task.isCancelled { loading = false }
+        }
+
         do {
             // R08：能选内核的是"实际能力"，不是请求参数。
             //   有 VLCKit -> 尝试直连（省掉 NAS 中转），裸 TS 也能解；
@@ -292,7 +331,6 @@ struct PlayerView: View {
 
             // heartbeat 是 async 的，必须 await——Swift 里 async 函数不能"发了不管"
             await session.api.heartbeat(channelId: active.id)
-            programs = (try? await session.api.epg(channelId: active.id)) ?? []
         } catch {
             errorText = error.localizedDescription
             loading = false

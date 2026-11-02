@@ -109,11 +109,15 @@ struct HomeView: View {
                     .listRowBackground(Color.clear)
             }
             ForEach(filtered) { ch in
-                NavigationLink {
-                    PlayerView(channel: ch)
+                // 不在这里直接 push PlayerView：TabView 会同时保留
+                // 「播放」tab 和这里推入的播放器，导致两个画面同时出声。
+                // 改成发一个播放请求，由「播放」tab 独占唯一播放器。
+                Button {
+                    session.requestPlay(ch)
                 } label: {
                     row(ch)
                 }
+                .buttonStyle(.plain)
                 .listRowBackground(Color.white.opacity(0.04))
                 .swipeActions(edge: .trailing) {
                     Button {
@@ -173,6 +177,13 @@ struct HomeView: View {
 
 /// 设置页。
 struct SettingsView: View {
+    /// 从 Info.plist 读真实版本号（project.yml 里注入）。
+    static var appVersion: String {
+        let v = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "—"
+        let b = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "—"
+        return "\(v) (\(b))"
+    }
+
     @EnvironmentObject var session: Session
     @Environment(\.dismiss) private var dismiss
 
@@ -207,7 +218,9 @@ struct SettingsView: View {
                     HStack {
                         Text("版本")
                         Spacer()
-                        Text("1.0.0").foregroundColor(.gray)
+                        // 以前这里硬编码成 "1.0.0"，不管装的是哪个版本都显示 1.0.0。
+                        // 改为读 Info.plist（由 project.yml 的 CFBundleShortVersionString 注入）。
+                        Text(SettingsView.appVersion).foregroundColor(.gray)
                     }
                     Text("本 App 不提供任何直播源")
                         .font(.caption).foregroundColor(.gray)

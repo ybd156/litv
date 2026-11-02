@@ -2,9 +2,12 @@ import { http } from '../http'
 import { asArray } from '../normalize'
 import type {
   EpgAuditEntry,
+  EpgAutomapReport,
   EpgChannel,
   EpgProgram,
+  EpgMappingConflict,
   EpgProgramHit,
+  EpgUnmatchedChannel,
   EpgRefreshResult,
   EpgSource,
   EpgSourceInput,
@@ -99,4 +102,32 @@ export async function searchEpg(q: string, limit = 50): Promise<EpgProgramHit[]>
     return []
   }
   return asArray<EpgProgramHit>(raw)
+}
+
+/** 按频道名自动匹配（B1/B2）。 */
+export function automapEpg(): Promise<EpgAutomapReport> {
+  return http.post<EpgAutomapReport>('epg/automap')
+}
+
+/** 按台号自动匹配（B4）。 */
+export function mapEpgByNumber(): Promise<EpgAutomapReport> {
+  return http.post<EpgAutomapReport>('epg/map/by-number')
+}
+
+/** 未匹配频道 + 映射冲突（B5/B6）。 */
+export async function fetchEpgMapping(): Promise<{
+  unmatched: EpgUnmatchedChannel[]
+  conflicts: EpgMappingConflict[]
+}> {
+  const raw = await http.get<unknown>('epg/mapping')
+  const obj = (raw ?? {}) as { unmatched?: unknown; conflicts?: unknown }
+  return {
+    unmatched: Array.isArray(obj.unmatched) ? (obj.unmatched as EpgUnmatchedChannel[]) : [],
+    conflicts: Array.isArray(obj.conflicts) ? (obj.conflicts as EpgMappingConflict[]) : [],
+  }
+}
+
+/** 批量映射（B3）。epgId 传空表示解除映射。 */
+export function mapEpgBatch(channelIds: number[], epgId: string): Promise<{ updated: number }> {
+  return http.post<{ updated: number }>('epg/map/batch', { channel_ids: channelIds, epg_id: epgId })
 }

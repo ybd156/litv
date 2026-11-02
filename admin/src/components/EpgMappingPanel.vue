@@ -5,7 +5,7 @@ import StateBlock from './StateBlock.vue'
 import Icon from './Icon.vue'
 import * as channelsApi from '@/api/modules/channels'
 import * as epgApi from '@/api/modules/epg'
-import type { Channel, EpgChannel } from '@/api/types'
+import type { Channel, EpgChannel, EpgMappingConflict, EpgUnmatchedChannel } from '@/api/types'
 import { toErrorMessage } from '@/api/errors'
 import { toast } from '@/utils/feedback'
 
@@ -31,6 +31,51 @@ const onlyUnmatched = ref(false)
 const selectedId = ref<number | null>(null)
 const dragId = ref<number | null>(null)
 const hoverEpg = ref<string | null>(null)
+
+// ---- B1/B2/B4/B6：自动匹配与诊断 ----
+const automapping = ref(false)
+const byNumbering = ref(false)
+const unmatchedDiag = ref<EpgUnmatchedChannel[]>([])
+const conflicts = ref<EpgMappingConflict[]>([])
+
+async function loadDiag(): Promise<void> {
+  try {
+    const r = await epgApi.fetchEpgMapping()
+    unmatchedDiag.value = r.unmatched
+    conflicts.value = r.conflicts
+  } catch {
+    unmatchedDiag.value = []
+    conflicts.value = []
+  }
+}
+
+/** B1/B2：按频道名自动匹配，并把结果说清楚。 */
+async function runAutomap(): Promise<void> {
+  automapping.value = true
+  try {
+    const r = await epgApi.automapEpg()
+    toast.success(`自动匹配完成：扫描 ${r.scanned}，匹配 ${r.matched}，未匹配 ${r.unmatched.length}`)
+    await load()
+  } catch (e) {
+    toast.error(toErrorMessage(e))
+  } finally {
+    automapping.value = false
+  }
+}
+
+/** B4：按台号匹配（只在数字唯一对应时才生效）。 */
+async function runByNumber(): Promise<void> {
+  byNumbering.value = true
+  try {
+    const r = await epgApi.mapEpgByNumber()
+    toast.success(`按台号匹配完成：匹配 ${r.matched}，未匹配 ${r.unmatched.length}`)
+    await load()
+  } catch (e) {
+    toast.error(toErrorMessage(e))
+  } finally {
+    byNumbering.value = false
+  }
+}
 
 const filteredChannels = computed(() => {
   const kw = chSearch.value.trim().toLowerCase()
@@ -90,6 +135,8 @@ async function load(): Promise<void> {
     error.value = toErrorMessage(e)
   } finally {
     loading.value = false
+    // 自动匹配/按台号匹配之后都要刷新诊断，否则未匹配列表还是旧的
+    void loadDiag()
   }
 }
 
@@ -144,7 +191,10 @@ function pickTarget(epg: EpgChannel): void {
   if (channel) void assign(channel, epg.id)
 }
 
-onMounted(() => void load())
+onMounted(() => {
+  void load()
+  void loadDiag()
+})
 </script>
 
 <template>
@@ -152,6 +202,12 @@ onMounted(() => void load())
     <div class="toolbar">
       <NTag size="small" :bordered="false" type="success">已匹配 {{ matchedCount }}</NTag>
       <NTag size="small" :bordered="false" type="warning">未匹配 {{ unmatchedCount }}</NTag>
+      <NButton size="small" type="primary" :loading="automapping" @click="runAutomap">
+        自动匹配
+      </NButton>
+      <NButton size="small" secondary :loading="byNumbering" @click="runByNumber">
+        按台号匹配
+      </NButton>
       <NButton size="small" secondary :loading="loading" @click="load">
         <template #icon><Icon name="refresh" :size="15" /></template>
         重新加载
@@ -159,6 +215,14 @@ onMounted(() => void load())
       <span class="spacer" />
       <span class="hint-text">左边拖到右边就能纠正自动匹配的结果</span>
     </div>
+
+    <!-- B6：映射冲突。两个频道共用一份节目单几乎总是误匹配，必须提示 -->
+    <p v-if="conflicts.length > 0" class="note warn">
+      <Icon name="warning" :size="14" />
+      有 {{ conflicts.length }} 组冲突：多个频道映射到了同一个 EPG 频道
+      （{{ conflicts.map((c) => c.channels.join(' / ')).join('；') }}）。
+      这通常是自动匹配错了，建议手动改掉。
+    </p>
 
     <p v-if="degraded && !loading" class="note">
       <Icon name="warning" :size="14" />
@@ -171,6 +235,27 @@ onMounted(() => void load())
       EPG 库还是空的。先去「EPG 源」标签页添加一个节目单地址并点「立即刷新」，
       拉回来之后这里才有东西可以对应。
     </p>
+
+    <!-- B2/B5：未匹配诊断。给出最佳候选与分数，用户不用自己翻 EPG 列表 -->
+    <div v-if="unmatchedDiag.length > 0" class="diag">
+      <div class="diag-head">
+        还有 {{ unmatchedDiag.length }} 个频道没有节目单
+        <span class="muted">（下面是按名字算出的最接近候选，分数越高越像）</span>
+      </div>
+      <div class="diag-list">
+        <div v-for="u in unmatchedDiag.slice(0, 12)" :key="u.id" class="diag-item">
+          <span class="diag-name">{{ u.number }}. {{ u.name }}</span>
+          <span v-if="u.best_guess" class="diag-guess">
+            最接近：<b>{{ epgName(u.best_guess) }}</b>
+            <span class="score">{{ u.best_score }} 分</span>
+          </span>
+          <span v-else class="muted">没有相似候选</span>
+        </div>
+      </div>
+      <div v-if="unmatchedDiag.length > 12" class="muted">
+        …还有 {{ unmatchedDiag.length - 12 }} 个，用左侧「只看没匹配上的」逐个处理
+      </div>
+    </div>
 
     <StateBlock :loading="loading && channels.length === 0" :error="error" :min-height="360" @retry="load">
       <div class="map">
@@ -247,6 +332,45 @@ onMounted(() => void load())
 </template>
 
 <style scoped>
+.diag {
+  margin: 4px 6px 8px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: rgba(139, 148, 158, 0.08);
+}
+.diag-head {
+  font-size: 12.5px;
+  color: #e2ecf1;
+  margin-bottom: 6px;
+}
+.diag-list {
+  display: grid;
+  gap: 4px;
+}
+.diag-item {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  font-size: 12.5px;
+  color: #c9d6dc;
+}
+.diag-name {
+  min-width: 180px;
+}
+.diag-guess b {
+  color: #e2ecf1;
+}
+.score {
+  margin-left: 6px;
+  color: #2dd4bf;
+}
+.note.warn {
+  color: #f0b429;
+}
+.muted {
+  color: #8b949e;
+}
+
 .note {
   display: flex;
   align-items: center;

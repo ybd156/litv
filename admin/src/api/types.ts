@@ -183,6 +183,30 @@ export interface EpgAuditEntry {
   created_at: number
 }
 
+/** 未匹配 EPG 的频道（B5），带最佳候选建议（B2）。 */
+export interface EpgUnmatchedChannel {
+  id: number
+  number: number
+  name: string
+  group: string
+  best_guess: string
+  best_score: number
+}
+
+/** 多个频道映射到同一个 EPG 频道（B6）。 */
+export interface EpgMappingConflict {
+  epg_id: string
+  channels: string[]
+}
+
+/** 自动匹配报告（B1）。 */
+export interface EpgAutomapReport {
+  scanned: number
+  matched: number
+  unmatched: EpgUnmatchedChannel[]
+  conflicts: EpgMappingConflict[]
+}
+
 /** 单个源的刷新明细（A3）。 */
 export interface EpgRefreshResult {
   id: number

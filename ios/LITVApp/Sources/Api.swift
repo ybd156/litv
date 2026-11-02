@@ -112,16 +112,17 @@ struct ApiClient {
 
     /// 取播放地址。
     ///
-    /// iOS 必须带 `fmt=hls`：AVPlayer 播不了裸 MPEG-TS，
-    /// 服务端收到这个参数后会把裸 TS 源用 ffmpeg 转封装成 HLS（只转封装不转码）。
-    /// 取播放地址。
+    /// `fmt=hls` 的语义是"我不想要裸 TS，请服务端转封装成 HLS"：
+    /// AVPlayer 播不了裸 MPEG-TS，服务端收到这个参数后会用 ffmpeg 把裸 TS 源
+    /// 转封装成 HLS（只转封装不转码）。
     ///
     /// - Parameter direct: 让服务端把**上游原始地址**直接给回来，客户端自己连源站。
     ///   省掉 NAS 的带宽和 CPU。注意：AVPlayer 播不了裸 TS，所以只有装了 VLCKit
     ///   才敢要直连；否则仍然要求服务端转封装成 HLS。
     func play(channelId: Int64, streamId: Int64 = 0, direct: Bool = false) async throws -> PlayInfo {
         var q: [String] = []
-        // VLCKit 能直接吃裸 TS，AVPlayer 不行
+        // R08：只有 AVPlayer 路径必须 HLS。VLCKit 底层是 FFmpeg，裸 TS 能直接解。
+        // 所以"直连 + 有 VLCKit"这一种组合才不带 fmt=hls。
         if !direct || !VLCPlayerView.isAvailable {
             q.append("fmt=hls")
         }
@@ -134,6 +135,19 @@ struct ApiClient {
         return try await send(req, as: PlayInfo.self)
     }
 
+    /// 专门给 AVPlayer 用的地址：**强制 relay + HLS**。
+    ///
+    /// VLC 起播失败降级到 AVPlayer 时必须走这里重新取一次地址：
+    /// 手里那个 VLC 用的地址可能是直连源站的裸 TS，
+    /// 直接喂给 AVPlayer 只会黑屏，而且我们已经绕过了服务端的转封装。
+    /// 这里 `direct: false` 会稳定地带 `fmt=hls`，服务端据此转封装。
+    ///
+    /// 注意：服务端没配 ffmpeg 时 `kind` 仍然是 "ts"（见 handlers_client.go 的 tvPlay），
+    /// 调用方必须自己检查 `kind`，不能假定这里一定拿到 HLS。
+    func playForAVPlayer(channelId: Int64, streamId: Int64 = 0) async throws -> PlayInfo {
+        try await play(channelId: channelId, streamId: streamId, direct: false)
+    }
+
     func streams(channelId: Int64) async throws -> [TvStream] {
         guard let req = request("/api/v1/tv/streams/\(channelId)", method: "GET", body: nil) else {
             throw ApiError(message: "地址无效")
@@ -141,11 +155,19 @@ struct ApiClient {
         return try await send(req, as: [TvStream].self)
     }
 
+    /// 取当天节目单。
+    ///
+    /// 服务端 data 是对象不是数组（handlers_client.go 的 tvEPG）：
+    ///   {"channel":{…},"programs":[{…}]}                       正常
+    ///   {"channel":{…},"programs":[],"note":"该频道未关联 EPG"}  未关联 EPG
+    /// 所以按 EpgResponse 解外壳，再把 programs 摊平成数组给界面用。
+    /// 未关联 EPG 或当天没节目时返回空数组（不是错误）。
     func epg(channelId: Int64, day: Int = 0) async throws -> [EpgProgram] {
         guard let req = request("/api/v1/tv/epg/\(channelId)?day=\(day)", method: "GET", body: nil) else {
             throw ApiError(message: "地址无效")
         }
-        return try await send(req, as: [EpgProgram].self)
+        let r = try await send(req, as: EpgResponse.self)
+        return r.programs
     }
 
     func favorite(channelId: Int64, on: Bool) async throws {

@@ -24,6 +24,12 @@ struct PlayerView: View {
     @State private var showEpg = false
     @State private var streamId: Int64 = 0
     @State private var streams: [TvStream] = []
+    /// VLC 失败降级正在进行。VLCKit 一次失败可能连发两个状态回调
+    /// （error + ended），不加锁会并发起两次降级请求、开两个 AVPlayer。
+    @State private var fallbackInFlight = false
+    /// VLC 状态回调里只置位，真正取地址的 async 工作交给下面的 onChange 做。
+    /// 回调本身不是 async 上下文，直接在里面 await 网络请求编译不过。
+    @State private var fallbackRequested = false
 
     // 控制条状态
     @State private var paused = false
@@ -44,17 +50,19 @@ struct PlayerView: View {
             // VLCKit 可用就用它（能解 AC3/裸 TS），否则退回 AVPlayer
             if usingVLC, let u = playURL {
                 VLCPlayerView(url: u, userAgent: playUA, control: vlc) { st in
-                    switch st {
-                    case .playing:
-                        loading = false
-                    case .buffering:
-                        loading = true
-                    case .failed(let msg):
-                        // VLC 起不来就退回 AVPlayer，别让用户卡死
-                        errorText = nil
-                        usingVLC = false
-                        startAVPlayer(u)
-                        _ = msg
+                    // VLCKit 的状态通知是在它自己的线程上发出的，直接改 @State
+                    // 属于跨线程写 UI 状态；统一切回主线程再处理。
+                    Task { @MainActor in
+                        switch st {
+                        case .playing:
+                            loading = false
+                        case .buffering:
+                            loading = true
+                        case .failed:
+                            // R08：VLC 起不来就退回 AVPlayer，别让用户卡死。
+                            // 这里只置位，真正的取地址在 onChange 里跑（见上面的说明）。
+                            fallbackRequested = true
+                        }
                     }
                 }
                 .ignoresSafeArea()
@@ -75,6 +83,13 @@ struct PlayerView: View {
                         .foregroundColor(.white)
                         .multilineTextAlignment(.center)
                         .padding(.horizontal, 32)
+                    // 降级全失败了给一条"再试一次"的路，否则用户只能杀进程
+                    if !loading {
+                        Button("重试") {
+                            Task { await start() }
+                        }
+                        .foregroundColor(Color(red: 0.176, green: 0.831, blue: 0.749))
+                    }
                 }
             }
 
@@ -90,6 +105,11 @@ struct PlayerView: View {
         .onChange(of: switched?.id) { _ in
             // 换台：重新起播
             Task { await start() }
+        }
+        .onChange(of: fallbackRequested) { want in
+            // VLC 判定失败后由这里接手降级（回调里不能直接 await）
+            guard want else { return }
+            Task { await fallbackToAVPlayer() }
         }
         .toolbar {
             ToolbarItemGroup(placement: .navigationBarTrailing) {
@@ -221,30 +241,45 @@ struct PlayerView: View {
     private func start() async {
         loading = true
         errorText = nil
+        fallbackInFlight = false
+        // 换台/重试时清掉上一次的降级请求，否则新旧两个标志会互相打架
+        fallbackRequested = false
         do {
-            // 装了 VLCKit 就尝试直连（省掉 NAS 中转）；服务端不允许时会自动回落
+            // R08：能选内核的是"实际能力"，不是请求参数。
+            //   有 VLCKit -> 尝试直连（省掉 NAS 中转），裸 TS 也能解；
+            //   没有 VLCKit -> 直接要 relay + HLS，AVPlayer 只认 HLS。
+            let viaVLC = VLCPlayerView.isAvailable
             let info = try await session.api.play(
-                channelId: active.id, streamId: streamId, direct: VLCPlayerView.isAvailable)
+                channelId: active.id, streamId: streamId, direct: viaVLC)
             guard let u = session.api.url(info.url) else {
                 errorText = "播放地址无效"
                 loading = false
                 return
             }
-            if info.kind == "ts" {
-                // 理论上不该出现：客户端已经带了 fmt=hls，服务端应该给 remux。
-                // 走到这里说明服务端没配 ffmpeg（转封装不可用）。
-                errorText = "该频道是裸 TS 源，而服务端未启用转封装（ffmpeg）。\n请管理员在 config.yaml 里配置 transcode.ffmpeg 后重启服务。"
-                loading = false
-                return
-            }
-            playURL = u
-            playUA = info.ua
-            playMode = info.mode
-            // 有 VLCKit 就用它（能解 AC3/裸 TS），没有就走 AVPlayer
-            if VLCPlayerView.isAvailable {
+
+            // R08 的关键分支：只有**走 AVPlayer 这条路**才拒绝裸 TS。
+            if viaVLC {
+                // VLC 路径：裸 TS 完全合法，不再在选内核之前拦一道。
+                // 服务端仍可能给 kind == "remux"（上游是裸 TS 且服务端配了 ffmpeg），
+                // 那只是表示 url 指向 remux.m3u8，VLC 一样能播，不需要区别对待。
+                playURL = u
+                playUA = info.ua
+                playMode = info.mode
                 usingVLC = true
                 player = nil
             } else {
+                // AVPlayer 路径：只接受 HLS。
+                // 走到这里说明已经带了 fmt=hls，服务端还是回 "ts"，
+                // 那就是 NAS 上没有可用的 ffmpeg（转封装不可用），这不是客户端能修的。
+                if info.kind == "ts" {
+                    errorText = "该频道是裸 TS 源，而服务端未启用转封装（ffmpeg）。\n请管理员在 config.yaml 里配置 transcode.ffmpeg 后重启服务。"
+                    loading = false
+                    return
+                }
+                playURL = u
+                playUA = info.ua
+                playMode = info.mode
+                usingVLC = false
                 startAVPlayer(u)
             }
 
@@ -253,6 +288,45 @@ struct PlayerView: View {
             programs = (try? await session.api.epg(channelId: active.id)) ?? []
         } catch {
             errorText = error.localizedDescription
+            loading = false
+        }
+    }
+
+    /// VLC 起播失败 -> 降级到 AVPlayer。
+    ///
+    /// 必须重新向服务端要一次地址（relay + HLS），**不能复用** VLC 拿到的那个 URL：
+    /// 那个 URL 很可能是 direct 模式下的上游裸 TS 地址，
+    /// AVPlayer 既解不了裸 TS，也拿不到服务端的转封装。
+    private func fallbackToAVPlayer() async {
+        if fallbackInFlight { return }
+        fallbackInFlight = true
+        usingVLC = false
+        player?.pause()
+        player = nil
+        loading = true
+        errorText = nil
+
+        do {
+            let info = try await session.api.playForAVPlayer(
+                channelId: active.id, streamId: streamId)
+            guard let u = session.api.url(info.url) else {
+                errorText = "播放地址无效"
+                loading = false
+                return
+            }
+            // 服务端没配 ffmpeg 时 relay 也只能给裸 TS，这时候降级没有意义，
+            // 给出和主路径一致的原因，别让用户以为换个内核就能好。
+            if info.kind == "ts" {
+                errorText = "VLC 播放失败，且服务端未启用转封装（ffmpeg），无法降级到 AVPlayer。\n请管理员在 config.yaml 里配置 transcode.ffmpeg 后重启服务。"
+                loading = false
+                return
+            }
+            playURL = u
+            playUA = info.ua
+            playMode = info.mode
+            startAVPlayer(u)
+        } catch {
+            errorText = "VLC 播放失败，降级 AVPlayer 也没拿到地址：" + error.localizedDescription
             loading = false
         }
     }

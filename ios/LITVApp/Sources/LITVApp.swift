@@ -9,7 +9,19 @@ struct LITVApp: App {
             RootView()
                 .environmentObject(session)
                 .preferredColorScheme(.dark)
-                .onAppear { session.bootstrap() }
+                .onAppear {
+                    #if DEBUG
+                    // R07 回归：DEBUG 下开局跑一遍服务端响应 fixture，
+                    // 解码一旦回归就在控制台立刻看到，不用等真机发现节目单空白。
+                    let fails = DecodeFixtures.check()
+                    if fails.isEmpty {
+                        print("[LITV] R07 fixture 全部通过")
+                    } else {
+                        for f in fails { print("[LITV] R07 fixture 失败: \(f)") }
+                    }
+                    #endif
+                    session.bootstrap()
+                }
         }
     }
 }

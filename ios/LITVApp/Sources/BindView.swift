@@ -204,11 +204,21 @@ struct BindView: View {
         if useDomain {
             let raw = domain.trimmingCharacters(in: .whitespaces)
             guard !raw.isEmpty else { return nil }
+
+            // 域名基本都是反向代理过来的，默认走 https。
+            // 之前硬编码 http://，iOS 的 ATS 直接拦掉，报
+            // "The resource could not be loaded because the App Transport Security
+            //  policy requires the use of a secure connection"。
+            let scheme = raw.hasPrefix("http://") ? "http" : "https"
             let hp = parseHostPort(raw)
             guard !hp.host.isEmpty else { return nil }
-            let p = hp.port.isEmpty ? Self.defaultPort : hp.port
-            guard let n = Int(p), (1...65535).contains(n) else { return nil }
-            return "http://\(hp.host):\(p)"
+
+            // 没写端口就不拼端口：反代域名走 443，拼上服务端口反而连不上
+            if hp.port.isEmpty {
+                return "\(scheme)://\(hp.host)"
+            }
+            guard let n = Int(hp.port), (1...65535).contains(n) else { return nil }
+            return "\(scheme)://\(hp.host):\(hp.port)"
         }
         guard ip.allSatisfy({ !$0.isEmpty }),
               ip.allSatisfy({ (0...255).contains(Int($0) ?? -1) }) else {

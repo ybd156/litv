@@ -66,6 +66,29 @@ struct VLCPlayerView: UIViewRepresentable {
         let player = VLCMediaPlayer()
         player.drawable = view
 
+        player.media = buildMedia()
+        context.coordinator.currentURL = url
+        context.coordinator.player = player
+        context.coordinator.onState = onState
+        // 控制条要能操作这个播放器
+        control?.player = player
+
+        NotificationCenter.default.addObserver(
+            context.coordinator,
+            selector: #selector(Coordinator.stateChanged(_:)),
+            name: NSNotification.Name(rawValue: VLCMediaPlayerStateChanged),
+            object: player
+        )
+
+        if autoplay { player.play() }
+        return view
+    }
+
+    /// 按当前 url / headers 造一份 VLCMedia。
+    ///
+    /// makeUIView 与 updateUIView 共用同一份构造逻辑，
+    /// 保证换台时直播低延迟参数和请求头完全一致——两处各写一遍迟早会漂移。
+    private func buildMedia() -> VLCMedia {
         let media = VLCMedia(url: url)
         // 直播低延迟参数：不丢帧、网络缓冲给足
         // 注意：VLCKit 3.5 的 addOptions 收的是 NSDictionary，
@@ -87,25 +110,23 @@ struct VLCPlayerView: UIViewRepresentable {
         if !ref.isEmpty {
             media.addOption(":http-referrer=\(ref)")
         }
-        player.media = media
-
-        context.coordinator.player = player
-        context.coordinator.onState = onState
-        // 控制条要能操作这个播放器
-        control?.player = player
-
-        NotificationCenter.default.addObserver(
-            context.coordinator,
-            selector: #selector(Coordinator.stateChanged(_:)),
-            name: NSNotification.Name(rawValue: VLCMediaPlayerStateChanged),
-            object: player
-        )
-
-        if autoplay { player.play() }
-        return view
+        return media
     }
 
-    func updateUIView(_ uiView: UIView, context: Context) {}
+    /// 换台时必须重建 media。
+    ///
+    /// SwiftUI 的 UIViewRepresentable 在参数变化时只调 updateUIView，
+    /// **不会**重新走 makeUIView。以前这里是空实现，于是 url 变了
+    /// 播放器还在放旧流（或首帧之后再也不出画面）——
+    /// 用户看到的就是「点频道换台黑屏、没有任何提示」。
+    func updateUIView(_ uiView: UIView, context: Context) {
+        guard context.coordinator.currentURL != url else { return }
+        context.coordinator.currentURL = url
+        guard let player = context.coordinator.player else { return }
+        player.stop()
+        player.media = buildMedia()
+        if autoplay { player.play() }
+    }
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
@@ -118,6 +139,8 @@ struct VLCPlayerView: UIViewRepresentable {
     final class Coordinator: NSObject {
         var player: VLCMediaPlayer?
         var onState: ((VLCPlaybackState) -> Void)?
+        /// 当前已加载的 URL。updateUIView 靠它判断是否需要换台重建 media。
+        var currentURL: URL?
 
         @objc func stateChanged(_ note: Notification) {
             guard let player = player else { return }

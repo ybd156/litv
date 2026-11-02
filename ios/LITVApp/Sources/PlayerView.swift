@@ -38,6 +38,11 @@ struct PlayerView: View {
     @State private var paused = false
     /// 转圈超时兜底任务（见 start() 里的说明）
     @State private var loadingWatchdog: Task<Void, Never>?
+
+    /// 控件浮层是否可见。和 Android 手机端一致：
+    /// 点画面呼出、4 秒自动收起，不常驻遮挡画面。
+    @State private var controlsVisible = true
+    @State private var controlsHideTask: Task<Void, Never>?
     @State private var muted = false
     @StateObject private var vlc = VLCControl()
     /// 换台用：切了台就换这个，nil 表示还是进来时那个
@@ -98,11 +103,21 @@ struct PlayerView: View {
                 }
             }
 
-            VStack {
-                Spacer()
-                // 控制条贴着底部，OSD 信息在它上面
-                controls
-                osd
+            // 点画面呼出/收起浮层（和 Android 手机端一致）。
+            // 出错时不铺这层：否则会盖住错误页的「重试」按钮。
+            if errorText == nil {
+                Color.clear
+                    .contentShape(Rectangle())
+                    .onTapGesture { toggleControls() }
+
+                if controlsVisible {
+                    VStack {
+                        osd
+                        Spacer()
+                        controls
+                    }
+                    .transition(.opacity)
+                }
             }
         }
         .navigationTitle(active.name)
@@ -131,12 +146,17 @@ struct PlayerView: View {
             }
         }
         .sheet(isPresented: $showEpg) { epgSheet }
-        .onAppear { Task { await start() } }
+        .onAppear {
+            showControls()
+            Task { await start() }
+        }
         .onDisappear {
             player?.pause()
             player = nil
             loadingWatchdog?.cancel()
             loadingWatchdog = nil
+            controlsHideTask?.cancel()
+            controlsHideTask = nil
         }
     }
 
@@ -191,11 +211,17 @@ struct PlayerView: View {
     /// 之前只有 OSD 显示信息，没有任何操作控件——用户只能靠手势，
     /// 而且不知道能干什么。这里补齐成常规播放器的样子。
     private var controls: some View {
-        HStack(spacing: 18) {
+        HStack(spacing: 16) {
             ctlButton("backward.end.fill", "上一台", size: 18) { switchBy(-1) }
             ctlButton(paused ? "play.fill" : "pause.fill", paused ? "播放" : "暂停", size: 22) { togglePause() }
             ctlButton("forward.end.fill", "下一台", size: 18) { switchBy(+1) }
             ctlButton(muted ? "speaker.slash.fill" : "speaker.wave.2.fill", muted ? "取消静音" : "静音", size: 18) { toggleMute() }
+            // 这两个原来只在 toolbar 上。PlayTab 里没有 NavigationView，
+            // toolbar 不会被渲染，用户就找不到节目单和线路了。
+            ctlButton("list.bullet.rectangle", "节目单", size: 18) { showEpg = true }
+            ctlButton("arrow.triangle.2.circlepath", "线路", size: 18) {
+                Task { await loadStreams() }
+            }
         }
         .foregroundColor(.white)
         .padding(.horizontal, 18)
@@ -214,6 +240,26 @@ struct PlayerView: View {
                 Text(label).font(.system(size: 10))
             }
             .frame(minWidth: 52)
+        }
+    }
+
+    // ---------------------------------------------------------------- 控件浮层
+
+    private func showControls() {
+        controlsVisible = true
+        controlsHideTask?.cancel()
+        controlsHideTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 4_000_000_000)
+            if !Task.isCancelled { controlsVisible = false }
+        }
+    }
+
+    private func toggleControls() {
+        if controlsVisible {
+            controlsHideTask?.cancel()
+            controlsVisible = false
+        } else {
+            showControls()
         }
     }
 

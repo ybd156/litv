@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -201,4 +202,20 @@ func doRaw(a *API, req *http.Request) *httptest.ResponseRecorder {
 	rec := httptest.NewRecorder()
 	a.Handler(false).ServeHTTP(rec, req)
 	return rec
+}
+
+// newJSONRequest 构造一个带 JSON body 的请求。
+func newJSONRequest(method, path, body string) *http.Request {
+	var r io.Reader
+	if body != "" {
+		r = strings.NewReader(body)
+	}
+	req := httptest.NewRequest(method, path, r)
+	req.Header.Set("Content-Type", "application/json")
+	return req
+}
+
+// wrapRecorder 把 httptest 响应包成测试里用的最小快照。
+func wrapRecorder(rec *httptest.ResponseRecorder) *httptestRecorder {
+	return &httptestRecorder{code: rec.Code, body: rec.Body.Bytes()}
 }

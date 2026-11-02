@@ -271,7 +271,7 @@ func TestConfigSaveIsAtomicAndPrivate(t *testing.T) {
 	path := filepath.Join(dir, "config.yaml")
 
 	cfg := config.Default()
-	cfg.Auth.Secret = "s3cret"
+	cfg.Auth.Secret = "0123456789abcdef0123456789abcdef"
 	if err := cfg.Save(path); err != nil {
 		t.Fatalf("保存失败: %v", err)
 	}
@@ -289,7 +289,7 @@ func TestConfigSaveIsAtomicAndPrivate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("重新加载失败: %v", err)
 	}
-	if reloaded.Auth.Secret != "s3cret" {
+	if reloaded.Auth.Secret != "0123456789abcdef0123456789abcdef" {
 		t.Errorf("密钥未正确往返：%q", reloaded.Auth.Secret)
 	}
 

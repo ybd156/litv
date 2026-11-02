@@ -304,21 +304,33 @@ func (a *API) identityMiddleware(viaGateway bool) func(http.Handler) http.Handle
 				}
 			}
 
+			// 1.5) 应急管理员会话（网关不可用时用密码登录换来的 token）
+			//
+			// 关键：管理员身份**只能**来自 admin_sessions 表里的会话记录，
+			// 不能从设备展示字段派生。以前的实现是
+			// `if d.Platform == "admin" { IsAdmin = true }`——
+			// 而 platform 是客户端注册时可以自报的字段，
+			// 等于让设备自己声明"我是管理员"就真的成了管理员。
+			// 现在一律只认 admin_sessions 里带到期时间的那条记录。
+			if tok := auth.BearerToken(r); tok != "" {
+				if sess, err := a.st.GetAdminSessionByToken(ctx, auth.HashToken(tok), a.now().Unix()); err == nil && sess != nil {
+					ctx = context.WithValue(ctx, ctxAdminSession, sess)
+					ctx = context.WithValue(ctx, ctxIdentity, auth.Identity{
+						UserID:     "admin-session",
+						Username:   "管理员",
+						IsAdmin:    true,
+						ViaGateway: false,
+					})
+				}
+			}
+
 			// 2) 终端 token
 			if tok := auth.BearerToken(r); tok != "" {
 				if d, err := a.st.GetDeviceByToken(ctx, auth.HashToken(tok)); err == nil && d != nil {
 					ctx = context.WithValue(ctx, ctxDevice, d)
 					_ = a.st.TouchDevice(ctx, d.ID)
-					// 应急登录（网关不可用时用密码登录）发的 token 存在 device 表里，
-					// platform=admin。这种 token 等价于管理员身份，否则登录了也进不去。
-					if d.Platform == "admin" {
-						ctx = context.WithValue(ctx, ctxIdentity, auth.Identity{
-							UserID:     d.DeviceKey,
-							Username:   d.Name,
-							IsAdmin:    true,
-							ViaGateway: false,
-						})
-					}
+					// 这里**没有**任何基于 d.Platform 的提权。
+					// 设备永远是设备；管理员身份只来自网关头或 admin_sessions。
 				}
 			}
 

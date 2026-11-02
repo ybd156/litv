@@ -166,6 +166,20 @@ CREATE TABLE IF NOT EXISTS epg_programs (
 );
 CREATE INDEX IF NOT EXISTS idx_epgprog_ch_start ON epg_programs(epg_channel_id, start_at);
 
+-- 节目开播提醒（C5）。按设备存：同一档节目电视和手机可以各自设提醒。
+CREATE TABLE IF NOT EXISTS epg_reminders (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  device_id    INTEGER NOT NULL,
+  channel_id   INTEGER NOT NULL,
+  channel_name TEXT NOT NULL DEFAULT '',
+  title        TEXT NOT NULL DEFAULT '',
+  start_at     INTEGER NOT NULL,
+  fired        INTEGER NOT NULL DEFAULT 0,
+  created_at   INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_reminders_due ON epg_reminders(fired, start_at);
+CREATE INDEX IF NOT EXISTS idx_reminders_device ON epg_reminders(device_id, start_at);
+
 CREATE TABLE IF NOT EXISTS favorites (
   device_id  INTEGER NOT NULL,
   channel_id INTEGER NOT NULL,

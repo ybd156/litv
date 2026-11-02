@@ -260,6 +260,12 @@ func (a *API) Handler(viaGateway bool) http.Handler {
 		// 跨端续播
 		pr.Post("/api/v1/tv/progress", a.tvSaveProgress)
 		pr.Get("/api/v1/tv/resume", a.tvResume)
+		// C5：节目开播提醒
+		pr.Post("/api/v1/tv/reminder", a.tvCreateReminder)
+		pr.Get("/api/v1/tv/reminders", a.tvListReminders)
+		pr.Delete("/api/v1/tv/reminder/{id}", a.tvDeleteReminder)
+		// C6：从节目单预约录制
+		pr.Post("/api/v1/tv/record", a.tvCreateRecording)
 	})
 
 	// ---- 流出口（签名 URL，不走身份中间件） ----

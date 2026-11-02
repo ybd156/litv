@@ -364,6 +364,41 @@ func main() {
 		}
 	}()
 
+	// 4) 节目开播提醒（C5）
+	//
+	// 每 30 秒扫一次到点的提醒。提醒本身存在库里、按设备区分，
+	// 推送走已经配置好的 alert 通道（Telegram / webhook）——
+	// 这是服务端唯一能主动触达用户的方式，没有额外的推送服务。
+	go func() {
+		t := time.NewTicker(30 * time.Second)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case now := <-t.C:
+				due, err := st.DueReminders(ctx, now.Unix())
+				if err != nil || len(due) == 0 {
+					continue
+				}
+				for _, rem := range due {
+					if notifier.Enabled() {
+						_ = notifier.Send(
+							fmt.Sprintf("reminder-%d", rem.ID),
+							fmt.Sprintf("LITV：%s 即将开始", rem.Title),
+							fmt.Sprintf("频道：%s\n开播时间：%s",
+								rem.ChannelName,
+								time.Unix(rem.StartAt, 0).Format("01-02 15:04")),
+						)
+					}
+					// 无论推送是否成功都标记已处理：
+					// 推送失败重试会把同一档节目反复推给用户，不如让他看一次日志。
+					_ = st.MarkReminderFired(ctx, rem.ID)
+				}
+			}
+		}
+	}()
+
 	// 3) EPG 定时刷新（A1）
 	//
 	// 以前 refresh_cron 只是个配置项和界面上的一行说明，**没有任何调度器**——

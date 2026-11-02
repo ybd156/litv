@@ -205,7 +205,21 @@ func (a *API) tvEPG(w http.ResponseWriter, r *http.Request) {
 		fail(w, http.StatusInternalServerError, 5001, err.Error())
 		return
 	}
-	ok(w, map[string]any{"channel": ch, "programs": progs})
+	// C1/C7：把「这一天是哪天」「服务端用哪个时区」一并下发。
+	//
+	// 客户端要显示「今天/明天」和节目时间，如果自己按设备时区算，
+	// 会和服务端的日边界对不上（设备时区可能设错，或者用户在别的时区）。
+	// 统一由服务端给 date/timezone/server_time，客户端只负责格式化。
+	ok(w, map[string]any{
+		"channel":     ch,
+		"programs":    progs,
+		"day":         day,
+		"date":        start.Format("2006-01-02"),
+		"timezone":    a.cfg.Server.Timezone,
+		"server_time": a.now().Unix(),
+		"day_start":   start.Unix(),
+		"day_end":     end.Unix(),
+	})
 }
 
 // localDayRange 返回指定时区里第 day 天的 [00:00, 次日00:00)。

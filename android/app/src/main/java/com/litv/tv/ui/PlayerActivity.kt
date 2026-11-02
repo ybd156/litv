@@ -60,8 +60,6 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
     private lateinit var panel: LinearLayout
     private lateinit var panelTitle: TextView
     private lateinit var panelList: RecyclerView
-    private lateinit var srcList: RecyclerView
-    private lateinit var grpList: RecyclerView
     private val srcAdapter = GroupAdapter()
     private val grpAdapter = GroupAdapter()
     /** 当前选中的源 id，0 = 全部 */
@@ -136,21 +134,6 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         panel = findViewById(R.id.channelPanel)
         panelTitle = findViewById(R.id.panelTitle)
         panelList = findViewById(R.id.panelList)
-        srcList = findViewById(R.id.srcList)
-        grpList = findViewById(R.id.grpList)
-        srcList.layoutManager = LinearLayoutManager(this)
-        grpList.layoutManager = LinearLayoutManager(this)
-        srcList.adapter = srcAdapter
-        grpList.adapter = grpAdapter
-        srcAdapter.onPick = { name ->
-            selSource = srcAdapter.sourceIdOf(name)
-            selGroup = ""
-            rebuildColumns()
-        }
-        grpAdapter.onPick = { name ->
-            selGroup = if (name == null || name == "全部") "" else name
-            applyChannelFilter()
-        }
         numberTip = findViewById(R.id.numberTip)
         settingsMenu = findViewById(R.id.settingsMenu)
         // 右侧设置菜单：能就地改的就地改，改不了的转给完整设置弹层
@@ -235,7 +218,6 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         // 会把全量列表覆盖成过滤后的结果（越点越少），
         // 后面再用 groupLabelText() 把四列的标题盖回去。整段删掉。
         if (::panelAdapter.isInitialized) {
-            rebuildColumns()
             applyChannelFilter()
         }
     }
@@ -254,16 +236,6 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         return "分组：$name（${channels.size}）  ←→ 切换"
     }
 
-    /** 四列之间移动焦点：源 -> 分组 -> 频道，反向同理 */
-    private fun moveColumn(delta: Int) {
-        when {
-            panelList.hasFocus() && delta < 0 -> grpList.requestFocus()
-            grpList.hasFocus() && delta > 0 -> panelList.requestFocus()
-            grpList.hasFocus() && delta < 0 -> srcList.requestFocus()
-            srcList.hasFocus() && delta > 0 -> grpList.requestFocus()
-            else -> if (delta > 0) panelList.requestFocus() else srcList.requestFocus()
-        }
-    }
 
     private fun switchGroup(delta: Int) {
         val total = groups.size + 1 + if (hasFavGroup) 1 else 0
@@ -391,7 +363,6 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         panel.visibility = View.VISIBLE
         // 四列：源 / 分组 / 频道。这里必须走 applyChannelFilter()，
         // 原来直接 submit(channels) 会把还没加载的空列表刷进去，频道列就是空的。
-        rebuildColumns()
         applyChannelFilter()
         val i = channels.indexOfFirst { it.id == current?.id }
         if (i >= 0) {
@@ -497,11 +468,11 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
                         closePanel(); return true
                     }
                     KeyEvent.KEYCODE_DPAD_LEFT -> {
-                        moveColumn(-1); return true
+                        cycleGroup(); return true
                     }
                     KeyEvent.KEYCODE_DPAD_RIGHT -> {
                         // 规范：焦点在频道列表时按右 → 打开节目单
-                        if (panelList.hasFocus()) openEpg() else moveColumn(+1)
+                        openEpg()
                         return true
                     }
                 }
@@ -627,24 +598,14 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         const val EXTRA_CHANNEL_NAME = "channel_name"
     }
 
-    /** 根据当前源选择，重建「源」和「分组」两列 */
-    private fun rebuildColumns() {
-        val srcRows = ArrayList<GroupAdapter.Row>()
-        srcRows.add(GroupAdapter.Row("全部源", allChannels.size))
-        val bySrc = allChannels.groupBy { it.sourceId }
-        for ((sid, list) in bySrc) {
-            val nm = srcNames[sid] ?: "源 $sid"
-            srcRows.add(GroupAdapter.Row(nm, list.size))
-        }
-        srcAdapter.submit(srcRows, if (selSource == 0L) "全部源" else srcNames[selSource])
-
-        val base = if (selSource == 0L) allChannels else allChannels.filter { it.sourceId == selSource }
-        val grpRows = ArrayList<GroupAdapter.Row>()
-        grpRows.add(GroupAdapter.Row("全部", base.size))
-        base.groupBy { it.group }.forEach { (g, list) ->
-            grpRows.add(GroupAdapter.Row(g.ifBlank { "未分组" }, list.size))
-        }
-        grpAdapter.submit(grpRows, if (selGroup.isEmpty()) "全部" else selGroup)
+    /** 分组窄竖条点击：在所有分组之间循环 */
+    private fun cycleGroup() {
+        val all = listOf("") + allChannels.map { it.group }.filter { it.isNotBlank() }.distinct()
+        val i = all.indexOf(selGroup)
+        selGroup = all[(i + 1).mod(all.size)]
+        findViewById<TextView>(R.id.grpStrip)?.text =
+            (if (selGroup.isEmpty()) "全部" else selGroup) + "\n《\n频道"
+        applyChannelFilter()
     }
 
     /** 按当前源+分组过滤，刷到频道列表 */

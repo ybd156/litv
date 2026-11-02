@@ -1,40 +1,64 @@
-# LITV2 AI Development Guide
+# LITV2 开发指南（给 AI 与新加入的人）
 
-## 1. Project purpose
+这份文档写的是**做事的规则**，不是功能说明。功能见 [README](README.md)。
 
-LITV2 is a privately deployed IPTV source-management and playback platform for fnOS. It does not provide, bundle, host, or distribute media sources. Users are responsible for the legality of imported sources.
+违反这里的约定，代码即使能跑也会在真机上出事——这个仓库里已经发生过多次。
 
-## 2. System boundaries
+---
 
-- `server/`: Go service. Owns authentication, SQLite data, source parsing, EPG, streaming, recording, timeshift, remote control, DLNA and the HTTP API.
-- `admin/`: Vue 3 + TypeScript + Vite administration UI, deployed below `/app/litv/`.
-- `android/`: Android TV and phone client. Media3 is primary; VLC and mpv are fallback engines.
-- `ios/`: SwiftUI client with MobileVLCKit and AVPlayer fallback.
-- `packaging/fnos/`: fnOS package manifests, lifecycle scripts and install/uninstall wizards.
-- `build/test/`: integration and smoke-test scripts.
-- `docs/design/`: architecture and API design documents.
+## 1. 项目是什么
 
-## 3. Core security model
+私有部署的 IPTV 源管理与播放平台，跑在飞牛 fnOS 上。
 
-1. Browser administration normally enters through the fnOS Unix-socket gateway.
-2. `X-Trim-*` identity headers are trusted only for requests known to come through that gateway.
-3. TCP requests must never become administrators by supplying `X-Trim-*` headers.
-4. Native clients authenticate with device bearer tokens.
-5. The server stores token hashes, not plaintext tokens.
-6. Stream URLs use HMAC signatures with expiration.
-7. Emergency password login is an exceptional path and must be rate-limited, audited and reviewed whenever changed.
+**不提供、不内置、不托管任何直播源。** 所有源由使用者导入，合法性自负。
+任何让项目"自带源"的改动都不要做。
 
-## 4. Source-of-truth rules
+---
 
-- Edit source files, never generated or packaged copies.
-- Do not edit `admin/dist`, `server/internal/web/www`, Android build output, generated bindings or Gradle intermediates.
-- When an API changes, update the Go handler, TypeScript/Kotlin/Swift types, mock implementation, tests and API documentation together.
-- The server response envelope is `{ code, msg, data }`. Do not silently accept unrelated response shapes without documenting compatibility.
-- Pages and clients must not construct privileged server URLs from untrusted input.
+## 2. 边界
 
-## 5. Files AI must ignore
+- `server/` — Go 服务端。认证、SQLite、源解析、EPG、流扇出、录制、时移、遥控中转、DLNA、HTTP API
+- `admin/` — Vue 3 + TypeScript + Vite 管理台，部署在 `/app/litv/`
+- `android/` — Android TV 与手机，**同一份代码**。Media3 主，VLC / mpv 兜底
+- `ios/` — SwiftUI。MobileVLCKit 主，AVPlayer 兜底
+- `packaging/fnos/` — fpk 清单、生命周期脚本、安装向导
+- `build/test/` — 集成测试脚本
 
-Do not read or modify these unless the task explicitly concerns generated artifacts:
+---
+
+## 3. 安全模型（改动前先读）
+
+1. 浏览器管理端正常经飞牛 Unix Socket 网关进入
+2. `X-Trim-*` 身份头**只对确认来自网关的请求可信**
+3. TCP 请求**绝不能**因为带了 `X-Trim-*` 头就成为管理员
+4. 原生客户端用设备 bearer token 认证
+5. 服务端存 token 的**哈希**，不存明文
+6. 流地址用 HMAC 签名并带过期时间
+7. 应急密码登录是例外路径，改动必须限流、审计、单独评审
+
+### 设备身份
+
+- 客户端 `device_key` 由系统稳定标识派生（Android 用 `ANDROID_ID`），
+  重装/清数据后不变，服务端据此认回原设备
+- 服务端遇到已存在的 `device_key`：**只有「已 bound 且平台一致」才换发可用 token**
+- 同 key 换平台必须拒绝（`ErrDeviceKeyConflict`），否则知道 key 就能顶掉设备
+- 未批准的设备重复注册**仍是 pending**，不能因为重复注册就被批准
+
+---
+
+## 4. 事实来源
+
+- 只改源码，不改生成物
+- 不要改 `admin/dist`、`server/internal/web/www`、Android 构建产物、Gradle 中间文件
+- 改 API 时，Go handler、TS/Kotlin/Swift 类型、mock、测试、文档**一起改**
+- 响应信封是 `{ code, msg, data }`。不接受其它形状，除非明确记录兼容性
+- 页面与客户端**不得**用不可信输入拼特权 URL
+
+---
+
+## 5. 不要读/改
+
+除非任务就是关于生成物，否则跳过：
 
 ```text
 **/node_modules/**
@@ -48,131 +72,144 @@ server/internal/web/www/**
 packaging/fnos/app/server/litvd_*
 ```
 
-## 6. Required engineering rules
+---
 
-### Administration UI
+## 6. 工程规则
 
-- Production builds must never enable the mock API through URL parameters or browser storage.
-- Keep API calls in `admin/src/api/modules` rather than Vue templates or unrelated components.
-- Treat 401 as unauthenticated and 403 as authenticated but unauthorized.
-- Destructive operations need clear confirmation text describing their scope.
-- Do not log passwords, bearer tokens, signed stream URLs or imported source credentials.
+### 管理台
 
-### Go server
+- 生产构建**绝不能**通过 URL 参数或浏览器存储启用 mock API
+- API 调用放在 `admin/src/api/modules`，不要写在模板里
+- 401 = 未认证，403 = 已认证但无权限，不要混用
+- 破坏性操作要有说明影响范围的确认文案
+- **不要**记录密码、bearer token、签名流地址、导入源的凭据
 
-- Validate request bodies, path IDs, sizes and allowed values at the HTTP boundary.
-- Use parameterized SQL. Never concatenate untrusted values into SQL statements.
-- Multi-record destructive operations must use transactions.
-- Reject unknown or malformed authentication contexts.
-- Authentication endpoints require rate limiting and security logging without secrets.
-- Outbound fetchers must consider SSRF. Restrict sensitive local and link-local destinations where product requirements permit.
-- File deletion must prove that the canonical target belongs to an approved application-owned root.
+### Go 服务端
 
-### Android and iOS
+- 在 HTTP 边界校验请求体、路径 ID、大小、取值范围
+- 只用参数化 SQL，**绝不**拼接不可信值
+- 多记录破坏性操作必须走事务
+- 拒绝未知或畸形的认证上下文
+- 认证接口要限流 + 安全日志（不含密钥）
+- 出站抓取要考虑 SSRF，限制本机与链路本地地址
+- 删除文件前必须证明规范化路径属于应用自有根目录
 
-- Prefer HTTPS. Plain HTTP may be supported for user-owned LAN servers, but the UI must make the transport choice explicit.
-- Never disable TLS certificate or hostname verification.
-- Do not emit tokens or complete signed URLs through logs or crash reports.
-- Persist authentication tokens using platform-protected storage when available.
-- Release builds must not include verbose HTTP logging.
-- Player changes must validate release, activity lifecycle, rapid channel switching, network recovery and bounded retry behavior.
+### Android / iOS
 
-### fnOS lifecycle scripts
+- 优先 HTTPS。用户自有 LAN 服务可以走 HTTP，但界面必须让用户明确知道
+- **绝不**关闭 TLS 证书或主机名校验
+- 不要在日志或崩溃上报里输出 token、完整签名 URL
+- token 用平台安全存储（Android Keystore / iOS Keychain）
+- Release 构建不能带详细 HTTP 日志
+- 播放器改动必须验证：release、Activity 生命周期、快速切台、断网恢复、重试有上限
 
-- Uninstall defaults to preserving data.
-- Recursive deletion is allowed only after canonical-path validation against documented application-owned roots.
-- Never delete a path solely because its text contains `litv`.
-- Do not follow symlinks outside approved roots.
-- Log skipped and failed cleanup actions without exposing secrets.
+### iOS 特有
 
-## 7. Change workflow
+- **部署目标是 iOS 15。不要用 iOS 16+ 的 API。**
+  踩过的坑：`.toolbar { if ... { ToolbarItem } }` 里的条件内容会编译成
+  `buildIf`，那是 iOS 16 才有的，CI 直接报
+  `'buildIf' is only available in iOS 16.0 or newer`。
+  需要条件显示时，让元素始终存在，用 `.disabled` / `.opacity` 控制
+- `UIViewRepresentable` 里的裸 `UIView` 没有 intrinsic size，
+  必须显式 `.frame(maxWidth: .infinity, maxHeight: .infinity)`
+  并设 `autoresizingMask`，否则画面会缩成一小块
 
-Before editing:
+### fnOS 生命周期脚本
 
-1. Read `README.md`, the relevant design document and all directly affected source files.
-2. Check `git status` and preserve unrelated user changes.
-3. State whether the change affects authentication, deletion, networking, storage, playback or packaging.
+- 卸载默认保留数据
+- 递归删除只能在规范化路径校验通过后执行
+- **不能**仅因为路径文本含 `litv` 就删除
+- 不跟随指向批准根目录之外的符号链接
+- 记录跳过与失败的动作，但不暴露密钥
 
-After editing:
+---
 
-1. Run the narrowest relevant tests first.
-2. Run formatting and type or compile checks.
-3. Review the diff for generated files, credentials and accidental binary changes.
-4. Update documentation when behavior or contracts changed.
-5. Report what was verified and what remains unverified.
+## 7. 改动流程
 
-## 8. Toolchains: use WSL, not Windows
+改之前：
 
-**The Windows host has no Go, JDK or Gradle. All toolchains live in WSL (Ubuntu).**
-Do not spend time searching for a Windows Go/JDK — there is none, and there is no bundled
-Go under `.review-artifacts/toolchains/go` that works from Windows (its build cache is
-outside the writable workspace and fails with `Access is denied`).
+1. 读 `README.md`、相关设计文档、所有直接受影响的源文件
+2. 看 `git status`，保留无关的本地改动
+3. 说明这次改动涉及：认证 / 删除 / 网络 / 存储 / 播放 / 打包 中的哪些
 
-Every build and test command must be run through WSL, from the repo as seen at
-`/mnt/d/Documents/deepseek-harness/default-workspace/LITV2`:
+改之后：
+
+1. 先跑最窄的相关测试
+2. 跑格式化与类型/编译检查
+3. 检查 diff 里有没有生成物、凭据、意外二进制
+4. 行为或契约变了就更新文档
+5. **报告哪些验证过、哪些没验证**
+
+---
+
+## 8. 工具链：用 WSL，不要用 Windows
+
+**Windows 主机上没有 Go、JDK、Gradle。** 全部在 WSL（Ubuntu）里。
+
+不要浪费时间找 Windows 版 Go/JDK——没有。也不要试图用
+`.review-artifacts/toolchains/go`，它的构建缓存在可写工作区之外，
+从 Windows 调用会 `Access is denied`。
+
+所有构建与测试命令都通过 WSL 执行，仓库路径为
+`/mnt/d/Documents/deepseek-harness/default-workspace/LITV2`：
 
 ```bash
 wsl.exe -e bash -lc '<command>'
 ```
 
-Verified WSL inventory (re-verify before trusting any version number):
+已验证的 WSL 清单（用之前先复核版本）：
 
-| Tool | Location / command | Version seen |
+| 工具 | 位置 / 命令 | 版本 |
 |---|---|---|
-| Go | on `PATH` in WSL | `go1.23.12 linux/amd64` |
-| Node / npm | on `PATH` in WSL | `v22.22.1` / npm 11 |
+| Go | `PATH` 上 | `go1.23.12 linux/amd64` |
+| Node / npm | `PATH` 上 | `v22.22.1` / npm 11 |
 | JDK | `source ~/android-dev/env.sh` → `$JAVA_HOME` | `openjdk 21.0.12.1` |
 | Gradle | `~/android-dev/gradle-dist/gradle-8.7/bin/gradle` | 8.7 |
-| Android SDK | `~/android-dev/sdk` (also `ANDROID_HOME`) | `platforms/android-35`, `build-tools/34.0.0`, `35.0.0` |
+| Android SDK | `~/android-dev/sdk`（也是 `ANDROID_HOME`） | platform 35，build-tools 34/35 |
 | Android NDK | `$ANDROID_NDK_HOME` | `27.0.12077973` |
 
-`android/gradlew` is a **shim, not a real wrapper**: it sources `~/android-dev/env.sh`
-and execs the local Gradle 8.7 distribution, because the standard wrapper tries to
-reach `services.gradle.org`, which fails from this network. Run `./gradlew` from
-inside WSL; do not regenerate the wrapper casually.
+`android/gradlew` 是**转发脚本，不是标准 wrapper**：它会 source
+`~/android-dev/env.sh` 再 exec 本地 Gradle 8.7。标准 wrapper 会去
+`services.gradle.org` 拉包，这个网络下拉不到。**不要**随意重新生成 wrapper。
 
-`android/local.properties` already points at `sdk.dir=/home/Z/android-dev/sdk`, so the
-Android build only works from WSL — Windows paths would break it.
+`android/local.properties` 指向 `sdk.dir=/home/Z/android-dev/sdk`，
+所以 Android 构建只能在 WSL 里跑。
 
-**The output of `wsl.exe` piped into Git Bash is UTF-16 and renders as garbage.**
-Pipe through `iconv -f UTF-16LE -t UTF-8` or `tr -d '\r'` when reading localized text;
-ASCII build output is usually fine as-is.
+**`wsl.exe` 的输出管道进 Git Bash 会变成 UTF-16，显示为乱码。**
+读中文输出时加 `| iconv -f UTF-16LE -t UTF-8` 或 `tr -d '\r'`。
 
-### GitHub Actions is the second supported build path
+### GitHub Actions 是第二条构建路径
 
-`.github/workflows/release.yml` builds all three targets on hosted runners and is the
-**only** path that can produce iOS — iOS needs Apple's SDK, so it cannot be built on
-Windows or Linux, only on the `macos-latest` job. Use the workflow when:
+`.github/workflows/release.yml` 在托管 runner 上构建三端，是**唯一**能产出
+iOS 的路径（需要 Apple SDK）。
 
-- you need an iOS build, or
-- a local WSL build is blocked (missing tool, network, disk), or
-- you want the same artefact the release actually ships.
+触发方式：workflow_dispatch，或推 `v*` tag。
 
-Trigger it with workflow_dispatch or by pushing a `v*` tag. Note the known defects in
-that workflow: the version is taken from `DEFAULT_VERSION`/input rather than the pushed
-tag, `build.sh` is called without `--version`, and the publish step can delete a
-release/tag other than the one being built. Treat CI as a build path, not yet as a
-trustworthy release path.
+另有 `.github/workflows/ios-check.yml`：只在 `ios/**` 变化时编译 iOS，
+**不发版**。iOS 改动靠它验证。
 
-## 9. Standard verification commands
+---
 
-Run these **inside WSL** (`wsl.exe -e bash -lc '...'`), from the repo path above.
+## 9. 验证命令
 
-### Go server
+全部在 WSL 里跑。
+
+### Go 服务端
 
 ```bash
 cd server
 gofmt -w <changed-go-files>
 go build ./...
-go test ./...
 go vet ./...
+go test -race ./...
 ```
 
-`go test ./...` currently reports `[no test files]` for every package: **the repository
-has no Go unit tests.** Exit code 0 from that command is not evidence of correctness.
-When you fix behaviour, add the `_test.go` files rather than citing this as a pass.
+**单元测试是存在的**，覆盖 `api` / `config` / `epg` / `store` / `stream` / `timeshift`
+六个包。`go test ./...` 全绿是有意义的——但只对**已经写了测试的行为**有意义。
 
-### Administration UI
+新增或修改行为时，**必须**同时加 `_test.go`。
+
+### 管理台
 
 ```bash
 cd admin
@@ -188,34 +225,108 @@ cd android
 ./gradlew lintDebug testDebugUnitTest assembleDebug
 ```
 
-Release/R8 behaviour (JNI callbacks and Gson reflection) needs an `assembleRelease`
-check; a debug-only pass does not prove it.
+Release/R8 行为（JNI 回调、Gson 反射）需要 `assembleRelease` 验证，
+只过 debug 不算数。
 
-### fnOS package
+### fnOS 包
 
 ```bash
 cd packaging/fnos
-./build.sh              # x86; --arch arm for ARM
+./build.sh              # x86；ARM 用 --arch arm
 ```
 
-Verify the frontend actually embedded in the package, not just that the `.fpk` was
-produced — `go:embed` only serves `server/internal/web/www`, and the packaging script
-also stages an external `www` that the handler never reads.
+要验证**前端真的嵌进去了**，不只是 fpk 生成成功——
+`go:embed` 只服务 `server/internal/web/www`，而打包脚本还会额外暂存一份
+`www`，handler 根本不读那份。用 `build/test/verify-frontend-embed.sh` 检查。
 
 ### iOS
 
-Not buildable locally. Use the `ios` job in the GitHub Actions release workflow.
+本地编不了。推上去看 `iOS Build Check`。
 
-### Integration
+### 集成
 
-Run the relevant scripts in `build/test/`. Authentication, binding, stream signing, recording, uninstall and upgrade changes require dedicated regression tests.
+跑 `build/test/` 里相关的脚本。认证、绑定、流签名、录制、卸载、升级
+这几类改动**必须**有专门的回归测试。
 
-## 10. Definition of done
+---
 
-A change is complete only when:
+## 10. 测试纪律
 
-- Source, clients, mocks and documentation agree.
-- Relevant type checks, tests and builds pass.
-- No secret, signing credential or generated build output was added.
-- Destructive behavior has an explicit scope, safe failure behavior and a regression test.
-- Security-sensitive changes explain the threat addressed and the remaining limitations.
+这个仓库有过两次「测试是绿的但根本没测到东西」的事故。所以：
+
+- **修 bug 先写一条在旧代码上会失败的测试。**
+  写不出失败的测试，说明还没定位到根因
+- 断言要打在**行为**上，不是实现细节
+- 测试自己也要能证明有效：写完把修复回退掉，确认它变红，再恢复
+- 别用「能编译」当「能工作」的证据
+
+---
+
+## 11. 跨端约定
+
+### 时间
+
+- 服务端内部一律用 **Unix 秒**（`store.Now()`）
+- **JavaScript `Date` 要毫秒**。传秒进去会得到 1970 年——
+  这个 bug 已经出过一次（界面上显示"57年"）
+- 前端统一用 `admin/src/utils/format.ts` 的 `toDate()` 做转换
+- 节目单的日边界由**服务端**按时区算好下发（`date` / `day_start` / `day_end`），
+  客户端不要自己按设备时区算
+
+### 版本号
+
+发版前这些地方必须同步，缺一个就会出现"关于里版本不对"：
+
+| 文件 | 字段 |
+|---|---|
+| `packaging/fnos/manifest` | `version` |
+| `android/app/build.gradle.kts` | `versionCode`（+1）、`versionName` |
+| `ios/project.yml` | `CFBundleShortVersionString`、`CFBundleVersion`（+1） |
+| `.github/workflows/release.yml` | `DEFAULT_VERSION` |
+| `CHANGELOG.md` | `## [x.y.z]` |
+
+客户端**不要**硬编码版本号，读 `Bundle.main` / `BuildConfig`。
+
+### 文本与换行
+
+- `.gitattributes` 强制 `.sh` 与 `packaging/fnos/**` 用 LF。
+  CRLF 会让 fnOS 上的 bash 脚本直接语法错误
+- 安装向导写 YAML 时，密码/密钥必须走 `yaml_dq` 转义
+
+---
+
+## 12. 发版
+
+1. 同步 §11 的五个版本号位置
+2. 在 `CHANGELOG.md` 写这一版改了什么（面向用户，不写实现细节）
+3. 本地验证：`go test ./...`、`npm run build`、`assembleDebug`
+4. `git tag -a vX.Y.Z && git push origin main --tags`
+5. 等 `Release` 工作流出三端产物
+
+**注意**：release 工作流会先删掉同名 tag 再发布。所以
+**已发布的版本号不能复用**，只能往上加。
+
+---
+
+## 13. 已知限制
+
+### AV3A（AVS3-P3）音频
+
+- FFmpeg 主线没有它的解码器（社区靠打补丁）
+- VLC / mpv 基于 FFmpeg → 同样不支持
+- ExoPlayer 完全不支持
+
+**集成更多解码器解决不了这个问题。** 可行方向：换非 AV3A 线路，或丢弃音频轨。
+
+不要为了"支持 AV3A"去接来路不明的二进制解码库。
+
+---
+
+## 14. 完成的标准
+
+- 源码、客户端、mock、文档互相一致
+- 相关的类型检查、测试、构建都过
+- 没有引入密钥、签名凭据、生成物
+- 破坏性行为有明确范围、安全的失败方式、回归测试
+- 安全相关改动写清了「防的是什么威胁、还剩什么局限」
+- 报告里说明了**哪些验证过、哪些没验证**

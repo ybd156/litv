@@ -487,12 +487,10 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
                         closePanel(); return true
                     }
                     KeyEvent.KEYCODE_DPAD_LEFT -> {
-                        cycleGroup(); return true
+                        movePanelFocus(-1); return true
                     }
                     KeyEvent.KEYCODE_DPAD_RIGHT -> {
-                        // 规范：焦点在频道列表时按右 → 打开节目单
-                        openEpg()
-                        return true
+                        movePanelFocus(+1); return true
                     }
                 }
             }
@@ -618,6 +616,23 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
     }
 
     /** 分组窄竖条点击：在所有分组之间循环 */
+    /**
+     * 浮层里在列之间移动焦点：分组竖条 <-> 频道列表 <-> 节目单。
+     *
+     * 参考实现就是这么操作的。分组竖条本身可点，焦点落上去用上下切分组，
+     * 左右负责跨列，比「左右键都拿来切分组」合理。
+     */
+    private fun movePanelFocus(dir: Int) {
+        val strip = findViewById<TextView>(R.id.grpStrip)
+        when {
+            strip.hasFocus() && dir > 0 -> panelList.requestFocus()
+            panelList.hasFocus() && dir < 0 -> strip.requestFocus()
+            panelList.hasFocus() && dir > 0 -> epgList.requestFocus()
+            epgList.hasFocus() && dir < 0 -> panelList.requestFocus()
+            else -> if (dir > 0) panelList.requestFocus() else strip.requestFocus()
+        }
+    }
+
     private fun cycleGroup() {
         val all = listOf("") + allChannels.map { it.group }.filter { it.isNotBlank() }.distinct()
         val i = all.indexOf(selGroup)

@@ -439,8 +439,15 @@ func (u *Upstream) readOnce(ctx context.Context) error {
 			copy(chunk, buf[:n])
 			u.appendRing(chunk)
 			u.broadcast(chunk)
-			// 时移录制：顺手 tee 一份到磁盘（回调内部必须快速返回）
-			if u.opts.OnData != nil {
+			// 时移录制：只在**确实有人在看**时才 tee 到磁盘。
+			//
+			// 空闲上游（最后一个订阅者已离开、还在等 IdleTimeout 回收）
+			// 会继续从上游读数据。若这时照常写时移盘，等于为没人看的频道
+			// 持续写盘——NAS 上几个台叠加就是持续的磁盘 IO，
+			// 反过来拖慢正在看的那个台（表现为换台后卡一下）。
+			//
+			// 时移的语义本来就是「看过就有回看」，没人看就不必录。
+			if u.opts.OnData != nil && u.subscriberCount() > 0 {
 				u.opts.OnData(u.ChannelID, chunk)
 			}
 		}

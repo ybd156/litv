@@ -326,7 +326,10 @@ func (a *API) identityMiddleware(viaGateway bool) func(http.Handler) http.Handle
 
 			// 2) 终端 token
 			if tok := auth.BearerToken(r); tok != "" {
-				if d, err := a.st.GetDeviceByToken(ctx, auth.HashToken(tok)); err == nil && d != nil {
+				// R15：token_hours 现在真正生效。<=0 表示不施加 TTL（长期有效，靠吊销）。
+				// >0 时是滑动续期：正常使用的设备不会被迫重绑，
+				// 只有长期不用的设备才自然过期。
+				if d, err := a.st.GetDeviceByToken(ctx, auth.HashToken(tok), a.cfg.Auth.TokenHours); err == nil && d != nil {
 					ctx = context.WithValue(ctx, ctxDevice, d)
 					_ = a.st.TouchDevice(ctx, d.ID)
 					// 这里**没有**任何基于 d.Platform 的提权。

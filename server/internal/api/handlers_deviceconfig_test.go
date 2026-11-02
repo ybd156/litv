@@ -60,7 +60,7 @@ func TestHeartbeatReturnsRealConfigVersion(t *testing.T) {
 		`INSERT INTO devices(device_key,token_hash,name,platform,model,status,created_at,last_seen,bound_at)
 		 VALUES(?,?,?,?,?,'bound',?,?,?)`,
 		"hb-dev", hash, "心跳设备", "android", "test",
-		store.Now(), store.Now(), 111111); err != nil { // bound_at 故意设成固定旧值
+		store.Now(), store.Now(), store.Now()); err != nil { // 活跃设备，避免被 R15 会话到期判过期
 		t.Fatalf("建设备失败: %v", err)
 	}
 
@@ -79,8 +79,14 @@ func TestHeartbeatReturnsRealConfigVersion(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
 		t.Fatalf("解析失败: %v", err)
 	}
-	// bound_at 是 111111，若 return 的等于它说明还在用旧字段
-	if out.Data.ConfigVersion == 111111 {
+	// 新设备的 config_version 初始为 0，而 bound_at 是当前时间戳（远大于 0）。
+	// 若返回值等于 bound_at，说明还在用旧字段。
+	var boundAt int64
+	if err := a.st.DB().QueryRowContext(ctx,
+		`SELECT bound_at FROM devices WHERE device_key='hb-dev'`).Scan(&boundAt); err != nil {
+		t.Fatalf("读 bound_at 失败: %v", err)
+	}
+	if out.Data.ConfigVersion == boundAt {
 		t.Fatal("心跳仍返回 bound_at 当 config_version——终端永远发现不了配置变化")
 	}
 }

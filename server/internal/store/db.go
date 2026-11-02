@@ -243,6 +243,11 @@ func (s *Store) migrate(ctx context.Context) error {
 		// 以前用 bound_at 当版本号，改配置时它不变，
 		// 终端永远不知道"配置该重新拉了"，管理台改了参数等于没改。
 		`ALTER TABLE devices ADD COLUMN config_version INTEGER NOT NULL DEFAULT 0`,
+		// R15：设备会话到期（滑动续期）。
+		// 0 表示"从未使用过"，此时以 bound_at 为起点计算。
+		// 正常使用会不断续期；只有长期不用才真正过期，
+		// 避免 IPTV 场景下用户每天被迫重新绑定。
+		`ALTER TABLE devices ADD COLUMN session_expires_at INTEGER NOT NULL DEFAULT 0`,
 	} {
 		if _, err := s.db.ExecContext(ctx, stmt); err != nil &&
 			!strings.Contains(strings.ToLower(err.Error()), "duplicate column") {

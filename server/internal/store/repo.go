@@ -571,12 +571,23 @@ func (s *Store) ListDevices(ctx context.Context, status string) ([]Device, error
 	return out, rows.Err()
 }
 
+// ErrDeviceSessionExpired 表示设备会话已过期，需要重新绑定。
+var ErrDeviceSessionExpired = errors.New("设备会话已过期")
+
 // GetDeviceByToken 用 token 哈希查设备（必须是 bound 状态）。
-func (s *Store) GetDeviceByToken(ctx context.Context, tokenHash string) (*Device, error) {
+//
+// ttlHours <= 0 表示不施加 TTL（保持长期有效，靠显式吊销）。
+// ttlHours > 0 时走滑动续期：每次成功使用都把到期时间往后推，
+// 只有**长期不用**才会过期。IPTV 场景下设备几乎每次开电视都在用，
+// 所以正常用户不会被迫重新绑定，而一台被遗忘/被替换的设备会自然失效。
+func (s *Store) GetDeviceByToken(ctx context.Context, tokenHash string, ttlHours int) (*Device, error) {
 	var d Device
-	err := s.db.QueryRowContext(ctx, `SELECT id,device_key,name,platform,model,status,config_json,config_version,bound_at,last_seen,created_at
+	var sessionExpires int64
+	err := s.db.QueryRowContext(ctx,
+		`SELECT id,device_key,name,platform,model,status,config_json,config_version,bound_at,last_seen,created_at,session_expires_at
 		FROM devices WHERE token_hash=? AND status='bound'`, tokenHash).
-		Scan(&d.ID, &d.DeviceKey, &d.Name, &d.Platform, &d.Model, &d.Status, &d.ConfigJSON, &d.ConfigVersion, &d.BoundAt, &d.LastSeen, &d.CreatedAt)
+		Scan(&d.ID, &d.DeviceKey, &d.Name, &d.Platform, &d.Model, &d.Status,
+			&d.ConfigJSON, &d.ConfigVersion, &d.BoundAt, &d.LastSeen, &d.CreatedAt, &sessionExpires)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, ErrNotFound
@@ -585,6 +596,31 @@ func (s *Store) GetDeviceByToken(ctx context.Context, tokenHash string) (*Device
 	}
 	if IsReservedDevicePlatform(d.Platform) {
 		return nil, ErrNotFound
+	}
+
+	if ttlHours > 0 {
+		now := Now()
+		ttl := int64(ttlHours) * 3600
+		// 从未设置过到期时间：以 bound_at 为起点**加上 TTL** 得到有效期。
+		// 注意不能直接拿 bound_at 当到期时间——那是绑定时刻，
+		// 拿它比较会把刚绑好的设备判成"已过期"。
+		if sessionExpires == 0 {
+			sessionExpires = d.BoundAt + ttl
+		}
+		if sessionExpires <= 0 {
+			sessionExpires = now + ttl
+		}
+		if now >= sessionExpires {
+			return nil, ErrDeviceSessionExpired
+		}
+		// 滑动续期：把到期时间推到 now+ttl。
+		// 用 MAX 避免并发下把到期时间往回拨。
+		if _, uerr := s.db.ExecContext(ctx,
+			`UPDATE devices SET session_expires_at=MAX(session_expires_at, ?) WHERE id=?`,
+			now+ttl, d.ID); uerr != nil {
+			// 续期失败不该让请求失败：本次已经通过了到期校验。
+			_ = uerr
+		}
 	}
 	return &d, nil
 }

@@ -661,11 +661,18 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
                 return true
             }
             KeyEvent.KEYCODE_DPAD_LEFT -> {
+                // 左键 = 频道页（分类 → 频道 → 节目单都在这个面板里）
                 if (action == KeyEvent.ACTION_DOWN) openPanel()
                 return true
             }
             KeyEvent.KEYCODE_DPAD_RIGHT -> {
-                if (action == KeyEvent.ACTION_DOWN) openEpg()
+                // 右键 = 设置菜单。
+                //
+                // 原来右键打开的是独立的节目单面板，但按电视的通用习惯
+                // （也是用户明确要求）：左=频道页、右=设置、OK=OSD。
+                // 节目单不再单独占一个方向键——频道面板里已经有节目单列，
+                // 而且从那里看节目单更符合「选台→看这个台播什么」的路径。
+                if (action == KeyEvent.ACTION_DOWN) toggleSettingsMenu()
                 return true
             }
             KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_NUMPAD_ENTER -> {

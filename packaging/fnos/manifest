@@ -21,10 +21,12 @@ desc                  = ${common.desc}
 platform              = x86
 
 source                = thirdparty
-maintainer            = LITV Team
-maintainer_url        = https://github.com/litv/litv
-distributor           = LITV Team
-distributor_url       = https://github.com/litv/litv
+# 开发者：个人 GitHub 主页
+maintainer            = ybd156
+maintainer_url        = https://github.com/ybd156
+# 发布者：本项目 GitHub 主页
+distributor           = ybd156
+distributor_url       = https://github.com/ybd156/litv
 
 # 统一网关依赖的系统版本量级（官方 Native 示例与社区生产包同款取值）。
 os_min_version        = 1.1.3100

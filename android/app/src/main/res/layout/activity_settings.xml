@@ -144,6 +144,32 @@
                 style="@style/SettingValue" />
         </LinearLayout>
 
+        <LinearLayout
+            android:id="@+id/rowStartTimeout"
+            style="@style/SettingRow">
+
+            <TextView
+                style="@style/SettingLabel"
+                android:text="数字跳台等待" />
+
+            <TextView
+                android:id="@+id/valueStartTimeout"
+                style="@style/SettingValue" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:id="@+id/rowRetry"
+            style="@style/SettingRow">
+
+            <TextView
+                style="@style/SettingLabel"
+                android:text="数字跳台等待" />
+
+            <TextView
+                android:id="@+id/valueRetry"
+                style="@style/SettingValue" />
+        </LinearLayout>
+
         <!-- ============ 设备 ============ -->
         <TextView
             style="@style/SectionTitle"

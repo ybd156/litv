@@ -44,11 +44,21 @@ class PlayerManager(
     private var pendingChannelId = 0L
     private var prepared = false
 
+    /** 本次内核已经重试过几次 */
+    private var retried = 0
+
     private val startTimeout = Runnable {
-        if (!prepared) {
-            Log.w(TAG, "内核 ${currentKind?.key} 起播超时，降级")
-            tryNext("起播超时")
+        if (prepared) return@Runnable
+        // 还没到重试上限就再来一次：网络抖动/慢设备上，重试比直接降级管用
+        if (retried < prefs.retryCount) {
+            retried++
+            Log.w(TAG, "内核 ${currentKind?.key} 起播超时，重试第 $retried 次（上限 ${prefs.retryCount}）")
+            startCurrent()
+            return@Runnable
         }
+        retried = 0
+        Log.w(TAG, "内核 ${currentKind?.key} 起播超时，降级")
+        tryNext("起播超时")
     }
 
     fun attach(surfaceView: SurfaceView, parent: ViewGroup?) {
@@ -123,7 +133,8 @@ class PlayerManager(
         }
 
         engine.prepare(pendingUrl, pendingHeaders, prefs.bufferMs, prefs.decode)
-        main.postDelayed(startTimeout, START_TIMEOUT_MS)
+        // 超时和重试次数都从设置里读，不再写死
+        main.postDelayed(startTimeout, prefs.startTimeoutMs.toLong())
     }
 
     private fun tryNext(reason: String) {
@@ -167,6 +178,6 @@ class PlayerManager(
     private companion object {
         const val TAG = "PlayerManager"
         // 起不来的内核不该拖 6 秒——3 秒足够判断，超时就换下一个
-        const val START_TIMEOUT_MS = 3000L
+        const val START_TIMEOUT_MS = 5000L
     }
 }

@@ -79,6 +79,16 @@ class Prefs(ctx: Context) {
         get() = sp.getInt(K_BUFFER, 3000)
         set(v) = sp.edit().putInt(K_BUFFER, v).apply()
 
+    /** 起播超时（毫秒）。超过这个时间还没 READY 就换下一个内核。 */
+    var startTimeoutMs: Int
+        get() = sp.getInt(K_START_TIMEOUT, 5000)
+        set(v) = sp.edit().putInt(K_START_TIMEOUT, v).apply()
+
+    /** 超时后重试几次再换内核。网络抖动时多试几次比直接降级好。 */
+    var retryCount: Int
+        get() = sp.getInt(K_RETRY, 1)
+        set(v) = sp.edit().putInt(K_RETRY, v).apply()
+
     var aspect: String
         get() = sp.getString(K_ASPECT, "auto") ?: "auto"
         set(v) = sp.edit().putString(K_ASPECT, v).apply()
@@ -151,6 +161,8 @@ class Prefs(ctx: Context) {
         const val K_ENGINE = "engine"
         const val K_DECODE = "decode"
         const val K_BUFFER = "buffer_ms"
+        const val K_START_TIMEOUT = "start_timeout_ms"
+        const val K_RETRY = "retry_count"
         const val K_ASPECT = "aspect"
         const val K_REVERSE = "reverse_keys"
         const val K_NUM_TIMEOUT = "num_timeout"

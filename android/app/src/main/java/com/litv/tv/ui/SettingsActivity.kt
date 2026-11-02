@@ -30,6 +30,8 @@ class SettingsActivity : AppCompatActivity() {
     private lateinit var valueAutoPlay: TextView
     private lateinit var valueNumberTimeout: TextView
     private lateinit var valueUiMode: TextView
+    private lateinit var valueStartTimeout: TextView
+    private lateinit var valueRetry: TextView
     private lateinit var valueDevice: TextView
     private lateinit var valueServer: TextView
     private lateinit var status: TextView
@@ -54,6 +56,8 @@ class SettingsActivity : AppCompatActivity() {
         valueAutoPlay = findViewById(R.id.valueAutoPlay)
         valueNumberTimeout = findViewById(R.id.valueNumberTimeout)
         valueUiMode = findViewById(R.id.valueUiMode)
+        valueStartTimeout = findViewById(R.id.valueStartTimeout)
+        valueRetry = findViewById(R.id.valueRetry)
         valueDevice = findViewById(R.id.valueDevice)
         valueServer = findViewById(R.id.valueServer)
         status = findViewById(R.id.status)
@@ -83,6 +87,20 @@ class SettingsActivity : AppCompatActivity() {
         bindCycle(R.id.rowNumberTimeout, valueNumberTimeout,
             numTimeouts.map { it.toString() }, app.prefs.numberJumpTimeoutMs.toString()) { v ->
             app.prefs.numberJumpTimeoutMs = v.toInt(); labelNumTimeout(v.toInt())
+        }
+
+        // 起播超时：慢设备/走代理时 3 秒会误判成"起不来"，这里可调
+        bindCycle(R.id.rowStartTimeout, valueStartTimeout,
+            listOf("3000", "5000", "8000", "12000"), app.prefs.startTimeoutMs.toString()) { v ->
+            app.prefs.startTimeoutMs = v.toIntOrNull() ?: 5000
+            labelStartTimeout(app.prefs.startTimeoutMs)
+        }
+
+        // 超时重试次数：网络抖动时多试几次比直接换内核好
+        bindCycle(R.id.rowRetry, valueRetry,
+            listOf("0", "1", "2", "3"), app.prefs.retryCount.toString()) { v ->
+            app.prefs.retryCount = v.toIntOrNull() ?: 1
+            labelRetry(app.prefs.retryCount)
         }
 
         bindCycle(R.id.rowUiMode, valueUiMode, listOf("auto", "tv", "phone"),
@@ -158,6 +176,8 @@ class SettingsActivity : AppCompatActivity() {
         // 新加的行也要在这里给初值，否则第一次进设置页是空白的
         valueAutoPlay.text = if (app.prefs.autoPlayLast) "开（打开就看）" else "关（先进列表）"
         labelUiMode(app.prefs.uiMode)
+        labelStartTimeout(app.prefs.startTimeoutMs)
+        labelRetry(app.prefs.retryCount)
     }
 
     private fun labelEngine(v: String) {
@@ -218,5 +238,13 @@ class SettingsActivity : AppCompatActivity() {
             "phone" -> "手机"
             else -> "自动"
         }
+    }
+
+    private fun labelStartTimeout(ms: Int) {
+        valueStartTimeout.text = "${ms / 1000} 秒"
+    }
+
+    private fun labelRetry(n: Int) {
+        valueRetry.text = if (n == 0) "不重试" else "$n 次"
     }
 }

@@ -251,6 +251,11 @@ func (s *Store) migrate(ctx context.Context) error {
 		// EPG 同步的「上次尝试」时间，与「上次成功」分开记。
 		// 以前只有一个 last_sync，失败时也写，界面分不清成功还是失败。
 		`ALTER TABLE epg_sources ADD COLUMN last_attempt INTEGER NOT NULL DEFAULT 0`,
+		// A5/A7/A8：源优先级、防盗链请求头、本地文件源。
+		`ALTER TABLE epg_sources ADD COLUMN priority INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE epg_sources ADD COLUMN user_agent TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE epg_sources ADD COLUMN referer TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE epg_sources ADD COLUMN kind TEXT NOT NULL DEFAULT 'url'`,
 	} {
 		if _, err := s.db.ExecContext(ctx, stmt); err != nil &&
 			!strings.Contains(strings.ToLower(err.Error()), "duplicate column") {

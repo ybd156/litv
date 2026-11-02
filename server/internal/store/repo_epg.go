@@ -8,33 +8,91 @@ import (
 
 // ---------- EPG sources ----------
 
+// epgSourceCols 是查询 EPG 源的统一列清单，避免各处 SELECT 漂移。
+const epgSourceCols = `id,name,url,enabled,priority,user_agent,referer,kind,last_sync,last_attempt,last_error`
+
+func scanEPGSource(sc interface {
+	Scan(dest ...any) error
+}) (EPGSource, error) {
+	var v EPGSource
+	var en int
+	err := sc.Scan(&v.ID, &v.Name, &v.URL, &en, &v.Priority, &v.UserAgent, &v.Referer,
+		&v.Kind, &v.LastSync, &v.LastAttempt, &v.LastError)
+	v.Enabled = en != 0
+	return v, err
+}
+
 // ListEPGSources 列出节目单源。
+//
+// 按 priority 倒序：优先级高的先同步，配合 UpsertEPGChannel 的
+// 「高优先级覆盖低优先级」，多源合并时结果才可预期。
 func (s *Store) ListEPGSources(ctx context.Context) ([]EPGSource, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id,name,url,enabled,last_sync,last_attempt,last_error FROM epg_sources ORDER BY id`)
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT `+epgSourceCols+` FROM epg_sources ORDER BY priority DESC, id`)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	out := []EPGSource{}
 	for rows.Next() {
-		var v EPGSource
-		var en int
-		if err := rows.Scan(&v.ID, &v.Name, &v.URL, &en, &v.LastSync, &v.LastAttempt, &v.LastError); err != nil {
+		v, err := scanEPGSource(rows)
+		if err != nil {
 			return nil, err
 		}
-		v.Enabled = en != 0
 		out = append(out, v)
 	}
 	return out, rows.Err()
 }
 
-// CreateEPGSource 新增节目单源。
+// GetEPGSource 取单个源。
+func (s *Store) GetEPGSource(ctx context.Context, id int64) (*EPGSource, error) {
+	row := s.db.QueryRowContext(ctx, `SELECT `+epgSourceCols+` FROM epg_sources WHERE id=?`, id)
+	v, err := scanEPGSource(row)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrNotFound
+		}
+		return nil, err
+	}
+	return &v, nil
+}
+
+// CreateEPGSource 新增节目单源（兼容旧调用：默认 url 源、优先级 0）。
 func (s *Store) CreateEPGSource(ctx context.Context, name, url string) (int64, error) {
-	res, err := s.db.ExecContext(ctx, `INSERT INTO epg_sources(name,url,enabled) VALUES(?,?,1)`, name, url)
+	return s.CreateEPGSourceEx(ctx, EPGSource{Name: name, URL: url, Enabled: true, Kind: "url"})
+}
+
+// CreateEPGSourceEx 新增节目单源（完整字段）。
+func (s *Store) CreateEPGSourceEx(ctx context.Context, v EPGSource) (int64, error) {
+	kind := v.Kind
+	if kind == "" {
+		kind = "url"
+	}
+	res, err := s.db.ExecContext(ctx,
+		`INSERT INTO epg_sources(name,url,enabled,priority,user_agent,referer,kind) VALUES(?,?,?,?,?,?,?)`,
+		v.Name, v.URL, boolInt(v.Enabled), v.Priority, v.UserAgent, v.Referer, kind)
 	if err != nil {
 		return 0, err
 	}
 	return res.LastInsertId()
+}
+
+// UpdateEPGSource 修改节目单源。
+func (s *Store) UpdateEPGSource(ctx context.Context, v EPGSource) error {
+	kind := v.Kind
+	if kind == "" {
+		kind = "url"
+	}
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE epg_sources SET name=?, url=?, enabled=?, priority=?, user_agent=?, referer=?, kind=? WHERE id=?`,
+		v.Name, v.URL, boolInt(v.Enabled), v.Priority, v.UserAgent, v.Referer, kind, v.ID)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	return nil
 }
 
 // DeleteEPGSource 删除节目单源及其数据。
@@ -116,9 +174,19 @@ func (s *Store) EPGSourceStats(ctx context.Context) (map[int64]EPGSourceStat, er
 }
 
 // UpsertEPGChannel 写入/更新一个 EPG 频道，返回其 ID。
+//
+// A5：多源合并时按优先级决定谁说了算。同一 xmltv_id 已存在时，
+// 只有**新源优先级 >= 原源优先级**才覆盖（display_name / icon / source_id）。
+// 否则保留原记录——这样低优先级的源不会把高优先级源的频道名冲掉。
 func (s *Store) UpsertEPGChannel(ctx context.Context, sourceID int64, xmltvID, displayName, icon string) (int64, error) {
 	_, err := s.db.ExecContext(ctx, `INSERT INTO epg_channels(source_id,xmltv_id,display_name,icon) VALUES(?,?,?,?)
-		ON CONFLICT(xmltv_id) DO UPDATE SET display_name=excluded.display_name, icon=excluded.icon`,
+		ON CONFLICT(xmltv_id) DO UPDATE SET
+			display_name=excluded.display_name,
+			icon=excluded.icon,
+			source_id=excluded.source_id
+		WHERE
+			COALESCE((SELECT priority FROM epg_sources WHERE id=excluded.source_id),0)
+			>= COALESCE((SELECT priority FROM epg_sources WHERE id=epg_channels.source_id),0)`,
 		sourceID, xmltvID, displayName, icon)
 	if err != nil {
 		return 0, err

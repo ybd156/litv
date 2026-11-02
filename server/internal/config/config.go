@@ -117,6 +117,20 @@ type EPG struct {
 	RefreshCron string   `yaml:"refresh_cron"`
 	KeepDays    int      `yaml:"keep_days"`
 	DefaultURLs []string `yaml:"default_urls"`
+	// MaxBytesMB 单个 XMLTV 的体积上限（A9）。
+	// 有些源的 xml.gz 解压后能到几百 MB，不设上限会把内存吃光。
+	MaxBytesMB int `yaml:"max_mb"`
+	// MaxProgrammes 单次解析保留的节目条数上限（A9）。
+	// 超出部分丢弃，避免一个巨无霸源拖垮整库。
+	MaxProgrammes int `yaml:"max_programmes"`
+}
+
+// MaxBytes 返回体积上限（字节）。<=0 表示不限制。
+func (e EPG) MaxBytes() int64 {
+	if e.MaxBytesMB <= 0 {
+		return 0
+	}
+	return int64(e.MaxBytesMB) << 20
 }
 
 // Probe 源健康探测配置。
@@ -239,6 +253,10 @@ func Default() *Config {
 		EPG: EPG{
 			Enabled:  true,
 			KeepDays: 3,
+			// 默认每小时整点同步一次。用户可在「应用设置」里改小时。
+			RefreshCron: "0 3 * * *",
+			MaxBytesMB:  64,
+			MaxProgrammes: 200000,
 		},
 		Probe: Probe{
 			Enabled:     true,

@@ -115,6 +115,13 @@ type EPGSource struct {
 	Name    string `json:"name"`
 	URL     string `json:"url"`
 	Enabled bool   `json:"enabled"`
+	// Priority 越大越优先。同一 xmltv_id 出现在多个源时，高优先级源覆盖低优先级。
+	Priority int `json:"priority"`
+	// UserAgent / Referer 部分 EPG 站有防盗链，拉取时要带。
+	UserAgent string `json:"user_agent"`
+	Referer   string `json:"referer"`
+	// Kind: url = 远程拉取；file = 本地上传的 XMLTV（URL 字段存文件路径）
+	Kind string `json:"kind"`
 	// LastSync 上次**成功**同步的时间。失败时不动它，
 	// 否则界面上「上次刷新」会在失败后照样显示成刚刷新过。
 	LastSync int64 `json:"last_sync"`

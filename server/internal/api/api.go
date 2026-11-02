@@ -202,8 +202,14 @@ func (a *API) Handler(viaGateway bool) http.Handler {
 
 		pr.Get("/api/v1/epg/sources", a.listEPGSources)
 		pr.Post("/api/v1/epg/sources", a.createEPGSource)
+		// A4：编辑源（名称/地址/启用/优先级/UA/Referer）
+		pr.Put("/api/v1/epg/sources/{id}", a.updateEPGSource)
 		pr.Delete("/api/v1/epg/sources/{id}", a.deleteEPGSource)
+		// A2：单源刷新
+		pr.Post("/api/v1/epg/sources/{id}/refresh", a.refreshEPGSource)
 		pr.Post("/api/v1/epg/refresh", a.refreshEPG)
+		// A8：导入本地 XMLTV
+		pr.Post("/api/v1/epg/import", a.importEPG)
 		pr.Get("/api/v1/epg/channels", a.listEPGChannels)
 		// 某个频道某天的节目单（管理台频道详情页用）。
 		// 复用 TV 端那个 handler：它只依赖频道 id 和 day，跟设备无关。

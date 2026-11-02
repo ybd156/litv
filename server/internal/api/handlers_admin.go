@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"os"
@@ -16,7 +17,6 @@ import (
 	"time"
 
 	"github.com/litv/litv/server/internal/config"
-	"github.com/litv/litv/server/internal/epg"
 	"github.com/litv/litv/server/internal/fetch"
 	"github.com/litv/litv/server/internal/parse"
 	"github.com/litv/litv/server/internal/probe"
@@ -698,6 +698,11 @@ func (a *API) listEPGSources(w http.ResponseWriter, r *http.Request) {
 			"name":    s.Name,
 			"url":     s.URL,
 			"enabled": s.Enabled,
+			// A5/A7/A8
+			"priority":   s.Priority,
+			"user_agent": s.UserAgent,
+			"referer":    s.Referer,
+			"kind":       s.Kind,
 			// 管理台实际读取的字段名
 			"last_refresh_at": s.LastSync,
 			"last_attempt_at": s.LastAttempt,
@@ -712,25 +717,169 @@ func (a *API) listEPGSources(w http.ResponseWriter, r *http.Request) {
 	ok(w, out)
 }
 
-func (a *API) createEPGSource(w http.ResponseWriter, r *http.Request) {
-	var body struct {
-		Name string `json:"name"`
-		URL  string `json:"url"`
-		// 管理台表单会带 enabled。服务端建源时一律启用（enabled=1），
-		// 但这个字段必须能收下——decode 用了 DisallowUnknownFields，
-		// 多一个字段就直接 400「unknown field "enabled"」。
-		Enabled *bool `json:"enabled"`
+// epgSourceBody 是新增/编辑共用的请求体。
+type epgSourceBody struct {
+	Name      string `json:"name"`
+	URL       string `json:"url"`
+	Enabled   *bool  `json:"enabled"`
+	Priority  *int   `json:"priority"`
+	UserAgent string `json:"user_agent"`
+	Referer   string `json:"referer"`
+	Kind      string `json:"kind"`
+}
+
+func (b epgSourceBody) toSource() store.EPGSource {
+	s := store.EPGSource{
+		Name:      strings.TrimSpace(b.Name),
+		URL:       strings.TrimSpace(b.URL),
+		Enabled:   true,
+		UserAgent: strings.TrimSpace(b.UserAgent),
+		Referer:   strings.TrimSpace(b.Referer),
+		Kind:      strings.TrimSpace(b.Kind),
 	}
+	if b.Enabled != nil {
+		s.Enabled = *b.Enabled
+	}
+	if b.Priority != nil {
+		s.Priority = *b.Priority
+	}
+	if s.Kind == "" {
+		s.Kind = "url"
+	}
+	return s
+}
+
+func (a *API) createEPGSource(w http.ResponseWriter, r *http.Request) {
+	var body epgSourceBody
 	if err := decode(r, &body); err != nil {
 		fail(w, http.StatusBadRequest, 1001, "参数错误: "+err.Error())
 		return
 	}
-	id, err := a.st.CreateEPGSource(r.Context(), body.Name, body.URL)
+	src := body.toSource()
+	if src.Name == "" {
+		src.Name = "EPG 源"
+	}
+	if src.URL == "" {
+		fail(w, http.StatusBadRequest, 1001, "地址不能为空")
+		return
+	}
+	id, err := a.st.CreateEPGSourceEx(r.Context(), src)
 	if err != nil {
 		fail(w, http.StatusInternalServerError, 5001, err.Error())
 		return
 	}
 	ok(w, map[string]any{"id": id})
+}
+
+// updateEPGSource 编辑源（A4）。
+func (a *API) updateEPGSource(w http.ResponseWriter, r *http.Request) {
+	id := pathInt64(r, "id")
+	var body epgSourceBody
+	if err := decode(r, &body); err != nil {
+		fail(w, http.StatusBadRequest, 1001, "参数错误: "+err.Error())
+		return
+	}
+	src := body.toSource()
+	src.ID = id
+	if src.Name == "" || src.URL == "" {
+		fail(w, http.StatusBadRequest, 1001, "名称和地址不能为空")
+		return
+	}
+	if err := a.st.UpdateEPGSource(r.Context(), src); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			fail(w, http.StatusNotFound, 3001, "EPG 源不存在")
+			return
+		}
+		fail(w, http.StatusInternalServerError, 5001, err.Error())
+		return
+	}
+	a.st.Audit(r.Context(), 0, "epg.source.update", fmt.Sprint(id), src.Name, r.RemoteAddr)
+	ok(w, map[string]any{"saved": true})
+}
+
+// refreshOneEPGSource 刷新单个源（A2）。
+func (a *API) refreshEPGSource(w http.ResponseWriter, r *http.Request) {
+	id := pathInt64(r, "id")
+	res, err := a.RefreshOneEPG(r.Context(), id)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			fail(w, http.StatusNotFound, 3001, "EPG 源不存在")
+			return
+		}
+		fail(w, http.StatusInternalServerError, 5001, err.Error())
+		return
+	}
+	if !res.OK {
+		// 刷新失败不是 5xx：源本身有问题，返回 200 带明细让界面展示原因
+		ok(w, res)
+		return
+	}
+	ok(w, res)
+}
+
+// importEPG 导入本地 XMLTV 文件（A8）。
+//
+// 上传的文件落到数据目录下的 epg-import/，并建一个 kind=file 的源，
+// 之后走与远程源完全相同的刷新路径（含解析、优先级、保留策略）。
+func (a *API) importEPG(w http.ResponseWriter, r *http.Request) {
+	// 限制请求体大小，避免上传把内存吃光
+	maxBytes := a.cfg.EPG.MaxBytes()
+	if maxBytes <= 0 {
+		maxBytes = 64 << 20
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxBytes+(1<<20))
+	if err := r.ParseMultipartForm(8 << 20); err != nil {
+		fail(w, http.StatusBadRequest, 1001, "上传内容无法解析: "+err.Error())
+		return
+	}
+	file, hdr, err := r.FormFile("file")
+	if err != nil {
+		fail(w, http.StatusBadRequest, 1001, "缺少文件字段 file")
+		return
+	}
+	defer file.Close()
+
+	dir := filepath.Join(filepath.Dir(a.cfg.Database.Path), "epg-import")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		fail(w, http.StatusInternalServerError, 5001, "创建导入目录失败: "+err.Error())
+		return
+	}
+	name := fmt.Sprintf("import-%d.xml", time.Now().Unix())
+	path := filepath.Join(dir, name)
+	out, err := os.Create(path)
+	if err != nil {
+		fail(w, http.StatusInternalServerError, 5001, "写入文件失败: "+err.Error())
+		return
+	}
+	written, copyErr := io.Copy(out, io.LimitReader(file, maxBytes))
+	closeErr := out.Close()
+	if copyErr != nil || closeErr != nil {
+		_ = os.Remove(path)
+		fail(w, http.StatusInternalServerError, 5001, "写入文件失败")
+		return
+	}
+	if written == 0 {
+		_ = os.Remove(path)
+		fail(w, http.StatusBadRequest, 1001, "文件是空的")
+		return
+	}
+
+	srcName := strings.TrimSpace(r.FormValue("name"))
+	if srcName == "" {
+		srcName = hdr.Filename
+	}
+	id, err := a.st.CreateEPGSourceEx(r.Context(), store.EPGSource{
+		Name: srcName, URL: path, Enabled: true, Kind: "file",
+	})
+	if err != nil {
+		_ = os.Remove(path)
+		fail(w, http.StatusInternalServerError, 5001, err.Error())
+		return
+	}
+	// 导入即刷新，用户不用再点一次
+	res, _ := a.RefreshOneEPG(r.Context(), id)
+	a.st.Audit(r.Context(), 0, "epg.import", fmt.Sprint(id), srcName, r.RemoteAddr)
+	ok(w, map[string]any{"id": id, "result": res})
 }
 
 func (a *API) deleteEPGSource(w http.ResponseWriter, r *http.Request) {
@@ -751,66 +900,9 @@ func (a *API) listEPGChannels(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) refreshEPG(w http.ResponseWriter, r *http.Request) {
-	srcs, err := a.st.ListEPGSources(r.Context())
-	if err != nil {
-		fail(w, http.StatusInternalServerError, 5001, err.Error())
-		return
-	}
-	type result struct {
-		ID       int64  `json:"id"`
-		Channels int    `json:"channels"`
-		Programs int    `json:"programs"`
-		Error    string `json:"error,omitempty"`
-	}
-	results := make([]result, 0, len(srcs))
-	for _, src := range srcs {
-		if !src.Enabled {
-			continue
-		}
-		r0 := result{ID: src.ID}
-		res, ferr := fetch.Get(r.Context(), src.URL, fetch.DefaultOptions())
-		if ferr != nil {
-			r0.Error = ferr.Error()
-			_ = a.st.MarkEPGSynced(r.Context(), src.ID, ferr.Error())
-			results = append(results, r0)
-			continue
-		}
-		parsed, perr := epg.Parse(strings.NewReader(string(parse.ToUTF8(res.Body))), 200000)
-		if perr != nil && (parsed == nil || len(parsed.Programmes) == 0) {
-			r0.Error = perr.Error()
-			_ = a.st.MarkEPGSynced(r.Context(), src.ID, perr.Error())
-			results = append(results, r0)
-			continue
-		}
-		idMap := map[string]int64{}
-		for _, ch := range parsed.Channels {
-			id, e := a.st.UpsertEPGChannel(r.Context(), src.ID, ch.ID, ch.DisplayName, ch.Icon)
-			if e == nil {
-				idMap[ch.ID] = id
-			}
-		}
-		byChannel := map[int64][]store.EPGProgram{}
-		for _, p := range parsed.Programmes {
-			cid, ok := idMap[p.ChannelID]
-			if !ok {
-				continue
-			}
-			byChannel[cid] = append(byChannel[cid], store.EPGProgram{
-				StartAt: p.Start, EndAt: p.Stop, Title: p.Title, Description: p.Description, Category: p.Category,
-			})
-		}
-		for cid, progs := range byChannel {
-			_ = a.st.ReplacePrograms(r.Context(), cid, progs)
-			r0.Programs += len(progs)
-		}
-		r0.Channels = len(parsed.Channels)
-		_ = a.st.MarkEPGSynced(r.Context(), src.ID, "")
-		results = append(results, r0)
-	}
-	// 同步完立刻按频道名自动匹配一次：源 M3U 大多没有 tvg-id，
-	// 不自动匹配的话 channels.epg_id 全空，电视端节目单永远是空的。
-	_, _ = a.st.AutoMapChannels(r.Context())
-	ok(w, results)
+	// 统一走 RefreshAllEPG：调度器（A1）与手动刷新共用同一套逻辑
+	// （重试、UA/Referer、体积上限、优先级、明细），避免两条路径行为漂移。
+	ok(w, a.RefreshAllEPG(r.Context()))
 }
 
 // ---------- 设备 ----------

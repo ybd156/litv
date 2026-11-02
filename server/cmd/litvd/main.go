@@ -26,6 +26,7 @@ import (
 	"github.com/litv/litv/server/internal/api"
 	"github.com/litv/litv/server/internal/config"
 	"github.com/litv/litv/server/internal/dlna"
+	"github.com/litv/litv/server/internal/epg"
 	"github.com/litv/litv/server/internal/logo"
 	"github.com/litv/litv/server/internal/probe"
 	"github.com/litv/litv/server/internal/record"
@@ -362,6 +363,58 @@ func main() {
 			}
 		}
 	}()
+
+	// 3) EPG 定时刷新（A1）
+	//
+	// 以前 refresh_cron 只是个配置项和界面上的一行说明，**没有任何调度器**——
+	// 用户配了「每天 3 点刷新」，实际上永远不会自动刷，只能手动点。
+	//
+	// 用 30 秒一次的 ticker 做分钟级判定：cron 精度是分钟，
+	// 30 秒足够及时命中，又不会空转太频繁。用 lastRun 保证同一分钟只跑一次
+	// （否则 30 秒的 tick 会在一分钟内触发两次）。
+	if cfg.EPG.Enabled && strings.TrimSpace(cfg.EPG.RefreshCron) != "" {
+		if !epg.Matches(cfg.EPG.RefreshCron, time.Now()) {
+			// 启动时先自检一次表达式，写错了能在日志里立刻看到
+			if !epg.Matches(cfg.EPG.RefreshCron, time.Now().Add(time.Minute)) &&
+				!epg.Matches(cfg.EPG.RefreshCron, time.Now().Add(24*time.Hour)) {
+				slog.Warn("EPG 刷新 cron 表达式可能不合法，定时刷新不会生效", "cron", cfg.EPG.RefreshCron)
+			}
+		}
+		go func() {
+			t := time.NewTicker(30 * time.Second)
+			defer t.Stop()
+			var lastRun string
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case now := <-t.C:
+					if !epg.Matches(cfg.EPG.RefreshCron, now) {
+						continue
+					}
+					key := now.Format("2006-01-02 15:04")
+					if key == lastRun {
+						continue
+					}
+					lastRun = key
+					slog.Info("EPG 定时刷新开始", "cron", cfg.EPG.RefreshCron)
+					results := a.RefreshAllEPG(ctx)
+					for _, res := range results {
+						if res.OK {
+							slog.Info("EPG 定时刷新完成",
+								"source", res.Name, "channels", res.Channels,
+								"programs", res.Programs, "ms", res.ElapsedMs)
+						} else if res.Error != "" {
+							slog.Warn("EPG 定时刷新失败", "source", res.Name, "err", res.Error)
+						}
+					}
+				}
+			}
+		}()
+		slog.Info("EPG 定时刷新已启用", "cron", cfg.EPG.RefreshCron)
+	} else if cfg.EPG.Enabled {
+		slog.Warn("EPG 已启用但没有配置 refresh_cron，不会自动刷新")
+	}
 
 	// 通知 cmd/main：服务已就绪（它靠这个判断 start 是否成功）
 	slog.Info("LITV 启动完成", "version", version, "port", cfg.Server.Port)

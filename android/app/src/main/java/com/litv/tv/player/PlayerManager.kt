@@ -76,7 +76,25 @@ class PlayerManager(
      * 开始播放某个频道。
      * @param preferredEngine auto | exo | mpv | vlc
      */
+    /**
+     * 每个内核各自的失败原因。
+     *
+     * 原来所有失败被合并成一句"所有播放内核都无法播放这个频道"，
+     * 用户和排查者都不知道到底是编码不支持、地址失效还是网络不通。
+     * 现在逐个记录下来，失败时一起展示。
+     */
+    private val failLog = mutableListOf<String>()
+
+    /** 把各内核的失败原因拼成一句话（过长时截断，电视上放不下）。 */
+    private fun chainFailMessage(): String {
+        if (failLog.isEmpty()) return "所有播放内核都无法播放这个频道"
+        val detail = failLog.joinToString("；")
+        val msg = "所有内核均失败：$detail"
+        return if (msg.length > 120) msg.take(117) + "…" else msg
+    }
+
     fun play(channelId: Long, url: String, headers: Map<String, String>, preferredEngine: String) {
+        failLog.clear()
         pendingChannelId = channelId
         pendingUrl = url
         pendingHeaders = headers
@@ -91,13 +109,14 @@ class PlayerManager(
     private fun startCurrent() {
         main.removeCallbacks(startTimeout)
         if (chainIndex >= chain.size) {
-            callback?.onError("所有播放内核都无法播放这个频道")
+            callback?.onError(chainFailMessage())
             return
         }
         val kind = chain[chainIndex]
         val engine = create(kind)
         if (engine == null || !engine.isAvailable(context)) {
             Log.i(TAG, "内核 ${kind.key} 不可用，跳过")
+            failLog += "${kind.key}: 不可用"
             chainIndex++
             startCurrent()
             return
@@ -148,9 +167,10 @@ class PlayerManager(
     private fun tryNext(reason: String) {
         main.removeCallbacks(startTimeout)
         Log.w(TAG, "内核 ${currentKind?.key} 失败($reason)，尝试下一个")
+        failLog += "${currentKind?.key ?: "?"}: $reason"
         chainIndex++
         if (chainIndex >= chain.size) {
-            callback?.onError("播放失败：$reason")
+            callback?.onError(chainFailMessage())
             return
         }
         startCurrent()

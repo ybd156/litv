@@ -468,6 +468,12 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
     private fun playChannel(ch: Channel, streamId: Long = 0) {
         Log.i(TAG, "playChannel: ${ch.name} streamId=$streamId direct=${app.prefs.directMode}")
         current = ch
+        // 换到别的台就重置"已试线路"记录
+        if (triedForChannel != ch.id) {
+            triedStreams.clear()
+            triedForChannel = ch.id
+        }
+        triedStreams += streamId
         app.prefs.lastChannelId = ch.id
         // 起播计时：从按下换台到出第一帧，这是用户唯一能感知的"快不快"
         startAt = System.currentTimeMillis()
@@ -882,8 +888,43 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
 
     override fun onError(message: String) {
         loading.visibility = View.GONE
+        // 所有内核都失败时，先自动换这个台的下一条线路再试。
+        // 源里同一个台常有多条线路（如 cctv1-MCP / cctv1-AV3A），
+        // 其中一条编码不支持，不代表别的也不行。
+        if (tryNextStreamLine(message)) return
         switchTip.text = "播放出错：$message"
         switchTip.visibility = View.VISIBLE
+    }
+
+    /** 本次选台已经试过的线路，避免来回死循环 */
+    private val triedStreams = mutableSetOf<Long>()
+    private var triedForChannel: Long = 0
+
+    /**
+     * 自动换下一条线路。
+     *
+     * 返回 true 表示"已经在换线，先别显示错误"；false 表示没有可换的线路，
+     * 让调用方照常把错误显示出来。
+     */
+    private fun tryNextStreamLine(reason: String): Boolean {
+        val ch = current ?: return false
+        app.api.streams(ch.id,
+            onOk = { list ->
+                val next = list.firstOrNull { it.id !in triedStreams }
+                if (next == null) {
+                    switchTip.text = "播放出错：$reason"
+                    switchTip.visibility = View.VISIBLE
+                    toastTip("这个台的线路都试过了，仍无法播放")
+                    return@streams
+                }
+                toastTip("换线路重试：${next.label}")
+                playChannel(ch, next.id)
+            },
+            onErr = {
+                switchTip.text = "播放出错：$reason"
+                switchTip.visibility = View.VISIBLE
+            })
+        return true
     }
 
     override fun onVideoSizeChanged(width: Int, height: Int) = Unit

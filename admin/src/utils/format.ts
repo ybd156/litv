@@ -1,8 +1,35 @@
 /** 时间/文本格式化：界面上一律说人话，不直接甩 ISO 字符串 */
 
+/**
+ * 把服务端的时间值转成 Date。
+ *
+ * ⚠️ 关键：服务端所有时间字段都是 Unix **秒**（Go 的 time.Now().Unix()），
+ * 而 JS 的 new Date(数字) 按**毫秒**解释。
+ * 不换算的话，new Date(1793600000) 得到的是 1970 年，
+ * 界面上就会显示「57 年前」——设备最后心跳、源上次拉取、EPG 上次刷新全中招。
+ *
+ * 判定方式：现代毫秒时间戳都是 1e12 量级（2001 年后），
+ * 而秒时间戳到 33658 年才会到 1e12。所以 < 1e12 一律按秒处理。
+ */
 function toDate(v?: string | number | Date | null): Date | null {
-  if (!v) return null
-  const d = v instanceof Date ? v : new Date(v)
+  if (v === 0 || v === '0' || v === null || v === undefined || v === '') return null
+  if (v instanceof Date) return Number.isNaN(v.getTime()) ? null : v
+
+  if (typeof v === 'number') {
+    const ms = v < 1e12 ? v * 1000 : v
+    const d = new Date(ms)
+    return Number.isNaN(d.getTime()) ? null : d
+  }
+
+  // 纯数字字符串也按同样的规则（服务端可能把 int64 序列化成字符串）
+  if (/^\d+$/.test(v)) {
+    const n = Number(v)
+    if (!n) return null
+    const d = new Date(n < 1e12 ? n * 1000 : n)
+    return Number.isNaN(d.getTime()) ? null : d
+  }
+
+  const d = new Date(v)
   return Number.isNaN(d.getTime()) ? null : d
 }
 

@@ -111,7 +111,10 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
         setupList()
         setupSearch()
 
-        switchTab(TAB_PLAY)
+        // 恢复上次停留的 Tab，而不是写死回「播放」。
+        // 从遥控器页/设置页返回时首页可能已被系统重建，
+        // 写死 TAB_PLAY 会让用户觉得"点了设置又给我弹回播放"。
+        switchTab(app.prefs.lastTab)
         load()
     }
 
@@ -304,6 +307,7 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
 
     private fun switchTab(tab: String) {
         currentTab = tab
+        app.prefs.lastTab = tab
         panelPlay.visibility = if (tab == TAB_PLAY) View.VISIBLE else View.GONE
         panelChannel.visibility = if (tab == TAB_CHANNEL) View.VISIBLE else View.GONE
         highlightTabs()
@@ -509,6 +513,9 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
 
     override fun onResume() {
         super.onResume()
+        // 从遥控器/设置返回时重新应用一次当前 Tab，
+        // 避免两个面板的可见性因为重建而错乱
+        if (::panelPlay.isInitialized) switchTab(currentTab)
         if (::adapter.isInitialized && all.isNotEmpty()) load()
     }
 

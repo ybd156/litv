@@ -71,6 +71,16 @@ class Prefs(ctx: Context) {
         }
         set(v) = sp.edit().putString(K_DEVICE_KEY, v).apply()
 
+    /**
+     * 上次停留的底部 Tab（play / channel）。
+     *
+     * 必须持久化：从遥控器页/设置页返回时，首页可能已经被系统回收重建，
+     * 若在 onCreate 里写死回到「播放」，用户就会觉得"点了设置又给我弹回播放"。
+     */
+    var lastTab: String
+        get() = sp.getString(K_LAST_TAB, "play") ?: "play"
+        set(v) = sp.edit().putString(K_LAST_TAB, v).apply()
+
     var token: String
         get() = tokenStore.read()
         set(v) = tokenStore.write(v)
@@ -178,6 +188,7 @@ class Prefs(ctx: Context) {
     private companion object {
         const val K_SERVER = "server_base"
         const val K_DEVICE_KEY = "device_key"
+        const val K_LAST_TAB = "last_tab"
         const val K_TOKEN = "token"
 
         /** 加密后的 token（SecureTokenStore 用；老的明文 token 会迁移过来） */

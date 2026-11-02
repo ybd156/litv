@@ -10,7 +10,7 @@ import (
 
 // ListEPGSources 列出节目单源。
 func (s *Store) ListEPGSources(ctx context.Context) ([]EPGSource, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id,name,url,enabled,last_sync,last_error FROM epg_sources ORDER BY id`)
+	rows, err := s.db.QueryContext(ctx, `SELECT id,name,url,enabled,last_sync,last_attempt,last_error FROM epg_sources ORDER BY id`)
 	if err != nil {
 		return nil, err
 	}
@@ -19,7 +19,7 @@ func (s *Store) ListEPGSources(ctx context.Context) ([]EPGSource, error) {
 	for rows.Next() {
 		var v EPGSource
 		var en int
-		if err := rows.Scan(&v.ID, &v.Name, &v.URL, &en, &v.LastSync, &v.LastError); err != nil {
+		if err := rows.Scan(&v.ID, &v.Name, &v.URL, &en, &v.LastSync, &v.LastAttempt, &v.LastError); err != nil {
 			return nil, err
 		}
 		v.Enabled = en != 0
@@ -56,10 +56,63 @@ func (s *Store) DeleteEPGSource(ctx context.Context, id int64) error {
 	return tx.Commit()
 }
 
-// MarkEPGSynced 记录同步结果。
+// MarkEPGSynced 记录同步结果（保留旧名字，转调 MarkEPGAttempt）。
 func (s *Store) MarkEPGSynced(ctx context.Context, id int64, errMsg string) error {
-	_, err := s.db.ExecContext(ctx, `UPDATE epg_sources SET last_sync=?, last_error=? WHERE id=?`, Now(), errMsg, id)
+	return s.MarkEPGAttempt(ctx, id, errMsg)
+}
+
+// MarkEPGAttempt 记录一次同步尝试。
+//
+// 成败必须分开记：
+//   - 成功：更新 last_sync 与 last_attempt，清空 last_error
+//   - 失败：只更新 last_attempt 与 last_error，**不动 last_sync**
+//
+// 以前不分成败，一律把 last_sync 写成当前时间，于是界面上「上次刷新」
+// 在失败后照样显示成刚刷新过，而错误信息又没被展示出来——
+// 用户看到的是「一切正常，但节目单是空的」。
+func (s *Store) MarkEPGAttempt(ctx context.Context, id int64, errMsg string) error {
+	now := Now()
+	if errMsg == "" {
+		_, err := s.db.ExecContext(ctx,
+			`UPDATE epg_sources SET last_attempt=?, last_sync=?, last_error='' WHERE id=?`,
+			now, now, id)
+		return err
+	}
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE epg_sources SET last_attempt=?, last_error=? WHERE id=?`,
+		now, errMsg, id)
 	return err
+}
+
+// EPGSourceStat 是一个 EPG 源的规模统计。
+type EPGSourceStat struct {
+	Channels int
+	Programs int
+}
+
+// EPGSourceStats 一次查出所有 EPG 源的频道数与节目条数。
+//
+// 用一条 GROUP BY 而不是每个源查一次：源多时 N+1 会把列表页拖慢。
+func (s *Store) EPGSourceStats(ctx context.Context) (map[int64]EPGSourceStat, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT c.source_id, COUNT(DISTINCT c.id), COUNT(p.id)
+		FROM epg_channels c
+		LEFT JOIN epg_programs p ON p.epg_channel_id = c.id
+		GROUP BY c.source_id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[int64]EPGSourceStat{}
+	for rows.Next() {
+		var sid int64
+		var st EPGSourceStat
+		if err := rows.Scan(&sid, &st.Channels, &st.Programs); err != nil {
+			return nil, err
+		}
+		out[sid] = st
+	}
+	return out, rows.Err()
 }
 
 // UpsertEPGChannel 写入/更新一个 EPG 频道，返回其 ID。

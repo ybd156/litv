@@ -248,6 +248,9 @@ func (s *Store) migrate(ctx context.Context) error {
 		// 正常使用会不断续期；只有长期不用才真正过期，
 		// 避免 IPTV 场景下用户每天被迫重新绑定。
 		`ALTER TABLE devices ADD COLUMN session_expires_at INTEGER NOT NULL DEFAULT 0`,
+		// EPG 同步的「上次尝试」时间，与「上次成功」分开记。
+		// 以前只有一个 last_sync，失败时也写，界面分不清成功还是失败。
+		`ALTER TABLE epg_sources ADD COLUMN last_attempt INTEGER NOT NULL DEFAULT 0`,
 	} {
 		if _, err := s.db.ExecContext(ctx, stmt); err != nil &&
 			!strings.Contains(strings.ToLower(err.Error()), "duplicate column") {

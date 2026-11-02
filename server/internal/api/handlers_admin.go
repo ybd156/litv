@@ -665,7 +665,33 @@ func (a *API) listEPGSources(w http.ResponseWriter, r *http.Request) {
 		fail(w, http.StatusInternalServerError, 5001, err.Error())
 		return
 	}
-	ok(w, items)
+	// 补齐管理台要的字段。
+	//
+	// 以前直接把 store.EPGSource 原样返回，字段名是 last_sync / last_error，
+	// 而面板读的是 last_refresh_at / error / channel_count / program_count。
+	// 结果：明明刷新过，界面也永远显示「还没拉过」，频道数节目条数永远是「—」，
+	// 状态永远是「正常」（错误信息根本没被展示）。
+	stats, _ := a.st.EPGSourceStats(r.Context())
+	out := make([]map[string]any, 0, len(items))
+	for _, s := range items {
+		st := stats[s.ID]
+		out = append(out, map[string]any{
+			"id":      s.ID,
+			"name":    s.Name,
+			"url":     s.URL,
+			"enabled": s.Enabled,
+			// 管理台实际读取的字段名
+			"last_refresh_at": s.LastSync,
+			"last_attempt_at": s.LastAttempt,
+			"channel_count":   st.Channels,
+			"program_count":   st.Programs,
+			"error":           s.LastError,
+			// 兼容旧字段名（外部脚本可能在用）
+			"last_sync":  s.LastSync,
+			"last_error": s.LastError,
+		})
+	}
+	ok(w, out)
 }
 
 func (a *API) createEPGSource(w http.ResponseWriter, r *http.Request) {

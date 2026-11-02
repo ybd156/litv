@@ -111,12 +111,16 @@ type Device struct {
 
 // EPGSource 是节目单来源。
 type EPGSource struct {
-	ID        int64  `json:"id"`
-	Name      string `json:"name"`
-	URL       string `json:"url"`
-	Enabled   bool   `json:"enabled"`
-	LastSync  int64  `json:"last_sync"`
-	LastError string `json:"last_error"`
+	ID      int64  `json:"id"`
+	Name    string `json:"name"`
+	URL     string `json:"url"`
+	Enabled bool   `json:"enabled"`
+	// LastSync 上次**成功**同步的时间。失败时不动它，
+	// 否则界面上「上次刷新」会在失败后照样显示成刚刷新过。
+	LastSync int64 `json:"last_sync"`
+	// LastAttempt 上次**尝试**同步的时间（不论成败）。
+	LastAttempt int64  `json:"last_attempt"`
+	LastError   string `json:"last_error"`
 }
 
 // EPGChannel 是 XMLTV 里的频道。

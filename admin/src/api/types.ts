@@ -121,7 +121,10 @@ export interface EpgSource {
   name: string
   url: string
   enabled?: boolean
+  /** 上次**成功**同步的时间（Unix 秒）。失败时不会变。 */
   last_refresh_at?: string | null
+  /** 上次**尝试**同步的时间（Unix 秒），不论成败。 */
+  last_attempt_at?: string | null
   channel_count?: number
   program_count?: number
   error?: string | null

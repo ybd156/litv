@@ -1,6 +1,7 @@
 package com.litv.tv.ui
 
 import android.os.Bundle
+import android.util.Log
 import android.view.Gravity
 import android.widget.LinearLayout
 import android.widget.TextView
@@ -9,6 +10,8 @@ import com.litv.tv.LitvApp
 import com.litv.tv.R
 import com.litv.tv.data.RemoteTarget
 import org.json.JSONObject
+
+private const val TAG = "RemoteActivity"
 
 /**
  * 手机端遥控器。
@@ -28,9 +31,13 @@ class RemoteActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // 诊断日志：遥控器页如果启动即崩，会被系统弹回上一个 Activity（播放页），
+        // 用户只看到"点遥控器跳回播放页"。这几条日志能确定它走到哪一步。
+        Log.i(TAG, "RemoteActivity onCreate 开始")
         setContentView(R.layout.activity_remote)
         BottomTabs.wire(this, BottomTabs.TAB_REMOTE)
         app = application as LitvApp
+        Log.i(TAG, "RemoteActivity 布局与底部栏就绪")
 
         status = findViewById(R.id.status)
         targets = findViewById(R.id.targets)
@@ -46,6 +53,7 @@ class RemoteActivity : AppCompatActivity() {
 
         buildNumberPad()
         loadTargets()
+        Log.i(TAG, "RemoteActivity onCreate 完成")
     }
 
     private fun bindKey(viewId: Int, key: String) {

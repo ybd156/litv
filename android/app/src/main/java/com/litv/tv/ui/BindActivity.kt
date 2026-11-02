@@ -244,7 +244,14 @@ class BindActivity : AppCompatActivity() {
 
     private fun goHome() {
         main.postDelayed({
-            startActivity(Intent(this, HomeActivity::class.java))
+            // 必须按设备类型分流：之前这里写死 HomeActivity，
+            // 结果手机绑完也进电视端三列布局（还会被强制横屏）。
+            val target = if (DeviceType.isTV(this)) {
+                HomeActivity::class.java
+            } else {
+                PhoneHomeActivity::class.java
+            }
+            startActivity(Intent(this, target))
             finish()
         }, 500)
     }

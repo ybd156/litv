@@ -2,6 +2,7 @@ package com.litv.tv.ui
 
 import android.app.Activity
 import android.content.Intent
+import android.os.Build
 import android.view.View
 import android.widget.TextView
 import com.litv.tv.R
@@ -41,13 +42,13 @@ object BottomTabs {
         tabs[TAB_REMOTE]?.setOnClickListener {
             if (current == TAB_REMOTE) return@setOnClickListener
             activity.startActivity(Intent(activity, RemoteActivity::class.java))
-            activity.overridePendingTransition(0, 0)
+            activity.noTransition()
             activity.finish()
         }
         tabs[TAB_SETTINGS]?.setOnClickListener {
             if (current == TAB_SETTINGS) return@setOnClickListener
             activity.startActivity(Intent(activity, SettingsActivity::class.java))
-            activity.overridePendingTransition(0, 0)
+            activity.noTransition()
             activity.finish()
         }
     }
@@ -61,6 +62,23 @@ object BottomTabs {
      */
     private fun backToHome(activity: Activity) {
         activity.finish()
-        activity.overridePendingTransition(0, 0)
+        activity.noTransition()
+    }
+}
+
+/**
+ * 关闭 Activity 切换动画。
+ *
+ * `overridePendingTransition` 从 API 34 起**已被忽略**——也就是说
+ * 之前写的"关闭动画"在 Android 14+ 上根本没生效，切换时照样有系统动画。
+ * API 33+ 改用 overrideActivityTransition，低版本回退到旧方法。
+ */
+@Suppress("DEPRECATION")
+fun Activity.noTransition() {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        overrideActivityTransition(Activity.OVERRIDE_TRANSITION_OPEN, 0, 0)
+        overrideActivityTransition(Activity.OVERRIDE_TRANSITION_CLOSE, 0, 0)
+    } else {
+        overridePendingTransition(0, 0)
     }
 }

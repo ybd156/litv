@@ -3,7 +3,6 @@ package com.litv.tv.data
 import android.annotation.TargetApi
 import android.content.Context
 import android.os.Build
-import android.security.KeyPairGeneratorSpec
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.util.Base64
@@ -83,6 +82,10 @@ internal class KeystoreTokenCipher(context: Context) : TokenCipher {
         return cipher.doFinal(decode(encrypted))
     }
 
+    // Android 5.x 没有 AES 的 Keystore 支持，只能用 RSA + KeyPairGeneratorSpec。
+    // 这个类在 API 23 就废弃了，但 minSdk 是 21，为了兼容老电视盒子必须留着。
+    // 用全限定名而不是 import：废弃警告是在 import 那一行报的，
+    // 去掉 import 就能消掉，同时保留 @Suppress 覆盖函数体。
     @Suppress("DEPRECATION")
     private fun encryptLegacy(bytes: ByteArray): String {
         var store = keys
@@ -91,7 +94,7 @@ internal class KeystoreTokenCipher(context: Context) : TokenCipher {
             val end = Calendar.getInstance().apply { add(Calendar.YEAR, 30) }
             KeyPairGenerator.getInstance("RSA", "AndroidKeyStore").apply {
                 initialize(
-                    KeyPairGeneratorSpec.Builder(context)
+                    android.security.KeyPairGeneratorSpec.Builder(context)
                         .setAlias(RSA_ALIAS)
                         .setKeySize(2048)
                         .setSubject(X500Principal("CN=LITV Device Credential"))

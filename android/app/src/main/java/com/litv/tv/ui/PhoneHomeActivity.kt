@@ -181,11 +181,11 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
         findViewById<TextView>(R.id.tabChannel).setOnClickListener { switchTab(TAB_CHANNEL) }
         findViewById<TextView>(R.id.tabRemote).setOnClickListener {
             startActivity(Intent(this, RemoteActivity::class.java))
-            overridePendingTransition(0, 0)
+            noTransition()
         }
         findViewById<TextView>(R.id.tabSettings).setOnClickListener {
             startActivity(Intent(this, SettingsActivity::class.java))
-            overridePendingTransition(0, 0)
+            noTransition()
         }
     }
 

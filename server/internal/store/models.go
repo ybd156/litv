@@ -100,9 +100,13 @@ type Device struct {
 	Model      string `json:"model"`
 	Status     string `json:"status"`
 	ConfigJSON string `json:"config_json"`
-	BoundAt    int64  `json:"bound_at"`
-	LastSeen   int64  `json:"last_seen"`
-	CreatedAt  int64  `json:"created_at"`
+	// ConfigVersion 单调递增，每次改设备配置 +1（R17）。
+	// 终端心跳里比对它，发现变大就重新拉 bootstrap 应用新配置。
+	// 不能用 BoundAt 顶替：那是绑定时间，改配置时不会变。
+	ConfigVersion int64 `json:"config_version"`
+	BoundAt       int64 `json:"bound_at"`
+	LastSeen      int64 `json:"last_seen"`
+	CreatedAt     int64 `json:"created_at"`
 }
 
 // EPGSource 是节目单来源。

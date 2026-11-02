@@ -223,11 +223,16 @@ func (a *API) tvHeartbeat(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Playing int64  `json:"playing_channel"`
 		State   string `json:"state"`
+		// 客户端上次看到的版本：用来判断"我是不是该重新拉配置了"
+		ConfigVersion int64 `json:"config_version"`
 	}
 	_ = decode(r, &body)
 	_ = a.st.TouchDevice(r.Context(), dev.ID)
 	ok(w, map[string]any{
-		"config_version": dev.BoundAt, // 配置有变化时递增，终端据此决定是否重新拉 bootstrap
+		// R17：用独立的 config_version，不再用 bound_at。
+		// bound_at 是绑定时间，管理台改配置时它不变，
+		// 终端据此比对永远看不出"配置变了"，改了参数等于没改。
+		"config_version": dev.ConfigVersion,
 		"server_time":    time.Now().Unix(),
 	})
 }

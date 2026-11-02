@@ -548,7 +548,7 @@ func (s *Store) CreateDevice(ctx context.Context, key, tokenHash, name, platform
 
 // ListDevices 列出设备。
 func (s *Store) ListDevices(ctx context.Context, status string) ([]Device, error) {
-	q := `SELECT id,device_key,name,platform,model,status,config_json,bound_at,last_seen,created_at FROM devices`
+	q := `SELECT id,device_key,name,platform,model,status,config_json,config_version,bound_at,last_seen,created_at FROM devices`
 	var args []any
 	if status != "" {
 		q += ` WHERE status=?`
@@ -563,7 +563,7 @@ func (s *Store) ListDevices(ctx context.Context, status string) ([]Device, error
 	out := []Device{}
 	for rows.Next() {
 		var d Device
-		if err := rows.Scan(&d.ID, &d.DeviceKey, &d.Name, &d.Platform, &d.Model, &d.Status, &d.ConfigJSON, &d.BoundAt, &d.LastSeen, &d.CreatedAt); err != nil {
+		if err := rows.Scan(&d.ID, &d.DeviceKey, &d.Name, &d.Platform, &d.Model, &d.Status, &d.ConfigJSON, &d.ConfigVersion, &d.BoundAt, &d.LastSeen, &d.CreatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, d)
@@ -574,9 +574,9 @@ func (s *Store) ListDevices(ctx context.Context, status string) ([]Device, error
 // GetDeviceByToken 用 token 哈希查设备（必须是 bound 状态）。
 func (s *Store) GetDeviceByToken(ctx context.Context, tokenHash string) (*Device, error) {
 	var d Device
-	err := s.db.QueryRowContext(ctx, `SELECT id,device_key,name,platform,model,status,config_json,bound_at,last_seen,created_at
+	err := s.db.QueryRowContext(ctx, `SELECT id,device_key,name,platform,model,status,config_json,config_version,bound_at,last_seen,created_at
 		FROM devices WHERE token_hash=? AND status='bound'`, tokenHash).
-		Scan(&d.ID, &d.DeviceKey, &d.Name, &d.Platform, &d.Model, &d.Status, &d.ConfigJSON, &d.BoundAt, &d.LastSeen, &d.CreatedAt)
+		Scan(&d.ID, &d.DeviceKey, &d.Name, &d.Platform, &d.Model, &d.Status, &d.ConfigJSON, &d.ConfigVersion, &d.BoundAt, &d.LastSeen, &d.CreatedAt)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, ErrNotFound
@@ -609,8 +609,36 @@ func (s *Store) TouchDevice(ctx context.Context, id int64) error {
 
 // SetDeviceConfig 下发/覆盖终端配置。
 func (s *Store) SetDeviceConfig(ctx context.Context, id int64, cfgJSON string) error {
-	_, err := s.db.ExecContext(ctx, `UPDATE devices SET config_json=? WHERE id=?`, cfgJSON, id)
+	_, _, err := s.SetDeviceConfigVersioned(ctx, id, cfgJSON)
 	return err
+}
+
+// SetDeviceConfigVersioned 写设备配置并把 config_version 单调 +1。
+//
+// R17：版本号必须在**同一条 UPDATE** 里递增，不能先读再写——
+// 两个管理员同时保存会读到同一个旧版本，各自 +1 后版本只涨了 1，
+// 终端可能因此错过一次变更。
+// 返回新版本号，供管理台立刻回显。
+func (s *Store) SetDeviceConfigVersioned(ctx context.Context, id int64, cfgJSON string) (int64, bool, error) {
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE devices SET config_json=?, config_version=config_version+1 WHERE id=?`,
+		cfgJSON, id)
+	if err != nil {
+		return 0, false, err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, false, err
+	}
+	if n == 0 {
+		return 0, false, ErrNotFound
+	}
+	var ver int64
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT config_version FROM devices WHERE id=?`, id).Scan(&ver); err != nil {
+		return 0, false, err
+	}
+	return ver, true, nil
 }
 
 // ---------- bind codes ----------

@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -852,11 +853,24 @@ func (a *API) setDeviceConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	b, _ := json.Marshal(body)
-	if err := a.st.SetDeviceConfig(r.Context(), id, string(b)); err != nil {
+	// R17：递增 config_version，终端心跳据此发现配置变了。
+	// 回传新版本，管理台能显示"已下发，版本 N"，
+	// 而不是只说"已保存"——那会让用户以为已经生效。
+	ver, _, err := a.st.SetDeviceConfigVersioned(r.Context(), id, string(b))
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			fail(w, http.StatusNotFound, 3001, "设备不存在")
+			return
+		}
 		fail(w, http.StatusInternalServerError, 5001, err.Error())
 		return
 	}
-	ok(w, map[string]any{"saved": true})
+	a.st.Audit(r.Context(), 0, "device.config", fmt.Sprint(id), string(b), r.RemoteAddr)
+	ok(w, map[string]any{
+		"saved":          true,
+		"config_version": ver,
+		"note":           "终端将在下次心跳时拉取新配置",
+	})
 }
 
 // ---------- 播放质量统计 ----------

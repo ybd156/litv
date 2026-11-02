@@ -239,6 +239,10 @@ func (s *Store) migrate(ctx context.Context) error {
 	// 这里补一遍。重复执行会报 "duplicate column name"，忽略即可。
 	for _, stmt := range []string{
 		`ALTER TABLE sources ADD COLUMN user_agent TEXT NOT NULL DEFAULT ''`,
+		// R17：设备配置版本。必须独立于 bound_at——
+		// 以前用 bound_at 当版本号，改配置时它不变，
+		// 终端永远不知道"配置该重新拉了"，管理台改了参数等于没改。
+		`ALTER TABLE devices ADD COLUMN config_version INTEGER NOT NULL DEFAULT 0`,
 	} {
 		if _, err := s.db.ExecContext(ctx, stmt); err != nil &&
 			!strings.Contains(strings.ToLower(err.Error()), "duplicate column") {

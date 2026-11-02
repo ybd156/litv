@@ -153,8 +153,13 @@ func (s *Store) ListChannels(ctx context.Context, q ChannelQuery) ([]Channel, in
 		return nil, 0, err
 	}
 
-	if q.Limit <= 0 || q.Limit > 500 {
+	// 上限截断而不是回退到 50：调用方明确要 500 条时应该给 500 条，
+	// 静默改成 50 会让「取全部频道」的页面只看到 50 个。
+	if q.Limit <= 0 {
 		q.Limit = 50
+	}
+	if q.Limit > 500 {
+		q.Limit = 500
 	}
 	sqlStr := `SELECT c.id,c.number,c.name,c.group_name,c.logo,c.tvg_id,c.epg_id,c.enabled,c.sort,c.source_id,c.created_at,
 		(SELECT COUNT(*) FROM streams st WHERE st.channel_id = c.id)

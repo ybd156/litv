@@ -492,9 +492,27 @@ func (a *API) listChannels(w http.ResponseWriter, r *http.Request) {
 		Keyword:  r.URL.Query().Get("q"),
 		Enabled:  queryBool(r, "enabled"),
 		SourceID: int64(queryInt(r, "source_id", 0)),
-		Offset:   queryInt(r, "offset", 0),
-		Limit:    queryInt(r, "limit", 50),
 	}
+	// 分页参数兼容两套命名：管理台传 page/size，老脚本传 offset/limit。
+	//
+	// 以前只认 offset/limit，而管理台传的是 page/size —— 两个都被忽略，
+	// 于是永远返回第一页 50 条：用户看到「只有 50 个台」，翻页也没反应。
+	size := queryInt(r, "size", 0)
+	if size <= 0 {
+		size = queryInt(r, "limit", 50)
+	}
+	offset := queryInt(r, "offset", 0)
+	if offset <= 0 {
+		if page := queryInt(r, "page", 1); page > 1 {
+			if size <= 0 {
+				size = 50
+			}
+			offset = (page - 1) * size
+		}
+	}
+	q.Limit = size
+	q.Offset = offset
+
 	items, total, err := a.st.ListChannels(r.Context(), q)
 	if err != nil {
 		fail(w, http.StatusInternalServerError, 5001, err.Error())

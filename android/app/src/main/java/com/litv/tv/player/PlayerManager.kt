@@ -33,7 +33,9 @@ class PlayerManager(
     var callback: Callback? = null
 
     private val main = Handler(Looper.getMainLooper())
-    private var surface: SurfaceView? = null
+    private var surface: android.view.Surface? = null
+    /** media3-ui 的 PlayerView，交给 ExoEngine 管 Surface */
+    var playerView: androidx.media3.ui.PlayerView? = null
     private var container: ViewGroup? = null
     private var current: PlayerEngine? = null
     private var currentKind: EngineKind? = null
@@ -61,10 +63,13 @@ class PlayerManager(
         tryNext("起播超时")
     }
 
-    fun attach(surfaceView: SurfaceView, parent: ViewGroup?) {
-        surface = surfaceView
+    /** 当前内核是否已经起播（用于 Surface 晚就绪时决定要不要补播） */
+    val isPlaying: Boolean get() = prepared
+
+    fun attach(surface: android.view.Surface?, parent: ViewGroup?) {
+        this.surface = surface
         container = parent
-        current?.attach(context, surfaceView, parent)
+        current?.attach(context, surface, parent)
     }
 
     /**
@@ -98,16 +103,18 @@ class PlayerManager(
             return
         }
 
-        current?.release()
+        disposeEngine(current)
         current = engine
         currentKind = kind
         callback?.onEngineChanged(kind)
 
-        val sv = surface ?: run {
+        // PlayerView 模式下不需要外部 Surface —— 它自己管 Surface 生命周期，
+        // 所以只有两条都没有时才算「视图未就绪」。
+        if (surface == null && playerView == null) {
             callback?.onError("播放视图未就绪")
             return
         }
-        engine.attach(context, sv, container)
+        engine.attach(context, surface, container)
         engine.listener = object : PlayerEngine.Listener {
             override fun onPrepared(durationMs: Long) {
                 prepared = true
@@ -132,6 +139,7 @@ class PlayerManager(
             override fun onEnded() = Unit
         }
 
+        engine.aspect = prefs.aspect
         engine.prepare(pendingUrl, pendingHeaders, prefs.bufferMs, prefs.decode)
         // 超时和重试次数都从设置里读，不再写死
         main.postDelayed(startTimeout, prefs.startTimeoutMs.toLong())
@@ -149,7 +157,7 @@ class PlayerManager(
     }
 
     private fun create(kind: EngineKind): PlayerEngine? = when (kind) {
-        EngineKind.EXO -> ExoEngine()
+        EngineKind.EXO -> ExoEngine().also { it.playerView = playerView }
         EngineKind.VLC -> VlcEngine()
         EngineKind.MPV -> MpvEngine(avs3Mode = false)
         EngineKind.AVS3 -> MpvEngine(avs3Mode = true)
@@ -170,9 +178,32 @@ class PlayerManager(
 
     fun release() {
         main.removeCallbacks(startTimeout)
-        current?.release()
+        disposeEngine(current)
         current = null
         currentKind = null
+    }
+
+    /**
+     * 丢弃一个引擎时，把它的重资源一并释放。
+     *
+     * B04：VlcEngine 的 LibVLC 是重对象（内含 FFmpeg、网络栈、音频输出）。
+     * 只调 PlayerEngine.release() 只放掉 MediaPlayer，LibVLC 会一直留着；
+     * 而每次换内核都会 new 一个 VlcEngine，切几次就攒几个 LibVLC，最终 OOM。
+     *
+     * 这里按类型做最后一步清理。用 when 而不是接口方法，
+     * 是因为只有 VLC 有这种"比播放器活得更久"的资源；
+     * 给所有引擎加一个空接口方法反而会让所有权更模糊。
+     */
+    private fun disposeEngine(engine: PlayerEngine?) {
+        if (engine == null) return
+        engine.release()
+        if (engine is VlcEngine) {
+            try {
+                engine.releaseLibVLC()
+            } catch (t: Throwable) {
+                Log.w(TAG, "释放 LibVLC 出错", t)
+            }
+        }
     }
 
     private companion object {

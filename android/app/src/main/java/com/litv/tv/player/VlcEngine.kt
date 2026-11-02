@@ -27,7 +27,8 @@ class VlcEngine : PlayerEngine {
 
     private var libVlc: LibVLC? = null
     private var player: MediaPlayer? = null
-    private var surface: SurfaceView? = null
+    private var videoSurface: android.view.Surface? = null
+    private var appCtx: android.content.Context? = null
     private var videoW = 0
     private var videoH = 0
 
@@ -38,8 +39,9 @@ class VlcEngine : PlayerEngine {
         false
     }
 
-    override fun attach(context: Context, surfaceView: SurfaceView, container: ViewGroup?) {
-        surface = surfaceView
+    override fun attach(context: Context, surface: android.view.Surface?, container: ViewGroup?) {
+        videoSurface = surface
+        appCtx = context.applicationContext
     }
 
     private fun ensureLib(context: Context): LibVLC {
@@ -58,7 +60,7 @@ class VlcEngine : PlayerEngine {
     }
 
     override fun prepare(url: String, headers: Map<String, String>, bufferMs: Int, decode: String) {
-        val ctx = surface?.context ?: run {
+        val ctx = appCtx ?: run {
             listener?.onError("VLC 未绑定 Surface")
             return
         }
@@ -78,8 +80,8 @@ class VlcEngine : PlayerEngine {
             }
         }
 
-        surface?.let {
-            mp.vlcVout.setVideoView(it)
+        videoSurface?.let {
+            mp.vlcVout.setVideoSurface(it, null)
             mp.vlcVout.attachViews()
         }
 
@@ -99,10 +101,19 @@ class VlcEngine : PlayerEngine {
         }
         mp.media = media
         media.release()
+        // 画面比例：auto 交给 VLC 自己按视频宽高比铺；其余强制
+        mp.aspectRatio = when (aspect) {
+            "16:9" -> "16:9"
+            "4:3" -> "4:3"
+            "fill" -> "fill"
+            else -> null
+        }
 
         player = mp
         mp.play()
     }
+
+    override var aspect: String = "auto"
 
     override fun play() { player?.play() }
     override fun pause() { player?.pause() }
@@ -110,6 +121,19 @@ class VlcEngine : PlayerEngine {
 
     override fun release() = releaseInternal()
 
+    /**
+     * 释放播放器，但**保留 LibVLC 实例**。
+     *
+     * B04：LibVLC 是一个重对象（内含 FFmpeg 解码器、网络栈、音频输出）。
+     * 以前 releaseInternal 只释放 MediaPlayer，libVlc 永不放；
+     * 而 PlayerManager 每次切内核都 new 一个 VlcEngine，
+     * 于是切几次台/内核就攒下几个 LibVLC，最终 OOM。
+     *
+     * 现在把它明确分成两级：
+     *   - release()        ：只放播放器（换台时用），LibVLC 留着复用
+     *   - releaseLibVLC()  ：连 LibVLC 一起放（引擎被丢弃时用）
+     * 所有权因此清晰：谁创建谁销毁，且不在热路径上反复重建。
+     */
     private fun releaseInternal() {
         player?.let {
             try {
@@ -117,10 +141,28 @@ class VlcEngine : PlayerEngine {
                 it.vlcVout.detachViews()
                 it.release()
             } catch (t: Throwable) {
-                Log.w(TAG, "释放 VLC 出错", t)
+                Log.w(TAG, "释放 VLC 播放器出错", t)
             }
         }
         player = null
+    }
+
+    /**
+     * 彻底释放，包括 LibVLC。
+     *
+     * 由 PlayerManager 在丢弃本引擎时调用。必须幂等：
+     * 重复调用不能崩，也不能把已经放掉的引用再放一次。
+     */
+    fun releaseLibVLC() {
+        releaseInternal()
+        libVlc?.let {
+            try {
+                it.release()
+            } catch (t: Throwable) {
+                Log.w(TAG, "释放 LibVLC 出错", t)
+            }
+        }
+        libVlc = null
     }
 
     override fun setVolume(volume: Float) {

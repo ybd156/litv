@@ -534,6 +534,10 @@ func (s *Store) UpdateStreamHealth(ctx context.Context, id int64, health, latenc
 // ErrReservedDevicePlatform prevents privileged roles entering device storage.
 var ErrReservedDevicePlatform = errors.New("reserved device platform")
 
+// ErrDeviceKeyConflict 表示同一个 device_key 出现在不同平台上。
+// 这种情况不能直接换发可用 token——否则知道 key 就能顶掉原设备。
+var ErrDeviceKeyConflict = errors.New("device_key 已被其他平台占用")
+
 func IsReservedDevicePlatform(platform string) bool {
 	return strings.EqualFold(strings.TrimSpace(platform), "admin")
 }
@@ -744,6 +748,43 @@ func (s *Store) RegisterWithBindCode(ctx context.Context, key, tokenHash, name, 
 	defer tx.Rollback()
 
 	now := Now()
+
+	// 设备已经存在时不要当成新设备。
+	//
+	// 以前这里是裸 INSERT，撞上 device_key 唯一约束就直接报错。
+	// 客户端把 device_key 做成稳定值（ANDROID_ID）之后，重装/清数据会带着
+	// 同一个 key 重新注册——这时应当**认回原设备**，而不是要求管理员再批准一次。
+	//
+	// 安全边界：只有「已 bound 且平台一致」才直接换发 token。
+	// 平台不一致（同一 key 换了平台）或状态是 pending/rejected 时，
+	// 只更新 token 与最后在线时间，**保持原状态**，避免仅凭一个 key 就能提权。
+	var existID int64
+	var existStatus, existPlatform string
+	err = tx.QueryRowContext(ctx,
+		`SELECT id,status,platform FROM devices WHERE device_key=?`, key).
+		Scan(&existID, &existStatus, &existPlatform)
+	if err == nil {
+		// 已 bound 但平台对不上：只凭一个 device_key 不足以换发可用 token，
+		// 否则知道 key 的人就能顶掉这台设备。直接拒绝，让客户端换新 key 重新走审批。
+		if existStatus == "bound" && existPlatform != platform {
+			return 0, "", ErrDeviceKeyConflict
+		}
+		// 注意不要动 session_expires_at：置 0 会被 GetDeviceByToken 判成"已过期"，
+		// 重装后拿到的 token 立刻不可用。
+		if _, uerr := tx.ExecContext(ctx,
+			`UPDATE devices SET token_hash=?, name=?, model=?, last_seen=? WHERE id=?`,
+			tokenHash, name, model, now, existID); uerr != nil {
+			return 0, "", uerr
+		}
+		if cerr := tx.Commit(); cerr != nil {
+			return 0, "", cerr
+		}
+		return existID, existStatus, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return 0, "", err
+	}
+
 	res, err := tx.ExecContext(ctx, `INSERT INTO devices(device_key,token_hash,name,platform,model,status,created_at,last_seen)
 		VALUES(?,?,?,?,?,'pending',?,?)`, key, tokenHash, name, platform, model, now, now)
 	if err != nil {

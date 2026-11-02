@@ -142,8 +142,20 @@ func TestDuplicateRegistrationDoesNotCreateSecondDevice(t *testing.T) {
 
 	rec2 := rawRequest(t, a, http.MethodPost, "/api/v1/device/register",
 		map[string]any{"device_key": "dup-key"}, false)
-	if rec2.Code == http.StatusOK {
-		t.Fatal("重复 device_key 的注册应当被拒绝（409）")
+	// 行为已变更（0.1.7）：重复注册不再一律拒绝，而是**认回原设备**。
+	// 客户端把 device_key 做成稳定值（ANDROID_ID）后，重装/清数据会带着
+	// 同一个 key 再来注册；拒绝掉就等于每次重装都要管理员重新批准。
+	// 但底线必须守住：设备表不能多一行，未批准的设备不能因此变成 bound。
+	if rec2.Code != http.StatusOK {
+		t.Fatalf("重复注册应认回原设备并返回 200，实际 %d", rec2.Code)
+	}
+	var dupStatus string
+	if err := a.st.DB().QueryRow(
+		`SELECT status FROM devices WHERE device_key='dup-key'`).Scan(&dupStatus); err != nil {
+		t.Fatalf("查询设备状态失败: %v", err)
+	}
+	if dupStatus == "bound" {
+		t.Fatal("重复注册把未批准的设备变成了 bound——仅凭 device_key 就能提权")
 	}
 
 	// 关键：失败的注册必须整体回滚，设备表里只能有一条。

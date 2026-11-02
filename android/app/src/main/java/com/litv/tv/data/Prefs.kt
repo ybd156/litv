@@ -6,13 +6,16 @@ import android.content.SharedPreferences
 /**
  * 本地持久化：服务端地址、设备标识、device token、播放偏好。
  *
- * device_key 一旦生成就不再变——服务端用它认"同一台电视"，
- * 重装 App 会被当成新设备（这也是为什么要有绑定码流程）。
+ * device_key 一旦生成就不再变——服务端用它认"同一台设备"。
+ * 首次生成时优先用 ANDROID_ID 派生：它由系统按「设备+签名+用户」算出来，
+ * 重装 App / 清数据都不会变，所以重装后服务端能认回原设备，不必重新授权。
  */
 class Prefs(ctx: Context) {
 
+    private val appCtx: Context = ctx.applicationContext
+
     private val sp: SharedPreferences =
-        ctx.applicationContext.getSharedPreferences("litv", Context.MODE_PRIVATE)
+        appCtx.getSharedPreferences("litv", Context.MODE_PRIVATE)
     private val tokenStore = SecureTokenStore(
         object : TokenStorage {
             override fun encrypted(): String? = sp.getString(K_TOKEN_ENCRYPTED, null)
@@ -43,7 +46,26 @@ class Prefs(ctx: Context) {
         get() {
             val existing = sp.getString(K_DEVICE_KEY, "") ?: ""
             if (existing.isNotEmpty()) return existing
-            val fresh = java.util.UUID.randomUUID().toString().replace("-", "")
+
+            // 用 ANDROID_ID 派生稳定标识。
+            //
+            // 原来每次都是随机 UUID 存 SharedPreferences：重装或清数据后
+            // 就变成"新设备"，必须让管理员重新批准一次，非常烦。
+            // ANDROID_ID 在同一设备 + 同一签名 + 同一用户下保持不变，
+            // 重装后仍然拿到同一个 key，服务端据此认回原设备。
+            val androidId = runCatching {
+                android.provider.Settings.Secure.getString(
+                    appCtx.contentResolver,
+                    android.provider.Settings.Secure.ANDROID_ID,
+                )
+            }.getOrNull()
+
+            // 9774d56d682e549c 是早期一批设备固定的错误值，不能用
+            val fresh = if (!androidId.isNullOrBlank() && androidId != "9774d56d682e549c") {
+                "and-" + androidId
+            } else {
+                java.util.UUID.randomUUID().toString().replace("-", "")
+            }
             sp.edit().putString(K_DEVICE_KEY, fresh).apply()
             return fresh
         }

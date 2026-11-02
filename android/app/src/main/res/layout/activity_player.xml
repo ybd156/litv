@@ -35,16 +35,17 @@
     <!-- Exo 走 PlayerView（media3-ui）：它自己管 Surface 生命周期，
          参考实现能正常播就是用的这个。
 
-         resize_mode=zoom：保持比例**裁切铺满**。
-         原来用 fit（完整显示、四周留黑边），电视上看起来画面只占中间一块；
-         用户明确要「裁切铺满」，所以默认改成 zoom。
-         设置里的「画面比例」仍可切回 16:9 / 4:3 / 拉伸。 -->
+         注意 resize_mode 必须是 fit。
+         曾改成 zoom（保持比例裁切铺满），结果出现"转圈结束就黑屏"：
+         zoom 在**视频尺寸未知时**会把子视图算成 0 尺寸，
+         一旦 VideoSize 迟迟不到（硬解失败/纯音频），画面就一直是黑的。
+         需要裁切铺满时走设置里的「画面比例」，不要动这里的默认值。 -->
     <androidx.media3.ui.PlayerView
         android:id="@+id/playerView"
         android:layout_width="match_parent"
         android:layout_height="match_parent"
         app:use_controller="false"
-        app:resize_mode="zoom" />
+        app:resize_mode="fit" />
 
     <ImageView
         android:id="@+id/snapshot"

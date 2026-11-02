@@ -136,12 +136,16 @@ class ExoEngine : PlayerEngine {
             // fill = 拉伸铺满（会变形，用户明确选了才用）
             // 16:9 / 4:3 = 强制该比例，完整显示（留黑边）
             when (aspect) {
+                // 拉伸铺满：会变形，用户明确选了才用
                 "fill" -> playerView!!.resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FILL
-                // 16:9 / 4:3：完整显示留黑边。
+                // 裁切铺满：用户主动选才用。
+                // 默认(auto)不能用它——视频尺寸未知时 ZOOM 会把子视图算成 0 尺寸，
+                // 表现为"转圈结束后黑屏"。
+                "zoom" -> playerView!!.resizeMode = AspectRatioFrameLayout.RESIZE_MODE_ZOOM
+                // 16:9 / 4:3 / auto：完整显示留黑边。
                 // 当前 media3 版本的 PlayerView 没有 setAspectRatio(float)，
                 // 无法强制比例，只能保证不裁切。
-                "16:9", "4:3" -> playerView!!.resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
-                else -> playerView!!.resizeMode = AspectRatioFrameLayout.RESIZE_MODE_ZOOM
+                else -> playerView!!.resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
             }
         } else {
             p.setVideoSurface(videoSurface)

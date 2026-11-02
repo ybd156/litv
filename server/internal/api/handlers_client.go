@@ -70,6 +70,8 @@ func (a *API) deviceRegister(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case errors.Is(err, store.ErrReservedDevicePlatform):
 			fail(w, http.StatusBadRequest, 1001, "platform 为保留值")
+		case errors.Is(err, store.ErrDeviceKeyConflict):
+			fail(w, http.StatusConflict, 1002, "该设备标识已被其他平台占用，请重新安装或联系管理员清理旧设备")
 		case errors.Is(err, store.ErrBindCodeNotFound):
 			fail(w, http.StatusBadRequest, 2004, "绑定码不存在")
 		case errors.Is(err, store.ErrBindCodeUsed):

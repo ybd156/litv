@@ -101,16 +101,76 @@ After editing:
 4. Update documentation when behavior or contracts changed.
 5. Report what was verified and what remains unverified.
 
-## 8. Standard verification commands
+## 8. Toolchains: use WSL, not Windows
+
+**The Windows host has no Go, JDK or Gradle. All toolchains live in WSL (Ubuntu).**
+Do not spend time searching for a Windows Go/JDK — there is none, and there is no bundled
+Go under `.review-artifacts/toolchains/go` that works from Windows (its build cache is
+outside the writable workspace and fails with `Access is denied`).
+
+Every build and test command must be run through WSL, from the repo as seen at
+`/mnt/d/Documents/deepseek-harness/default-workspace/LITV2`:
+
+```bash
+wsl.exe -e bash -lc '<command>'
+```
+
+Verified WSL inventory (re-verify before trusting any version number):
+
+| Tool | Location / command | Version seen |
+|---|---|---|
+| Go | on `PATH` in WSL | `go1.23.12 linux/amd64` |
+| Node / npm | on `PATH` in WSL | `v22.22.1` / npm 11 |
+| JDK | `source ~/android-dev/env.sh` → `$JAVA_HOME` | `openjdk 21.0.12.1` |
+| Gradle | `~/android-dev/gradle-dist/gradle-8.7/bin/gradle` | 8.7 |
+| Android SDK | `~/android-dev/sdk` (also `ANDROID_HOME`) | `platforms/android-35`, `build-tools/34.0.0`, `35.0.0` |
+| Android NDK | `$ANDROID_NDK_HOME` | `27.0.12077973` |
+
+`android/gradlew` is a **shim, not a real wrapper**: it sources `~/android-dev/env.sh`
+and execs the local Gradle 8.7 distribution, because the standard wrapper tries to
+reach `services.gradle.org`, which fails from this network. Run `./gradlew` from
+inside WSL; do not regenerate the wrapper casually.
+
+`android/local.properties` already points at `sdk.dir=/home/Z/android-dev/sdk`, so the
+Android build only works from WSL — Windows paths would break it.
+
+**The output of `wsl.exe` piped into Git Bash is UTF-16 and renders as garbage.**
+Pipe through `iconv -f UTF-16LE -t UTF-8` or `tr -d '\r'` when reading localized text;
+ASCII build output is usually fine as-is.
+
+### GitHub Actions is the second supported build path
+
+`.github/workflows/release.yml` builds all three targets on hosted runners and is the
+**only** path that can produce iOS — iOS needs Apple's SDK, so it cannot be built on
+Windows or Linux, only on the `macos-latest` job. Use the workflow when:
+
+- you need an iOS build, or
+- a local WSL build is blocked (missing tool, network, disk), or
+- you want the same artefact the release actually ships.
+
+Trigger it with workflow_dispatch or by pushing a `v*` tag. Note the known defects in
+that workflow: the version is taken from `DEFAULT_VERSION`/input rather than the pushed
+tag, `build.sh` is called without `--version`, and the publish step can delete a
+release/tag other than the one being built. Treat CI as a build path, not yet as a
+trustworthy release path.
+
+## 9. Standard verification commands
+
+Run these **inside WSL** (`wsl.exe -e bash -lc '...'`), from the repo path above.
 
 ### Go server
 
 ```bash
 cd server
 gofmt -w <changed-go-files>
+go build ./...
 go test ./...
 go vet ./...
 ```
+
+`go test ./...` currently reports `[no test files]` for every package: **the repository
+has no Go unit tests.** Exit code 0 from that command is not evidence of correctness.
+When you fix behaviour, add the `_test.go` files rather than citing this as a pass.
 
 ### Administration UI
 
@@ -128,11 +188,29 @@ cd android
 ./gradlew lintDebug testDebugUnitTest assembleDebug
 ```
 
+Release/R8 behaviour (JNI callbacks and Gson reflection) needs an `assembleRelease`
+check; a debug-only pass does not prove it.
+
+### fnOS package
+
+```bash
+cd packaging/fnos
+./build.sh              # x86; --arch arm for ARM
+```
+
+Verify the frontend actually embedded in the package, not just that the `.fpk` was
+produced — `go:embed` only serves `server/internal/web/www`, and the packaging script
+also stages an external `www` that the handler never reads.
+
+### iOS
+
+Not buildable locally. Use the `ios` job in the GitHub Actions release workflow.
+
 ### Integration
 
 Run the relevant scripts in `build/test/`. Authentication, binding, stream signing, recording, uninstall and upgrade changes require dedicated regression tests.
 
-## 9. Definition of done
+## 10. Definition of done
 
 A change is complete only when:
 

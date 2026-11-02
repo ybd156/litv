@@ -33,7 +33,10 @@ class BindActivity : AppCompatActivity() {
     private lateinit var ipRow: View
     private lateinit var domainInput: EditText
     private lateinit var btnToggleHost: TextView
+    private lateinit var btnScheme: TextView
     private var usingDomain = false
+    /** 是否走 https。域名默认 true，IP 默认 false，可手动切 */
+    private var usingHttps = true
     private lateinit var codeInput: EditText
     private lateinit var status: TextView
     private lateinit var bindButton: Button
@@ -60,6 +63,7 @@ class BindActivity : AppCompatActivity() {
         ipRow = findViewById(R.id.ipRow)
         domainInput = findViewById(R.id.domainInput)
         btnToggleHost = findViewById(R.id.btnToggleHost)
+        btnScheme = findViewById(R.id.btnScheme)
         codeInput = findViewById(R.id.codeInput)
         status = findViewById(R.id.status)
         bindButton = findViewById(R.id.bindButton)
@@ -68,6 +72,11 @@ class BindActivity : AppCompatActivity() {
 
         setupAddrBoxes()
         btnToggleHost.setOnClickListener { setDomainMode(!usingDomain) }
+        btnScheme.setOnClickListener {
+            usingHttps = !usingHttps
+            renderScheme()
+        }
+        renderScheme()
         fillAddr(app.prefs.serverBase)
         // 如果之前填过地址，直接先把二维码亮出来——用户一眼就知道该拿手机扫
         if (app.prefs.serverBase.isNotBlank()) showQr(app.prefs.serverBase)
@@ -104,6 +113,10 @@ class BindActivity : AppCompatActivity() {
      * 分框对遥控器友好（只输数字、自动跳格），但只收数字；
      * 用 DDNS 或反向代理的用户必须能填域名，所以两种模式都留着。
      */
+    private fun renderScheme() {
+        btnScheme.text = "协议：" + if (usingHttps) "HTTPS" else "HTTP"
+    }
+
     private fun setDomainMode(on: Boolean) {
         usingDomain = on
         ipRow.visibility = if (on) View.GONE else View.VISIBLE
@@ -169,7 +182,7 @@ class BindActivity : AppCompatActivity() {
             val scheme = when {
                 raw.startsWith("https://") -> "https"
                 raw.startsWith("http://") -> "http"
-                else -> "https"
+                else -> if (usingHttps) "https" else "http"
             }
             val withScheme = if (hasScheme) raw else "$scheme://$raw"
 

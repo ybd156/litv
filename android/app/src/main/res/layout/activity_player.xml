@@ -9,14 +9,37 @@
     LinearLayout channelPanel（左侧频道列表，默认隐藏）
 -->
 <FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:background="@android:color/black">
 
+    <!-- 用 TextureView 而不是 SurfaceView：
+         老 Amlogic 盒子上 SurfaceView + MediaCodec 会出现解码器不往 Surface 写帧、
+         画面全黑（日志 DequeueBuffer time out）。TextureView 走 GPU 合成更稳。 -->
+    <!-- 两套渲染目标，按「渲染方式」设置显示其中一个：
+         TextureView 走 GPU 合成，在老 Amlogic 盒子上比 SurfaceView 稳；
+         SurfaceView 更省电、延迟更低，但个别设备会黑屏。 -->
     <SurfaceView
         android:id="@+id/surface"
         android:layout_width="match_parent"
-        android:layout_height="match_parent" />
+        android:layout_height="match_parent"
+        android:visibility="gone" />
+
+    <TextureView
+        android:id="@+id/surfaceTex"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:visibility="gone" />
+
+    <!-- Exo 走 PlayerView（media3-ui）：它自己管 Surface 生命周期，
+         参考实现能正常播就是用的这个 -->
+    <androidx.media3.ui.PlayerView
+        android:id="@+id/playerView"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        app:use_controller="false"
+        app:resize_mode="fit" />
 
     <ImageView
         android:id="@+id/snapshot"

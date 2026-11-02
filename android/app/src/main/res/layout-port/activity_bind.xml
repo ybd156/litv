@@ -117,7 +117,17 @@
                 android:textSize="15sp"
                 android:visibility="gone" />
 
-            <TextView
+                        <TextView
+                android:id="@+id/btnScheme"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:paddingVertical="8dp"
+                android:paddingEnd="16dp"
+                android:text="协议：HTTPS"
+                android:textColor="@color/accent"
+                android:textSize="13sp" />
+
+<TextView
                 android:id="@+id/btnToggleHost"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"

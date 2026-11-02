@@ -30,12 +30,15 @@ interface PlayerEngine {
     var listener: Listener?
 
     /** 把渲染目标挂上去。Exo 用 SurfaceView，VLC 需要额外 attachViews。 */
-    fun attach(context: Context, surfaceView: SurfaceView, container: ViewGroup?)
+    fun attach(context: Context, surface: android.view.Surface?, container: ViewGroup?)
 
     /**
      * 准备播放。
      * @param decode auto | hard | soft
      */
+    /** auto | 16:9 | 4:3 | fill。由 PlayerManager 在 prepare 前赋值。 */
+    var aspect: String
+
     fun prepare(url: String, headers: Map<String, String>, bufferMs: Int, decode: String)
 
     fun play()

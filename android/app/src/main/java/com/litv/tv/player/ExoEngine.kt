@@ -32,16 +32,21 @@ class ExoEngine : PlayerEngine {
 
     private var player: ExoPlayer? = null
     private var appContext: Context? = null
-    private var surface: SurfaceView? = null
+    private var videoSurface: android.view.Surface? = null
     private var videoW = 0
     private var videoH = 0
 
     override fun isAvailable(context: Context): Boolean = true
 
-    override fun attach(context: Context, surfaceView: SurfaceView, container: ViewGroup?) {
+    /** 由 PlayerActivity 注入的 PlayerView（media3-ui），优先用它 */
+    var playerView: androidx.media3.ui.PlayerView? = null
+
+    override fun attach(context: Context, surface: android.view.Surface?, container: ViewGroup?) {
         appContext = context.applicationContext
-        surface = surfaceView
-        player?.setVideoSurfaceView(surfaceView)
+        videoSurface = surface
+        player?.let { p ->
+            if (playerView != null) playerView!!.player = p else p.setVideoSurface(surface)
+        }
     }
 
     override fun prepare(url: String, headers: Map<String, String>, bufferMs: Int, decode: String) {
@@ -75,10 +80,19 @@ class ExoEngine : PlayerEngine {
 
         val dsFactory = DefaultDataSource.Factory(ctx, httpFactory)
 
-        val p = ExoPlayer.Builder(ctx)
+        // 关键：硬解失败必须能自动回退到下一个解码器（最终是软解）。
+        // 这台电视的 Amlogic AVC 硬解会抛
+        //   MediaCodecVideoDecoderException: Decoder failed
+        // 不开这个开关 Exo 就直接报错退出，表现为黑屏/闪退。
+        val renderers = androidx.media3.exoplayer.DefaultRenderersFactory(ctx)
+            .setEnableDecoderFallback(true)
+
+        val p = ExoPlayer.Builder(ctx, renderers)
             .setLoadControl(loadControl)
             .setMediaSourceFactory(DefaultMediaSourceFactory(dsFactory))
             .build()
+
+        player?.setVideoSurface(videoSurface)
 
         p.addListener(object : Player.Listener {
             override fun onPlaybackStateChanged(state: Int) {
@@ -109,11 +123,20 @@ class ExoEngine : PlayerEngine {
         })
 
         player = p
-        surface?.let { p.setVideoSurfaceView(it) }
+        // 有 PlayerView 就交给它管 Surface（参考实现就是这么做的），
+        // 否则退回直接 setVideoSurface
+        if (playerView != null) {
+            playerView!!.player = p
+            playerView!!.useController = false
+        } else {
+            p.setVideoSurface(videoSurface)
+        }
         p.setMediaItem(MediaItem.fromUri(Uri.parse(url)))
         p.prepare()
         p.playWhenReady = true
     }
+
+    override var aspect: String = "auto"
 
     override fun play() { player?.playWhenReady = true }
     override fun pause() { player?.playWhenReady = false }
@@ -151,4 +174,5 @@ class ExoEngine : PlayerEngine {
         const val TAG = "ExoEngine"
         const val UA = "LITV/1.0 (Android TV)"
     }
+
 }

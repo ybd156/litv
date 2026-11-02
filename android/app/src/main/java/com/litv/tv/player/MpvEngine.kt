@@ -26,7 +26,7 @@ class MpvEngine(private val avs3Mode: Boolean = false) : PlayerEngine, MPVLib.Li
     override var listener: PlayerEngine.Listener? = null
 
     private var created = false
-    private var surface: SurfaceView? = null
+    private var videoSurface: android.view.Surface? = null
     private var appContext: Context? = null
     private var videoW = 0
     private var videoH = 0
@@ -34,9 +34,9 @@ class MpvEngine(private val avs3Mode: Boolean = false) : PlayerEngine, MPVLib.Li
 
     override fun isAvailable(context: Context): Boolean = MPVLib.available
 
-    override fun attach(context: Context, surfaceView: SurfaceView, container: ViewGroup?) {
+    override fun attach(context: Context, surface: android.view.Surface?, container: ViewGroup?) {
         appContext = context.applicationContext
-        surface = surfaceView
+        videoSurface = surface
     }
 
     override fun prepare(url: String, headers: Map<String, String>, bufferMs: Int, decode: String) {
@@ -44,7 +44,7 @@ class MpvEngine(private val avs3Mode: Boolean = false) : PlayerEngine, MPVLib.Li
             listener?.onError("libmpv 未打包进 APK")
             return
         }
-        val ctx = appContext ?: surface?.context ?: run {
+        val ctx = appContext ?: run {
             listener?.onError("mpv 未初始化")
             return
         }
@@ -55,7 +55,7 @@ class MpvEngine(private val avs3Mode: Boolean = false) : PlayerEngine, MPVLib.Li
 
         applyOptions(bufferMs, decode, headers)
 
-        surface?.let { MPVLib.attachSurface(it.holder.surface) }
+        videoSurface?.let { MPVLib.attachSurface(it) }
         MPVLib.command(arrayOf("loadfile", url, "replace"))
         MPVLib.setPropertyString("pause", "no")
     }
@@ -111,6 +111,13 @@ class MpvEngine(private val avs3Mode: Boolean = false) : PlayerEngine, MPVLib.Li
         opt("tls-verify", "no")
         opt("rtsp-transport", "tcp")
         opt("user-agent", headers["User-Agent"] ?: "LITV/1.0 (Android TV)")
+        // 画面比例：auto 用 no 让 mpv 按视频自身宽高比
+        when (aspect) {
+            "16:9" -> opt("video-aspect-override", "16:9")
+            "4:3" -> opt("video-aspect-override", "4:3")
+            "fill" -> opt("video-aspect-override", "-2")
+            else -> opt("video-aspect-override", "no")
+        }
 
         // ---- 缓冲：秒数 → 字节（照抄实测映射表）----
         val secs = (bufferMs / 1000).coerceIn(1, 30)
@@ -130,6 +137,8 @@ class MpvEngine(private val avs3Mode: Boolean = false) : PlayerEngine, MPVLib.Li
             opt("http-header-fields", joined)
         }
     }
+
+    override var aspect: String = "auto"
 
     override fun play() {
         if (MPVLib.available) MPVLib.setPropertyString("pause", "no")

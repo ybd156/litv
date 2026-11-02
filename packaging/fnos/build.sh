@@ -155,7 +155,64 @@ for ref in ${REFS}; do
 done
 [ "${MISSING}" = "0" ] && c_ok "i18n 引用完整（$(printf '%s\n' "${REFS}" | grep -c . || true) 个 key）"
 
-# ---------------------------------------------------------------- 5. 二进制
+# ---------------------------------------------------------------- 5. 管理台静态文件（必须在编译前）
+#
+# 为什么顺序这么重要：服务端用 go:embed 把 server/internal/web/www 打进二进制，
+# 前端产物必须在**编译之前**就躺在 embed 路径里。
+#
+# 以前的做法是「先编 Go、再把 admin/dist 拷到包里的 app/www」，
+# 但 web.Handler 不读那个外部目录，只认 embed。
+# 结果：前端改了、包也打成功了，装到 NAS 上看到的还是上一次的前端——
+# 复制成功、打包成功，一路假绿。
+#
+# 现在收敛成唯一机制：先把前端同步进 embed 路径，再编译。
+WWW_SRC=""
+for cand in "${REPO_ROOT}/web/dist" "${REPO_ROOT}/admin/dist" "${REPO_ROOT}/web/build" "${REPO_ROOT}/admin/build"; do
+    if [ -d "${cand}" ] && [ -n "$(ls -A "${cand}" 2>/dev/null)" ]; then WWW_SRC="${cand}"; break; fi
+done
+
+EMBED_WWW="${REPO_ROOT}/server/internal/web/www"
+
+if [ -n "${WWW_SRC}" ]; then
+    c_info "同步管理台产物到 embed 路径..."
+    c_ok "来源: ${WWW_SRC}"
+    # 整体替换：旧版本残留的 assets/*.js 会继续进包，而 index.html 引用的
+    # hash 已经变了，残留文件纯属噪音和体积。
+    rm -rf "${EMBED_WWW}"
+    mkdir -p "${EMBED_WWW}"
+    cp -a "${WWW_SRC}/." "${EMBED_WWW}/"
+
+    # 自检：index.html 必须存在，且引用的资源真的在。
+    # 不检查的话，一个空 dist 也能顺利通过，最后表现为白屏。
+    [ -s "${EMBED_WWW}/index.html" ] || die "同步后 ${EMBED_WWW}/index.html 缺失"
+    MISSING_ASSET=0
+    for ref in $(grep -oE '(src|href)="[^"]+"' "${EMBED_WWW}/index.html" \
+        | sed -E 's/(src|href)="([^"]+)"/\2/' \
+        | grep -v '^http' | sed 's|^/app/litv/||' | sed 's|^/||'); do
+        [ -f "${EMBED_WWW}/${ref}" ] || { c_warn "index.html 引用的资源不存在: ${ref}"; MISSING_ASSET=1; }
+    done
+    [ "${MISSING_ASSET}" = "0" ] && c_ok "embed 自检通过（资源引用齐全）"
+else
+    c_warn "没找到已构建的前端（web/dist、admin/dist 均不存在），使用占位首页"
+    rm -rf "${EMBED_WWW}"
+    mkdir -p "${EMBED_WWW}"
+    cat >"${EMBED_WWW}/index.html" <<'HTML'
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><title>LITV</title>
+<style>body{font-family:system-ui,-apple-system,"Noto Sans SC",sans-serif;background:#0f172a;color:#e2e8f0;
+display:flex;align-items:center;justify-content:center;height:100vh;margin:0}
+.card{max-width:640px;padding:32px;border-radius:16px;background:#1e293b;line-height:1.7}
+code{background:#0f172a;padding:2px 6px;border-radius:4px}</style></head>
+<body><div class="card">
+<h1>LITV 占位页面</h1>
+<p>服务端已通过飞牛统一网关正常响应，但管理台前端还没有构建。</p>
+<p>在 <code>admin/</code> 下执行 <code>npm ci &amp;&amp; npm run build</code> 后重新打包。</p>
+<p>健康检查：<a style="color:#22d3ee" href="api/health">api/health</a></p>
+</div></body></html>
+HTML
+fi
+
+# ---------------------------------------------------------------- 6. 二进制
 BIN_DIR="${ROOT}/app/server"
 mkdir -p "${BIN_DIR}"
 
@@ -210,17 +267,6 @@ for bin in ${BIN_LIST}; do
     c_ok "$(basename "${f}")  $(du -h "${f}" | cut -f1)  $(file -b "${f}" 2>/dev/null | cut -c1-40)"
 done
 
-# ---------------------------------------------------------------- 6. 管理台静态文件
-WWW_SRC=""
-for cand in "${REPO_ROOT}/web/dist" "${REPO_ROOT}/admin/dist" "${REPO_ROOT}/web/build" "${REPO_ROOT}/admin/build"; do
-    if [ -d "${cand}" ] && [ -n "$(ls -A "${cand}" 2>/dev/null)" ]; then WWW_SRC="${cand}"; break; fi
-done
-if [ -n "${WWW_SRC}" ]; then
-    c_ok "管理台静态文件: ${WWW_SRC}"
-else
-    c_warn "没找到已构建的前端（web/dist、admin/dist 均不存在），用占位首页"
-fi
-
 # ---------------------------------------------------------------- 7. 组装 staging
 c_info "组装 staging 目录..."
 rm -rf "${BUILD_DIR}"
@@ -243,6 +289,8 @@ for bin in ${BIN_LIST}; do
 done
 
 if [ -n "${WWW_SRC}" ]; then
+    # 只是外部诊断副本：web.Handler 走 go:embed，从不读这个目录。
+    # 留一份是为了在 NAS 上能直接比对"包里那份"和"二进制里那份"是否一致。
     cp -a "${WWW_SRC}/." "${STAGE}/app/www/"
 else
     # 占位首页：保证网关入口打开不是 404/白屏，能立刻看到"服务活着"

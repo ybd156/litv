@@ -5,7 +5,11 @@
 build/apk-re/
 **/dist/
 **/dist-mock/
+# 只忽略真正的构建产物目录；build/test/ 里是版本管理的脚本
+build/
 **/build/
+!build/test/
+!build/test/**
 **/generated/
 **/intermediates/
 **/.gradle/

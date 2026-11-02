@@ -121,9 +121,19 @@ jobs:
         run: |
           cd packaging/fnos
           chmod +x build.sh
+          # build.sh 会在编译 Go 之前把 admin/dist 同步进 go:embed 路径，
+          # 所以这里不需要额外拷前端——同步是脚本的唯一机制。
           ./build.sh --arch x86
           ./build.sh --arch arm
           ls -lh dist/
+
+      - name: 验证前端确实进了包（R11 门禁）
+        run: |
+          set -o pipefail
+          # 服务端用 go:embed 打静态资源。若构建顺序错了，
+          # 包会静默带着上一次的前端，而构建一路显示成功。
+          # 这里断言 embed 与本次 dist 一致、且资源引用齐全。
+          bash build/test/verify-frontend-embed.sh packaging/fnos/dist/litv_x86_v*.fpk
 
       - name: 收集 fpk
         run: |

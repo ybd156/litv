@@ -45,6 +45,11 @@ temp/
 *.tmp
 .review-artifacts/
 
+# Windows 保留设备名：在 Git Bash 里重定向到 NUL 会真的创建一个文件，
+# 而且 git 每次都会报 "short read while indexing NUL"。它不是源码。
+NUL
+nul
+
 # Third-party reference code used only for local research
 ref/
 

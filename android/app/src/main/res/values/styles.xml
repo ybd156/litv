@@ -31,14 +31,14 @@
         <item name="android:layout_height">wrap_content</item>
         <item name="android:layout_weight">1</item>
         <item name="android:textColor">@color/text_primary</item>
-        <item name="android:textSize">17sp</item>
+        <item name="android:textSize">13sp</item>
     </style>
 
     <style name="SettingValue">
         <item name="android:layout_width">wrap_content</item>
         <item name="android:layout_height">wrap_content</item>
         <item name="android:textColor">@color/accent</item>
-        <item name="android:textSize">17sp</item>
+        <item name="android:textSize">13sp</item>
     </style>
 
     <!-- 手机端底部 Tab -->
@@ -88,9 +88,9 @@
         <item name="android:layout_marginHorizontal">3dp</item>
         <item name="android:background">@drawable/bg_card</item>
         <item name="android:gravity">center</item>
-        <item name="android:paddingVertical">11dp</item>
+        <item name="android:paddingVertical">7dp</item>
         <item name="android:textColor">@color/text_primary</item>
-        <item name="android:textSize">17sp</item>
+        <item name="android:textSize">13sp</item>
     </style>
 
     <!-- 服务器地址分框：每段 IP / 端口一个小框 -->

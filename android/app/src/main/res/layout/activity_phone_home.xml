@@ -133,27 +133,27 @@
                 <TextView
                     android:id="@+id/btnPrev"
                     style="@style/PhoneCtl"
-                    android:text="⏮" />
+                    android:text="⏮\n上一台" />
 
                 <TextView
                     android:id="@+id/btnPlayPause"
                     style="@style/PhoneCtl"
-                    android:text="⏸" />
+                    android:text="⏸\n暂停" />
 
                 <TextView
                     android:id="@+id/btnNext"
                     style="@style/PhoneCtl"
-                    android:text="⏭" />
+                    android:text="⏭\n下一台" />
 
                 <TextView
                     android:id="@+id/btnMute"
                     style="@style/PhoneCtl"
-                    android:text="🔇" />
+                    android:text="🔇\n静音" />
 
                 <TextView
                     android:id="@+id/btnFullscreen"
                     style="@style/PhoneCtl"
-                    android:text="⛶" />
+                    android:text="⛶\n全屏" />
             </LinearLayout>
 
             <ScrollView

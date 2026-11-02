@@ -164,9 +164,9 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
         btnPlayPause.setOnClickListener {
             if (currentChannel == null) { switchTab(TAB_CHANNEL); return@setOnClickListener }
             if (paused) {
-                player.resume(); paused = false; btnPlayPause.text = "⏸"
+                player.resume(); paused = false; btnPlayPause.text = "⏸\n暂停"
             } else {
-                player.pause(); paused = true; btnPlayPause.text = "▶"
+                player.pause(); paused = true; btnPlayPause.text = "▶\n播放"
             }
         }
 
@@ -326,7 +326,7 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
         playHint.visibility = View.GONE
         loading.visibility = View.VISIBLE
         paused = false
-        btnPlayPause.text = "⏸"
+        btnPlayPause.text = "⏸\n暂停"
 
         app.api.play(
             ch.id,
@@ -427,7 +427,7 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
         super.onPause()
         player.pause()
         paused = true
-        if (::btnPlayPause.isInitialized) btnPlayPause.text = "▶"
+        if (::btnPlayPause.isInitialized) btnPlayPause.text = "▶\n播放"
     }
 
     override fun onDestroy() {

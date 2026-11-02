@@ -15,7 +15,7 @@ struct RootTabs: View {
             HomeView()
                 .tabItem { Label("频道", systemImage: "list.bullet") }
 
-            RemoteTab()
+            RemoteView()
                 .tabItem { Label("遥控器", systemImage: "av.remote") }
 
             SettingsView()
@@ -48,30 +48,5 @@ private struct PlayTab: View {
                 .background(Color(red: 0.043, green: 0.055, blue: 0.067))
             }
         }
-    }
-}
-
-/// 「遥控器」tab。
-///
-/// 真正的遥控实现（设备列表 + 按键转发）在下一步补，
-/// 这里先给出入口，避免四个 tab 里少一个。
-private struct RemoteTab: View {
-    var body: some View {
-        NavigationView {
-            VStack(spacing: 10) {
-                Image(systemName: "av.remote")
-                    .font(.system(size: 42))
-                    .foregroundColor(.gray)
-                Text("遥控器")
-                    .foregroundColor(.gray)
-                Text("在同一个 Wi-Fi 下控制其他设备")
-                    .font(.system(size: 12))
-                    .foregroundColor(.gray.opacity(0.75))
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .navigationTitle("遥控器")
-            .navigationBarTitleDisplayMode(.inline)
-        }
-        .navigationViewStyle(.stack)
     }
 }

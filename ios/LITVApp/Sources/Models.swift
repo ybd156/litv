@@ -434,6 +434,15 @@ extension RegisterResult {
 
 /// 服务端来源：handlers_client.go 的 tvTimeshift。
 /// 时移未开启时只回 {"available_seconds":0,"enabled":false} —— **没有 url 键**。
+/// 可被遥控的设备（GET /tv/remote/targets）。
+struct RemoteTarget: Codable, Identifiable, Hashable {
+    var id: Int64 = 0
+    var name: String = ""
+    var platform: String = ""
+    var model: String = ""
+    var online: Bool = false
+}
+
 struct TimeshiftInfo: Codable {
     var enabled: Bool = false
     var availableSeconds: Int = 0

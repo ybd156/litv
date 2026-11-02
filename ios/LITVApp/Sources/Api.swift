@@ -184,6 +184,35 @@ struct ApiClient {
         _ = try? await send(req, as: HeartbeatResult.self)
     }
 
+    /// 可被遥控的设备列表（不含自己）。
+    func remoteTargets() async throws -> [RemoteTarget] {
+        guard let req = request("/api/v1/tv/remote/targets", method: "GET", body: nil) else {
+            throw ApiError(message: "地址无效")
+        }
+        return try await send(req, as: [RemoteTarget].self)
+    }
+
+    /// 发一个按键指令给目标设备。
+    ///
+    /// key 取值见服务端 remote.Command：up/down/left/right/ok/back/menu/home/
+    /// volume_up/volume_down，以及数字 "0"…"9"。
+    func remoteKey(deviceId: Int64, key: String) async throws {
+        guard let req = request("/api/v1/tv/remote/\(deviceId)", method: "POST",
+                                body: ["type": "key", "key": key]) else {
+            throw ApiError(message: "地址无效")
+        }
+        _ = try await send(req, as: EmptyResponse.self)
+    }
+
+    /// 让目标设备直接播某个频道。
+    func remotePlay(deviceId: Int64, channelId: Int64) async throws {
+        guard let req = request("/api/v1/tv/remote/\(deviceId)", method: "POST",
+                                body: ["type": "play", "channel_id": channelId]) else {
+            throw ApiError(message: "地址无效")
+        }
+        _ = try await send(req, as: EmptyResponse.self)
+    }
+
     func timeshift(channelId: Int64) async throws -> TimeshiftInfo {
         guard let req = request("/api/v1/tv/timeshift/\(channelId)", method: "GET", body: nil) else {
             throw ApiError(message: "地址无效")

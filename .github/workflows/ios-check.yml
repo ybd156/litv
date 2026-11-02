@@ -1,0 +1,83 @@
+name: iOS Build Check
+
+# =============================================================================
+# 只编译 iOS，不发布。用途是把 Swift 代码交给真正的编译器验证。
+#
+# 为什么单独一个 workflow：
+#   iOS 需要 Apple SDK，Windows/Linux 都编不了，只能跑 macOS runner。
+#   release.yml 只在推 v* tag 或手动触发时跑，且会连带构建三端并发布——
+#   改一行 Swift 就触发整套发版显然不合适。
+#
+#   这个 workflow 只做一件事：编译通过与否，作为 CI 门禁。
+#   本地开发改完 Swift 推上来，就能立刻知道有没有编译错误，
+#   而不是等到发版时才发现（那种发现方式代价高得多）。
+#
+# 触发：手动，或推送到 main / PR 时自动跑（限 iOS 相关路径）。
+# =============================================================================
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "ios/**"
+      - ".github/workflows/ios-check.yml"
+  pull_request:
+    paths:
+      - "ios/**"
+
+concurrency:
+  group: ios-check-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-ios:
+    runs-on: macos-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装工具
+        run: brew install xcodegen
+
+      - name: 生成工程 + 装 Pod
+        working-directory: ios
+        run: |
+          xcodegen generate
+          # --repo-update 在国内网络下偶发失败，允许重试一次。
+          pod install --repo-update 2>&1 | tail -20 || \
+            pod install 2>&1 | tail -20
+
+      - name: 编译（不签名）
+        working-directory: ios
+        run: |
+          # pipefail 不能少：否则 xcodebuild 失败会被 tail 的退出码盖掉，
+          # 表现为"构建成功"但产物其实是空的。
+          set -o pipefail
+          xcodebuild \
+            -workspace LITV.xcworkspace \
+            -scheme LITV \
+            -sdk iphoneos \
+            -configuration Debug \
+            -derivedDataPath build \
+            -destination 'generic/platform=iOS' \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGN_ENTITLEMENTS="" \
+            build 2>&1 | tee /tmp/xcodebuild.log | tail -80
+
+      - name: 断言主二进制真的产出了
+        working-directory: ios
+        run: |
+          APP="build/Build/Products/Debug-iphoneos/LITV.app"
+          test -d "$APP" || { echo "没找到 LITV.app"; exit 1; }
+          test -f "$APP/LITV" || { echo "LITV.app 里没有主二进制，构建其实失败了"; exit 1; }
+          ls -lh "$APP/LITV"
+          echo "iOS 编译通过"
+
+      - name: 失败时回传完整日志
+        if: failure()
+        run: |
+          echo "=== xcodebuild.log 末尾 ==="
+          tail -200 /tmp/xcodebuild.log 2>/dev/null || echo "（没有日志）"

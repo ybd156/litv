@@ -35,7 +35,9 @@ const { data, loading, error, run } = useAsyncData<SettingsData>(async () => {
 })
 
 const form = reactive<SystemConfig>({
-  port: 9527,
+  // 与服务端 config.Default() 和安装向导 wizard/install 对齐（28027）。
+  // 这里曾经写 9527，新装用户看到的默认端口和实际监听端口对不上。
+  port: 28027,
   max_concurrent: 6,
   transcode_enabled: false,
   log_level: 'info',
@@ -59,7 +61,7 @@ const dirty = computed(() => JSON.stringify(form) !== snapshot.value)
 function hydrate(): void {
   const c = data.value?.config
   if (!c) return
-  form.port = c.port ?? 9527
+  form.port = c.port ?? 28027
   form.max_concurrent = c.max_concurrent ?? 6
   form.transcode_enabled = Boolean(c.transcode_enabled)
   form.log_level = c.log_level ?? 'info'
@@ -75,7 +77,9 @@ async function save(): Promise<void> {
   }
   saving.value = true
   try {
-    await systemApi.saveSystemConfig({
+    // 服务端会回传 restart_needed，明确告诉我们哪些项改了但还没生效。
+    // 不再笼统地说"已保存"——用户需要知道到底要不要重启。
+    const res = await systemApi.saveSystemConfig({
       port: form.port,
       max_concurrent: form.max_concurrent,
       transcode_enabled: form.transcode_enabled,
@@ -84,11 +88,31 @@ async function save(): Promise<void> {
       allow_lan: form.allow_lan,
     })
     snapshot.value = JSON.stringify(form)
-    toast.success('已保存（改端口需要重启服务才生效）')
+
+    const need = res?.restart_needed ?? []
+    if (need.length > 0) {
+      toast.warning(`已保存；${need.map(restartFieldName).join('、')} 需要重启服务后才生效`)
+    } else {
+      toast.success('已保存并生效')
+    }
   } catch (e) {
     toast.error(toErrorMessage(e))
   } finally {
     saving.value = false
+  }
+}
+
+/** 把后端字段名翻成人话，别在界面上直接暴露 port / allow_lan。 */
+function restartFieldName(field: string): string {
+  switch (field) {
+    case 'port':
+      return '服务端口'
+    case 'allow_lan':
+      return '局域网访问'
+    case 'epg_refresh_hour':
+      return 'EPG 刷新时间'
+    default:
+      return field
   }
 }
 
@@ -126,7 +150,7 @@ onMounted(() => void load())
             <NFormItem label="服务端口">
               <div class="field">
                 <NInputNumber v-model:value="form.port" :min="1" :max="65535" style="width: 160px" />
-                <span class="tip">终端 App 通过这个端口连（默认 9527）。改完要重启服务。</span>
+                <span class="tip">终端 App 通过这个端口连（默认 28027）。改完要重启服务。</span>
               </div>
             </NFormItem>
 

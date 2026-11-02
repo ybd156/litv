@@ -204,4 +204,9 @@ export interface SystemConfig {
   log_level?: string
   epg_refresh_hour?: number
   allow_lan?: boolean
+  /**
+   * 保存后服务端回传：哪些字段已写入配置文件但还需重启才生效。
+   * 只出现在 PUT /system/config 的响应里，GET 不会带。
+   */
+  restart_needed?: string[]
 }

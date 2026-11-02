@@ -112,6 +112,44 @@ func (s *Signer) Sign(channelID int64, exp int64, deviceKey string) string {
 	return base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
 }
 
+// SignStream 把选中的线路也绑进播放签名。
+//
+// R13：手动切换线路时，客户端选中的 stream_id 必须一路带到真正拉流的入口。
+// 旧实现里 tvPlay 尊重了 stream_id，但 relay 地址里没有它，
+// liveTS/liveManifest/remux 又各自 BestStream —— 结果"已切线路"只改变了
+// 响应字段，实际请求的还是默认线路。用户看到的是"切了没用"。
+//
+// streamID 为 0 时退化成普通播放签名，保证既有地址与客户端继续可用。
+func (s *Signer) SignStream(channelID, streamID int64, exp int64, deviceKey string) string {
+	if streamID <= 0 {
+		return s.Sign(channelID, exp, deviceKey)
+	}
+	mac := hmac.New(sha256.New, s.secret)
+	fmt.Fprintf(mac, "%d|%d|%d|%s", channelID, streamID, exp, deviceKey)
+	return base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
+}
+
+// VerifyStreamSig 校验播放签名，同时返回签名里绑定的线路 id（未绑定时为 0）。
+//
+// 先按带线路的形式校验，失败再按不带线路的旧形式校验——
+// 这样升级后已发出的老地址不会立刻 403，同时新地址能表达线路选择。
+func (s *Signer) VerifyStreamSig(channelID, streamID int64, exp int64, deviceKey, sig string) (int64, error) {
+	if exp < time.Now().Unix() {
+		return 0, fmt.Errorf("播放地址已过期")
+	}
+	if streamID > 0 {
+		want := s.SignStream(channelID, streamID, exp, deviceKey)
+		if subtle.ConstantTimeCompare([]byte(want), []byte(sig)) == 1 {
+			return streamID, nil
+		}
+	}
+	// 兼容：不带线路的旧签名
+	if subtle.ConstantTimeCompare([]byte(s.Sign(channelID, exp, deviceKey)), []byte(sig)) == 1 {
+		return 0, nil
+	}
+	return 0, fmt.Errorf("播放地址签名无效")
+}
+
 // Verify 校验签名与过期时间。
 func (s *Signer) Verify(channelID int64, exp int64, deviceKey, sig string) error {
 	if exp < time.Now().Unix() {

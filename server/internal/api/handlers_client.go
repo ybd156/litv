@@ -304,7 +304,9 @@ func (a *API) tvPlay(w http.ResponseWriter, r *http.Request) {
 	}
 
 	exp := time.Now().Add(12 * time.Hour).Unix()
-	sig := a.signer.Sign(id, exp, dev.DeviceKey)
+	// R13：把选中的线路绑进签名，relay 各入口据此使用同一条线路，
+	// 不再各自 BestStream。streamID 为 0 时退化为普通签名。
+	sig := a.signer.SignStream(id, st.ID, exp, dev.DeviceKey)
 	path := fmt.Sprintf("%s/live/%d/stream.ts", a.cfg.Server.Prefix, id)
 	switch kind {
 	case "hls":
@@ -316,6 +318,8 @@ func (a *API) tvPlay(w http.ResponseWriter, r *http.Request) {
 	q.Set("sig", sig)
 	q.Set("exp", strconv.FormatInt(exp, 10))
 	q.Set("dk", dev.DeviceKey)
+	// stream_id 与签名一起出现：verifyStreamFull 会校验它们是否匹配。
+	q.Set("stream_id", strconv.FormatInt(st.ID, 10))
 
 	// 直连：把上游地址原样交给客户端，让它自己连源站。
 	//
@@ -513,7 +517,7 @@ func (a *API) liveTimeshift(w http.ResponseWriter, r *http.Request) {
 // liveRemuxPlaylist 返回转封装后的 m3u8。
 // 切片 URI 会被改写成 /live/{id}/remux/{seg}，复用同一套签名鉴权。
 func (a *API) liveRemuxPlaylist(w http.ResponseWriter, r *http.Request) {
-	id, _, ok2 := a.verifyStream(r)
+	id, _, sid, ok2 := a.verifyStreamFull(r)
 	if !ok2 {
 		fail(w, http.StatusForbidden, 2002, "播放地址无效或已过期")
 		return
@@ -522,7 +526,8 @@ func (a *API) liveRemuxPlaylist(w http.ResponseWriter, r *http.Request) {
 		fail(w, http.StatusServiceUnavailable, 5001, "服务端未启用转封装")
 		return
 	}
-	st, err := a.st.BestStream(r.Context(), id)
+	// R13：用签名里绑定的线路，尊重手动选择
+	st, err := a.streamForPlay(r.Context(), id, sid)
 	if err != nil {
 		fail(w, http.StatusNotFound, 3002, "该频道没有可用线路")
 		return
@@ -690,24 +695,61 @@ func (a *API) tvResume(w http.ResponseWriter, r *http.Request) {
 
 // verifyStream 校验签名，返回频道 ID 与设备标识。
 func (a *API) verifyStream(r *http.Request) (int64, string, bool) {
-	id := pathInt64(r, "id")
+	id, dk, _, ok := a.verifyStreamFull(r)
+	return id, dk, ok
+}
+
+// verifyStreamFull 与 verifyStream 相同，另外返回签名里绑定的线路 id。
+//
+// R13：线路选择必须由签名承载。只靠查询参数 stream_id 的话，
+// 攻击者可以随便改它去探测其他线路；更重要的是各拉流入口
+// 需要知道"用户到底选了哪条"，否则又会各自 BestStream。
+func (a *API) verifyStreamFull(r *http.Request) (id int64, dk string, streamID int64, ok bool) {
+	id = pathInt64(r, "id")
 	q := r.URL.Query()
 	exp, _ := strconv.ParseInt(q.Get("exp"), 10, 64)
-	if err := a.signer.Verify(id, exp, q.Get("dk"), q.Get("sig")); err != nil {
-		return 0, "", false
+	// 查询参数里的 stream_id 只是"待校验的候选值"，
+	// 只有签名里真的绑定了它才算数（见 VerifyStreamSig）。
+	cand, _ := strconv.ParseInt(q.Get("stream_id"), 10, 64)
+	gotSID, err := a.signer.VerifyStreamSig(id, cand, exp, q.Get("dk"), q.Get("sig"))
+	if err != nil {
+		return 0, "", 0, false
 	}
-	return id, q.Get("dk"), true
+	return id, q.Get("dk"), gotSID, true
+}
+
+// streamForPlay 解析本次请求该用哪条线路。
+//
+// 优先用签名里绑定的线路（R13）；没有绑定就回落到 BestStream。
+// 绑定的线路必须属于该频道，否则说明签名被跨频道复用，直接拒绝。
+func (a *API) streamForPlay(ctx context.Context, channelID, boundStreamID int64) (*store.Stream, error) {
+	if boundStreamID > 0 {
+		all, err := a.st.ListStreams(ctx, channelID)
+		if err != nil {
+			return nil, err
+		}
+		for i := range all {
+			if all[i].ID == boundStreamID {
+				return &all[i], nil
+			}
+		}
+		// 绑定线路不属于这个频道：签名不可信。
+		return nil, fmt.Errorf("线路 %d 不属于频道 %d", boundStreamID, channelID)
+	}
+	return a.st.BestStream(ctx, channelID)
 }
 
 // livePlay 是个分发器：告诉客户端该走 TS 还是 HLS。
 func (a *API) livePlay(w http.ResponseWriter, r *http.Request) {
 	slog.Info("livePlay", "path", r.URL.Path)
-	id, _, ok2 := a.verifyStream(r)
+	id, _, sid, ok2 := a.verifyStreamFull(r)
 	if !ok2 {
 		fail(w, http.StatusForbidden, 2002, "播放地址无效或已过期")
 		return
 	}
-	st, err := a.st.BestStream(r.Context(), id)
+	// R13：用签名里绑定的线路判断该走 TS 还是 HLS，
+	// 否则会把用户选中的 TS 线路判成 HLS（或反之），跳转到错误的入口。
+	st, err := a.streamForPlay(r.Context(), id, sid)
 	if err != nil {
 		fail(w, http.StatusNotFound, 3002, "该频道没有可用线路")
 		return
@@ -721,12 +763,13 @@ func (a *API) livePlay(w http.ResponseWriter, r *http.Request) {
 
 // liveTS 是核心：把上游 TS 字节流转给终端，多终端共用一路上游。
 func (a *API) liveTS(w http.ResponseWriter, r *http.Request) {
-	id, dk, ok2 := a.verifyStream(r)
+	id, dk, sid, ok2 := a.verifyStreamFull(r)
 	if !ok2 {
 		fail(w, http.StatusForbidden, 2002, "播放地址无效或已过期")
 		return
 	}
-	st, err := a.st.BestStream(r.Context(), id)
+	// R13：用签名里绑定的线路，尊重手动选择
+	st, err := a.streamForPlay(r.Context(), id, sid)
 	if err != nil {
 		fail(w, http.StatusNotFound, 3002, "该频道没有可用线路")
 		return
@@ -876,7 +919,7 @@ func (a *API) streamFetchOptions(ctx context.Context, channelID int64) fetch.Opt
 }
 
 func (a *API) liveManifest(w http.ResponseWriter, r *http.Request) {
-	id, dk, ok2 := a.verifyStream(r)
+	id, dk, sid, ok2 := a.verifyStreamFull(r)
 	if !ok2 {
 		fail(w, http.StatusForbidden, 2002, "播放地址无效或已过期")
 		return
@@ -887,6 +930,20 @@ func (a *API) liveManifest(w http.ResponseWriter, r *http.Request) {
 	if serr != nil || len(streams) == 0 {
 		fail(w, http.StatusNotFound, 3002, "该频道没有可用线路")
 		return
+	}
+
+	// R13：用户手动选了线路就优先试它。
+	// 仍然保留"失败再试别的"——死线路不该让整个台播不了，
+	// 但"能用哪条"的第一顺位必须是用户的选择，否则切了等于没切。
+	if sid > 0 {
+		for i := range streams {
+			if streams[i].ID == sid {
+				first := streams[i]
+				copy(streams[1:], streams[0:i])
+				streams[0] = first
+				break
+			}
+		}
 	}
 
 	var (
@@ -964,11 +1021,17 @@ func (a *API) liveManifest(w http.ResponseWriter, r *http.Request) {
 
 // liveSegment 代理 HLS 分片（含子清单）。
 func (a *API) liveSegment(w http.ResponseWriter, r *http.Request) {
-	id, dk, ok2 := a.verifyStream(r)
-	if !ok2 {
-		fail(w, http.StatusForbidden, 2002, "播放地址无效或已过期")
-		return
-	}
+	// 注意：这里**不能**先走 verifyStreamFull。
+	//
+	// /seg 的签名是「绑定目标」的分片签名，它和频道级播放签名是两套
+	// 不同内容的 HMAC，一个签名不可能同时满足两者。
+	// 先要求频道级校验的话，segmentURL 生成的地址会永远 403——
+	// 清单能取到、分片全被拒，表现就是"有列表但画面全黑"。
+	//
+	// 所以分片签名**替代**频道级校验，而不是叠加：
+	// 它自己已经绑定了用途、频道、目标地址、到期时间和设备。
+	id := pathInt64(r, "id")
+	dk := r.URL.Query().Get("dk")
 	target := r.URL.Query().Get("u")
 	if target == "" {
 		fail(w, http.StatusBadRequest, 1001, "缺少分片地址")
@@ -982,12 +1045,15 @@ func (a *API) liveSegment(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// R04：校验分片签名，它绑定了「用途 + 频道 + 目标地址 + 到期 + 设备」。
-	// 只校验频道级播放签名是不够的——那样改掉 u 就能当任意 HTTP 代理用。
+	// 改 u / 换频道 / 换设备 / 改到期 任一都会失败。
 	exp, _ := strconv.ParseInt(r.URL.Query().Get("exp"), 10, 64)
 	if err := a.signer.VerifySegment(id, target, exp, dk, r.URL.Query().Get("sig")); err != nil {
 		fail(w, http.StatusForbidden, 2002, "分片地址无效或已过期")
 		return
 	}
+	// 分片签名不携带线路选择，取最佳线路即可（分片本身已由签名锁定目标）。
+	var sid int64
+	_ = sid
 
 	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, target, nil)
 	if err != nil {
@@ -997,7 +1063,12 @@ func (a *API) liveSegment(w http.ResponseWriter, r *http.Request) {
 	// R09：分片也要带整条线路的头。源站校验是覆盖整条链路的，
 	// 不只是清单请求；只带 UA 时，要求 Referer 的源会在分片这一步 403，
 	// 表现是清单能取到、画面却一片黑。
-	for k, v := range a.streamHeaders(id, nil) {
+	// R13：用签名绑定的线路取头，保证与清单请求是同一条线路的配置。
+	var boundStream *store.Stream
+	if st, serr := a.streamForPlay(r.Context(), id, sid); serr == nil {
+		boundStream = st
+	}
+	for k, v := range a.streamHeaders(id, boundStream) {
 		req.Header.Set(k, v)
 	}
 	req.Header.Set("Accept", "*/*")
@@ -1015,32 +1086,44 @@ func (a *API) liveSegment(w http.ResponseWriter, r *http.Request) {
 	br := bufio.NewReader(resp.Body)
 	if head, _ := br.Peek(7); bytes.HasPrefix(head, []byte("#EXTM3U")) {
 		body, _ := io.ReadAll(io.LimitReader(br, 4<<20))
-		base, perr := url.Parse(target)
-		if perr == nil {
-			lines := strings.Split(string(body), "\n")
-			out := make([]string, 0, len(lines))
-			for _, line := range lines {
-				trimmed := strings.TrimSpace(line)
-				if trimmed == "" || strings.HasPrefix(trimmed, "#") {
-					out = append(out, rewriteURIAttr(trimmed, base, a, id, dk))
-					continue
-				}
-				if u, uerr := base.Parse(trimmed); uerr == nil {
-					out = append(out, a.segmentURL(u.String(), id, dk))
-				} else {
-					out = append(out, line)
-				}
-			}
-			w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
-			w.Header().Set("Cache-Control", "no-cache")
-			w.Header().Set("Access-Control-Allow-Origin", "*")
-			_, _ = io.WriteString(w, strings.Join(out, "\n"))
-			return
+
+		// R14：基准地址必须是**实际最终响应**的 URL，不是我们请求的那个。
+		//
+		// 源站很常见 302 到另一个目录（CDN 调度、鉴权跳板）。
+		// 用请求的 target 当基准，相对路径会解析到错误目录——
+		// 表现是 master 能取到、variant 却 404，用户看到"这个台播不了"。
+		// http.Client 已经跟随重定向，最终地址在 resp.Request.URL。
+		base := pu
+		if resp.Request != nil && resp.Request.URL != nil {
+			base = resp.Request.URL
 		}
-		// 解析失败就退回普通分片处理
-		w.Header().Set("Content-Type", "video/mp2t")
+
+		// 递归深度限制：清单可以嵌套，但不能无限嵌套。
+		// 恶意或损坏的源可以构造 A->B->A 的循环，把 NAS 卡在这里。
+		depth, _ := strconv.Atoi(r.URL.Query().Get("depth"))
+		if depth <= 0 {
+			depth = 1
+		}
+		const maxDepth = 4
+
+		lines := strings.Split(string(body), "\n")
+		out := make([]string, 0, len(lines))
+		for _, line := range lines {
+			trimmed := strings.TrimSpace(line)
+			if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+				out = append(out, rewriteURIAttrDepth(trimmed, base, a, id, dk, depth))
+				continue
+			}
+			if u, uerr := base.Parse(trimmed); uerr == nil {
+				out = append(out, a.segmentURLDepth(u.String(), id, dk, depth+1, maxDepth))
+			} else {
+				out = append(out, line)
+			}
+		}
+		w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
+		w.Header().Set("Cache-Control", "no-cache")
 		w.Header().Set("Access-Control-Allow-Origin", "*")
-		_, _ = w.Write(body)
+		_, _ = io.WriteString(w, strings.Join(out, "\n"))
 		return
 	}
 
@@ -1062,6 +1145,15 @@ func (a *API) liveSegment(w http.ResponseWriter, r *http.Request) {
 //
 // 这里的签名带 "seg" 用途前缀，所以它也不能被拿去当播放签名复用。
 func (a *API) segmentURL(abs string, channelID int64, dk string) string {
+	return a.segmentURLDepth(abs, channelID, dk, 0, 0)
+}
+
+// segmentURLDepth 是 segmentURL 的带深度版本。
+//
+// R14：清单可能嵌套（master → variant → 分片），甚至被恶意源构造成循环。
+// depth 会写进代理地址，下一次请求据此继续计数；超过 maxDepth 就不再
+// 转发为代理地址，避免无限递归把 NAS 卡死。
+func (a *API) segmentURLDepth(abs string, channelID int64, dk string, depth, maxDepth int) string {
 	exp := time.Now().Add(12 * time.Hour).Unix()
 	sig := a.signer.SignSegment(channelID, abs, exp, dk)
 	q := url.Values{}
@@ -1069,11 +1161,25 @@ func (a *API) segmentURL(abs string, channelID int64, dk string) string {
 	q.Set("sig", sig)
 	q.Set("exp", strconv.FormatInt(exp, 10))
 	q.Set("dk", dk)
+	if depth > 0 {
+		// 把深度带进代理地址，下次请求从这儿继续往上数。
+		q.Set("depth", strconv.Itoa(depth))
+	}
 	return fmt.Sprintf("%s/live/%d/seg?%s", a.cfg.Server.Prefix, channelID, q.Encode())
 }
 
 // rewriteURIAttr 处理 `#EXT-X-KEY:METHOD=AES-128,URI="xxx"` 这类带 URI 属性的标签。
 func rewriteURIAttr(line string, base *url.URL, a *API, channelID int64, dk string) string {
+	return rewriteURIAttrDepth(line, base, a, channelID, dk, 0)
+}
+
+// rewriteURIAttrDepth 是 rewriteURIAttr 的带深度版本。
+//
+// R14 的另一半：#EXT-X-MAP / #EXT-X-KEY / #EXT-X-MEDIA 里的 URI 也会指向
+// 相对路径（初始化段、AES 密钥、子清单）。只改写裸行、不改写属性 URI 的话，
+// 这些引用会相对 NAS 的 /seg 路径解析，取不到真实文件——
+// 表现为"能起播但一直黑屏/解密失败"。
+func rewriteURIAttrDepth(line string, base *url.URL, a *API, channelID int64, dk string, depth int) string {
 	const marker = `URI="`
 	idx := strings.Index(line, marker)
 	if idx < 0 {
@@ -1089,7 +1195,7 @@ func rewriteURIAttr(line string, base *url.URL, a *API, channelID int64, dk stri
 	if err != nil {
 		return line
 	}
-	return line[:start] + a.segmentURL(u.String(), channelID, dk) + line[start+end:]
+	return line[:start] + a.segmentURLDepth(u.String(), channelID, dk, depth+1, 4) + line[start+end:]
 }
 
 func boolPtr(b bool) *bool { return &b }

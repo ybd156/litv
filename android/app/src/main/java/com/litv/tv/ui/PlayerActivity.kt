@@ -70,6 +70,8 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
     private var selGroup = ""
     private var srcNames: Map<Long, String> = emptyMap()
     private lateinit var numberTip: TextView
+    private lateinit var settingsMenu: android.view.View
+    private var menuVisible = false
     private lateinit var epgPanel: LinearLayout
     private lateinit var epgTitle: TextView
     private lateinit var epgList: RecyclerView
@@ -150,6 +152,36 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
             applyChannelFilter()
         }
         numberTip = findViewById(R.id.numberTip)
+        settingsMenu = findViewById(R.id.settingsMenu)
+        // 右侧设置菜单：能就地改的就地改，改不了的转给完整设置弹层
+        findViewById<TextView>(R.id.miAspect).setOnClickListener {
+            app.prefs.aspect = cycleOf(app.prefs.aspect, listOf("auto", "16:9", "4:3", "fill"))
+            // 比例是引擎在 prepare 时读的，改完下次起播生效
+            toastTip("画面比例：" + app.prefs.aspect)
+        }
+        findViewById<TextView>(R.id.miDecode).setOnClickListener {
+            app.prefs.decode = cycleOf(app.prefs.decode, listOf("auto", "hard", "soft"))
+            toastTip("解码方式：" + app.prefs.decode)
+        }
+        findViewById<TextView>(R.id.miLine).setOnClickListener { openLinePicker() }
+        findViewById<TextView>(R.id.miTimeout).setOnClickListener {
+            SettingsDialog(this).show()
+        }
+        findViewById<TextView>(R.id.miCategory).setOnClickListener {
+            closeSettingsMenu(); openPanel()
+        }
+        findViewById<TextView>(R.id.miList).setOnClickListener {
+            closeSettingsMenu(); openPanel()
+        }
+        findViewById<TextView>(R.id.miDisplay).setOnClickListener {
+            SettingsDialog(this).show()
+        }
+        findViewById<TextView>(R.id.miPrefs).setOnClickListener {
+            SettingsDialog(this).show()
+        }
+        findViewById<TextView>(R.id.miOther).setOnClickListener {
+            SettingsDialog(this).show()
+        }
         epgPanel = findViewById(R.id.epgPanel)
         epgTitle = findViewById(R.id.epgTitle)
         epgList = findViewById(R.id.epgList)
@@ -512,9 +544,9 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
                 }
                 return true
             }
-            KeyEvent.KEYCODE_MENU, KeyEvent.KEYCODE_INFO -> {
-                // 菜单键 = 打开设置弹层，改完继续看，不离开画面
-                if (action == KeyEvent.ACTION_DOWN) SettingsDialog(this).show()
+            KeyEvent.KEYCODE_MENU -> {
+                // 规范：Menu 键呼出/隐藏右侧设置菜单
+                if (action == KeyEvent.ACTION_DOWN) toggleSettingsMenu()
                 return true
             }
             KeyEvent.KEYCODE_BACK -> {
@@ -625,5 +657,48 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
             if (selGroup.isNotEmpty()) append(" · ").append(selGroup)
             append("  ").append(list.size).append(" 个")
         }
+    }
+
+    // ---------------------------------------------------------------- 右侧设置菜单
+
+    private fun toggleSettingsMenu() {
+        if (menuVisible) closeSettingsMenu() else {
+            menuVisible = true
+            settingsMenu.visibility = android.view.View.VISIBLE
+            hideOsd()
+            settingsMenu.findViewById<TextView>(R.id.miLine)?.requestFocus()
+        }
+    }
+
+    private fun closeSettingsMenu() {
+        menuVisible = false
+        settingsMenu.visibility = android.view.View.GONE
+    }
+
+    private fun cycleOf(cur: String, all: List<String>): String {
+        val i = all.indexOf(cur)
+        return all[(i + 1).mod(all.size)]
+    }
+
+    private fun toastTip(msg: String) {
+        switchTip.text = msg
+        switchTip.visibility = android.view.View.VISIBLE
+        main.postDelayed({ switchTip.visibility = android.view.View.GONE }, 2000)
+    }
+
+    /** 线路选择：把当前频道的线路列出来，选中就切过去 */
+    private fun openLinePicker() {
+        val ch = current ?: return
+        closeSettingsMenu()
+        app.api.streams(ch.id, onOk = { list ->
+            if (list.isEmpty()) { toastTip("这个台只有一条线路"); return@streams }
+            val names = list.map { "${it.quality.ifBlank { "线路" }} ${it.latencyMs}ms" }
+            android.app.AlertDialog.Builder(this)
+                .setTitle("选择线路（${list.size} 条）")
+                .setItems(names.toTypedArray()) { _, i ->
+                    playChannel(ch, list[i].id)
+                }
+                .show()
+        }, onErr = { toastTip("取线路失败：$it") })
     }
 }

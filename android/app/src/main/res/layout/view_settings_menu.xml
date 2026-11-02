@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  播放中呼出的右侧设置菜单（对齐参考实现的图3）：
+
+    线路选择 / 画面比例 / 解码方式 / 超时换源 / 分类管理
+    列表配置 / 显示设置 / 偏好设置 / 其他设置
+
+  从右侧滑出，改完继续看，不离开画面。
+-->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/settingsMenu"
+    android:layout_width="300dp"
+    android:layout_height="match_parent"
+    android:layout_gravity="end"
+    android:background="#F20B0E11"
+    android:gravity="center_vertical"
+    android:orientation="vertical"
+    android:paddingHorizontal="20dp"
+    android:visibility="gone">
+
+    <TextView
+        style="@style/SettingsMenuItem"
+        android:id="@+id/miLine"
+        android:text="线路选择" />
+
+    <TextView
+        style="@style/SettingsMenuItem"
+        android:id="@+id/miAspect"
+        android:text="画面比例" />
+
+    <TextView
+        style="@style/SettingsMenuItem"
+        android:id="@+id/miDecode"
+        android:text="解码方式" />
+
+    <TextView
+        style="@style/SettingsMenuItem"
+        android:id="@+id/miTimeout"
+        android:text="超时换源" />
+
+    <TextView
+        style="@style/SettingsMenuItem"
+        android:id="@+id/miCategory"
+        android:text="分类管理" />
+
+    <TextView
+        style="@style/SettingsMenuItem"
+        android:id="@+id/miList"
+        android:text="列表配置" />
+
+    <TextView
+        style="@style/SettingsMenuItem"
+        android:id="@+id/miDisplay"
+        android:text="显示设置" />
+
+    <TextView
+        style="@style/SettingsMenuItem"
+        android:id="@+id/miPrefs"
+        android:text="偏好设置" />
+
+    <TextView
+        style="@style/SettingsMenuItem"
+        android:id="@+id/miOther"
+        android:text="其他设置" />
+</LinearLayout>

@@ -296,4 +296,6 @@
         android:textSize="32sp"
         android:textStyle="bold"
         android:visibility="gone" />
+
+    <include layout="@layout/view_settings_menu" />
 </FrameLayout>

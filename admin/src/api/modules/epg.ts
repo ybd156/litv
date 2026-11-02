@@ -32,5 +32,16 @@ export async function listEpgChannels(): Promise<EpgChannel[]> {
 
 export async function listPrograms(channelId: number, day = 0): Promise<EpgProgram[]> {
   const raw = await http.get<unknown>(`epg/${channelId}`, { day })
+  // ⚠️ 服务端 data 是**对象** {channel, programs}，不是数组
+  //（见 server/internal/api/handlers_client.go 的 tvEPG）。
+  // asArray 只认 items/list/rows/lines/data，遇到 programs 返回空数组，
+  // 于是节目单永远显示不出来。
+  if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+    const obj = raw as { programs?: unknown }
+    if (Array.isArray(obj.programs)) return obj.programs as EpgProgram[]
+    // 未关联 EPG 时服务端给 programs: []，这里同样返回空数组
+    return []
+  }
+  // 兼容旧形状（裸数组）
   return asArray<EpgProgram>(raw)
 }

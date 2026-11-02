@@ -47,6 +47,23 @@ data class EpgProgram(
     val category: String = "",
 )
 
+/**
+ * /tv/epg/{id} 的返回外壳。
+ *
+ * 服务端 data 是**对象**不是数组（见 handlers_client.go 的 tvEPG）：
+ *   {"channel":{…},"programs":[…]}                          正常
+ *   {"channel":{…},"programs":[],"note":"该频道未关联 EPG"}  未关联
+ *
+ * 以前这里用 callList 按数组解析，而服务端给的是对象，
+ * 于是永远解析失败 —— 表现就是「节目单一直无法获取」。
+ * iOS 侧已修过同类问题（R07），安卓漏了。
+ */
+data class EpgResponse(
+    val channel: Channel? = null,
+    val programs: List<EpgProgram> = emptyList(),
+    val note: String = "",
+)
+
 data class NowPlaying(
     @SerializedName("channel_id") val channelId: Long = 0,
     val title: String = "",

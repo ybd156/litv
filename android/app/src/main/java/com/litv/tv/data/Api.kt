@@ -277,7 +277,14 @@ class Api(private val prefs: Prefs) {
     }
 
     fun epg(channelId: Long, day: Int, onOk: (List<EpgProgram>) -> Unit, onErr: (String) -> Unit) {
-        callList("/api/v1/tv/epg/$channelId?day=$day", EpgProgram::class.java, onOk, onErr)
+        // 服务端 data 是对象 {channel, programs}，不是数组。
+        // 用 callList 按数组解析会永远失败（节目单空白）。
+        call(
+            "/api/v1/tv/epg/$channelId?day=$day",
+            clazz = EpgResponse::class.java,
+            onOk = { r -> onOk(r?.programs ?: emptyList()) },
+            onErr = onErr,
+        )
     }
 
     fun favorite(channelId: Long, on: Boolean, onOk: () -> Unit = {}, onErr: (String) -> Unit = {}) {

@@ -330,6 +330,8 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         epgList.adapter = epgAdapter
         // C3：点节目看详情。之前这个回调根本没接线，点节目毫无反应。
         epgAdapter.onProgramClick = { p -> showProgramDetails(p) }
+        // C4：点标题切换分类
+        epgTitle.setOnClickListener { cycleEpgCategory() }
     }
 
     /**
@@ -622,10 +624,43 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
      * 参考实现里节目单是紧挨频道列表常显的第三列，不是抽屉，
      * 所以开浮层时要跟着一起刷，切台时也要跟着换。
      */
+    /** C4：节目单分类筛选。null 表示全部分类。 */
+    private var epgCategory: String? = null
+
+    /** 当前节目单里出现过的分类（去重，保持出现顺序）。 */
+    private fun epgCategories(): List<String> =
+        programs.map { it.category }.filter { it.isNotBlank() }.distinct()
+
+    /** 按当前分类筛选后的节目。 */
+    private fun filteredPrograms(): List<com.litv.tv.data.EpgProgram> {
+        val c = epgCategory ?: return programs
+        return programs.filter { it.category == c }
+    }
+
+    private fun epgTitleText(): String {
+        val name = current?.name ?: "节目单"
+        val cat = epgCategory
+        return if (cat == null) "$name · 全部" else "$name · $cat"
+    }
+
+    /** 依次切换：全部 → 各分类 → 全部。 */
+    private fun cycleEpgCategory() {
+        val cats = epgCategories()
+        if (cats.isEmpty()) {
+            toastTip("这个频道没有分类信息")
+            return
+        }
+        val order = listOf<String?>(null) + cats
+        val i = order.indexOf(epgCategory)
+        epgCategory = order[((if (i < 0) 0 else i) + 1) % order.size]
+        refreshEpgColumn()
+        toastTip("分类：" + (epgCategory ?: "全部"))
+    }
+
     private fun refreshEpgColumn() {
         epgPanel.visibility = View.VISIBLE
-        epgTitle.text = "${current?.name ?: "节目单"}"
-        epgAdapter.submit(programs)
+        epgTitle.text = epgTitleText()
+        epgAdapter.submit(filteredPrograms())
         val pos = epgAdapter.currentPosition()
         if (pos >= 0) epgList.scrollToPosition(pos)
     }
@@ -634,8 +669,8 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
     private fun openEpg() {
         epgVisible = true
         epgPanel.visibility = View.VISIBLE
-        epgTitle.text = "${current?.name ?: ""} · 节目单"
-        epgAdapter.submit(programs)
+        epgTitle.text = epgTitleText()
+        epgAdapter.submit(filteredPrograms())
         val pos = epgAdapter.currentPosition()
         epgList.scrollToPosition(pos)
         epgList.post {

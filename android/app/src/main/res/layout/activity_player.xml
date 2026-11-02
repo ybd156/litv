@@ -242,12 +242,18 @@
             android:orientation="vertical"
             android:paddingHorizontal="8dp">
 
+            <!-- C4：点它切换节目分类筛选（遥控器按上键聚焦到标题再按 OK） -->
             <TextView
                 android:id="@+id/epgTitle"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
+                android:background="@drawable/bg_focusable"
+                android:clickable="true"
+                android:focusable="true"
                 android:paddingBottom="6dp"
                 android:paddingStart="4dp"
+                android:paddingEnd="4dp"
+                android:paddingTop="4dp"
                 android:textColor="@color/accent"
                 android:textSize="13sp" />
 

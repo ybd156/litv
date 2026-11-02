@@ -767,6 +767,18 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
             return super.dispatchKeyEvent(event)
         }
 
+        // 设置菜单打开时：按键全部交给菜单自己处理。
+        //
+        // 之前**没有这个分支**，于是菜单虽然显示出来了，
+        // 上下键仍然被当成换台、OK 仍然去呼出 OSD、左键去开频道页，
+        // 结果就是"右键能打开设置，但焦点选不中任何一项"。
+        if (menuVisible) {
+            if (action == KeyEvent.ACTION_DOWN && code == KeyEvent.KEYCODE_BACK) {
+                closeSettingsMenu(); return true
+            }
+            return super.dispatchKeyEvent(event)
+        }
+
         when (code) {
             KeyEvent.KEYCODE_DPAD_UP -> {
                 if (action == KeyEvent.ACTION_DOWN) switchBy(-1)
@@ -955,7 +967,11 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
             menuVisible = true
             settingsMenu.visibility = android.view.View.VISIBLE
             hideOsd()
-            settingsMenu.findViewById<TextView>(R.id.miLine)?.requestFocus()
+            // 必须 post 到下一帧：刚设成 VISIBLE 时还没布局，
+            // 立刻 requestFocus() 会失败（返回 false），焦点留在画面上。
+            settingsMenu.post {
+                settingsMenu.findViewById<TextView>(R.id.miLine)?.requestFocus()
+            }
         }
     }
 

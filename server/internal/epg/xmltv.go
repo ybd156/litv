@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // Channel 是 XMLTV 里的一个频道。
@@ -192,8 +193,13 @@ func MatchScore(channelName, epgName string) int {
 		return 100
 	}
 	if strings.Contains(a, b) || strings.Contains(b, a) {
-		// 长度差太大就降分，避免 "CCTV1" 匹配到 "CCTV1综合频道HD"
-		diff := len(a) - len(b)
+		// 长度差太大就降分，避免 "CCTV1" 匹配到 "CCTV1综合频道HD"。
+		//
+		// 必须按**字符数**而不是字节数比较：一个汉字占 3 字节，
+		// 用 len() 会让 "CCTV1综合" 与 "CCTV1" 的长度差从 2 变成 6，
+		// 于是明明高度相似的两个名字被判定为"差得远"，
+		// 进而把同一个台的多个线路误报成映射冲突。
+		diff := utf8.RuneCountInString(a) - utf8.RuneCountInString(b)
 		if diff < 0 {
 			diff = -diff
 		}

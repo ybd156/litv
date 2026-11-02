@@ -191,25 +191,57 @@ func (s *Store) ListUnmatchedChannels(ctx context.Context) ([]UnmatchedChannel, 
 }
 
 // MappingConflicts 找出被多个频道共用的 EPG 映射（B6）。
+// conflictSameChannelScore 是"这两个名字其实是同一个台"的最低分。
+//
+// 70 分对应 epg.MatchScore 的"包含关系且长度接近"：
+//
+//	CCTV1综合  vs CCTV-1   -> 70
+//	cctv1-MCP  vs CCTV-1   -> 70（normalize 会去掉连字符）
+//
+// 低于这个分说明名字差得远，基本可以断定是映射错了。
+const conflictSameChannelScore = 70
+
+// MappingConflicts 找出**真的**映射冲突（B6）。
+//
+// 关键：同一份 M3U 里一个台常常有多条线路（cctv1-MCP / cctv1-AV3A / CCTV1综合），
+// 它们本来就应该共用同一份节目单。如果只按 "epg_id 出现多次" 判断，
+// 几百个台的源会报出几十组"冲突"，全是噪音，真正错的那几条反而被淹掉。
+//
+// 所以这里再加一层判断：只有当一个组里**存在与 EPG 频道名对不上的频道**时，
+// 才算冲突。全是同一个台的不同线路就静默跳过。
 func (s *Store) MappingConflicts(ctx context.Context) ([]MappingConflict, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT epg_id, GROUP_CONCAT(name, '|')
-		FROM channels
-		WHERE epg_id != ''
-		GROUP BY epg_id
+		SELECT c.epg_id,
+		       COALESCE(NULLIF(e.display_name, ''), c.epg_id),
+		       GROUP_CONCAT(c.name, '|')
+		FROM channels c
+		LEFT JOIN epg_channels e ON e.xmltv_id = c.epg_id
+		WHERE c.epg_id != ''
+		GROUP BY c.epg_id
 		HAVING COUNT(*) > 1
-		ORDER BY epg_id`)
+		ORDER BY c.epg_id`)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	out := []MappingConflict{}
 	for rows.Next() {
-		var epgID, names string
-		if err := rows.Scan(&epgID, &names); err != nil {
+		var epgID, epgName, names string
+		if err := rows.Scan(&epgID, &epgName, &names); err != nil {
 			return nil, err
 		}
-		out = append(out, MappingConflict{EpgID: epgID, Channels: strings.Split(names, "|")})
+		list := strings.Split(names, "|")
+		mismatch := 0
+		for _, n := range list {
+			if epg.MatchScore(n, epgName) < conflictSameChannelScore {
+				mismatch++
+			}
+		}
+		if mismatch == 0 {
+			// 全是同一个台的不同线路，不算冲突
+			continue
+		}
+		out = append(out, MappingConflict{EpgID: epgID, Channels: list})
 	}
 	return out, rows.Err()
 }

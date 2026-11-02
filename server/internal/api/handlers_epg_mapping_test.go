@@ -176,6 +176,58 @@ func TestMappingConflicts(t *testing.T) {
 	}
 }
 
+// TestConflictsIgnoreMultiLineSameChannel 是"38 组冲突"误报的回归测试。
+//
+// 同一份 M3U 里一个台常有多条线路（cctv1-MCP / cctv1-AV3A / CCTV1综合），
+// 它们本来就应该共用同一份节目单。按 "epg_id 出现多次" 判断会报出一堆噪音，
+// 把真正映射错的台淹掉。
+func TestConflictsIgnoreMultiLineSameChannel(t *testing.T) {
+	a, _ := newTestAPI(t)
+	ctx := context.Background()
+
+	srcID, _ := a.st.CreateEPGSourceEx(ctx, store.EPGSource{Name: "s", URL: "http://x", Enabled: true})
+	if _, err := a.st.UpsertEPGChannel(ctx, srcID, "cctv1", "CCTV-1", ""); err != nil {
+		t.Fatalf("建 EPG 频道失败: %v", err)
+	}
+
+	// 同一个台的三个线路
+	var ids []int64
+	for _, name := range []string{"CCTV1综合", "cctv1-MCP", "cctv1-AV3A"} {
+		id, err := a.st.CreateChannel(ctx, store.Channel{Number: 1, Name: name, Enabled: true})
+		if err != nil {
+			t.Fatalf("建频道失败: %v", err)
+		}
+		ids = append(ids, id)
+	}
+	if _, err := a.st.BatchSetChannelEpgID(ctx, ids, "cctv1"); err != nil {
+		t.Fatalf("映射失败: %v", err)
+	}
+
+	conflicts, err := a.st.MappingConflicts(ctx)
+	if err != nil {
+		t.Fatalf("查冲突失败: %v", err)
+	}
+	if len(conflicts) != 0 {
+		t.Fatalf("同台多线路不该算冲突，实际报了 %d 组：%+v", len(conflicts), conflicts)
+	}
+
+	// 反例：把一个明显不同的台也映射过去，必须报冲突
+	badID, err := a.st.CreateChannel(ctx, store.Channel{Number: 99, Name: "湖南卫视", Enabled: true})
+	if err != nil {
+		t.Fatalf("建频道失败: %v", err)
+	}
+	if _, err := a.st.BatchSetChannelEpgID(ctx, []int64{badID}, "cctv1"); err != nil {
+		t.Fatalf("映射失败: %v", err)
+	}
+	conflicts, err = a.st.MappingConflicts(ctx)
+	if err != nil {
+		t.Fatalf("查冲突失败: %v", err)
+	}
+	if len(conflicts) != 1 {
+		t.Fatalf("湖南卫视映射到 cctv1 应当报 1 组冲突，实际 %d 组", len(conflicts))
+	}
+}
+
 // TestMapByNumberOnlyUnique 覆盖 B4：只在数字唯一对应时才映射。
 func TestMapByNumberOnlyUnique(t *testing.T) {
 	a, _ := newTestAPI(t)

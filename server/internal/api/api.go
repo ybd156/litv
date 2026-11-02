@@ -218,6 +218,11 @@ func (a *API) Handler(viaGateway bool) http.Handler {
 		pr.Post("/api/v1/epg/cleanup", a.epgCleanup)
 		pr.Get("/api/v1/epg/refresh-log", a.epgRefreshLog)
 		pr.Get("/api/v1/epg/search", a.epgSearch)
+		// B1–B6：频道 ↔ EPG 映射
+		pr.Post("/api/v1/epg/automap", a.epgAutomap)
+		pr.Get("/api/v1/epg/mapping", a.epgMapping)
+		pr.Post("/api/v1/epg/map/batch", a.epgMapBatch)
+		pr.Post("/api/v1/epg/map/by-number", a.epgMapByNumber)
 		// 某个频道某天的节目单（管理台频道详情页用）。
 		// 复用 TV 端那个 handler：它只依赖频道 id 和 day，跟设备无关。
 		pr.Get("/api/v1/epg/{id}", a.tvEPG)

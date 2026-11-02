@@ -110,4 +110,71 @@ func (a *API) auditEPGRefresh(r *http.Request, scope string, results []EPGRefres
 	a.st.Audit(r.Context(), 0, "epg.refresh."+scope, "", detail, r.RemoteAddr)
 }
 
+// epgAutomap 按频道名自动匹配（B1/B2），返回完整报告。
+func (a *API) epgAutomap(w http.ResponseWriter, r *http.Request) {
+	rep, err := a.st.AutoMapChannelsReport(r.Context())
+	if err != nil {
+		fail(w, http.StatusInternalServerError, 5001, err.Error())
+		return
+	}
+	a.st.Audit(r.Context(), 0, "epg.automap", "",
+		fmt.Sprintf("扫描 %d，匹配 %d，未匹配 %d", rep.Scanned, rep.Matched, len(rep.Unmatched)),
+		r.RemoteAddr)
+	ok(w, rep)
+}
+
+// epgMapping 返回未匹配频道与映射冲突（B5/B6），供映射面板一次拉齐。
+func (a *API) epgMapping(w http.ResponseWriter, r *http.Request) {
+	unmatched, err := a.st.ListUnmatchedChannels(r.Context())
+	if err != nil {
+		fail(w, http.StatusInternalServerError, 5001, err.Error())
+		return
+	}
+	conflicts, _ := a.st.MappingConflicts(r.Context())
+	ok(w, map[string]any{
+		"unmatched": unmatched,
+		"conflicts": conflicts,
+	})
+}
+
+// epgMapBatch 批量设置映射（B3）。epg_id 传空字符串表示解除映射。
+func (a *API) epgMapBatch(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		ChannelIDs []int64 `json:"channel_ids"`
+		EpgID      string  `json:"epg_id"`
+	}
+	if err := decode(r, &body); err != nil {
+		fail(w, http.StatusBadRequest, 1001, "参数错误: "+err.Error())
+		return
+	}
+	if len(body.ChannelIDs) == 0 {
+		fail(w, http.StatusBadRequest, 1001, "channel_ids 不能为空")
+		return
+	}
+	if len(body.ChannelIDs) > 1000 {
+		fail(w, http.StatusBadRequest, 1001, "一次最多 1000 个频道")
+		return
+	}
+	n, err := a.st.BatchSetChannelEpgID(r.Context(), body.ChannelIDs, body.EpgID)
+	if err != nil {
+		fail(w, http.StatusInternalServerError, 5001, err.Error())
+		return
+	}
+	a.st.Audit(r.Context(), 0, "epg.map.batch", body.EpgID,
+		fmt.Sprintf("更新 %d 个频道", n), r.RemoteAddr)
+	ok(w, map[string]any{"updated": n})
+}
+
+// epgMapByNumber 按台号批量匹配（B4）。
+func (a *API) epgMapByNumber(w http.ResponseWriter, r *http.Request) {
+	rep, err := a.st.MapByNumber(r.Context())
+	if err != nil {
+		fail(w, http.StatusInternalServerError, 5001, err.Error())
+		return
+	}
+	a.st.Audit(r.Context(), 0, "epg.map.number", "",
+		fmt.Sprintf("扫描 %d，匹配 %d", rep.Scanned, rep.Matched), r.RemoteAddr)
+	ok(w, rep)
+}
+
 var _ = store.EPGStats{}

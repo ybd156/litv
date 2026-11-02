@@ -145,9 +145,16 @@ struct BindView: View {
     private func toggleMode() {
         // 切模式时把已填的内容带过去，别让人重输
         if useDomain {
-            // 域名 -> 分框
+            // 域名 -> 分框：只有真的是 IPv4 才拆，否则清空。
+            // 之前无脑按 "." 拆，iptv.683868.xyz 会变成 iptv/683868/xyz。
             let host = parseHostPort(domain).host
-            fillIPs(host)
+            let parts = host.split(separator: ".")
+            let isIPv4 = parts.count == 4 && parts.allSatisfy { (0...255).contains(Int($0) ?? -1) }
+            if isIPv4 {
+                fillIPs(host)
+            } else if !host.isEmpty {
+                for i in 0..<4 { ip[i] = "" }
+            }
             useDomain = false
         } else {
             let h = ip.joined(separator: ".")

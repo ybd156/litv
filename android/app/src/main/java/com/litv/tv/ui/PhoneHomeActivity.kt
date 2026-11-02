@@ -1,6 +1,7 @@
 package com.litv.tv.ui
 
 import android.content.Intent
+import androidx.activity.OnBackPressedCallback
 import android.content.pm.ActivityInfo
 import android.media.AudioManager
 import android.os.Bundle
@@ -120,6 +121,23 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
         playRoute = findViewById(R.id.playRoute)
         playHint = findViewById(R.id.playHint)
         epgList = findViewById(R.id.epgList)
+
+        // 返回二次确认：直接退太容易误触，参考实现都是「再按一次返回退出」。
+        // 用 OnBackPressedDispatcher 注册，override onBackPressed() 在
+        // androidx.activity 上不一定拦得住。
+        onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
+            override fun handleOnBackPressed() {
+                val now = System.currentTimeMillis()
+                if (now - lastBackAt < 2000) {
+                    isEnabled = false
+                    onBackPressedDispatcher.onBackPressed()
+                    return
+                }
+                lastBackAt = now
+                android.widget.Toast.makeText(this@PhoneHomeActivity, "再按一次返回退出",
+                    android.widget.Toast.LENGTH_SHORT).show()
+            }
+        })
         gestureTip = findViewById(R.id.gestureTip)
         btnPlayPause = findViewById(R.id.btnPlayPause)
         btnMute = findViewById(R.id.btnMute)
@@ -446,4 +464,9 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
             insets
         }
     }
+
+    // ---------------------------------------------------------------- 返回
+
+    private var lastBackAt = 0L
+
 }

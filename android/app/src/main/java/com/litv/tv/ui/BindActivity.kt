@@ -109,6 +109,28 @@ class BindActivity : AppCompatActivity() {
         ipRow.visibility = if (on) View.GONE else View.VISIBLE
         domainInput.visibility = if (on) View.VISIBLE else View.GONE
         btnToggleHost.text = if (on) "用 IP 分框输入" else "用域名访问"
+
+        if (!on) {
+            // 切回 IP 模式时，只有域名真的是 IPv4 才拆进框里。
+            // 否则像 iptv.683868.xyz 会被拆成 iptv/683868/xyz，全是垃圾。
+            val raw = domainInput.text.toString().trim()
+            val host = raw.removePrefix("https://").removePrefix("http://").substringBefore(":").substringBefore("/")
+            val octets = host.split(".")
+            val isIPv4 = octets.size == 4 && octets.all { (it.toIntOrNull() ?: -1) in 0..255 }
+            if (isIPv4) {
+                ipBoxes.forEachIndexed { i, box -> box.setText(octets[i]) }
+            } else if (host.isNotBlank()) {
+                ipBoxes.forEach { it.setText("") }
+            }
+        } else {
+            // 切到域名模式：如果四个框里有合法 IP，拼出来带过去
+            val octets = ipBoxes.map { it.text.toString().trim() }
+            val isIPv4 = octets.all { it.isNotEmpty() } && octets.all { (it.toIntOrNull() ?: -1) in 0..255 }
+            if (isIPv4 && domainInput.text.isBlank()) {
+                domainInput.setText(octets.joinToString("."))
+            }
+        }
+
         if (on) domainInput.requestFocus() else ipBoxes.first().requestFocus()
     }
 
@@ -141,14 +163,27 @@ class BindActivity : AppCompatActivity() {
         if (usingDomain) {
             val raw = domainInput.text.toString().trim()
             if (raw.isBlank()) return null
-            val withScheme = if (raw.startsWith("http")) raw else "http://$raw"
-            // 必须带主机名，且端口合法（没写端口就用默认）
+
+            // 填了协议就尊重；没填默认 https（域名基本都是反代过来的）
+            val hasScheme = raw.startsWith("http://") || raw.startsWith("https://")
+            val scheme = when {
+                raw.startsWith("https://") -> "https"
+                raw.startsWith("http://") -> "http"
+                else -> "https"
+            }
+            val withScheme = if (hasScheme) raw else "$scheme://$raw"
+
             val u = runCatching { java.net.URI(withScheme) }.getOrNull() ?: return null
             val host = u.host ?: return null
             if (host.isBlank()) return null
-            val port = if (u.port == -1) DEFAULT_PORT.toInt() else u.port
-            if (port !in 1..65535) return null
-            return "http://$host:$port"
+
+            // 关键：没写端口就不要拼端口。
+            // 反代域名（如 iptv.example.com）走 443，拼上服务端口 28027 反而连不上。
+            if (u.port != -1) {
+                if (u.port !in 1..65535) return null
+                return "$scheme://$host:${u.port}"
+            }
+            return "$scheme://$host"
         }
 
         val octets = ipBoxes.map { it.text.toString().trim() }

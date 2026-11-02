@@ -98,6 +98,8 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
     // 长按判定：800ms（逆向实测值，不是 320ms）
     private val longPressRunnable = Runnable { onLongPressOk() }
     private var okDownTime = 0L
+    /** 上一次按返回的时间，用于「再按一次退出」 */
+    private var lastBackAt = 0L
 
     private val hideOsdRunnable = Runnable { hideOsd() }
     private val numberJumpRunnable = Runnable { jumpByNumber() }
@@ -539,10 +541,16 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
             }
             KeyEvent.KEYCODE_BACK -> {
                 if (action == KeyEvent.ACTION_DOWN) {
-                    if (osdVisible) {
-                        hideOsd()
-                    } else {
-                        finish()
+                    when {
+                        osdVisible -> hideOsd()
+                        menuVisible -> closeSettingsMenu()
+                        panelVisible -> closePanel()
+                        // 二次确认：直接退出太容易误触（遥控器返回键和方向键挨着）
+                        System.currentTimeMillis() - lastBackAt < 2000 -> finish()
+                        else -> {
+                            lastBackAt = System.currentTimeMillis()
+                            toastTip("再按一次返回退出")
+                        }
                     }
                 }
                 return true

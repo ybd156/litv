@@ -28,6 +28,7 @@
             android:orientation="vertical">
 
             <LinearLayout
+                android:id="@+id/playHeader"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:gravity="center_vertical"
@@ -96,6 +97,46 @@
                     android:text="去「频道」选一个台"
                     android:textColor="#66FFFFFF"
                     android:textSize="13sp" />
+
+                <!-- 播放控件浮层：像现代播放器一样做在画面里。
+                     点画面呼出，4 秒后自动隐藏，不遮挡内容。 -->
+                <LinearLayout
+                    android:id="@+id/playerControls"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_gravity="bottom"
+                    android:background="#99000000"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal"
+                    android:paddingHorizontal="8dp"
+                    android:paddingVertical="6dp"
+                    android:visibility="gone">
+
+                    <TextView
+                        android:id="@+id/btnPrev"
+                        style="@style/PhoneCtl"
+                        android:text="⏮&#10;上一台" />
+
+                    <TextView
+                        android:id="@+id/btnPlayPause"
+                        style="@style/PhoneCtl"
+                        android:text="⏸&#10;暂停" />
+
+                    <TextView
+                        android:id="@+id/btnNext"
+                        style="@style/PhoneCtl"
+                        android:text="⏭&#10;下一台" />
+
+                    <TextView
+                        android:id="@+id/btnMute"
+                        style="@style/PhoneCtl"
+                        android:text="🔇&#10;静音" />
+
+                    <TextView
+                        android:id="@+id/btnFullscreen"
+                        style="@style/PhoneCtl"
+                        android:text="⛶&#10;全屏" />
+                </LinearLayout>
             </FrameLayout>
 
             <TextView
@@ -120,41 +161,6 @@
                 android:paddingTop="3dp"
                 android:textColor="#66FFFFFF"
                 android:textSize="11sp" />
-
-            <!-- 控制条：上下台、播放暂停、静音、全屏 -->
-            <LinearLayout
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:gravity="center_vertical"
-                android:orientation="horizontal"
-                android:paddingHorizontal="12dp"
-                android:paddingVertical="8dp">
-
-                <TextView
-                    android:id="@+id/btnPrev"
-                    style="@style/PhoneCtl"
-                    android:text="⏮\n上一台" />
-
-                <TextView
-                    android:id="@+id/btnPlayPause"
-                    style="@style/PhoneCtl"
-                    android:text="⏸\n暂停" />
-
-                <TextView
-                    android:id="@+id/btnNext"
-                    style="@style/PhoneCtl"
-                    android:text="⏭\n下一台" />
-
-                <TextView
-                    android:id="@+id/btnMute"
-                    style="@style/PhoneCtl"
-                    android:text="🔇\n静音" />
-
-                <TextView
-                    android:id="@+id/btnFullscreen"
-                    style="@style/PhoneCtl"
-                    android:text="⛶\n全屏" />
-            </LinearLayout>
 
             <ScrollView
                 android:layout_width="match_parent"

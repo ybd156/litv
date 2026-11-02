@@ -18,7 +18,9 @@ import android.widget.ProgressBar
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.ViewCompat
+import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.google.gson.Gson
@@ -91,6 +93,8 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        // 播放中保持屏幕常亮：看直播时屏幕自己灭掉是很烦的事。
+        window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_phone_home)
         applySystemInsets()
@@ -128,6 +132,12 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
         // androidx.activity 上不一定拦得住。
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
+                // 全屏状态下返回 = 退出全屏，而不是退出 App。
+                // 之前不管在什么状态，返回都是"再按一次退出"，很容易误退。
+                if (landscape) {
+                    toggleOrientation()
+                    return
+                }
                 val now = System.currentTimeMillis()
                 if (now - lastBackAt < 2000) {
                     isEnabled = false
@@ -197,8 +207,9 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
 
         findViewById<TextView>(R.id.btnFullscreen).setOnClickListener { toggleOrientation() }
 
-        // 点画面：暂停/继续（和主流播放器一致）
-        surface.setOnClickListener { btnPlayPause.performClick() }
+        // 点画面：呼出/收起控件浮层（现代播放器的通用交互）。
+        // 原来点一下就直接暂停，用户完全看不到有哪些控件。
+        surface.setOnClickListener { toggleControls() }
     }
 
     /**
@@ -209,6 +220,37 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
      * 「点了全屏但没全屏」。所以横屏时必须把频道列表和底部栏藏掉，
      * 并把播放器容器撑满。
      */
+    // ---------------------------------------------------------------- 控件浮层
+
+    private val controlsHideRunnable = Runnable { hideControls() }
+
+    /** 呼出控件，4 秒后自动收起（播放中不遮挡画面）。 */
+    private fun showControls() {
+        findViewById<View>(R.id.playerControls)?.visibility = View.VISIBLE
+        Handler(Looper.getMainLooper()).removeCallbacks(controlsHideRunnable)
+        Handler(Looper.getMainLooper()).postDelayed(controlsHideRunnable, 4000)
+    }
+
+    private fun hideControls() {
+        findViewById<View>(R.id.playerControls)?.visibility = View.GONE
+    }
+
+    private fun toggleControls() {
+        val v = findViewById<View>(R.id.playerControls) ?: return
+        if (v.visibility == View.VISIBLE) hideControls() else showControls()
+    }
+
+    /** 隐藏/显示状态栏与导航栏。 */
+    private fun setSystemBarsHidden(hidden: Boolean) {
+        val c = WindowCompat.getInsetsController(window, window.decorView)
+        if (hidden) {
+            c.hide(WindowInsetsCompat.Type.systemBars())
+            c.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        } else {
+            c.show(WindowInsetsCompat.Type.systemBars())
+        }
+    }
+
     private fun toggleOrientation() {
         landscape = !landscape
         requestedOrientation = if (landscape) {
@@ -222,6 +264,10 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
     /** 按是否全屏调整可见性与播放器高度。 */
     private fun applyFullscreen(on: Boolean) {
         findViewById<View>(R.id.bottomTabs)?.visibility = if (on) View.GONE else View.VISIBLE
+        // 全屏时连频道名标题也藏掉——用户要的是"只剩画面"
+        findViewById<View>(R.id.playHeader)?.visibility = if (on) View.GONE else View.VISIBLE
+        // 沉浸式：隐藏状态栏与导航栏，下滑可临时唤出
+        setSystemBarsHidden(on)
         findViewById<View>(R.id.panelChannel)?.visibility =
             if (on) View.GONE else if (currentTab == TAB_CHANNEL) View.VISIBLE else View.GONE
 
@@ -447,6 +493,8 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
     override fun onPlaying() {
         loading.visibility = View.GONE
         playHint.visibility = View.GONE
+        // 出画面时闪一下控件，让用户知道点画面能呼出操作条
+        showControls()
     }
 
     override fun onError(message: String) {

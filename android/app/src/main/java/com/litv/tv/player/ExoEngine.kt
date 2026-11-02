@@ -14,6 +14,7 @@ import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import androidx.media3.ui.AspectRatioFrameLayout
 
 /**
  * 内核 1：Media3 (ExoPlayer)。
@@ -128,6 +129,20 @@ class ExoEngine : PlayerEngine {
         if (playerView != null) {
             playerView!!.player = p
             playerView!!.useController = false
+            // 画面比例：让设置里的选项真正生效。
+            //
+            // auto = 保持比例**裁切铺满**（zoom）：电视上最符合"铺满屏幕"的预期，
+            //        代价是 4:3 之类的老片源会切掉上下一点点。
+            // fill = 拉伸铺满（会变形，用户明确选了才用）
+            // 16:9 / 4:3 = 强制该比例，完整显示（留黑边）
+            when (aspect) {
+                "fill" -> playerView!!.resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FILL
+                // 16:9 / 4:3：完整显示留黑边。
+                // 当前 media3 版本的 PlayerView 没有 setAspectRatio(float)，
+                // 无法强制比例，只能保证不裁切。
+                "16:9", "4:3" -> playerView!!.resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
+                else -> playerView!!.resizeMode = AspectRatioFrameLayout.RESIZE_MODE_ZOOM
+            }
         } else {
             p.setVideoSurface(videoSurface)
         }

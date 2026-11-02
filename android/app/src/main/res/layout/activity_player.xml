@@ -33,13 +33,18 @@
         android:visibility="gone" />
 
     <!-- Exo 走 PlayerView（media3-ui）：它自己管 Surface 生命周期，
-         参考实现能正常播就是用的这个 -->
+         参考实现能正常播就是用的这个。
+
+         resize_mode=zoom：保持比例**裁切铺满**。
+         原来用 fit（完整显示、四周留黑边），电视上看起来画面只占中间一块；
+         用户明确要「裁切铺满」，所以默认改成 zoom。
+         设置里的「画面比例」仍可切回 16:9 / 4:3 / 拉伸。 -->
     <androidx.media3.ui.PlayerView
         android:id="@+id/playerView"
         android:layout_width="match_parent"
         android:layout_height="match_parent"
         app:use_controller="false"
-        app:resize_mode="fit" />
+        app:resize_mode="zoom" />
 
     <ImageView
         android:id="@+id/snapshot"

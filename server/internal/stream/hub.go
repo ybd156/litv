@@ -70,6 +70,19 @@ type Subscriber struct {
 // Dropped 返回因下游太慢而丢弃的块数（用于诊断卡顿）。
 func (s *Subscriber) Dropped() int64 { return s.dropped.Load() }
 
+// isClosed 报上游是否已经收尾。
+//
+// 为什么要包一层而不是直接读 u.closed：closed 由 u.mu 保护，
+// 但 Hub.Subscribe 是在 h.mu 下判断上游是否可复用的。
+// 用 h.mu 去读一个由 u.mu 保护的字段等于没有同步，-race 会直接报 DATA RACE
+// （而且真机上可能读到撕裂的旧值，把新订阅挂到一个正在关闭的上游上）。
+// 所有对 closed 的访问都必须经过 u.mu，这里就是唯一入口。
+func (u *Upstream) isClosed() bool {
+	u.mu.RLock()
+	defer u.mu.RUnlock()
+	return u.closed
+}
+
 // Upstream 是一路上游连接。
 type Upstream struct {
 	ChannelID int64
@@ -101,7 +114,7 @@ func (h *Hub) Subscribe(ctx context.Context, channelID int64, url string, header
 	// 上游卡死判定：连接还开着，但已经不推数据了。
 	// 不重建的话，新订阅者会挂在这个死连接上一直转圈。
 	stale := false
-	if ok && up != nil && !up.closed {
+	if ok && up != nil && !up.isClosed() {
 		now := time.Now()
 		if last := up.lastData.Load(); last > 0 {
 			stale = now.Sub(time.Unix(0, last)) > 15*time.Second
@@ -111,7 +124,7 @@ func (h *Hub) Subscribe(ctx context.Context, channelID int64, url string, header
 		}
 	}
 
-	if !ok || up.closed || up.URL != url || stale {
+	if !ok || up.isClosed() || up.URL != url || stale {
 		// 新建（或替换：源换了地址）
 		if up != nil {
 			up.close()
@@ -248,14 +261,23 @@ func (u *Upstream) close() {
 }
 
 func (u *Upstream) broadcast(chunk []byte) {
+	// 必须在读锁内就地发送，不能先拷贝 subs、放锁后再发。
+	//
+	// 旧实现就是「RLock 下拷贝 → 放锁 → 逐个非阻塞发送」，
+	// 而 close()/unsubscribe() 是在 u.mu.Lock() 下 close(s.ch) 的。
+	// 两者没有共同的同步约束，拷贝与 close 之间那条缝隙一旦命中，
+	// 就是 send on closed channel。这个 panic 发生在上游读取 goroutine 里，
+	// HTTP 层的 Recoverer 兜不住，会直接打死整个 litvd 进程。
+	//
+	// 现在的收敛方式：订阅者的通道只在持锁、且已从 u.subs 里摘除之后才关闭；
+	// 扇出只在持读锁、且订阅者仍在 u.subs 里时才发送。读锁与写锁互斥，
+	// 所以「正在用的通道」不可能被并发关闭——单一 close owner 由此成立。
+	//
+	// 持锁会不会反压上游？不会：发送全部走 default 分支，永不阻塞，
+	// 慢客户端只丢块并计数。所以「一个卡死的客户端不能拖垮所有人」的设计意图保留。
 	u.mu.RLock()
-	subs := make([]*Subscriber, 0, len(u.subs))
+	defer u.mu.RUnlock()
 	for s := range u.subs {
-		subs = append(subs, s)
-	}
-	u.mu.RUnlock()
-
-	for _, s := range subs {
 		select {
 		case s.ch <- chunk:
 		default:

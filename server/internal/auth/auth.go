@@ -16,6 +16,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -30,9 +31,9 @@ const (
 
 // Identity 是当前请求的身份。
 type Identity struct {
-	UserID   string
-	Username string
-	IsAdmin  bool
+	UserID     string
+	Username   string
+	IsAdmin    bool
 	ViaGateway bool // 是否来自网关（可信）
 }
 
@@ -129,4 +130,62 @@ func BuildSignedURL(basePath string, channelID int64, deviceKey string, s *Signe
 	sig := s.Sign(channelID, exp, deviceKey)
 	return fmt.Sprintf("%s?sig=%s&exp=%s&dk=%s",
 		basePath, sig, strconv.FormatInt(exp, 10), deviceKey)
+}
+
+// ---------- 分片代理签名 ----------
+
+// segmentSignature 把「用途 + 频道 + 目标地址 + 到期时间 + 设备」全部绑进签名。
+//
+// 为什么单独一套：原来的 /seg 只校验频道级播放签名，而签名内容里没有目标地址。
+// 于是任何持有有效播放签名的设备，只要改查询参数 u，就能让 NAS 去请求
+// 任意 http/https 地址——把播放权限放大成"任意 HTTP 代理"，
+// 可以拿它探内网服务。签名必须绑定实际目标，改 u 就必须失效。
+//
+// 用途前缀 "seg" 让分片签名不能被当作播放签名复用，反之亦然。
+func segmentSignature(secret []byte, channelID int64, target string, exp int64, deviceKey string) string {
+	norm := normalizeSegmentTarget(target)
+	payload := fmt.Sprintf("seg|%d|%s|%d|%s", channelID, norm, exp, deviceKey)
+	mac := hmac.New(sha256.New, secret)
+	mac.Write([]byte(payload))
+	return base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
+}
+
+// normalizeSegmentTarget 归一化目标地址，保证签名与校验用同一形态。
+//
+// 只做无歧义的处理：大小写统一 scheme/host、去掉 fragment、去掉默认端口。
+// 不做路径清洗——路径必须原样参与签名，否则两个不同的地址可能归一到同一串，
+// 那是把签名强度换成"差不多能用"。
+func normalizeSegmentTarget(raw string) string {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || u == nil {
+		return raw
+	}
+	u.Scheme = strings.ToLower(u.Scheme)
+	u.Host = strings.ToLower(u.Host)
+	u.Fragment = ""
+	// 默认端口省略，避免 http://x:80 与 http://x 被判成不同目标
+	if (u.Scheme == "http" && strings.HasSuffix(u.Host, ":80")) ||
+		(u.Scheme == "https" && strings.HasSuffix(u.Host, ":443")) {
+		if i := strings.LastIndex(u.Host, ":"); i > 0 {
+			u.Host = u.Host[:i]
+		}
+	}
+	return u.String()
+}
+
+// SignSegment 生成分片签名。
+func (s *Signer) SignSegment(channelID int64, target string, exp int64, deviceKey string) string {
+	return segmentSignature(s.secret, channelID, target, exp, deviceKey)
+}
+
+// VerifySegment 校验分片签名：目标地址、频道、用途、到期时间全部必须一致。
+func (s *Signer) VerifySegment(channelID int64, target string, exp int64, deviceKey, sig string) error {
+	if exp < time.Now().Unix() {
+		return fmt.Errorf("分片地址已过期")
+	}
+	want := s.SignSegment(channelID, target, exp, deviceKey)
+	if subtle.ConstantTimeCompare([]byte(want), []byte(sig)) != 1 {
+		return fmt.Errorf("分片地址签名无效")
+	}
+	return nil
 }

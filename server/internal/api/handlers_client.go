@@ -981,6 +981,14 @@ func (a *API) liveSegment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// R04：校验分片签名，它绑定了「用途 + 频道 + 目标地址 + 到期 + 设备」。
+	// 只校验频道级播放签名是不够的——那样改掉 u 就能当任意 HTTP 代理用。
+	exp, _ := strconv.ParseInt(r.URL.Query().Get("exp"), 10, 64)
+	if err := a.signer.VerifySegment(id, target, exp, dk, r.URL.Query().Get("sig")); err != nil {
+		fail(w, http.StatusForbidden, 2002, "分片地址无效或已过期")
+		return
+	}
+
 	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, target, nil)
 	if err != nil {
 		fail(w, http.StatusBadGateway, 4001, err.Error())
@@ -1046,9 +1054,16 @@ func (a *API) liveSegment(w http.ResponseWriter, r *http.Request) {
 	_, _ = io.Copy(w, br)
 }
 
+// segmentURL 为分片/子清单/密钥地址签一个**绑定目标**的代理地址。
+//
+// R04：签名必须包含目标地址本身。旧实现签的是「频道级播放签名」，
+// 而签名内容里没有 u，于是持有有效播放签名的设备只要改 u，
+// 就能让 NAS 去请求任意 http/https 地址——把播放权限放大成任意 HTTP 代理。
+//
+// 这里的签名带 "seg" 用途前缀，所以它也不能被拿去当播放签名复用。
 func (a *API) segmentURL(abs string, channelID int64, dk string) string {
 	exp := time.Now().Add(12 * time.Hour).Unix()
-	sig := a.signer.Sign(channelID, exp, dk)
+	sig := a.signer.SignSegment(channelID, abs, exp, dk)
 	q := url.Values{}
 	q.Set("u", abs)
 	q.Set("sig", sig)

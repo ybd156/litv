@@ -195,3 +195,10 @@ func deviceGET(t *testing.T, a *API, path, token string) *httptest.ResponseRecor
 	a.Handler(false).ServeHTTP(rec, req)
 	return rec
 }
+
+// doRaw 用 TCP 入口直接执行一个已构造好的请求（签名 URL 不走设备身份）。
+func doRaw(a *API, req *http.Request) *httptest.ResponseRecorder {
+	rec := httptest.NewRecorder()
+	a.Handler(false).ServeHTTP(rec, req)
+	return rec
+}

@@ -287,6 +287,58 @@ class Api(private val prefs: Prefs) {
         )
     }
 
+    /** 时移回看：问服务端这个台能回看多久，拿带签名的地址。 */
+    fun timeshift(
+        channelId: Long,
+        onOk: (TimeshiftInfo) -> Unit,
+        onErr: (String) -> Unit,
+    ) {
+        call(
+            "/api/v1/tv/timeshift/$channelId",
+            clazz = TimeshiftInfo::class.java,
+            onOk = { if (it != null) onOk(it) },
+            onErr = onErr,
+        )
+    }
+
+    /** C5：设置节目开播提醒。 */
+    fun createReminder(
+        channelId: Long,
+        title: String,
+        startAt: Long,
+        onOk: () -> Unit = {},
+        onErr: (String) -> Unit = {},
+    ) {
+        call(
+            "/api/v1/tv/reminder", "POST",
+            mapOf("channel_id" to channelId, "title" to title, "start_at" to startAt),
+            clazz = Any::class.java,
+            onOk = { onOk() }, onErr = onErr,
+        )
+    }
+
+    /** C6：从节目单预约录制。 */
+    fun createRecording(
+        channelId: Long,
+        name: String,
+        startAt: Long,
+        durationSec: Int,
+        onOk: () -> Unit = {},
+        onErr: (String) -> Unit = {},
+    ) {
+        call(
+            "/api/v1/tv/record", "POST",
+            mapOf(
+                "channel_id" to channelId,
+                "name" to name,
+                "start_at" to startAt,
+                "duration_sec" to durationSec,
+            ),
+            clazz = Any::class.java,
+            onOk = { onOk() }, onErr = onErr,
+        )
+    }
+
     fun favorite(channelId: Long, on: Boolean, onOk: () -> Unit = {}, onErr: (String) -> Unit = {}) {
         call("/api/v1/tv/favorite", "POST",
             mapOf("channel_id" to channelId, "on" to on),

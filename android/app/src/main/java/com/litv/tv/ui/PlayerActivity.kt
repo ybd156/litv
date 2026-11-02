@@ -328,6 +328,77 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         epgAdapter = EpgAdapter()
         epgList.layoutManager = LinearLayoutManager(this)
         epgList.adapter = epgAdapter
+        // C3：点节目看详情。之前这个回调根本没接线，点节目毫无反应。
+        epgAdapter.onProgramClick = { p -> showProgramDetails(p) }
+    }
+
+    /**
+     * 节目详情弹层（C3），顺带提供 C5 提醒 / C6 预约录制。
+     *
+     * 为什么放在这里而不是单独一页：电视上多一层页面就多一次"返回"，
+     * 用户看完详情多半是要么设提醒、要么接着看，用弹层最省事。
+     */
+    /**
+     * 回看某个频道（时移缓冲）。
+     *
+     * 服务端只在「有人看过这个台」时才有缓冲，所以先问 available_seconds；
+     * 没有缓冲就明确告诉用户，而不是切过去黑屏。
+     */
+    private fun openTimeshiftFor(ch: Channel) {
+        app.api.timeshift(ch.id,
+            onOk = { info ->
+                if (!info.enabled || info.availableSeconds <= 0) {
+                    toastTip("这个台暂时没有可回看的缓冲")
+                    return@timeshift
+                }
+                val abs = app.api.absolute(info.url)
+                val minutes = info.availableSeconds / 60
+                toastTip("回看中（可回看约 $minutes 分钟）")
+                player.play(
+                    ch.id, abs,
+                    mapOf("User-Agent" to "LITV/1.0 (Android TV)"),
+                    app.prefs.engine,
+                )
+            },
+            onErr = { toastTip("回看不可用：$it") })
+    }
+
+    private fun showProgramDetails(p: com.litv.tv.data.EpgProgram) {
+        val ch = current ?: return
+        val fmt = SimpleDateFormat("MM-dd HH:mm", Locale.getDefault())
+        val now = System.currentTimeMillis() / 1000
+        val timeText = fmt.format(Date(p.startAt * 1000)) + " - " +
+            SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(p.endAt * 1000))
+
+        val lines = StringBuilder()
+        lines.append(timeText)
+        if (p.category.isNotBlank()) lines.append("  ·  ").append(p.category)
+        if (p.description.isNotBlank()) lines.append("\n\n").append(p.description)
+
+        val finished = p.endAt in 1 until now
+        val builder = android.app.AlertDialog.Builder(this)
+            .setTitle(p.title.ifBlank { "（无标题）" })
+            .setMessage(lines.toString())
+            .setNegativeButton("关闭", null)
+
+        if (finished) {
+            // 已播完：给回看入口
+            builder.setPositiveButton("回看") { _, _ -> openTimeshiftFor(ch) }
+        } else {
+            // 未播完：给提醒 + 预约录制
+            builder.setPositiveButton("提醒我") { _, _ ->
+                app.api.createReminder(ch.id, p.title, p.startAt,
+                    onOk = { toastTip("已设置提醒，开播时推送") },
+                    onErr = { toastTip("设置提醒失败：$it") })
+            }
+            builder.setNeutralButton("预约录制") { _, _ ->
+                val dur = (p.endAt - p.startAt).toInt().coerceIn(60, 8 * 3600)
+                app.api.createRecording(ch.id, p.title, p.startAt, dur,
+                    onOk = { toastTip("已预约录制：${p.title}") },
+                    onErr = { toastTip("预约失败：$it") })
+            }
+        }
+        builder.show()
     }
 
     /** 存全量频道 + 分组名 + 收藏，供「列表内左右键切分组」用。 */

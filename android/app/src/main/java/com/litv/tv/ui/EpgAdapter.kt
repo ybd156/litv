@@ -47,10 +47,16 @@ class EpgAdapter : RecyclerView.Adapter<EpgAdapter.VH>() {
         val p = items[position]
         val now = System.currentTimeMillis() / 1000
 
-        holder.time.text = fmt.format(Date(p.startAt * 1000))
+        val isNow = position == currentIndex
+        // C2：正在播的节目显示已播进度，用户一眼能看出还剩多久
+        holder.time.text = if (isNow && p.endAt > p.startAt) {
+            val pct = ((now - p.startAt) * 100 / (p.endAt - p.startAt)).coerceIn(0, 100)
+            fmt.format(Date(p.startAt * 1000)) + "\n" + pct + "%"
+        } else {
+            fmt.format(Date(p.startAt * 1000))
+        }
         holder.title.text = p.title.ifBlank { "（无标题）" }
 
-        val isNow = position == currentIndex
         holder.title.setTextColor(
             holder.itemView.context.getColor(if (isNow) R.color.accent else R.color.text_primary)
         )

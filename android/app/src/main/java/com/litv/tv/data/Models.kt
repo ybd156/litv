@@ -37,6 +37,13 @@ data class Channel(
     @SerializedName("source_id") val sourceId: Long = 0,
 )
 
+/** /tv/timeshift/{id} 的返回：这个台能回看多久、地址是什么。 */
+data class TimeshiftInfo(
+    val enabled: Boolean = false,
+    @SerializedName("available_seconds") val availableSeconds: Int = 0,
+    val url: String = "",
+)
+
 data class EpgProgram(
     val id: Long = 0,
     @SerializedName("epg_channel_id") val epgChannelId: Long = 0,

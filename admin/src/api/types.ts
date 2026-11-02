@@ -122,6 +122,12 @@ export interface EpgSource {
   url: string
   enabled?: boolean
   /** 上次**成功**同步的时间（Unix 秒）。失败时不会变。 */
+  /** 越大越优先；同一 xmltv_id 多源时高优先级覆盖低优先级 */
+  priority?: number
+  user_agent?: string
+  referer?: string
+  /** url = 远程拉取；file = 本地上传 */
+  kind?: string
   last_refresh_at?: string | null
   /** 上次**尝试**同步的时间（Unix 秒），不论成败。 */
   last_attempt_at?: string | null
@@ -134,6 +140,24 @@ export interface EpgSourceInput {
   name: string
   url: string
   enabled?: boolean
+  /** 越大越优先。同一 xmltv_id 出现在多个源时，高优先级覆盖低优先级。 */
+  priority?: number
+  /** 防盗链：拉取时带的 UA / Referer。 */
+  user_agent?: string
+  referer?: string
+  /** url = 远程拉取；file = 本地上传的 XMLTV */
+  kind?: string
+}
+
+/** 单个源的刷新明细（A3）。 */
+export interface EpgRefreshResult {
+  id: number
+  name?: string
+  ok: boolean
+  channels: number
+  programs: number
+  elapsed_ms: number
+  error?: string
 }
 
 /** EPG 侧的一个频道（xmltv 里的 channel，id 通常就是 tvg-id） */

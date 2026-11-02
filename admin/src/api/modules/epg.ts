@@ -1,6 +1,6 @@
 import { http } from '../http'
 import { asArray } from '../normalize'
-import type { EpgChannel, EpgProgram, EpgSource, EpgSourceInput } from '../types'
+import type { EpgChannel, EpgProgram, EpgRefreshResult, EpgSource, EpgSourceInput } from '../types'
 
 export async function listEpgSources(): Promise<EpgSource[]> {
   const raw = await http.get<unknown>('epg/sources')
@@ -9,6 +9,24 @@ export async function listEpgSources(): Promise<EpgSource[]> {
 
 export function createEpgSource(input: EpgSourceInput): Promise<EpgSource> {
   return http.post<EpgSource>('epg/sources', input)
+}
+
+/** 编辑 EPG 源（A4）。 */
+export function updateEpgSource(id: number, input: EpgSourceInput): Promise<unknown> {
+  return http.put<unknown>(`epg/sources/${id}`, input)
+}
+
+/** 刷新单个源（A2），返回该源的刷新明细。 */
+export function refreshOneEpg(id: number): Promise<EpgRefreshResult> {
+  return http.post<EpgRefreshResult>(`epg/sources/${id}/refresh`)
+}
+
+/** 导入本地 XMLTV 文件（A8）。 */
+export function importEpg(file: File, name?: string): Promise<unknown> {
+  const fd = new FormData()
+  fd.append('file', file)
+  if (name) fd.append('name', name)
+  return http.post<unknown>('epg/import', fd)
 }
 
 export function deleteEpgSource(id: number): Promise<unknown> {

@@ -26,18 +26,96 @@ const sources = computed(() => data.value ?? [])
 const showAdd = ref(false)
 const saving = ref(false)
 const refreshing = ref(false)
-const form = ref({ name: '', url: '' })
+const refreshingId = ref<number | null>(null)
+const importing = ref(false)
+/** 非 null 表示正在编辑这个源（A4） */
+const editing = ref<EpgSource | null>(null)
+/** 隐藏的文件输入，供「导入本地 XMLTV」触发 */
+const importInput = ref<HTMLInputElement | null>(null)
+
+const form = ref({
+  name: '',
+  url: '',
+  // NInput 的 value 是 string；提交时再 Number()
+  priority: '0',
+  user_agent: '',
+  referer: '',
+})
+
+function openAdd(): void {
+  editing.value = null
+  form.value = { name: '', url: '', priority: '0', user_agent: '', referer: '' }
+  showAdd.value = true
+}
+
+function openEdit(row: EpgSource): void {
+  editing.value = row
+  form.value = {
+    name: row.name,
+    url: row.url,
+    priority: String(row.priority ?? 0),
+    user_agent: row.user_agent ?? '',
+    referer: row.referer ?? '',
+  }
+  showAdd.value = true
+}
 
 async function refreshAll(): Promise<void> {
   refreshing.value = true
   try {
-    await epgApi.refreshEpg()
-    toast.success('已开始刷新 EPG，节目单会在几分钟内更新')
+    const results = await epgApi.refreshEpg()
+    // A3：把每个源的结果直接摊开说清楚，不再只报「已开始刷新」
+    const list = Array.isArray(results) ? results : []
+    const okCount = list.filter((r) => r?.ok).length
+    const failed = list.filter((r) => r && !r.ok)
+    if (failed.length > 0) {
+      toast.warning(`刷新完成：${okCount} 个成功，${failed.length} 个失败（见状态列）`)
+    } else if (list.length > 0) {
+      toast.success(`刷新完成：${okCount} 个源已更新`)
+    } else {
+      toast.success('没有启用的 EPG 源')
+    }
     await run(true)
   } catch (e) {
     toast.error(toErrorMessage(e))
   } finally {
     refreshing.value = false
+  }
+}
+
+/** 刷新单个源（A2）。 */
+async function refreshRow(row: EpgSource): Promise<void> {
+  refreshingId.value = row.id
+  try {
+    const r = await epgApi.refreshOneEpg(row.id)
+    if (r?.ok) {
+      toast.success(`${row.name}：${r.channels} 个频道 / ${r.programs} 条节目（${r.elapsed_ms} ms）`)
+    } else {
+      toast.error(`${row.name} 刷新失败：${r?.error || '未知原因'}`)
+    }
+    await run(true)
+  } catch (e) {
+    toast.error(toErrorMessage(e))
+  } finally {
+    refreshingId.value = null
+  }
+}
+
+/** 导入本地 XMLTV（A8）。 */
+async function onImport(ev: Event): Promise<void> {
+  const input = ev.target as HTMLInputElement
+  const file = input.files?.[0]
+  if (!file) return
+  importing.value = true
+  try {
+    await epgApi.importEpg(file, file.name)
+    toast.success(`已导入 ${file.name}`)
+    await run(true)
+  } catch (e) {
+    toast.error(toErrorMessage(e))
+  } finally {
+    importing.value = false
+    input.value = ''
   }
 }
 
@@ -48,14 +126,24 @@ async function submit(): Promise<void> {
   }
   saving.value = true
   try {
-    await epgApi.createEpgSource({
+    const payload = {
       name: form.value.name.trim(),
       url: form.value.url.trim(),
-      enabled: true,
-    })
-    toast.success('EPG 源已添加')
+      enabled: editing.value ? editing.value.enabled !== false : true,
+      priority: Number(form.value.priority) || 0,
+      user_agent: form.value.user_agent.trim(),
+      referer: form.value.referer.trim(),
+    }
+    if (editing.value) {
+      await epgApi.updateEpgSource(editing.value.id, payload)
+      toast.success('已保存')
+    } else {
+      await epgApi.createEpgSource(payload)
+      toast.success('EPG 源已添加')
+    }
     showAdd.value = false
-    form.value = { name: '', url: '' }
+    editing.value = null
+    form.value = { name: '', url: '', priority: '0', user_agent: '', referer: '' }
     await run(true)
   } catch (e) {
     toast.error(toErrorMessage(e))
@@ -111,6 +199,12 @@ const columns: DataTableColumns<EpgSource> = [
     render: (row) => h('span', { class: 'mono' }, fmtCount(row.program_count)),
   },
   {
+    title: '优先级',
+    key: 'priority',
+    width: 90,
+    render: (row) => h('span', { class: 'mono' }, String(row.priority ?? 0)),
+  },
+  {
     title: '状态',
     key: 'error',
     minWidth: 200,
@@ -123,14 +217,33 @@ const columns: DataTableColumns<EpgSource> = [
   {
     title: '操作',
     key: 'actions',
-    width: 90,
+    width: 190,
     fixed: 'right',
     render: (row) =>
-      h(
-        NButton,
-        { size: 'tiny', quaternary: true, type: 'error', onClick: () => remove(row) },
-        { default: () => '删除' },
-      ),
+      h(NSpace, { size: 4, wrap: false }, {
+        default: () => [
+          h(
+            NButton,
+            {
+              size: 'tiny',
+              quaternary: true,
+              loading: refreshingId.value === row.id,
+              onClick: () => void refreshRow(row),
+            },
+            { default: () => '刷新' },
+          ),
+          h(
+            NButton,
+            { size: 'tiny', quaternary: true, onClick: () => openEdit(row) },
+            { default: () => '编辑' },
+          ),
+          h(
+            NButton,
+            { size: 'tiny', quaternary: true, type: 'error', onClick: () => remove(row) },
+            { default: () => '删除' },
+          ),
+        ],
+      }),
   },
 ]
 
@@ -144,10 +257,22 @@ onMounted(() => void run())
         <template #icon><Icon name="refresh" :size="15" /></template>
         立即刷新全部 EPG
       </NButton>
-      <NButton size="small" secondary @click="showAdd = true">
+      <NButton size="small" secondary @click="openAdd">
         <template #icon><Icon name="plus" :size="15" /></template>
         添加 EPG 源
       </NButton>
+      <!-- A8：导入本地 XMLTV（不上网，直接上传文件） -->
+      <NButton size="small" secondary :loading="importing" @click="importInput?.click()">
+        <template #icon><Icon name="up" :size="15" /></template>
+        导入本地 XMLTV
+      </NButton>
+      <input
+        ref="importInput"
+        type="file"
+        accept=".xml,.gz,.xml.gz,application/xml,application/gzip"
+        style="display: none"
+        @change="onImport"
+      />
       <span class="spacer" />
       <span class="hint-text">EPG 就是电视上的「节目单」，刷新会重新下载 XMLTV 并解析。</span>
     </div>
@@ -181,7 +306,7 @@ onMounted(() => void run())
     <NModal
       v-model:show="showAdd"
       preset="card"
-      title="添加 EPG 源"
+      :title="editing ? '编辑 EPG 源' : '添加 EPG 源'"
       style="width: 560px; max-width: 94vw"
       :bordered="false"
       :mask-closable="false"
@@ -193,11 +318,25 @@ onMounted(() => void run())
         <NFormItem label="XMLTV 地址">
           <NInput v-model:value="form.url" placeholder="https://example.com/epg/cn.xml.gz" />
         </NFormItem>
+        <NFormItem label="优先级（越大越优先）">
+          <NInput v-model:value="form.priority" placeholder="0" />
+          <template #feedback>
+            同一个 xmltv_id 出现在多个源时，优先级高的覆盖低的。
+          </template>
+        </NFormItem>
+        <NFormItem label="User-Agent（可选）">
+          <NInput v-model:value="form.user_agent" placeholder="部分 EPG 站有防盗链，需要带 UA" />
+        </NFormItem>
+        <NFormItem label="Referer（可选）">
+          <NInput v-model:value="form.referer" placeholder="https://example.com/" />
+        </NFormItem>
       </NForm>
       <template #footer>
         <NSpace justify="end">
           <NButton quaternary @click="showAdd = false">取消</NButton>
-          <NButton type="primary" :loading="saving" @click="submit">添加</NButton>
+          <NButton type="primary" :loading="saving" @click="submit">
+            {{ editing ? '保存' : '添加' }}
+          </NButton>
         </NSpace>
       </template>
     </NModal>

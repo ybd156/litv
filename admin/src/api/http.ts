@@ -113,7 +113,11 @@ export async function request<T>(path: string, opts: RequestOptions = {}): Promi
   // 正常从飞牛桌面进来没有这个，身份由网关注入。
   const tk = adminToken()
   if (tk) (init.headers as Record<string, string>).Authorization = `Bearer ${tk}`
-  if (opts.body !== undefined) {
+  if (opts.body instanceof FormData) {
+    // 文件上传（如 EPG 本地导入）：交给浏览器自己带 multipart boundary，
+    // **不能**设 Content-Type，也不能 JSON.stringify——否则服务端收不到文件。
+    init.body = opts.body
+  } else if (opts.body !== undefined) {
     init.headers = { ...(init.headers as Record<string, string>), 'Content-Type': 'application/json' }
     init.body = JSON.stringify(opts.body)
   }

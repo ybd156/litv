@@ -47,8 +47,8 @@ android {
         // 低端盒子（1GB RAM）是这个项目的性能下限。
         minSdk = 21
         targetSdk = 35
-        versionCode = 13
-        versionName = "0.1.3"
+        versionCode = 14
+        versionName = "0.1.4"
 
         // 注意：abiFilters 与 splits.abi 互斥（AGP 会报冲突）。
         // 这里只用 splits 声明 ABI，debug 包同理生效。

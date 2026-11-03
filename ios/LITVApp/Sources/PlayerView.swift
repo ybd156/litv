@@ -26,6 +26,9 @@ struct PlayerView: View {
     @State private var loading = true
     @State private var programs: [EpgProgram] = []
     @State private var showEpg = false
+    /// 节目单当前看的是第几天：0=今天，-1=昨天，+1=明天
+    @State private var epgDay = 0
+    @State private var epgTip: String?
     @State private var streamId: Int64 = 0
     @State private var streams: [TvStream] = []
     /// VLC 失败降级正在进行。VLCKit 一次失败可能连发两个状态回调
@@ -387,22 +390,112 @@ struct PlayerView: View {
         switched = list[n]
     }
 
+    /// 节目单弹层：支持按天切换，长按节目可以设开播提醒 / 预约录制。
     private var epgSheet: some View {
         NavigationView {
-            List(programs) { p in
-                HStack {
-                    Text(p.timeText).foregroundColor(.gray).font(.caption)
-                        .frame(width: 44, alignment: .leading)
-                    Text(p.title).foregroundColor(p.isNow ? .green : .primary)
+            VStack(spacing: 0) {
+                // 按天切换。IPTV 的节目单一般只给前后几天，
+                // 所以这里不限范围，拉不到就是空列表。
+                HStack(spacing: 18) {
+                    Button {
+                        Task { await loadEpg(day: epgDay - 1) }
+                    } label: { Image(systemName: "chevron.left") }
+
+                    Text(dayLabel(epgDay))
+                        .font(.subheadline)
+                        .frame(maxWidth: .infinity)
+
+                    Button {
+                        Task { await loadEpg(day: epgDay + 1) }
+                    } label: { Image(systemName: "chevron.right") }
                 }
+                .padding(.horizontal, 20)
+                .padding(.vertical, 10)
+
+                if let tip = epgTip {
+                    Text(tip)
+                        .font(.caption)
+                        .foregroundColor(.orange)
+                        .padding(.horizontal, 20)
+                        .padding(.bottom, 6)
+                }
+
+                List(programs) { p in
+                    HStack {
+                        Text(p.timeText)
+                            .foregroundColor(.gray)
+                            .font(.caption)
+                            .frame(width: 44, alignment: .leading)
+                        Text(p.title)
+                            .foregroundColor(p.isNow ? .green : .primary)
+                        Spacer()
+                    }
+                    .contentShape(Rectangle())
+                    // 长按出菜单：只有还没播完的节目才给提醒/录制
+                    .contextMenu {
+                        if p.endAt > Int64(Date().timeIntervalSince1970) {
+                            Button {
+                                Task { await addReminder(p) }
+                            } label: { Label("提醒我", systemImage: "bell") }
+
+                            Button {
+                                Task { await addRecording(p) }
+                            } label: { Label("预约录制", systemImage: "record.circle") }
+                        }
+                    }
+                }
+                .listStyle(.plain)
             }
-            .navigationTitle("节目单")
+            .navigationTitle(active.name)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button("关闭") { showEpg = false }
                 }
             }
+        }
+        .navigationViewStyle(.stack)
+    }
+
+    private func dayLabel(_ d: Int) -> String {
+        switch d {
+        case 0: return "今天"
+        case -1: return "昨天"
+        case 1: return "明天"
+        default: return d > 0 ? "\(d) 天后" : "\(-d) 天前"
+        }
+    }
+
+    /// 按天重新拉节目单。day 是相对今天的偏移。
+    private func loadEpg(day: Int) async {
+        epgTip = nil
+        let list = (try? await session.api.epg(channelId: active.id, day: day)) ?? []
+        programs = list
+        epgDay = day
+        if list.isEmpty {
+            epgTip = "这一天没有节目单（该频道可能未关联 EPG）"
+        }
+    }
+
+    private func addReminder(_ p: EpgProgram) async {
+        do {
+            try await session.api.createReminder(
+                channelId: active.id, title: p.title, startAt: p.startAt)
+            epgTip = "已设置提醒：\(p.title)"
+        } catch {
+            epgTip = "设置提醒失败：\(error.localizedDescription)"
+        }
+    }
+
+    private func addRecording(_ p: EpgProgram) async {
+        // 时长取节目本身的长度，夹在 1 分钟 ~ 8 小时之间（服务端同样有限制）
+        let dur = Int(max(60, min(8 * 3600, p.endAt - p.startAt)))
+        do {
+            try await session.api.createRecording(
+                channelId: active.id, name: p.title, startAt: p.startAt, durationSec: dur)
+            epgTip = "已预约录制：\(p.title)"
+        } catch {
+            epgTip = "预约录制失败：\(error.localizedDescription)"
         }
     }
 
@@ -419,6 +512,7 @@ struct PlayerView: View {
         // 节目单先拉：它和播放是两件独立的事。
         // 之前放在播放成功之后，一旦取流失败（或 VLC 卡住不回调），
         // 节目单就永远是空的——用户看到的就是"视频里没有节目单"。
+        epgDay = 0
         programs = (try? await session.api.epg(channelId: active.id)) ?? []
 
         // 转圈兜底：VLC 的 .playing 回调在个别源/机型上可能一直不来，

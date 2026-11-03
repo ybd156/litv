@@ -222,6 +222,27 @@ struct ApiClient {
         _ = try await send(req, as: EmptyResponse.self)
     }
 
+    /// 设置节目开播提醒。
+    /// 服务端：POST /api/v1/tv/reminder（按设备存，电视和手机各设各的）
+    func createReminder(channelId: Int64, title: String, startAt: Int64) async throws {
+        guard let req = request("/api/v1/tv/reminder", method: "POST",
+                                body: ["channel_id": channelId, "title": title, "start_at": startAt]) else {
+            throw ApiError(message: "地址无效")
+        }
+        _ = try await send(req, as: EmptyResponse.self)
+    }
+
+    /// 从节目单预约录制。
+    /// 服务端：POST /api/v1/tv/record（设备端专用，不需要管理员权限）
+    func createRecording(channelId: Int64, name: String, startAt: Int64, durationSec: Int) async throws {
+        guard let req = request("/api/v1/tv/record", method: "POST",
+                                body: ["channel_id": channelId, "name": name,
+                                       "start_at": startAt, "duration_sec": durationSec]) else {
+            throw ApiError(message: "地址无效")
+        }
+        _ = try await send(req, as: EmptyResponse.self)
+    }
+
     func timeshift(channelId: Int64) async throws -> TimeshiftInfo {
         guard let req = request("/api/v1/tv/timeshift/\(channelId)", method: "GET", body: nil) else {
             throw ApiError(message: "地址无效")

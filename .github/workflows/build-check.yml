@@ -23,7 +23,7 @@ concurrency:
 jobs:
   server:
     name: Go 服务端
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
@@ -51,7 +51,7 @@ jobs:
 
   admin:
     name: 管理台
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -71,7 +71,7 @@ jobs:
 
   android:
     name: Android（电视版 + 手机版）
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
 
@@ -90,7 +90,7 @@ jobs:
       - name: 安装 Gradle 8.7
         uses: gradle/actions/setup-gradle@v6
         with:
-          gradle-version: "8.7"
+          gradle-version: "8.14.6"
 
       - name: 编译两个 flavor
         working-directory: android

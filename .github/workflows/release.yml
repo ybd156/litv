@@ -35,7 +35,7 @@ env:
 jobs:
   # ---------------------------------------------------------------- Android
   android:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@v7
@@ -57,7 +57,7 @@ jobs:
       - name: 安装 Gradle 8.7
         uses: gradle/actions/setup-gradle@v6
         with:
-          gradle-version: "8.7"
+          gradle-version: "8.14.6"
 
       - name: 构建 APK（release，已签名）
         working-directory: android
@@ -97,7 +97,7 @@ jobs:
 
   # ---------------------------------------------------------------- fnOS fpk
   fpk:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
@@ -218,7 +218,7 @@ jobs:
   # ---------------------------------------------------------------- 发 Release
   release:
     needs: [android, fpk, ios]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
 

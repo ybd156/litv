@@ -156,7 +156,7 @@ packaging/fnos/app/server/litvd_*
 
 理由：
 
-- 本地要装一整套（Go 1.23 + JDK + Android SDK 35 + build-tools + NDK + Gradle 8.7 + Node 24），
+- 本地要装一整套（Go 1.23 + JDK + Android SDK 35 + build-tools + NDK + Gradle 8.14.6 + Node 24），
   换台机器就得重搭一遍
 - 版本稍有差异就会出现「我这里能编过」的问题
 - iOS 本地根本编不了（需要 Apple SDK）
@@ -177,7 +177,9 @@ packaging/fnos/app/server/litvd_*
 
 **必须遵守：**
 
-- 只用 `runs-on: ubuntu-latest` / `macos-latest` 这类**标准** runner
+- 只用标准 runner，并且**钉住版本**而不是 `-latest`：
+  `ubuntu-24.04`、`macos-latest`。`ubuntu-latest` 正在迁移到 Ubuntu 26，
+  钉版本可以避免某天构建环境被悄悄换掉
 - **不要**用 larger runner（`ubuntu-latest-4-core`、`macos-14-xlarge` 等），那些按分钟计费
 - 仓库一旦转成 **private**，macOS 立刻按 **10 倍**扣分钟——
   届时必须把 `ios-check.yml` 改成只在手动触发时跑，或干脆停掉

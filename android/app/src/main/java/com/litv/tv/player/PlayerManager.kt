@@ -120,6 +120,25 @@ class PlayerManager(
 
     private fun startCurrent() {
         main.removeCallbacks(startTimeout)
+
+        // 换内核前给上一个解码器一点时间真正释放。
+        //
+        // ExoPlayer 的 release() 是**异步**的：它把 MediaCodec 的释放抛到内部
+        // 播放线程。如果我们紧接着让下一个内核去申请解码器，上一个还占着
+        // 硬件解码内存——4K 这种大码流就会直接报
+        // "not enough codec memory for this file"，硬解失败回落软解。
+        // 同设备上别的播放器只开一个解码器，所以不会遇到这个。
+        if (chainIndex > 0 && current != null) {
+            val next = chainIndex
+            main.postDelayed({ startEngine(next) }, 600)
+            return
+        }
+        startEngine(chainIndex)
+    }
+
+    private fun startEngine(index: Int) {
+        if (index != chainIndex) return
+        main.removeCallbacks(startTimeout)
         if (chainIndex >= chain.size) {
             callback?.onError(chainFailMessage())
             return

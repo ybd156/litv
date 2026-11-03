@@ -24,7 +24,6 @@ const navItems: NavItem[] = [
   { key: 'sources', label: '源管理', icon: 'sources' },
   { key: 'channels', label: '频道管理', icon: 'channels' },
   { key: 'epg', label: 'EPG 管理', icon: 'epg' },
-  { key: 'live', label: '直播预览', icon: 'preview' },
   { key: 'devices', label: '终端设备', icon: 'devices' },
   { key: 'settings', label: '系统设置', icon: 'settings' },
 ]

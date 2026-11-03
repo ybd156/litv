@@ -51,6 +51,8 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
     private lateinit var panelPlay: View
     private lateinit var panelChannel: View
     private lateinit var surface: SurfaceView
+    /** 竖屏下 videoBox 的 16:9 高度。全屏/退出全屏来回切时要靠它恢复。 */
+    private var videoHeight169 = 0
     private lateinit var loading: ProgressBar
     private lateinit var playName: TextView
     private lateinit var playEngine: TextView
@@ -162,13 +164,12 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
         groupChips = findViewById(R.id.groupChips)
         searchInput = findViewById(R.id.searchInput)
 
-        // 视频按 16:9 固定比例，竖屏铺满全高会把画面压成中间一条
+        // 视频按 16:9 固定比例。
+        // 为什么必须显式算：SurfaceView 没有固有尺寸，父容器用 wrap_content 时
+        // 它会把「剩余可用高度」全吃掉，下面的节目单被挤成 0，
+        // 而控件一显隐整块高度又跟着变——表现就是画面出不来、界面乱跳。
         val box = findViewById<View>(R.id.videoBox)
-        box.post {
-            if (box.width > 0) {
-                box.layoutParams = box.layoutParams.apply { height = box.width * 9 / 16 }
-            }
-        }
+        box.post { applyVideoRatio() }
     }
 
     private fun setupPlayer() {
@@ -331,12 +332,34 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
         findViewById<View>(R.id.panelChannel)?.visibility =
             if (on) View.GONE else if (currentTab == TAB_CHANNEL) View.VISIBLE else View.GONE
 
+        applyVideoRatio()
+    }
+
+    /**
+     * 按当前方向和宽度重算 videoBox 高度。
+     *
+     * 横屏：铺满剩余空间（MATCH_PARENT）。
+     * 竖屏：固定 16:9，绝不回退到 WRAP_CONTENT——
+     * 那个值会让 SurfaceView 撑满剩余高度，把下面的节目单挤没，
+     * 而且每次控件显隐都会重算，界面就会"飘"。
+     */
+    private fun applyVideoRatio() {
         val box = findViewById<View>(R.id.videoBox) ?: return
         val lp = box.layoutParams ?: return
-        // 横屏铺满：高度改成 MATCH_PARENT；竖屏恢复原来的自适应（16:9）
-        lp.height = if (on) ViewGroup.LayoutParams.MATCH_PARENT
-        else ViewGroup.LayoutParams.WRAP_CONTENT
+        if (landscape) {
+            lp.height = ViewGroup.LayoutParams.MATCH_PARENT
+        } else {
+            if (box.width > 0) videoHeight169 = box.width * 9 / 16
+            lp.height = if (videoHeight169 > 0) videoHeight169
+            else ViewGroup.LayoutParams.WRAP_CONTENT
+        }
         box.layoutParams = lp
+    }
+
+    override fun onConfigurationChanged(newConfig: android.content.res.Configuration) {
+        super.onConfigurationChanged(newConfig)
+        // 旋转后宽度变了，16:9 的高度也要跟着重算
+        findViewById<View>(R.id.videoBox)?.post { applyVideoRatio() }
     }
 
     private fun setupList() {

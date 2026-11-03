@@ -36,12 +36,6 @@ const routes: RouteRecordRaw[] = [
     meta: { title: '终端设备' },
   },
   {
-    path: '/live',
-    name: 'live',
-    component: () => import('@/views/LiveView.vue'),
-    meta: { title: '直播预览' },
-  },
-  {
     path: '/settings',
     name: 'settings',
     component: () => import('@/views/SettingsView.vue'),

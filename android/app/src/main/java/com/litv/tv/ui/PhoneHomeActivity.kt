@@ -87,6 +87,9 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
     private var muted = false
     private var landscape = false
 
+    /** 竖屏下视频区的 16:9 高度；全屏/退出全屏来回切时靠它恢复 */
+    private var videoHeight169 = 0
+
     private companion object {
         const val TAB_PLAY = "play"
         const val TAB_CHANNEL = "channel"
@@ -162,13 +165,11 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
         groupChips = findViewById(R.id.groupChips)
         searchInput = findViewById(R.id.searchInput)
 
-        // 视频按 16:9 固定比例，竖屏铺满全高会把画面压成中间一条
+        // 视频区高度统一走 applyVideoRatio()。
+        // SurfaceView 没有固有尺寸，父容器用 WRAP_CONTENT 时它会把
+        // 剩余高度全吃掉——画面被拉伸、下面的节目单被挤没。
         val box = findViewById<View>(R.id.videoBox)
-        box.post {
-            if (box.width > 0) {
-                box.layoutParams = box.layoutParams.apply { height = box.width * 9 / 16 }
-            }
-        }
+        box.post { applyVideoRatio() }
     }
 
     private fun setupPlayer() {
@@ -331,12 +332,34 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
         findViewById<View>(R.id.panelChannel)?.visibility =
             if (on) View.GONE else if (currentTab == TAB_CHANNEL) View.VISIBLE else View.GONE
 
+        applyVideoRatio()
+    }
+
+    /**
+     * 按当前方向和宽度重算视频区高度。
+     *
+     * 横屏：铺满剩余空间（MATCH_PARENT）。
+     * 竖屏：固定 16:9，**绝不**回退到 WRAP_CONTENT——
+     * 那个值会让 SurfaceView 撑满剩余高度，画面被拉伸变形，
+     * 而且每次控件显隐都会重新量一次，界面就会"飘"。
+     */
+    private fun applyVideoRatio() {
         val box = findViewById<View>(R.id.videoBox) ?: return
         val lp = box.layoutParams ?: return
-        // 横屏铺满：高度改成 MATCH_PARENT；竖屏恢复原来的自适应（16:9）
-        lp.height = if (on) ViewGroup.LayoutParams.MATCH_PARENT
-        else ViewGroup.LayoutParams.WRAP_CONTENT
+        if (landscape) {
+            lp.height = ViewGroup.LayoutParams.MATCH_PARENT
+        } else {
+            if (box.width > 0) videoHeight169 = box.width * 9 / 16
+            lp.height = if (videoHeight169 > 0) videoHeight169
+            else ViewGroup.LayoutParams.WRAP_CONTENT
+        }
         box.layoutParams = lp
+    }
+
+    override fun onConfigurationChanged(newConfig: android.content.res.Configuration) {
+        super.onConfigurationChanged(newConfig)
+        // 旋转后宽度变了，16:9 高度要跟着重算
+        findViewById<View>(R.id.videoBox)?.post { applyVideoRatio() }
     }
 
     private fun setupList() {

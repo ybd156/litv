@@ -158,7 +158,8 @@ class ExoEngine : PlayerEngine {
         val p = ExoPlayer.Builder(ctx, renderers)
             .setTrackSelector(trackSelector)
             .setLoadControl(loadControl)
-            .setMediaSourceFactory(DefaultMediaSourceFactory(dsFactory))
+            // 用我们自己的媒体源工厂：HLS 走带 AV3A 支持的解析器
+            .setMediaSourceFactory(LitvMediaSourceFactory(dsFactory))
             .build()
 
         exoFirstFrameRendered = false

@@ -1,7 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">LITV</string>
-    <string name="home_title">LITV 直播</string>
     <string name="loading">正在加载频道…</string>
     <string name="empty_channels">还没有频道\n请先在管理台导入直播源</string>
     <string name="bind_title">绑定这台设备</string>
@@ -9,7 +8,6 @@
     <string name="bind_code_label">绑定码</string>
     <string name="bind_server_label">服务器地址</string>
     <string name="bind_action">绑定</string>
-    <string name="bind_retry">重试</string>
     <string name="bind_pending">等待管理台批准…</string>
     <string name="bind_success">绑定成功</string>
     <string name="switch_channel">正在切换…</string>

@@ -64,13 +64,15 @@ struct PlayerView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            videoArea
-
-            // 竖屏时在画面下方补上「在看什么」——和 Android 手机端一致。
-            // 以前这里是整屏视频，竖屏下 16:9 的画面缩成中间一条，
-            // 上下全黑，看着像没加载出来。
+            // 竖屏：信息卡在**画面上面**（频道名、当前节目、下一档），
+            // 下面才是 16:9 的画面。
             if !isFullscreen {
                 osd
+            }
+
+            videoArea
+
+            if !isFullscreen {
                 Spacer(minLength: 0)
             }
         }

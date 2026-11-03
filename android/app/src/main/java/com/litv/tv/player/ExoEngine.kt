@@ -158,11 +158,20 @@ class ExoEngine : PlayerEngine {
         val p = ExoPlayer.Builder(ctx, renderers)
             .setTrackSelector(trackSelector)
             .setLoadControl(loadControl)
-            // 用我们自己的媒体源工厂：HLS 走带 AV3A 支持的解析器
-            // 只有真正加载到 AV3A 解码库时才启用自定义 HLS 解析器；
-            // 否则用 media3 默认实现（否则普通频道会受影响）。
+            // 媒体源工厂：
+            // 只有真正加载到 AV3A 解码库时才换成我们的实现（它给 HLS 挂上
+            // 自定义解析器）；**没有库时用官方 DefaultMediaSourceFactory**。
+            //
+            // 为什么不在没库时也用自己的：官方那个还负责 DASH / RTSP / DRM /
+            // 错误重试策略等一堆东西，我的简化版只认 HLS 和渐进式。
+            // 之前无条件替换，等于把所有非 HLS 频道和一堆边缘逻辑都关了，
+            // 直连播放因此拿不到轨道——这类回归在 CI 里永远发现不了。
             .setMediaSourceFactory(
-                LitvMediaSourceFactory(dsFactory, Av3aLoader.available(ctx))
+                if (Av3aLoader.available(ctx)) {
+                    LitvMediaSourceFactory(dsFactory, true)
+                } else {
+                    DefaultMediaSourceFactory(dsFactory)
+                }
             )
             .build()
 

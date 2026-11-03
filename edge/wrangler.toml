@@ -13,8 +13,9 @@ run_worker_first = ["/api/*", "/playlist.m3u"]
 [[d1_databases]]
 binding = "DB"
 database_name = "litv-edge"
-# 先跑一次 `npx wrangler d1 create litv-edge`，把返回的 database_id 填在这里
-database_id = "REPLACE_WITH_YOUR_DATABASE_ID"
+# 这是标识不是凭据：没有 CLOUDFLARE_API_TOKEN 用不了它，所以可以提交进仓库。
+# 建库：Cloudflare 控制台 → Workers & Pages → D1 → Create database
+database_id = "66c1a87d-e266-4e32-ab45-d9f4bf8fa527"
 
 [vars]
 SERVER_NAME = "LITV Edge"

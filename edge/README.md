@@ -60,14 +60,15 @@ LITV2 的边缘降级部署：NAS 挂了之后，用 Cloudflare 免费额度顶�
 和 LITV2 同一个仓库，工作流已经在 `.github/workflows/edge-deploy.yml`，
 不用另建仓库、不用改路径。
 
-### 1. 建 D1 数据库
+### 1. D1 数据库
 
-```bash
-npx wrangler d1 create litv-edge
-```
+本仓库已经建好并写进 `wrangler.toml`（`database_id` 是标识不是凭据，
+提交进仓库没有风险）。要换成你自己的库：
 
-把返回的 `database_id` 填进 `wrangler.toml` 的 `REPLACE_WITH_YOUR_DATABASE_ID`。
-（这一步在哪台机器上做都行，只有一次。）
+控制台 → Workers & Pages → **D1** → Create database，名字 `litv-edge`，
+把返回的 UUID 填进 `wrangler.toml` 的 `database_id`。
+
+（也可以用 `npx wrangler d1 create litv-edge`，但没必要为这一步在本机装环境。）
 
 ### 2. 配 Secrets
 

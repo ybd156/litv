@@ -273,3 +273,29 @@ jobs:
 
       - name: 打印 Release 地址
         run: echo "https://github.com/${{ github.repository }}/releases/tag/v${{ github.event.inputs.version || env.DEFAULT_VERSION }}"
+
+      - name: 同步 README 下载表
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # 为什么不靠 readme-downloads.yml 的 release:published 事件：
+          # 用 GITHUB_TOKEN 创建的 Release **不会再触发其它工作流**
+          # （GitHub 防止递归的规则），那个事件根本不会到达。
+          # 所以在这里直接同步，readme-downloads.yml 只留作手动触发。
+          git fetch --quiet origin main
+          git checkout --quiet main
+          git reset --quiet --hard origin/main
+
+          python3 tools/ops/update-downloads.py
+
+          if git diff --quiet README.md; then
+            echo "README 已是最新，跳过提交"
+            exit 0
+          fi
+
+          V="${{ github.event.inputs.version || env.DEFAULT_VERSION }}"
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add README.md
+          git commit -m "docs: README 下载表同步到 v${V} [skip ci]"
+          git push origin HEAD:main

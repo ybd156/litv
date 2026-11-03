@@ -20,7 +20,7 @@
 //   - TXT 格式（含 GBK 编码、名字带逗号）能认；HTML/JSON 给出可读诊断
 import { createServer } from "node:http";
 import { spawn } from "node:child_process";
-import { readFile } from "node:fs/promises";
+import { readFile, writeFile, unlink } from "node:fs/promises";
 import { DatabaseSync } from "node:sqlite";
 import { BOOTSTRAP_SQL } from "../src/bootstrap.sql.js";
 
@@ -63,7 +63,14 @@ const HTML_LOGIN = `<!doctype html><html><head><title>登录</title></head>
 
 // ---------------------------------------------------------------- 服务
 
+// 记录每个请求带的 UA / Referer，用来验证"每个源用自己的 UA"。
+const seen = {};
+
 const server = createServer((req, res) => {
+  seen[req.url] = {
+    ua: req.headers["user-agent"] || "",
+    referer: req.headers["referer"] || "",
+  };
   if (req.url === "/a.m3u") { res.writeHead(200); res.end(SRC_A); }
   else if (req.url === "/b.m3u") { res.writeHead(200); res.end(SRC_B); }
   else if (req.url === "/c.txt") { res.writeHead(200); res.end(TXT_GBK); }
@@ -74,10 +81,10 @@ const server = createServer((req, res) => {
 await new Promise((r) => server.listen(0, "127.0.0.1", r));
 const base = `http://127.0.0.1:${server.address().port}`;
 
-function runBuild(sources) {
+function runBuild(env) {
   return new Promise((resolve) => {
     const child = spawn(process.execPath, ["scripts/build.mjs"], {
-      env: { ...process.env, SOURCE_URLS: sources },
+      env: { ...process.env, ...env },
     });
     let out = "";
     let err = "";
@@ -89,7 +96,7 @@ function runBuild(sources) {
 
 // ---------------------------------------------------------------- A. m3u 生成
 
-const first = await runBuild(`${base}/a.m3u\n${base}/b.m3u`);
+const first = await runBuild({ SOURCE_URLS: `${base}/a.m3u\n${base}/b.m3u` });
 if (first.code !== 0) {
   console.error(`build 退出码 ${first.code}`);
   process.exit(1);
@@ -182,10 +189,28 @@ check("sources / now / favorites 是空数组", body &&
   Array.isArray(body.now) && body.now.length === 0 &&
   Array.isArray(body.favorites) && body.favorites.length === 0);
 
-// ---------------------------------------------------------------- C. TXT / HTML
+// ---------------------------------------------------------------- C. 源清单 / TXT / HTML
 
-console.log("\n--- TXT + HTML ---");
-const second = await runBuild(`${base}/c.txt\n${base}/d.html`);
+console.log("\n--- 源清单 + TXT + HTML ---");
+
+// 模拟 CI 从 D1 读出来的源清单（wrangler d1 execute --json 的形状）
+const sourcesFile = "sources.test.json";
+await writeFile(
+  sourcesFile,
+  JSON.stringify([
+    {
+      results: [
+        { id: 7, name: "txt源", url: `${base}/c.txt`, ua: "CustomUA/1.0", referer: "http://ref.example/" },
+        { id: 8, name: "html源", url: `${base}/d.html`, ua: "", referer: "" },
+      ],
+      success: true,
+    },
+  ]),
+  "utf8",
+);
+
+const second = await runBuild({ SOURCES_FILE: sourcesFile, SOURCE_URLS: "" });
+await unlink(sourcesFile);
 
 check("TXT + HTML 混合源仍然成功（部分源失败不拖垮整体）", second.code === 0);
 
@@ -195,6 +220,22 @@ check("TXT 的 3 个频道都进来了", (m3u2.match(/#EXTINF/g) || []).length =
 check("名字里带逗号时按协议头从右往左拆", m3u2.includes(",Drama,HD"));
 check("HTML 源给出可读提示，不是静默失败", second.err.includes("HTML"));
 check("诊断信息里不带完整地址（脱敏）", !second.err.includes("d.html"));
+
+check("每个源用自己的 UA", seen["/c.txt"] && seen["/c.txt"].ua === "CustomUA/1.0");
+check("每个源用自己的 Referer", seen["/c.txt"] && seen["/c.txt"].referer === "http://ref.example/");
+check("没配 UA 的源回退到默认 UA", seen["/d.html"] && seen["/d.html"].ua.includes("VLC"));
+
+const statusSql = await readFile("sql/source-status.sql", "utf8");
+check("回写源状态带 id（供管理台显示）", statusSql.includes("WHERE id = 7;"));
+check("失败的源也回写状态", statusSql.includes("'html'"));
+
+const metaSql = await readFile("sql/meta.sql", "utf8");
+check("写入重建信息（管理台显示上次重建时间）", metaSql.includes("'last_build'"));
+
+// 没有源时不该炸：首次部署就是这个状态，得能正常发上去
+const third = await runBuild({ SOURCES_FILE: "", SOURCE_URLS: "" });
+check("没有源时不算失败（首次部署靠它）", third.code === 0);
+check("没有源时给的是可读提示", third.out.includes("没有启用的订阅源"));
 
 server.close();
 

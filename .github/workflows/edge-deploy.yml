@@ -12,10 +12,13 @@ on:
     branches: [main]
     paths:
       - "edge/**"
+      # 自带管理台会被构建进静态资源，改了也要重新发
+      - "admin/**"
       - ".github/workflows/edge-deploy.yml"
   pull_request:
     paths:
       - "edge/**"
+      - "admin/**"
   schedule:
     # UTC 21:17 = 北京时间 05:17。错开整点。
     - cron: "17 21 * * *"
@@ -59,9 +62,12 @@ jobs:
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-24.04
     env:
-      # 四个 Secret 缺任何一个就整体跳过部署。
+      # 必需的三个 Secret 缺任何一个就整体跳过部署。
       # 否则仓库还没配置时，每次改 edge/ 都会在 main 上红一次。
-      CONFIGURED: ${{ secrets.SOURCE_URLS != '' && secrets.BIND_CODE != '' && secrets.CLOUDFLARE_API_TOKEN != '' && secrets.CLOUDFLARE_ACCOUNT_ID != '' }}
+      # 注意不再要求 SOURCE_URLS：源现在配在管理台（D1 的 sources 表）。
+      CONFIGURED: ${{ secrets.BIND_CODE != '' && secrets.CLOUDFLARE_API_TOKEN != '' && secrets.CLOUDFLARE_ACCOUNT_ID != '' }}
+      GH_TOKEN: ${{ secrets.GITHUB_DISPATCH_TOKEN }}
+      SOURCE_URLS_FALLBACK: ${{ secrets.SOURCE_URLS }}
     steps:
       - name: 未配置 Secrets，跳过部署
         if: env.CONFIGURED != 'true'
@@ -69,7 +75,7 @@ jobs:
         # 顶层的 working-directory: edge，否则 bash 起不来。
         working-directory: .
         run: |
-          echo "::notice::未配置 SOURCE_URLS / BIND_CODE / CLOUDFLARE_API_TOKEN / CLOUDFLARE_ACCOUNT_ID，跳过部署。配置方法见 edge/README.md"
+          echo "::notice::未配置 BIND_CODE / CLOUDFLARE_API_TOKEN / CLOUDFLARE_ACCOUNT_ID，跳过部署。配置方法见 edge/README.md"
 
       - uses: actions/checkout@v7
         if: env.CONFIGURED == 'true'
@@ -83,14 +89,7 @@ jobs:
         if: env.CONFIGURED == 'true'
         run: npm install --no-audit --no-fund
 
-      # 生成失败会 exit 1，后面的部署全部短路，线上继续用上一次的好数据。
-      - name: 生成播放列表与 seed.sql
-        if: env.CONFIGURED == 'true'
-        env:
-          SOURCE_URLS: ${{ secrets.SOURCE_URLS }}
-          SOURCE_UA: ${{ secrets.SOURCE_UA }}
-        run: node scripts/build.mjs
-
+      # 先建表：sources / kv 表要先存在，下一步才能读源清单。
       - name: 建表（幂等）
         if: env.CONFIGURED == 'true'
         env:
@@ -98,12 +97,61 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: npx --yes wrangler@4 d1 execute DB --remote --file=schema.sql
 
+      # 源清单是管理台维护的，CI 只读。读不出来（比如首次还没建表成功）
+      # 就让文件为空，build.mjs 会回退到 SOURCE_URLS 或直接跳过数据更新。
+      - name: 读取源清单
+        if: env.CONFIGURED == 'true'
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          npx --yes wrangler@4 d1 execute DB --remote --json \
+            --command "SELECT id, name, url, ua, referer FROM sources WHERE enabled = 1 ORDER BY sort, id" \
+            > sources.json || echo "[]" > sources.json
+          node -e "const j=require('fs').readFileSync('sources.json','utf8');console.log('源清单字节数', j.length)"
+
+      # 生成失败会 exit 1，后面的部署全部短路，线上继续用上一次的好数据。
+      - name: 生成播放列表与 seed.sql
+        if: env.CONFIGURED == 'true'
+        env:
+          SOURCES_FILE: sources.json
+          SOURCE_URLS: ${{ secrets.SOURCE_URLS }}
+          SOURCE_UA: ${{ secrets.SOURCE_UA }}
+        run: node scripts/build.mjs
+
       - name: 灌数据
         if: env.CONFIGURED == 'true'
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: npx --yes wrangler@4 d1 execute DB --remote --file=sql/seed.sql
+
+      - name: 回写源状态与重建信息
+        if: env.CONFIGURED == 'true'
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          npx --yes wrangler@4 d1 execute DB --remote --file=sql/source-status.sql
+          npx --yes wrangler@4 d1 execute DB --remote --file=sql/meta.sql
+
+      # 用 LITV2 自带的管理台（admin/ 的 Vue），不是另写一套。
+      # base 改成 /：边缘这边它挂在根路径，这样它内部的相对 api/v1 正好落到
+      # Worker 的 /api/v1/*。默认的 /app/litv/ 是给飞牛网关用的。
+      - name: 构建自带管理台
+        if: env.CONFIGURED == 'true'
+        working-directory: admin
+        run: |
+          npm install --no-audit --no-fund
+          npm run build -- --base=/
+
+      - name: 把管理台放进静态资源
+        if: env.CONFIGURED == 'true'
+        working-directory: .
+        run: |
+          rm -rf edge/public/assets
+          cp -r admin/dist/. edge/public/
+          ls -la edge/public | head
 
       - name: 部署
         if: env.CONFIGURED == 'true'
@@ -122,3 +170,11 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           BIND_CODE: ${{ secrets.BIND_CODE }}
         run: echo "$BIND_CODE" | npx --yes wrangler@4 secret put BIND_CODE
+
+      # 可选：配了它，管理台才有「立即重建」按钮。
+      - name: 写入 GitHub 触发令牌（可选）
+        if: env.CONFIGURED == 'true' && env.GH_TOKEN != ''
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: echo "$GH_TOKEN" | npx --yes wrangler@4 secret put GITHUB_DISPATCH_TOKEN

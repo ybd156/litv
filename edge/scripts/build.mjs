@@ -8,7 +8,7 @@
 //
 // 纪律：日志里只出现计数，绝不打印上游 URL 或凭据。
 
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 
 const UA = process.env.SOURCE_UA || "VLC/3.0.20 LibVLC/3.0.20";
 const OUT_DIR = "public";
@@ -215,18 +215,78 @@ function redact(s) {
     .slice(0, 100);
 }
 
+// ---------- 源清单 ----------
+
+// wrangler d1 execute --json 的输出形状有好几种，全都兜住。
+function extractRows(json) {
+  if (Array.isArray(json)) {
+    if (json.length && Array.isArray(json[0]?.results)) return json[0].results;
+    return json;
+  }
+  if (json && Array.isArray(json.results)) return json.results;
+  if (json && json.result && Array.isArray(json.result[0]?.results)) {
+    return json.result[0].results;
+  }
+  return [];
+}
+
+/**
+ * 源清单来源，优先级：
+ *   1. SOURCES_FILE —— CI 从 D1 的 sources 表读出来写的临时 JSON（主路径，管理台配的）
+ *   2. SOURCE_URLS   —— 老的 Secret，一行一个地址（回退，不推荐）
+ *
+ * 每个源可以带自己的 UA / Referer：有些面板不认默认 UA，直接 403。
+ * 注意这是「拉取订阅时」用的 UA，不是播放时用的——播放用的 UA 在线路里。
+ */
+async function loadSources() {
+  const file = process.env.SOURCES_FILE;
+  if (file) {
+    try {
+      const rows = extractRows(JSON.parse(await readFile(file, "utf8")));
+      const list = rows
+        .map((r) => ({
+          id: Number(r.id) || 0,
+          name: String(r.name ?? ""),
+          url: String(r.url ?? ""),
+          ua: String(r.ua ?? ""),
+          referer: String(r.referer ?? ""),
+        }))
+        .filter((s) => s.url);
+      if (list.length > 0) return list;
+      console.log("D1 里没有启用的源");
+      return [];
+    } catch (err) {
+      console.warn(`读 SOURCES_FILE 失败（${err.message}），回退到 SOURCE_URLS`);
+    }
+  }
+
+  return (process.env.SOURCE_URLS || "")
+    .split(/\r?\n/)
+    .map((s) => s.trim())
+    .filter((s) => s && !s.startsWith("#"))
+    .map((url) => ({ id: 0, name: "", url, ua: "", referer: "" }));
+}
+
 // ---------- 抓取 ----------
 
-async function fetchOne(url, index) {
+/**
+ * 返回 { entries, status }。status 会回写到 sources.last_status，
+ * 管理台据此显示"这个源还活着吗、上次拉到几条"。
+ */
+async function fetchOne(src, index) {
+  const label = src.name ? `源 ${index}（${src.name}）` : `源 ${index}`;
+  const headers = { "User-Agent": src.ua || UA, Accept: "*/*" };
+  if (src.referer) headers["Referer"] = src.referer;
+
   try {
-    const res = await fetch(url, {
-      headers: { "User-Agent": UA, Accept: "*/*" },
+    const res = await fetch(src.url, {
+      headers,
       signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
       redirect: "follow",
     });
     if (!res.ok) {
-      console.warn(`[源 ${index}] HTTP ${res.status}`);
-      return [];
+      console.warn(`[${label}] HTTP ${res.status}`);
+      return { entries: [], status: `http_${res.status}` };
     }
 
     const buf = new Uint8Array(await res.arrayBuffer());
@@ -243,30 +303,30 @@ async function fetchOne(url, index) {
         break;
       case "html":
         console.warn(
-          `[源 ${index}] 拿到的是网页（HTML），不是播放列表。` +
+          `[${label}] 拿到的是网页（HTML），不是播放列表。` +
             `需要面板里「订阅 / 播放列表」那个地址，通常带 get.php?...type=m3u_plus 之类。`,
         );
-        return [];
+        return { entries: [], status: "html" };
       case "json":
         console.warn(
-          `[源 ${index}] 拿到的是 JSON，不是播放列表。` +
+          `[${label}] 拿到的是 JSON，不是播放列表。` +
             `这多半是面板的 API，请改用订阅导出地址。`,
         );
-        return [];
+        return { entries: [], status: "json" };
       case "empty":
-        console.warn(`[源 ${index}] 响应是空的`);
-        return [];
+        console.warn(`[${label}] 响应是空的`);
+        return { entries: [], status: "empty" };
       default:
-        console.warn(`[源 ${index}] 认不出格式，开头是：${redact(text.trimStart())}`);
-        return [];
+        console.warn(`[${label}] 认不出格式，开头是：${redact(text.trimStart())}`);
+        return { entries: [], status: "unknown" };
     }
 
-    console.log(`[源 ${index}] ${format} 格式，${entries.length} 条`);
-    return entries;
+    console.log(`[${label}] ${format} 格式，${entries.length} 条`);
+    return { entries, status: entries.length > 0 ? "ok" : "empty_list" };
   } catch (err) {
     // 只报错误类型，不带 URL
-    console.warn(`[源 ${index}] 失败：${err.name}`);
-    return [];
+    console.warn(`[${label}] 失败：${err.name}`);
+    return { entries: [], status: `error_${err.name}` };
   }
 }
 
@@ -392,28 +452,67 @@ function renderSeed(channels) {
   ].join("\n");
 }
 
+// 回写每个源的拉取结果，管理台据此显示"上次拉取：ok / 12 条"。
+function renderSourceStatus(results) {
+  const ts = Math.floor(Date.now() / 1000);
+  const lines = ["-- 由 scripts/build.mjs 生成：回写每个源的拉取结果"];
+  for (const r of results) {
+    // 回退模式（SOURCE_URLS）没有 id，没什么可回写的
+    if (!r.id) continue;
+    lines.push(
+      `UPDATE sources SET last_fetch_at = ${ts}, ` +
+        `last_status = ${sqlStr(r.status)}, last_count = ${sqlInt(r.count)} ` +
+        `WHERE id = ${sqlInt(r.id)};`,
+    );
+  }
+  return lines.join("\n") + "\n";
+}
+
+// 重建结果写进 kv，管理台据此显示"数据是什么时候更新的"，
+// 不用去翻 GitHub Actions。
+function renderMeta(channels, sourceCount, lineCount) {
+  const info = {
+    at: Math.floor(Date.now() / 1000),
+    sources: sourceCount,
+    channels: channels.length,
+    lines: lineCount,
+  };
+  return [
+    "-- 由 scripts/build.mjs 生成：记录本次重建结果",
+    `INSERT INTO kv (k, v) VALUES ('last_build', ${sqlStr(JSON.stringify(info))})`,
+    "ON CONFLICT(k) DO UPDATE SET v = excluded.v;",
+    "",
+  ].join("\n");
+}
+
 // ---------- 主流程 ----------
 
 async function main() {
-  const urls = (process.env.SOURCE_URLS || "")
-    .split(/\r?\n/)
-    .map((s) => s.trim())
-    .filter((s) => s && !s.startsWith("#"));
+  const sources = await loadSources();
 
-  if (urls.length === 0) {
-    console.error("SOURCE_URLS 为空或未配置");
-    process.exit(1);
+  if (sources.length === 0) {
+    // 首次部署时还没人配源，这是正常流程：先把 Worker 发上去，
+    // 管理台能打开了再去「源」里添加。所以这里不算失败。
+    console.log("没有启用的订阅源，跳过数据更新（管理台 → 源 里添加后重跑）。");
+    await mkdir(SQL_DIR, { recursive: true });
+    await writeFile(`${SQL_DIR}/seed.sql`, "-- 没有启用的订阅源，本次不更新频道数据\n", "utf8");
+    await writeFile(`${SQL_DIR}/source-status.sql`, "", "utf8");
+    await writeFile(`${SQL_DIR}/meta.sql`, "", "utf8");
+    return;
   }
 
-  console.log(`共 ${urls.length} 个源`);
+  console.log(`共 ${sources.length} 个源`);
 
   const all = [];
-  for (let i = 0; i < urls.length; i++) {
-    all.push(...(await fetchOne(urls[i], i + 1)));
+  const statuses = [];
+  for (let i = 0; i < sources.length; i++) {
+    const r = await fetchOne(sources[i], i + 1);
+    all.push(...r.entries);
+    statuses.push({ id: sources[i].id, status: r.status, count: r.entries.length });
   }
 
   if (all.length === 0) {
-    console.error("所有源都没解析出条目，拒绝生成空播放列表");
+    console.error("所有源都没解析出条目，拒绝生成空播放列表（线上保留上一次的数据）");
     process.exit(1);
   }
 
@@ -448,12 +547,15 @@ async function main() {
     renderM3U(channels.map((ch) => ({ ...ch, line: ch.lines[0] }))),
     "utf8",
   );
+  const totalLines = channels.reduce((n, c) => n + c.lines.length, 0);
+
   await writeFile(`${SQL_DIR}/seed.sql`, renderSeed(channels), "utf8");
+  await writeFile(`${SQL_DIR}/source-status.sql`, renderSourceStatus(statuses), "utf8");
+  await writeFile(`${SQL_DIR}/meta.sql`, renderMeta(channels, sources.length, totalLines), "utf8");
 
   const withHeaders = channels.filter((c) => c.lines.some((l) => l.ua || Object.keys(l.headers).length));
   const groups = new Map();
   for (const ch of channels) groups.set(ch.group, (groups.get(ch.group) || 0) + 1);
-  const totalLines = channels.reduce((n, c) => n + c.lines.length, 0);
 
   console.log(`条目 ${all.length} → ${channels.length} 个频道 / ${totalLines} 条线路`);
   console.log(`带 UA 或 Referer 的频道 ${withHeaders.length} 个`);

@@ -95,21 +95,24 @@ LITV2 的边缘降级部署：NAS 挂了之后，用 Cloudflare 免费额度顶�
 
 本仓库 Settings → Secrets and variables → Actions：
 
-| Secret | 说明 |
-|---|---|
-| `SOURCE_URLS` | 上游 m3u 订阅地址，**一行一个**。可以带账号密码，只存在这里 |
-| `BIND_CODE` | **必须是 6 位数字**（客户端输入框限死了）。设备绑定码 + 管理台口令 |
-| `CLOUDFLARE_API_TOKEN` | Cloudflare → API Tokens → "Edit Cloudflare Workers" 模板 |
-| `CLOUDFLARE_ACCOUNT_ID` | 控制台右侧栏的 Account ID |
+| Secret | 必需 | 说明 |
+|---|---|---|
+| `BIND_CODE` | ✅ | **必须是 6 位数字**（客户端输入框限死了）。设备绑定码 + 管理台登录口令 |
+| `CLOUDFLARE_API_TOKEN` | ✅ | Cloudflare → API Tokens。模板用 "Edit Cloudflare Workers"，**再手动加 Account → D1 → Edit** |
+| `CLOUDFLARE_ACCOUNT_ID` | ✅ | 控制台右侧栏的 Account ID |
+| `GITHUB_DISPATCH_TOKEN` | 可选 | 配了管理台才有「立即重建」按钮。fine-grained PAT，只给本仓库的 **Actions: write** |
+| `SOURCE_URLS` | 回退 | 一行一个地址。**推荐在管理台的「源」页里配**，这里只是没有 UI 时的兜底 |
+| `SOURCE_UA` | 回退 | 全局默认拉取 UA。每个源自己的 UA 在「源」页里配 |
 
-可选：`SOURCE_UA` 拉取上游时用的 User-Agent，默认 `VLC/3.0.20 LibVLC/3.0.20`。
+> **源不放这里。** 订阅源是日常要改的东西，放在管理台的「源」页（存在 D1），
+> 每个源可以带自己的 UA / Referer。`SOURCE_URLS` 只在 D1 里一个源都没有时才用。
 
 ### 3. 跑一次
 
 Actions → `Edge Deploy` → Run workflow。它会先跑 `check`（类型检查 + 自测 + 打包检查），
 全绿才部署。
 
-只改 `edge/` 的提交会自动触发；改别的地方不会，免得普通提交白白重建一遍。
+只改 `edge/` 或 `admin/` 的提交会自动触发。
 
 ## 客户端怎么连
 
@@ -128,12 +131,32 @@ https://litv-edge.<你的子域>.workers.dev/playlist.m3u?t=<BIND_CODE>
 
 ## 管理台
 
-浏览器打开 `https://litv-edge.<你的子域>.workers.dev/admin.html`，输 6 位绑定码登录。
+**用的是 LITV2 自带的管理台**（`admin/` 的 Vue 应用），不是另写一套。
+CI 会把它构建出来（`--base=/`）塞进静态资源，访问根路径就是：
 
-- 会话是登录后签发的随机 token，有效期 7 天；绑定码只在登录那一刻用
-- **频道**：搜索、按分组筛、改名、改分组、显示/隐藏
-- **线路**：查看每条线路的地址与 UA/Referer、手工添加、删除、探活
-- **设备**：看已绑定设备，吊销（立刻掉线，需重新绑定）
+```
+https://litv-edge.<你的子域>.workers.dev/
+```
+
+登录页和 NAS 上那个一模一样：品牌方块 + 主机名 + 口令。口令就是 `BIND_CODE`。
+
+**能用的**：源（增删改、每源自己的 UA/Referer、测试连通）、频道（搜索/分组/改名/
+启用停用/批量/拖拽排序/线路增删）、设备（查看、吊销）、概览、立即重建。
+
+**明确不支持的**（点了会提示"边缘模式不支持"，不会假装成功）：
+EPG 导入与映射、台标抓取/上传、设备审批与下发配置、系统配置、系统日志。
+这些在边缘架构里没有对应物——不是没做，是本来就不存在。
+
+### 源和「立即重建」
+
+- 源存在 D1 里，在「源」页改完就保存
+- 抓取 + 解析要跑 CI（免费版 Worker 单次只有 10ms CPU，解析不了播放列表）
+- 配了 `GITHUB_DISPATCH_TOKEN` 就能点「立即重建」，否则等每天 05:17
+
+### 简易版管理台（备用）
+
+`/admin.html` 还留着一个单文件版本，功能更少但没有构建依赖。
+自带管理台出问题时可以用它兜底。
 
 ### 手工改动不会被每日重建冲掉
 

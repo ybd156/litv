@@ -73,11 +73,43 @@
   .form .line { display: flex; gap: 8px; flex-wrap: wrap; }
   .form input { flex: 1; min-width: 140px; }
 
-  .login { max-width: 320px; margin: 16vh auto; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 24px; }
-  .login h1 { font-size: 16px; margin: 0 0 4px; }
-  .login p { color: var(--dim); font-size: 13px; margin: 0 0 16px; }
-  .login input { width: 100%; margin-bottom: 10px; text-align: center; letter-spacing: 4px; }
-  .login button { width: 100%; }
+  /* 登录页：照 admin/src/views/LoginView.vue 的设计做——
+     径向渐变背景 + 半透明玻璃卡片 + 品牌方块 + 主机名。 */
+  .login-page {
+    min-height: 100vh; display: flex; align-items: center; justify-content: center;
+    background: radial-gradient(1200px 600px at 50% -10%, #1b2a4a 0%, #0b0e11 60%);
+    padding: 24px;
+  }
+  .login-card {
+    width: 100%; max-width: 420px;
+    background: rgba(22, 27, 34, 0.72);
+    border: 1px solid #ffffff14; border-radius: 18px;
+    padding: 36px 32px 28px;
+    backdrop-filter: blur(14px);
+  }
+  .brand { text-align: center; margin-bottom: 26px; }
+  .mark {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 64px; height: 64px; border-radius: 16px;
+    background: linear-gradient(160deg, #1e3a8a, #0f1e3d);
+    color: #fff; font-weight: 800; font-size: 18px; letter-spacing: 1px;
+    margin-bottom: 12px;
+  }
+  .brand h1 { margin: 0; font-size: 20px; color: #e6edf3; font-weight: 600; }
+  .brand .host { margin: 6px 0 0; font-size: 13px; letter-spacing: 2px; color: #8b949e; }
+  .login-form { display: flex; flex-direction: column; gap: 14px; }
+  .login-form input[type="text"], .login-form input[type="password"] {
+    width: 100%; padding: 11px 14px; font-size: 15px; border-radius: 8px;
+  }
+  .code-input { text-align: center; letter-spacing: 8px; font-size: 20px; }
+  .login-form .row { display: flex; align-items: center; justify-content: space-between; font-size: 13px; }
+  .remember { display: flex; align-items: center; gap: 6px; color: #8b949e; cursor: pointer; }
+  .link { color: #8b949e; cursor: pointer; text-decoration: none; }
+  .link:hover { color: #2dd4bf; }
+  .err { margin: 0; color: #ff8f88; font-size: 13px; }
+  .login-form .btn-block { width: 100%; padding: 10px; font-size: 15px; }
+  .login-form .btn-ghost-block { width: 100%; padding: 10px; background: transparent; }
+  .login-tip { margin: 10px 0 0; font-size: 12px; line-height: 1.6; color: #8b949e; }
 
   .toast { position: fixed; left: 50%; bottom: 28px; transform: translateX(-50%); background: #2b313c; border: 1px solid var(--line); border-radius: 8px; padding: 9px 16px; z-index: 40; }
   .muted { color: var(--dim); }
@@ -98,10 +130,14 @@ const state = {
   channels: [],
   groups: [],
   devices: [],
+  sources: [],
+  build: null,
   q: "",
   group: "",
   drawer: null,      // { channelId, name, streams }
   form: { url: "", ua: "", referer: "" },
+  // 「源」页的新增表单
+  srcForm: { open: false, id: 0, name: "", url: "", ua: "", referer: "" },
   busy: false,
   error: "",
 };
@@ -162,15 +198,19 @@ function healthTag(h) {
 
 async function loadAll() {
   try {
-    const [stats, ch, dev] = await Promise.all([
+    const [stats, ch, dev, src, build] = await Promise.all([
       api("/api/v1/admin/stats"),
       api("/api/v1/admin/channels?limit=500"),
       api("/api/v1/admin/devices"),
+      api("/api/v1/admin/sources"),
+      api("/api/v1/admin/build"),
     ]);
     state.stats = stats;
     state.channels = ch.items;
     state.groups = ch.groups;
     state.devices = dev;
+    state.sources = src;
+    state.build = build;
   } catch (e) {
     toast(e.message, true);
   }
@@ -216,17 +256,31 @@ async function refreshStreams() {
 
 // ---------------------------------------------------------------- 动作
 
-async function login(code) {
+async function login(code, remember) {
+  const errEl = document.getElementById("loginErr");
+  const showErr = (m) => {
+    if (errEl) {
+      errEl.textContent = m;
+      errEl.style.display = "block";
+    } else {
+      toast(m, true);
+    }
+  };
+
+  if (!code) return showErr("请输入口令");
+
   try {
     const data = await api("/api/v1/admin/login", {
       method: "POST",
       body: JSON.stringify({ code }),
     });
     state.token = data.token;
-    localStorage.setItem(TOKEN_KEY, data.token);
+    // 「记住口令」= 存 localStorage；不勾就只留在内存里，刷新要重输
+    if (remember) localStorage.setItem(TOKEN_KEY, data.token);
+    else localStorage.removeItem(TOKEN_KEY);
     await loadAll();
   } catch (e) {
-    toast(e.message, true);
+    showErr(e.message);
   }
 }
 
@@ -312,15 +366,116 @@ async function deleteDevice(id) {
   }
 }
 
+// ---------------------------------------------------------------- 源
+
+async function saveSource() {
+  const f = state.srcForm;
+  if (!f.url.trim()) return toast("请填订阅地址", true);
+  const body = { name: f.name.trim(), url: f.url.trim(), ua: f.ua.trim(), referer: f.referer.trim() };
+  try {
+    if (f.id) {
+      await api("/api/v1/admin/source/" + f.id, { method: "PATCH", body: JSON.stringify(body) });
+    } else {
+      await api("/api/v1/admin/sources", { method: "POST", body: JSON.stringify(body) });
+    }
+    state.srcForm = { open: false, id: 0, name: "", url: "", ua: "", referer: "" };
+    await loadAll();
+    toast("已保存，下次重建生效");
+  } catch (e) {
+    toast(e.message, true);
+  }
+}
+
+async function patchSource(id, patch) {
+  try {
+    await api("/api/v1/admin/source/" + id, { method: "PATCH", body: JSON.stringify(patch) });
+    await loadAll();
+  } catch (e) {
+    toast(e.message, true);
+  }
+}
+
+async function deleteSource(id) {
+  if (!confirm("删除这个源？已经生成的频道不会立刻消失，下次重建时才会被清掉。")) return;
+  try {
+    await api("/api/v1/admin/source/" + id, { method: "DELETE" });
+    await loadAll();
+  } catch (e) {
+    toast(e.message, true);
+  }
+}
+
+async function triggerRebuild(btn) {
+  btn.disabled = true;
+  btn.textContent = "已触发…";
+  try {
+    await api("/api/v1/admin/rebuild", { method: "POST" });
+    toast("已触发重建，约 1 分钟后自动刷新");
+    // 重建要跑 CI（装依赖、拉源、灌库、部署），大概一两分钟。
+    // 自动刷一次，省得用户盯着手动点。
+    setTimeout(() => loadAll(), 60000);
+  } catch (e) {
+    toast(e.message, true);
+  }
+  btn.disabled = false;
+  btn.textContent = "立即重建";
+}
+
+async function testSource(id, btn) {  btn.disabled = true;
+  btn.textContent = "测试中…";
+  try {
+    const r = await api("/api/v1/admin/source/" + id + "/test", { method: "POST" });
+    const ok = r.format === "m3u" || r.format === "txt";
+    toast(
+      ok
+        ? `通了，是 ${r.format.toUpperCase()}（${r.latency_ms}ms）`
+        : `没拿到播放列表：${r.format}（HTTP ${r.status}）`,
+      !ok,
+    );
+  } catch (e) {
+    toast(e.message, true);
+  }
+  btn.disabled = false;
+  btn.textContent = "测试";
+}
+
 // ---------------------------------------------------------------- 渲染
 
 function renderLogin() {
+  // 主机名那行跟 NAS 版一样：让人一眼确认自己连的是哪台
+  const host = (location.hostname || "edge").toUpperCase();
   return `
-    <div class="login">
-      <h1>LITV 边缘管理台</h1>
-      <p>输入 6 位绑定码</p>
-      <input id="code" inputmode="numeric" maxlength="6" placeholder="••••••" autocomplete="off">
-      <button class="primary" id="doLogin">登录</button>
+    <div class="login-page">
+      <div class="login-card">
+        <div class="brand">
+          <div class="mark">LITV</div>
+          <h1>LITV 边缘管理台</h1>
+          <p class="host">${esc(host)}</p>
+        </div>
+
+        <div class="login-form">
+          <input id="code" class="code-input" type="password" inputmode="numeric"
+                 maxlength="6" placeholder="访问口令" autocomplete="off">
+
+          <div class="row">
+            <label class="remember">
+              <input type="checkbox" id="remember" checked />
+              <span>记住口令</span>
+            </label>
+            <a class="link" id="hintLink">口令是什么？</a>
+          </div>
+
+          <p class="err" id="loginErr" style="display:none"></p>
+
+          <button class="primary btn-block" id="doLogin">登录</button>
+          <button class="ghost btn-ghost-block" id="hintBtn">口令在 GitHub Secrets 的 BIND_CODE</button>
+        </div>
+
+        <p class="login-tip">
+          这是 NAS 不可用时的边缘部署：只做频道表分发，播放时客户端直连上游源站。
+          口令就是部署时配的 6 位绑定码，和电视绑定页填的是同一个。
+        </p>
+      </div>
     </div>`;
 }
 
@@ -375,6 +530,88 @@ function renderChannels() {
         ? '<div class="empty">没有频道。先跑一次 Actions 生成数据。</div>'
         : `<table>
              <thead><tr><th class="num">#</th><th>频道</th><th>分组</th><th>线路</th><th>状态</th><th></th></tr></thead>
+             <tbody>${rows}</tbody>
+           </table>`}
+    </div>`;
+}
+
+// 源地址里常带账号密码。列表里默认打码，避免截图外泄；
+// 编辑时表单里是完整值。
+function maskUrl(u) {
+  return String(u).replace(/([?&](?:password|pass|pwd|token|key)=)[^&]*/gi, "$1•••");
+}
+
+function statusTag(s) {
+  if (!s) return '<span class="tag">未拉取</span>';
+  if (s === "ok") return '<span class="tag ok">正常</span>';
+  if (s === "empty_list") return '<span class="tag warn">空列表</span>';
+  if (s === "html" || s === "json") return '<span class="tag bad">不是播放列表</span>';
+  return `<span class="tag bad">${esc(s)}</span>`;
+}
+
+function renderSources() {
+  const f = state.srcForm;
+  const form = f.open ? `
+    <div class="form">
+      <div class="line">
+        <input id="sUrl" placeholder="订阅地址 http(s)://…" value="${esc(f.url)}">
+      </div>
+      <div class="line">
+        <input id="sName" placeholder="备注名（可空）" value="${esc(f.name)}">
+        <input id="sUa" placeholder="拉取用的 User-Agent（可空）" value="${esc(f.ua)}">
+        <input id="sRef" placeholder="拉取用的 Referer（可空）" value="${esc(f.referer)}">
+      </div>
+      <div class="line">
+        <button class="primary" data-act="saveSrc">${f.id ? "保存" : "添加"}</button>
+        <button class="ghost" data-act="cancelSrc">取消</button>
+        <span class="muted" style="font-size:12px">
+          这个 UA 只用于抓订阅；播放时用的 UA 在线路里单独配
+        </span>
+      </div>
+    </div>` : "";
+
+  const rows = state.sources.map((s) => `
+    <tr>
+      <td>
+        <div>${esc(s.name || "未命名源")}</div>
+        <div class="muted" style="font-size:12px;font-family:ui-monospace,monospace;word-break:break-all">
+          ${esc(maskUrl(s.url))}
+        </div>
+      </td>
+      <td>${s.enabled ? '<span class="tag ok">启用</span>' : '<span class="tag">停用</span>'}</td>
+      <td>${statusTag(s.last_status)}</td>
+      <td class="muted">${s.last_count || 0}</td>
+      <td class="muted">${s.last_fetch_at ? fmtTime(s.last_fetch_at) : "—"}</td>
+      <td style="text-align:right; white-space:nowrap">
+        <button data-act="testSrc" data-id="${s.id}">测试</button>
+        <button data-act="toggleSrc" data-id="${s.id}" data-on="${s.enabled ? 0 : 1}">${s.enabled ? "停用" : "启用"}</button>
+        <button data-act="editSrc" data-id="${s.id}">编辑</button>
+        <button class="danger" data-act="delSrc" data-id="${s.id}">删除</button>
+      </td>
+    </tr>`).join("");
+
+  const b = state.build;
+  const last = b && b.last_build;
+  const buildLine = last
+    ? `上次重建：${fmtTime(last.at)} · ${last.channels} 个频道 / ${last.lines} 条线路`
+    : "还没有重建过";
+
+  return `
+    <div class="panel">
+      <div class="toolbar">
+        <button class="primary" data-act="newSrc">添加源</button>
+        ${b && b.can_rebuild
+          ? '<button data-act="rebuild">立即重建</button>'
+          : '<button disabled title="需要配 GITHUB_DISPATCH_TOKEN">立即重建</button>'}
+        <span class="muted" style="font-size:12px;align-self:center">
+          ${esc(buildLine)}　·　定时：${esc(b ? b.schedule : "每天 05:17")}
+        </span>
+      </div>
+      ${form}
+      ${state.sources.length === 0
+        ? '<div class="empty">还没有订阅源。点「添加源」填面板给的订阅/播放列表地址。</div>'
+        : `<table>
+             <thead><tr><th>源</th><th>状态</th><th>上次结果</th><th>条目</th><th>上次拉取</th><th></th></tr></thead>
              <tbody>${rows}</tbody>
            </table>`}
     </div>`;
@@ -463,13 +700,21 @@ function render() {
     app.innerHTML = renderLogin();
     const btn = document.getElementById("doLogin");
     const input = document.getElementById("code");
-    btn.onclick = () => login(input.value.trim());
+    const remember = document.getElementById("remember");
+    btn.onclick = () => login(input.value.trim(), remember.checked);
     input.onkeydown = (e) => { if (e.key === "Enter") btn.onclick(); };
+
+    const hint = () =>
+      toast("口令就是部署时配的 BIND_CODE（6 位数字），和电视绑定页填的是同一个");
+    document.getElementById("hintBtn").onclick = hint;
+    document.getElementById("hintLink").onclick = hint;
+
     input.focus();
     return;
   }
 
   const tabBody = state.tab === "channels" ? renderChannels()
+    : state.tab === "sources" ? renderSources()
     : state.tab === "devices" ? renderDevices()
     : `<div class="panel"><div class="empty">
          这是 NAS 挂掉之后的降级部署：只做频道表分发，播放时客户端直连上游源站。<br><br>
@@ -487,6 +732,7 @@ function render() {
       ${renderStats()}
       <div class="tabs">
         <button data-tab="channels" class="${state.tab === "channels" ? "on" : ""}">频道</button>
+        <button data-tab="sources" class="${state.tab === "sources" ? "on" : ""}">源</button>
         <button data-tab="devices" class="${state.tab === "devices" ? "on" : ""}">设备</button>
         <button data-tab="about" class="${state.tab === "about" ? "on" : ""}">关于</button>
       </div>
@@ -520,6 +766,19 @@ function render() {
     document.getElementById("fUa").oninput = (e) => { state.form.ua = e.target.value; };
     document.getElementById("fRef").oninput = (e) => { state.form.referer = e.target.value; };
   }
+
+  // 「源」页的新增/编辑表单。不回写 state 再 render，避免输入时丢焦点。
+  const sUrl = document.getElementById("sUrl");
+  if (sUrl) {
+    const bind = (elId, key) => {
+      const el = document.getElementById(elId);
+      if (el) el.oninput = (e) => { state.srcForm[key] = e.target.value; };
+    };
+    bind("sUrl", "url");
+    bind("sName", "name");
+    bind("sUa", "ua");
+    bind("sRef", "referer");
+  }
 }
 
 // ---------------------------------------------------------------- 事件委托
@@ -546,6 +805,20 @@ document.addEventListener("click", (e) => {
   else if (act === "probe") probeStream(id, el);
   else if (act === "delst") deleteStream(id);
   else if (act === "deldev") deleteDevice(id);
+  else if (act === "newSrc") { state.srcForm = { open: true, id: 0, name: "", url: "", ua: "", referer: "" }; render(); }
+  else if (act === "cancelSrc") { state.srcForm.open = false; render(); }
+  else if (act === "editSrc") {
+    const s = state.sources.find((x) => x.id === id);
+    if (s) {
+      state.srcForm = { open: true, id: s.id, name: s.name, url: s.url, ua: s.ua, referer: s.referer };
+      render();
+    }
+  }
+  else if (act === "saveSrc") saveSource();
+  else if (act === "toggleSrc") patchSource(id, { enabled: el.dataset.on === "1" });
+  else if (act === "delSrc") deleteSource(id);
+  else if (act === "testSrc") testSource(id, el);
+  else if (act === "rebuild") triggerRebuild(el);
 });
 
 // ---------------------------------------------------------------- 启动

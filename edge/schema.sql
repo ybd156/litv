@@ -70,6 +70,26 @@ CREATE TABLE IF NOT EXISTS devices (
 
 CREATE INDEX IF NOT EXISTS idx_devices_token ON devices (token_hash);
 
+-- 订阅源。放在 D1 而不是 GitHub Secret，这样能在管理台里增删改、
+-- 每个源带自己的 UA / Referer（有些面板不认默认 UA 就 403）。
+--
+-- 注意：url 里通常带账号密码，这是管理台数据，不是日志，不会外泄。
+-- last_* 三个字段由 CI 每次重建后回写，用来在管理台显示"这个源还活着吗"。
+CREATE TABLE IF NOT EXISTS sources (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  name          TEXT    NOT NULL DEFAULT '',
+  type          TEXT    NOT NULL DEFAULT 'm3u',
+  url           TEXT    NOT NULL,
+  ua            TEXT    NOT NULL DEFAULT '',
+  referer       TEXT    NOT NULL DEFAULT '',
+  enabled       INTEGER NOT NULL DEFAULT 1,
+  sort          INTEGER NOT NULL DEFAULT 0,
+  created_at    INTEGER NOT NULL,
+  last_fetch_at INTEGER NOT NULL DEFAULT 0,
+  last_status   TEXT    NOT NULL DEFAULT '',
+  last_count    INTEGER NOT NULL DEFAULT 0
+);
+
 -- 管理台会话。绑定码只有 6 位数字，所以它只在登录那一刻用，
 -- 之后走随机 token，避免把弱口令当长期凭据使。
 CREATE TABLE IF NOT EXISTS admin_sessions (
@@ -83,4 +103,11 @@ CREATE TABLE IF NOT EXISTS bind_attempts (
   ip           TEXT PRIMARY KEY,
   fails        INTEGER NOT NULL DEFAULT 0,
   window_start INTEGER NOT NULL
+);
+
+-- 杂项键值。目前只存 last_build（上次重建的时间/频道数），
+-- 让管理台能显示"数据是什么时候更新的"，不用去翻 Actions。
+CREATE TABLE IF NOT EXISTS kv (
+  k TEXT PRIMARY KEY,
+  v TEXT NOT NULL
 );

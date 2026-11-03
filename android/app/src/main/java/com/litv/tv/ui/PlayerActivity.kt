@@ -371,7 +371,7 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
                 toastTip("回看中（可回看约 $minutes 分钟）")
                 player.play(
                     ch.id, abs,
-                    mapOf("User-Agent" to "LITV/1.0 (Android TV)"),
+                    mapOf("User-Agent" to "LITV/1.0 (Android)"),
                     app.prefs.engine,
                 )
             },
@@ -512,7 +512,10 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
             onOk = { info ->
                 // R09：用服务端下发的整份线路头（已清洗），不再只带 UA。
                 // 要求 Referer / Origin 校验的源，只带 UA 会直接 403。
-                val headers = info.playHeaders("LITV/1.0 (Android TV)")
+                // 默认 UA 必须和手机端完全一致（LITV/1.0 (Android)）。
+                // 之前电视端多带了个 " TV" 后缀，很多 IPTV 服务商做 UA 白名单，
+                // 结果同一份源手机能播、电视被挡——排查了很久才发现是这个。
+                val headers = info.playHeaders("LITV/1.0 (Android)")
                 val abs = app.api.absolute(info.url)
 
                 // 时钟偏移检查：签名地址的过期时间是服务端按**自己的时钟**算的。

@@ -191,7 +191,7 @@ class ExoEngine : PlayerEngine {
 
     private companion object {
         const val TAG = "ExoEngine"
-        const val UA = "LITV/1.0 (Android TV)"
+        const val UA = "LITV/1.0 (Android)"
     }
 
 }

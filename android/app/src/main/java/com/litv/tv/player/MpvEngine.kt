@@ -122,7 +122,7 @@ class MpvEngine(private val avs3Mode: Boolean = false) : PlayerEngine, MPVLib.Li
         opt("network-timeout", "15")
         opt("tls-verify", "no")
         opt("rtsp-transport", "tcp")
-        opt("user-agent", headers["User-Agent"] ?: "LITV/1.0 (Android TV)")
+        opt("user-agent", headers["User-Agent"] ?: "LITV/1.0 (Android)")
         // 画面比例：auto 用 no 让 mpv 按视频自身宽高比
         when (aspect) {
             "16:9" -> opt("video-aspect-override", "16:9")

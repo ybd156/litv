@@ -142,57 +142,61 @@ packaging/fnos/app/server/litvd_*
 
 ---
 
-## 8. 工具链：用 WSL，不要用 Windows
+## 8. 编译：一律放 GitHub Actions，不要在本地搭工具链
 
-**Windows 主机上没有 Go、JDK、Gradle。** 全部在 WSL（Ubuntu）里。
+**这是硬规则。** 新接手的人或 AI，改完代码**推上去让 CI 编**，
+不要花时间在本地装 Go / JDK / Android SDK / Gradle / Node。
 
-不要浪费时间找 Windows 版 Go/JDK——没有。也不要试图用
-`.review-artifacts/toolchains/go`，它的构建缓存在可写工作区之外，
-从 Windows 调用会 `Access is denied`。
+理由：
 
-所有构建与测试命令都通过 WSL 执行，仓库路径为
-`/mnt/d/Documents/deepseek-harness/default-workspace/LITV2`：
+- 本地要装一整套（Go 1.23 + JDK + Android SDK 35 + build-tools + NDK + Gradle 8.7 + Node 22），
+  换台机器就得重搭一遍
+- 版本稍有差异就会出现「我这里能编过」的问题
+- iOS 本地根本编不了（需要 Apple SDK）
+
+### 标准编译路径
+
+| 工作流 | 触发 | 做什么 |
+|---|---|---|
+| `.github/workflows/build-check.yml` | push 到 main、PR、手动 | Go 编译+vet+test、管理台 typecheck+build、Android 两个 flavor 编译+单测 |
+| `.github/workflows/ios-check.yml` | 只在 `ios/**` 变化时 | 编译 iOS（不发版） |
+| `.github/workflows/release.yml` | `v*` tag 或手动 | 出三端产物（APK / fpk / ipa） |
+
+改完代码看 `Build Check` 的结论就够了。要产物走 `Release`。
+
+### CI 上的几个坑（改工作流前必读）
+
+- **`android/gradlew` 不是标准 wrapper**，是给本地 WSL 用的转发脚本
+  （硬编码 `~/android-dev/env.sh`）。CI 上**必须**用 setup-gradle 装的 `gradle` 命令
+- `android/local.properties` 被 gitignore，CI 靠 `ANDROID_HOME` 环境变量找 SDK。
+  **不要**把它提交上去，会写死本地路径
+- `server/` 用 `modernc.org/sqlite`（纯 Go），不需要 cgo；测试跑 `-race` 也没问题
+- macOS runner 按 **10 倍**计费，所以 iOS 单独一个工作流、只在 `ios/**` 变化时跑
+
+### 如果 CI 编不过
+
+先看日志里第一条 `error:`。常见原因：
+
+- Go：忘了 `gofmt -w`（build-check 会先查格式）
+- Android：`e:` 开头的 Kotlin 编译错误；`assembleRelease` 才暴露的 R8/JNI 问题
+- iOS：用了 iOS 16+ 的 API（部署目标是 **15**）
+
+### 历史遗留（不推荐，仅作参考）
+
+早期为了本地调试在 WSL 里搭过工具链，**现在不作为标准路径**。
+如果机器上恰好已经有，可以临时用：
 
 ```bash
-wsl.exe -e bash -lc '<command>'
+wsl.exe -e bash -lc 'cd /mnt/d/Documents/deepseek-harness/default-workspace/LITV2/server && go build ./...'
 ```
 
-已验证的 WSL 清单（用之前先复核版本）：
-
-| 工具 | 位置 / 命令 | 版本 |
-|---|---|---|
-| Go | `PATH` 上 | `go1.23.12 linux/amd64` |
-| Node / npm | `PATH` 上 | `v22.22.1` / npm 11 |
-| JDK | `source ~/android-dev/env.sh` → `$JAVA_HOME` | `openjdk 21.0.12.1` |
-| Gradle | `~/android-dev/gradle-dist/gradle-8.7/bin/gradle` | 8.7 |
-| Android SDK | `~/android-dev/sdk`（也是 `ANDROID_HOME`） | platform 35，build-tools 34/35 |
-| Android NDK | `$ANDROID_NDK_HOME` | `27.0.12077973` |
-
-`android/gradlew` 是**转发脚本，不是标准 wrapper**：它会 source
-`~/android-dev/env.sh` 再 exec 本地 Gradle 8.7。标准 wrapper 会去
-`services.gradle.org` 拉包，这个网络下拉不到。**不要**随意重新生成 wrapper。
-
-`android/local.properties` 指向 `sdk.dir=/home/Z/android-dev/sdk`，
-所以 Android 构建只能在 WSL 里跑。
-
-**`wsl.exe` 的输出管道进 Git Bash 会变成 UTF-16，显示为乱码。**
-读中文输出时加 `| iconv -f UTF-16LE -t UTF-8` 或 `tr -d '\r'`。
-
-### GitHub Actions 是第二条构建路径
-
-`.github/workflows/release.yml` 在托管 runner 上构建三端，是**唯一**能产出
-iOS 的路径（需要 Apple SDK）。
-
-触发方式：workflow_dispatch，或推 `v*` tag。
-
-另有 `.github/workflows/ios-check.yml`：只在 `ios/**` 变化时编译 iOS，
-**不发版**。iOS 改动靠它验证。
-
----
+但**不要**为了本地编译去新装任何东西，也不要把这套路径写进文档或脚本。
+`wsl.exe` 的输出管道进 Git Bash 会变成 UTF-16，读中文时加 `| tr -d '\r'`。
 
 ## 9. 验证命令
 
-全部在 WSL 里跑。
+**标准做法：推上去让 `Build Check` 跑**（见 §8）。
+下面列的是它内部执行的命令，本地排查时对照用。
 
 ### Go 服务端
 
@@ -299,7 +303,7 @@ cd packaging/fnos
 
 1. 同步 §11 的五个版本号位置
 2. 在 `CHANGELOG.md` 写这一版改了什么（面向用户，不写实现细节）
-3. 本地验证：`go test ./...`、`npm run build`、`assembleDebug`
+3. 等 `Build Check` 变绿（不要用本地编译代替，见 §8）
 4. `git tag -a vX.Y.Z && git push origin main --tags`
 5. 等 `Release` 工作流出三端产物
 

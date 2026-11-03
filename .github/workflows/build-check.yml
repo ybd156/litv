@@ -1,0 +1,107 @@
+name: Build Check
+
+# 三端编译检查。**这是本项目的标准编译路径。**
+#
+# 为什么放在 CI 而不是本地：
+#   本地需要 Go 1.23 + JDK + Android SDK/NDK + Gradle + Node 一整套工具链，
+#   换一台机器就要重搭一遍，而且版本稍有差异就会出现"我这里能编过"的问题。
+#   iOS 更是只能在这里编（需要 Apple SDK）。
+#
+# 所以：**不要在新机器上搭本地工具链**，改完代码推上来让这里编。
+# 需要产物（APK/fpk/ipa）走 release.yml。
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: build-check-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  server:
+    name: Go 服务端
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.23"
+          cache-dependency-path: server/go.sum
+      - name: 格式检查
+        working-directory: server
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "❌ 以下文件没格式化（本地跑 gofmt -w）："
+            echo "$unformatted"
+            exit 1
+          fi
+      - name: 编译
+        working-directory: server
+        run: go build ./...
+      - name: 静态检查
+        working-directory: server
+        run: go vet ./...
+      - name: 单元测试
+        working-directory: server
+        run: go test -race ./...
+
+  admin:
+    name: 管理台
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: admin/package-lock.json
+      - name: 安装依赖
+        working-directory: admin
+        run: npm ci
+      - name: 类型检查
+        working-directory: admin
+        run: npm run typecheck
+      - name: 构建
+        working-directory: admin
+        run: npm run build
+
+  android:
+    name: Android（电视版 + 手机版）
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 准备 JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: 确认 Android SDK 组件
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null 2>&1 || true
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
+            "platforms;android-35" "build-tools;35.0.0" >/dev/null 2>&1 || true
+
+      - name: 安装 Gradle 8.7
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.7"
+
+      - name: 编译两个 flavor
+        working-directory: android
+        run: |
+          # 仓库里的 ./gradlew 是给本地 WSL 用的 shim（硬编码路径），CI 上不能用，
+          # 必须用 setup-gradle 装的 gradle 命令。
+          gradle --no-daemon assembleTvDebug assemblePhoneDebug
+
+      - name: 单元测试
+        working-directory: android
+        run: gradle --no-daemon testTvDebugUnitTest
+
+# 注：iOS 不在这里编。它有自己的 .github/workflows/ios-check.yml，
+# 只在 ios/** 变化时触发——macOS runner 按 10 倍计费，没必要每次主分支推送都跑。

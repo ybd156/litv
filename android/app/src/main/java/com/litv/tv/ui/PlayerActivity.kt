@@ -81,6 +81,20 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
     private lateinit var epgTitle: TextView
     private lateinit var epgList: RecyclerView
 
+    // 底部信息条（对齐 DIYP / 群晖电视的样式）
+    private lateinit var infoLogo: ImageView
+    private lateinit var infoName: TextView
+    private lateinit var infoNow: TextView
+    private lateinit var infoNext: TextView
+    private lateinit var infoLine: TextView
+    private lateinit var infoProgress: ProgressBar
+    private lateinit var infoTime: TextView
+
+    /** 当前频道的线路总数 / 正在用的第几条 / 该线路延迟 */
+    private var streamTotal = 0
+    private var streamIndex = 0
+    private var streamLatency = 0
+
     private lateinit var player: PlayerManager
     private lateinit var panelAdapter: ChannelAdapter
     private lateinit var epgAdapter: EpgAdapter
@@ -317,6 +331,13 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         epgPanel = findViewById(R.id.epgPanel)
         epgTitle = findViewById(R.id.epgTitle)
         epgList = findViewById(R.id.epgList)
+        infoLogo = findViewById(R.id.infoLogo)
+        infoName = findViewById(R.id.infoName)
+        infoNow = findViewById(R.id.infoNow)
+        infoNext = findViewById(R.id.infoNext)
+        infoLine = findViewById(R.id.infoLine)
+        infoProgress = findViewById(R.id.infoProgress)
+        infoTime = findViewById(R.id.infoTime)
     }
 
     private fun loadChannels() {
@@ -545,6 +566,9 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
                 Log.i(TAG, "实际播放地址: ${abs.take(160)}")
                 player.play(ch.id, abs, headers, app.prefs.engine)
                 refreshEpg(ch.id)
+                // 底部信息条：线路 x/y 与延迟
+                refreshLineInfo(ch.id, info.streamId)
+                renderInfoBar()
                 app.api.heartbeat(ch.id, "playing")
             },
             onErr = { msg ->
@@ -589,6 +613,7 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
             // 节目单是浮层里常显的一列，取到数据要立刻刷上去，
             // 否则打开浮层时看到的永远是加载圈。
             if (panelVisible) refreshEpgColumn()
+            main.post { renderInfoBar() }
         }, onErr = { programs = emptyList() })
     }
 
@@ -608,6 +633,72 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         }
         osdNext.text = next?.let { "下一档 ${fmt(it.startAt)} ${it.title}" } ?: ""
         osdEngine.text = player.engineLabel()
+    }
+
+    /**
+     * 刷新底部信息条：台标 / 台号+名称 / 正在播 / 下一档 / 线路 / 进度 / 时间。
+     *
+     * 参考 DIYP 与群晖电视：两个实现都在底部放这样一条信息卡，
+     * 好处是不用呼出 OSD 就能看到「这个台在播什么、还有几条线路」。
+     */
+    private fun renderInfoBar() {
+        val ch = current ?: return
+        val now = System.currentTimeMillis() / 1000
+
+        infoName.text = if (ch.number > 0) "${ch.number}  ${ch.name}" else ch.name
+        // 复用频道列表那套台标加载（内存 LRU + 降采样），不额外引图片库
+        infoLogo.setImageDrawable(null)
+        if (ch.logo.isNotBlank() && ::panelAdapter.isInitialized) {
+            panelAdapter.loadLogoFor(infoLogo, ch.logo)
+        }
+
+        val cur = programs.firstOrNull { it.startAt <= now && it.endAt > now }
+        val next = programs.firstOrNull { it.startAt > now }
+        if (cur != null) {
+            infoNow.text = "正在播放：" + cur.title
+            val span = (cur.endAt - cur.startAt).coerceAtLeast(1)
+            val pct = (((now - cur.startAt).toFloat() / span) * 100).toInt().coerceIn(0, 100)
+            infoProgress.progress = pct
+            infoProgress.visibility = View.VISIBLE
+        } else {
+            infoNow.text = "正在播放：" + getString(R.string.no_epg)
+            infoProgress.visibility = View.GONE
+        }
+        infoNext.text = if (next != null) "下一节目：" + next.title else ""
+
+        // 线路 x/y · 延迟
+        infoLine.text = if (streamTotal > 0) {
+            val base = "线路 " + streamIndex + "/" + streamTotal
+            if (streamLatency > 0) base + "  ·  " + streamLatency + "ms" else base
+        } else ""
+
+        // 时间 + 星期
+        val cal = java.util.Calendar.getInstance()
+        val days = arrayOf("周日", "周一", "周二", "周三", "周四", "周五", "周六")
+        infoTime.text = String.format("%02d:%02d %s",
+            cal.get(java.util.Calendar.HOUR_OF_DAY),
+            cal.get(java.util.Calendar.MINUTE),
+            days[cal.get(java.util.Calendar.DAY_OF_WEEK) - 1])
+    }
+
+    /** 拉一次线路列表，算出「第几条 / 共几条 / 延迟」。 */
+    private fun refreshLineInfo(channelId: Long, usedStreamId: Long) {
+        app.api.streams(channelId,
+            onOk = { list ->
+                main.post {
+                    streamTotal = list.size
+                    val idx = list.indexOfFirst { it.id == usedStreamId }
+                    streamIndex = if (idx >= 0) idx + 1 else if (list.isNotEmpty()) 1 else 0
+                    streamLatency = list.getOrNull((streamIndex - 1).coerceAtLeast(0))?.latencyMs ?: 0
+                    renderInfoBar()
+                }
+            },
+            onErr = {
+                main.post {
+                    streamTotal = 0; streamIndex = 0; streamLatency = 0
+                    renderInfoBar()
+                }
+            })
     }
 
     private fun fmt(ts: Long): String =

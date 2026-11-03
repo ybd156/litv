@@ -182,99 +182,195 @@
 
     <!-- 左侧频道列表 -->
     <!-- 频道列表浮层：图标栏 / 源分类 / 分组 / 频道列表（对齐参考实现） -->
-    <!-- 频道浮层：分组窄竖条 / 频道列表 / 节目单，右侧露出视频 -->
+    <!-- 频道浮层：分组 / 频道 / 节目单 三列 + 底部信息条，右侧露出视频。
+         结构参考 DIYP / 群晖电视：两者都是三列，底部一条信息卡。 -->
     <LinearLayout
         android:id="@+id/channelPanel"
         android:layout_width="match_parent"
         android:layout_height="match_parent"
         android:background="@android:color/transparent"
-        android:orientation="horizontal"
+        android:orientation="vertical"
         android:paddingVertical="12dp"
         android:visibility="gone">
 
-        <!-- 1. 分组窄竖条（参考实现里是竖排文字） -->
-        <TextView
-            android:id="@+id/grpStrip"
-            android:layout_width="66dp"
-            android:layout_height="match_parent"
-            android:background="#E60B0E11"
-            android:clickable="true"
-            android:focusable="true"
-            android:gravity="center"
-            android:lineSpacingExtra="6dp"
-            android:text="全部
-《
-频道"
-            android:textColor="@color/text_primary"
-            android:textSize="16sp" />
-
-        <!-- 2. 频道列表：台号框 + 台名 + 当前节目 -->
+        <!-- 上：三列 -->
         <LinearLayout
-            android:layout_width="0dp"
-            android:layout_height="match_parent"
-            android:layout_weight="0.40"
-            android:background="#E60B0E11"
-            android:orientation="vertical"
-            android:paddingHorizontal="8dp">
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1"
+            android:orientation="horizontal">
 
+            <!-- 1. 分组（扁平化：所有源的分组合并成一组列表） -->
             <TextView
-                android:id="@+id/panelTitle"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:paddingBottom="6dp"
-                android:paddingStart="4dp"
-                android:textColor="@color/accent"
-                android:textSize="13sp" />
-
-            <androidx.recyclerview.widget.RecyclerView
-                android:id="@+id/panelList"
-                android:layout_width="match_parent"
-                android:layout_height="0dp"
-                android:layout_weight="1"
-                android:scrollbars="none" />
-        </LinearLayout>
-
-        <!-- 3. 节目单：星期 + 时间 + 节目名 + 回看 -->
-        <LinearLayout
-            android:id="@+id/epgPanel"
-            android:layout_width="0dp"
-            android:layout_height="match_parent"
-            android:layout_weight="0.34"
-            android:background="#D90B0E11"
-            android:orientation="vertical"
-            android:paddingHorizontal="8dp">
-
-            <!-- C4：点它切换节目分类筛选（遥控器按上键聚焦到标题再按 OK） -->
-            <TextView
-                android:id="@+id/epgTitle"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:background="@drawable/bg_focusable"
+                android:id="@+id/grpStrip"
+                android:layout_width="66dp"
+                android:layout_height="match_parent"
+                android:background="#E60B0E11"
                 android:clickable="true"
                 android:focusable="true"
-                android:paddingBottom="6dp"
-                android:paddingStart="4dp"
-                android:paddingEnd="4dp"
-                android:paddingTop="4dp"
-                android:textColor="@color/accent"
-                android:textSize="13sp" />
+                android:gravity="center"
+                android:lineSpacingExtra="6dp"
+                android:text="全部"
+                android:textColor="@color/text_primary"
+                android:textSize="16sp" />
 
-            <androidx.recyclerview.widget.RecyclerView
-                android:id="@+id/epgList"
-                android:layout_width="match_parent"
-                android:layout_height="0dp"
-                android:layout_weight="1"
-                android:scrollbars="none" />
+            <!-- 2. 频道列表：台号框 + 台名 + 当前节目 -->
+            <LinearLayout
+                android:layout_width="0dp"
+                android:layout_height="match_parent"
+                android:layout_weight="0.40"
+                android:background="#E60B0E11"
+                android:orientation="vertical"
+                android:paddingHorizontal="8dp">
+
+                <TextView
+                    android:id="@+id/panelTitle"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:paddingBottom="6dp"
+                    android:paddingStart="4dp"
+                    android:textColor="@color/accent"
+                    android:textSize="13sp" />
+
+                <androidx.recyclerview.widget.RecyclerView
+                    android:id="@+id/panelList"
+                    android:layout_width="match_parent"
+                    android:layout_height="0dp"
+                    android:layout_weight="1"
+                    android:scrollbars="none" />
+            </LinearLayout>
+
+            <!-- 3. 节目单：时间 + 节目名 + 回看 -->
+            <LinearLayout
+                android:id="@+id/epgPanel"
+                android:layout_width="0dp"
+                android:layout_height="match_parent"
+                android:layout_weight="0.34"
+                android:background="#D90B0E11"
+                android:orientation="vertical"
+                android:paddingHorizontal="8dp">
+
+                <!-- C4：点它切换节目分类筛选 -->
+                <TextView
+                    android:id="@+id/epgTitle"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:background="@drawable/bg_focusable"
+                    android:clickable="true"
+                    android:focusable="true"
+                    android:paddingBottom="6dp"
+                    android:paddingStart="4dp"
+                    android:paddingEnd="4dp"
+                    android:paddingTop="4dp"
+                    android:textColor="@color/accent"
+                    android:textSize="13sp" />
+
+                <androidx.recyclerview.widget.RecyclerView
+                    android:id="@+id/epgList"
+                    android:layout_width="match_parent"
+                    android:layout_height="0dp"
+                    android:layout_weight="1"
+                    android:scrollbars="none" />
+            </LinearLayout>
+
+            <!-- 4. 右侧留白，露出正在播的画面 -->
+            <View
+                android:layout_width="0dp"
+                android:layout_height="match_parent"
+                android:layout_weight="0.26" />
         </LinearLayout>
 
-        <!-- 4. 右侧留白，露出正在播的画面 -->
-        <View
-            android:layout_width="0dp"
-            android:layout_height="match_parent"
-            android:layout_weight="0.26" />
-    </LinearLayout>
+        <!-- 下：底部信息条（台标 / 台号名称 / 正在播 / 下一档 / 线路 / 进度 / 时间） -->
+        <LinearLayout
+            android:id="@+id/infoBar"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:background="#E60B0E11"
+            android:gravity="center_vertical"
+            android:orientation="horizontal"
+            android:paddingHorizontal="16dp"
+            android:paddingVertical="10dp">
 
-    
+            <ImageView
+                android:id="@+id/infoLogo"
+                android:layout_width="56dp"
+                android:layout_height="56dp"
+                android:background="@drawable/bg_card"
+                android:contentDescription="@null"
+                android:padding="4dp"
+                android:scaleType="fitCenter" />
+
+            <LinearLayout
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="14dp"
+                android:layout_weight="1"
+                android:orientation="vertical">
+
+                <TextView
+                    android:id="@+id/infoName"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:ellipsize="end"
+                    android:maxLines="1"
+                    android:textColor="@color/text_primary"
+                    android:textSize="18sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:id="@+id/infoNow"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:ellipsize="end"
+                    android:maxLines="1"
+                    android:textColor="@color/text_secondary"
+                    android:textSize="13sp" />
+
+                <TextView
+                    android:id="@+id/infoNext"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:ellipsize="end"
+                    android:maxLines="1"
+                    android:textColor="#8B949E"
+                    android:textSize="13sp" />
+            </LinearLayout>
+
+            <LinearLayout
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:gravity="end"
+                android:minWidth="200dp"
+                android:orientation="vertical">
+
+                <TextView
+                    android:id="@+id/infoLine"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:gravity="end"
+                    android:textColor="@color/accent"
+                    android:textSize="13sp" />
+
+                <ProgressBar
+                    android:id="@+id/infoProgress"
+                    style="?android:attr/progressBarStyleHorizontal"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="4dp"
+                    android:max="100"
+                    android:progressTint="@color/accent" />
+
+                <TextView
+                    android:id="@+id/infoTime"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="2dp"
+                    android:gravity="end"
+                    android:textColor="@color/text_secondary"
+                    android:textSize="13sp" />
+            </LinearLayout>
+        </LinearLayout>
+    </LinearLayout>
 
     <!-- 数字键跳台提示 -->
     <TextView

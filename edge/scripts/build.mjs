@@ -1,0 +1,337 @@
+// 拉取上游 m3u 订阅 → 解析 → 合并去重 → 产出两样东西：
+//
+//   1. public/playlist.m3u   给第三方播放器用的普通播放列表
+//   2. sql/seed.sql          灌进 D1 的频道表 + 线路表
+//
+// 第二条是"接入现有 app"的关键：app 不认识 m3u，它只认 /api/v1/tv/bootstrap
+// 和 /api/v1/tv/play/{id}。所以要把 m3u 落成表。
+//
+// 纪律：日志里只出现计数，绝不打印上游 URL 或凭据。
+
+import { mkdir, writeFile } from "node:fs/promises";
+
+const UA = process.env.SOURCE_UA || "VLC/3.0.20 LibVLC/3.0.20";
+const OUT_DIR = "public";
+const SQL_DIR = "sql";
+const MIN_CHANNELS = Number(process.env.MIN_CHANNELS || "1");
+const FETCH_TIMEOUT_MS = 30_000;
+const INSERT_BATCH = 50;
+
+// ---------- 解析 ----------
+
+// #EXTINF 的属性段和频道名之间用逗号分隔，但属性值里也可能有逗号
+// （group-title="新闻,财经"），所以要跳过引号内的逗号。
+function splitExtinf(line) {
+  let inQuote = false;
+  for (let i = 0; i < line.length; i++) {
+    const c = line[i];
+    if (c === '"') inQuote = !inQuote;
+    else if (c === "," && !inQuote) return [line.slice(0, i), line.slice(i + 1)];
+  }
+  return [line, ""];
+}
+
+function parseAttrs(head) {
+  const attrs = {};
+  const re = /([A-Za-z0-9_-]+)="([^"]*)"/g;
+  let m;
+  while ((m = re.exec(head)) !== null) attrs[m[1].toLowerCase()] = m[2];
+  return attrs;
+}
+
+function parseM3U(text) {
+  const entries = [];
+  let cur = null;
+
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!line) continue;
+
+    if (line.startsWith("#EXTM3U")) continue;
+
+    if (line.startsWith("#EXTINF")) {
+      const [head, name] = splitExtinf(line);
+      const attrs = parseAttrs(head);
+      cur = {
+        name: name.trim(),
+        tvgId: attrs["tvg-id"] || "",
+        tvgName: attrs["tvg-name"] || "",
+        logo: attrs["tvg-logo"] || "",
+        group: attrs["group-title"] || "",
+        ua: "",
+        headers: {},
+        extras: [],
+        url: "",
+      };
+      continue;
+    }
+
+    if (line.startsWith("#EXTGRP:")) {
+      if (cur && !cur.group) cur.group = line.slice(8).trim();
+      continue;
+    }
+
+    // #EXTVLCOPT 里常带源站要求的 UA / Referer。
+    // 不抽出来的话，客户端直连会 403 —— 这是"直连打不开、中转能看"的老问题。
+    if (line.startsWith("#EXTVLCOPT:")) {
+      const opt = line.slice(11);
+      const eq = opt.indexOf("=");
+      if (cur && eq > 0) {
+        const key = opt.slice(0, eq).trim().toLowerCase();
+        const val = opt.slice(eq + 1).trim();
+        if (key === "http-user-agent" && val) cur.ua = val;
+        else if ((key === "http-referrer" || key === "http-referer") && val) {
+          cur.headers["Referer"] = val;
+        }
+      }
+      continue;
+    }
+
+    if (line.startsWith("#")) {
+      // #KODIPROP 之类跟播放器有关，普通播放列表里保留，D1 里不需要
+      if (cur && /^#(KODIPROP|EXT-X-)/i.test(line)) cur.extras.push(line);
+      continue;
+    }
+
+    if (cur && !cur.url) {
+      cur.url = line;
+      if (cur.name) entries.push(cur);
+      cur = null;
+    }
+  }
+
+  return entries;
+}
+
+// ---------- 去重 ----------
+
+// 保守归一化：只抹掉空白和常见分隔符，不剥 "HD"/"4K" 之类的后缀——
+// 那些往往是真的不同频道，合并错了比重复更糟。
+function normalizeName(name) {
+  return name.toLowerCase().replace(/[\s\-_.·|/\\]+/g, "");
+}
+
+function dedupeKey(e) {
+  return e.tvgId ? `id:${e.tvgId}` : `name:${normalizeName(e.name)}`;
+}
+
+// ---------- 抓取 ----------
+
+async function fetchOne(url, index) {
+  try {
+    const res = await fetch(url, {
+      headers: { "User-Agent": UA, Accept: "*/*" },
+      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+      redirect: "follow",
+    });
+    if (!res.ok) {
+      console.warn(`[源 ${index}] HTTP ${res.status}`);
+      return [];
+    }
+    const entries = parseM3U(await res.text());
+    console.log(`[源 ${index}] ${entries.length} 条`);
+    return entries;
+  } catch (err) {
+    // 只报错误类型，不带 URL
+    console.warn(`[源 ${index}] 失败：${err.name}`);
+    return [];
+  }
+}
+
+// ---------- 输出：播放列表 ----------
+
+function quote(s) {
+  return String(s).replace(/"/g, "'");
+}
+
+function renderM3U(channels) {
+  const lines = ["#EXTM3U"];
+  for (const ch of channels) {
+    const attrs = [];
+    if (ch.tvgId) attrs.push(`tvg-id="${quote(ch.tvgId)}"`);
+    if (ch.tvgName) attrs.push(`tvg-name="${quote(ch.tvgName)}"`);
+    if (ch.logo) attrs.push(`tvg-logo="${quote(ch.logo)}"`);
+    attrs.push(`group-title="${quote(ch.group)}"`);
+    lines.push(`#EXTINF:-1 ${attrs.join(" ")},${ch.name}`);
+    for (const extra of ch.extras) lines.push(extra);
+    // UA / Referer 要跟着线路一起吐回去，否则第三方播放器直连那些
+    // "认 UA 才给流"的源会 403。app 那边走 headers 字段，这里是给普通播放器的。
+    if (ch.line.ua) lines.push(`#EXTVLCOPT:http-user-agent=${ch.line.ua}`);
+    if (ch.line.headers["Referer"]) {
+      lines.push(`#EXTVLCOPT:http-referrer=${ch.line.headers["Referer"]}`);
+    }
+    lines.push(ch.line.url);
+  }
+  return lines.join("\n") + "\n";
+}
+
+// ---------- 输出：D1 seed ----------
+
+function sqlStr(v) {
+  if (v === null || v === undefined) return "''";
+  return "'" + String(v).replace(/'/g, "''") + "'";
+}
+
+function sqlInt(v) {
+  const n = Number(v);
+  return Number.isFinite(n) ? String(Math.trunc(n)) : "0";
+}
+
+function batchInsert(table, columns, rows) {
+  const out = [];
+  for (let i = 0; i < rows.length; i += INSERT_BATCH) {
+    const chunk = rows.slice(i, i + INSERT_BATCH);
+    out.push(
+      `INSERT INTO ${table} (${columns.join(", ")}) VALUES\n` +
+        chunk.map((r) => "  (" + r.join(", ") + ")").join(",\n") +
+        ";",
+    );
+  }
+  return out.join("\n\n");
+}
+
+function renderSeed(channels) {
+  const chRows = [];
+  const stRows = [];
+
+  channels.forEach((ch, i) => {
+    const key = dedupeKey(ch);
+    chRows.push([
+      sqlStr(key),
+      sqlInt(i + 1), // number
+      sqlStr(ch.name),
+      sqlStr(ch.group),
+      sqlStr(ch.logo),
+      sqlStr(ch.tvgId),
+      sqlStr(ch.tvgId), // epg_id 先跟 tvg_id 走，边缘模式不解析节目单
+      "1",
+      sqlInt(i), // sort
+      sqlStr("m3u"),
+    ]);
+
+    // 同一频道名下的每条线路都进 streams 表，客户端可以手动切线路。
+    ch.lines.forEach((line, idx) => {
+      stRows.push([
+        // 频道 id 由数据库自增，这里用 stable_key 反查，
+        // 这样重建后 id 变了也不会插错地方。
+        `(SELECT id FROM channels WHERE stable_key = ${sqlStr(key)})`,
+        sqlStr(key),
+        sqlStr(`线路 ${idx + 1}`),
+        sqlStr(""),
+        sqlInt(ch.lines.length - idx), // 靠前的优先级高
+        "-1", // health 未探测
+        "0",
+        sqlStr(line.url),
+        sqlStr(line.ua),
+        sqlStr(JSON.stringify(line.headers)),
+        sqlStr("m3u"),
+      ]);
+    });
+  });
+
+  return [
+    "-- 由 scripts/build.mjs 生成，不要手改",
+    "",
+    "-- 1. 只清订阅生成的数据，管理台手工加的频道和线路留着",
+    "DELETE FROM streams WHERE origin = 'm3u';",
+    "DELETE FROM channels WHERE origin = 'm3u';",
+    "",
+    "-- 2. 插入本次订阅解析出的频道（id 自增，跨重建不稳定，所以外部一律用 stable_key）",
+    batchInsert(
+      "channels",
+      ["stable_key", "number", "name", '"group"', "logo", "tvg_id", "epg_id", "enabled", "sort", "origin"],
+      chRows,
+    ),
+    "",
+    "-- 3. 手工线路重新挂到新频道 id 上（频道没了就跳过，不能挂成 NULL）",
+    "UPDATE streams",
+    "   SET channel_id = (SELECT c.id FROM channels c WHERE c.stable_key = streams.channel_key)",
+    " WHERE origin = 'manual'",
+    "   AND channel_key <> ''",
+    "   AND EXISTS (SELECT 1 FROM channels c WHERE c.stable_key = streams.channel_key);",
+    "",
+    "-- 4. 插入本次的线路",
+    batchInsert(
+      "streams",
+      ["channel_id", "channel_key", "label", "quality", "priority", "health", "latency_ms", "url", "ua", "headers", "origin"],
+      stRows,
+    ),
+    "",
+  ].join("\n");
+}
+
+// ---------- 主流程 ----------
+
+async function main() {
+  const urls = (process.env.SOURCE_URLS || "")
+    .split(/\r?\n/)
+    .map((s) => s.trim())
+    .filter((s) => s && !s.startsWith("#"));
+
+  if (urls.length === 0) {
+    console.error("SOURCE_URLS 为空或未配置");
+    process.exit(1);
+  }
+
+  console.log(`共 ${urls.length} 个源`);
+
+  const all = [];
+  for (let i = 0; i < urls.length; i++) {
+    all.push(...(await fetchOne(urls[i], i + 1)));
+  }
+
+  if (all.length === 0) {
+    console.error("所有源都没解析出条目，拒绝生成空播放列表");
+    process.exit(1);
+  }
+
+  // 按 key 合并：首次出现的当主线路，后面的都并成备选线路
+  const byKey = new Map();
+  for (const e of all) {
+    const key = dedupeKey(e);
+    const hit = byKey.get(key);
+    if (hit) {
+      hit.lines.push({ url: e.url, ua: e.ua, headers: e.headers });
+      continue;
+    }
+    byKey.set(key, {
+      ...e,
+      group: e.group || "未分组",
+      lines: [{ url: e.url, ua: e.ua, headers: e.headers }],
+    });
+  }
+
+  const channels = [...byKey.values()];
+
+  if (channels.length < MIN_CHANNELS) {
+    console.error(`去重后只有 ${channels.length} 个频道，低于 MIN_CHANNELS=${MIN_CHANNELS}`);
+    process.exit(1);
+  }
+
+  await mkdir(OUT_DIR, { recursive: true });
+  await mkdir(SQL_DIR, { recursive: true });
+
+  await writeFile(
+    `${OUT_DIR}/playlist.m3u`,
+    renderM3U(channels.map((ch) => ({ ...ch, line: ch.lines[0] }))),
+    "utf8",
+  );
+  await writeFile(`${SQL_DIR}/seed.sql`, renderSeed(channels), "utf8");
+
+  const withHeaders = channels.filter((c) => c.lines.some((l) => l.ua || Object.keys(l.headers).length));
+  const groups = new Map();
+  for (const ch of channels) groups.set(ch.group, (groups.get(ch.group) || 0) + 1);
+  const totalLines = channels.reduce((n, c) => n + c.lines.length, 0);
+
+  console.log(`条目 ${all.length} → ${channels.length} 个频道 / ${totalLines} 条线路`);
+  console.log(`带 UA 或 Referer 的频道 ${withHeaders.length} 个`);
+  console.log(`分组 ${groups.size} 个`);
+  for (const [g, n] of [...groups.entries()].sort((a, b) => b[1] - a[1]).slice(0, 10)) {
+    console.log(`  ${g}: ${n}`);
+  }
+}
+
+main().catch((err) => {
+  console.error(`生成失败：${err.message}`);
+  process.exit(1);
+});

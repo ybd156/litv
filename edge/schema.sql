@@ -1,0 +1,86 @@
+-- 边缘版最小 litvd 的存储。
+--
+-- 核心设计：把「订阅生成的数据」和「手工改的数据」分开，否则每天重建
+-- 都会把用户在管理台里的改动冲掉。
+--
+--   channels.stable_key  跨重建稳定的标识（tvg-id 或归一化频道名）
+--   channels.origin      m3u = 订阅生成（每次重建删除重建）
+--                        manual = 管理台手工添加（永不被重建删除）
+--   streams.origin       同上
+--   streams.channel_key  让手工线路在重建后还能挂回正确的频道
+--   channel_overrides    对订阅频道的改名/改分组/隐藏，按 stable_key 存
+--
+-- 重建顺序见 scripts/build.mjs 生成的 seed.sql：
+--   删 m3u 线路 → 删 m3u 频道 → 插新频道 → 手工线路重新挂 id → 插新线路
+
+CREATE TABLE IF NOT EXISTS channels (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  stable_key TEXT    NOT NULL UNIQUE,
+  number     INTEGER NOT NULL DEFAULT 0,
+  name       TEXT    NOT NULL,
+  "group"    TEXT    NOT NULL DEFAULT '未分组',
+  logo       TEXT    NOT NULL DEFAULT '',
+  tvg_id     TEXT    NOT NULL DEFAULT '',
+  epg_id     TEXT    NOT NULL DEFAULT '',
+  enabled    INTEGER NOT NULL DEFAULT 1,
+  sort       INTEGER NOT NULL DEFAULT 0,
+  origin     TEXT    NOT NULL DEFAULT 'm3u'
+);
+
+CREATE INDEX IF NOT EXISTS idx_channels_order ON channels (enabled, sort, number, id);
+CREATE INDEX IF NOT EXISTS idx_channels_origin ON channels (origin);
+
+CREATE TABLE IF NOT EXISTS streams (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  channel_id  INTEGER NOT NULL,
+  channel_key TEXT    NOT NULL DEFAULT '',
+  label       TEXT    NOT NULL DEFAULT '',
+  quality     TEXT    NOT NULL DEFAULT '',
+  priority    INTEGER NOT NULL DEFAULT 0,
+  health      INTEGER NOT NULL DEFAULT -1,
+  latency_ms  INTEGER NOT NULL DEFAULT 0,
+  url         TEXT    NOT NULL,
+  ua          TEXT    NOT NULL DEFAULT '',
+  headers     TEXT    NOT NULL DEFAULT '{}',
+  origin      TEXT    NOT NULL DEFAULT 'm3u'
+);
+
+CREATE INDEX IF NOT EXISTS idx_streams_channel ON streams (channel_id, priority);
+CREATE INDEX IF NOT EXISTS idx_streams_origin ON streams (origin);
+
+-- 对订阅频道的人工修改。NULL 表示不覆盖。
+CREATE TABLE IF NOT EXISTS channel_overrides (
+  stable_key TEXT PRIMARY KEY,
+  name       TEXT,
+  group_name TEXT,
+  logo       TEXT,
+  enabled    INTEGER,
+  updated_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS devices (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  device_key  TEXT NOT NULL UNIQUE,
+  token_hash  TEXT NOT NULL,
+  platform    TEXT NOT NULL DEFAULT '',
+  name        TEXT NOT NULL DEFAULT '',
+  created_at  INTEGER NOT NULL,
+  last_seen   INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_devices_token ON devices (token_hash);
+
+-- 管理台会话。绑定码只有 6 位数字，所以它只在登录那一刻用，
+-- 之后走随机 token，避免把弱口令当长期凭据使。
+CREATE TABLE IF NOT EXISTS admin_sessions (
+  token_hash TEXT PRIMARY KEY,
+  created_at INTEGER NOT NULL,
+  expires_at INTEGER NOT NULL
+);
+
+-- 绑定码/登录的失败限速，按 IP 记。
+CREATE TABLE IF NOT EXISTS bind_attempts (
+  ip           TEXT PRIMARY KEY,
+  fails        INTEGER NOT NULL DEFAULT 0,
+  window_start INTEGER NOT NULL
+);

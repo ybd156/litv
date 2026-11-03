@@ -1,0 +1,24 @@
+name = "litv-edge"
+main = "src/index.ts"
+compatibility_date = "2026-11-01"
+
+# 只保留首页占位；playlist.m3u 由 CI 生成，不入库。
+[assets]
+directory = "./public"
+binding = "ASSETS"
+
+# /api/* 全部进 Worker；playlist.m3u 也要过一遍，因为它里面是上游地址。
+run_worker_first = ["/api/*", "/playlist.m3u"]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "litv-edge"
+# 先跑一次 `npx wrangler d1 create litv-edge`，把返回的 database_id 填在这里
+database_id = "REPLACE_WITH_YOUR_DATABASE_ID"
+
+[vars]
+SERVER_NAME = "LITV Edge"
+
+# 口令通过 secret 注入，不要写在这里：
+#   npx wrangler secret put BIND_CODE
+# 用户在电视绑定页的"绑定码"里填的就是它。

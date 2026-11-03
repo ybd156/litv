@@ -256,6 +256,7 @@ ios/                     SwiftUI（MobileVLCKit 主，AVPlayer 兜底）
 packaging/fnos/          fpk 清单、生命周期脚本、安装向导
 build/test/              集成测试脚本
 tools/                   开发辅助脚本（checks / inspect / ops）
+edge/                    Cloudflare 边缘降级部署（可选，代码开源、实例私有）
 docs/                    设计文档、调研、审查记录
 .github/workflows/       编译与发布
 ```

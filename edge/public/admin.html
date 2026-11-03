@@ -1,0 +1,557 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LITV 边缘管理台</title>
+<style>
+  :root {
+    --bg: #14161a; --panel: #1c1f26; --panel2: #23272f; --line: #2e333d;
+    --text: #e6e8ec; --dim: #8b93a1; --accent: #4c8dff; --ok: #3fbf7f;
+    --warn: #e0a33e; --bad: #e35d5d;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 14px/1.6 system-ui, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  }
+  button, input, select { font: inherit; color: inherit; }
+  button {
+    background: var(--panel2); border: 1px solid var(--line); border-radius: 6px;
+    padding: 6px 12px; cursor: pointer;
+  }
+  button:hover { border-color: #3d4453; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button.ghost { background: transparent; }
+  button.danger { color: var(--bad); border-color: #4a2c2c; }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  input, select {
+    background: #12141a; border: 1px solid var(--line); border-radius: 6px; padding: 6px 10px;
+  }
+  input:focus, select:focus { outline: none; border-color: var(--accent); }
+
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 20px; }
+  .top { display: flex; align-items: center; gap: 12px; margin-bottom: 18px; }
+  .top h1 { font-size: 17px; margin: 0; font-weight: 600; }
+  .top .spacer { flex: 1; }
+
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px; margin-bottom: 18px; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; }
+  .card .n { font-size: 22px; font-weight: 600; }
+  .card .l { color: var(--dim); font-size: 12px; }
+
+  .tabs { display: flex; gap: 6px; margin-bottom: 14px; }
+  .tabs button.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+  .toolbar { display: flex; gap: 8px; padding: 12px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+  .toolbar input[type=search] { flex: 1; min-width: 160px; }
+
+  table { width: 100%; border-collapse: collapse; }
+  th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--line); }
+  th { color: var(--dim); font-weight: 500; font-size: 12px; background: #191c22; }
+  tr:hover td { background: #1a1e25; }
+  td.num { color: var(--dim); width: 60px; }
+  .tag { display: inline-block; padding: 1px 7px; border-radius: 4px; font-size: 12px; border: 1px solid var(--line); color: var(--dim); }
+  .tag.ok { color: var(--ok); border-color: #24513c; }
+  .tag.bad { color: var(--bad); border-color: #4a2c2c; }
+  .tag.warn { color: var(--warn); border-color: #4a3d24; }
+  .tag.manual { color: var(--accent); border-color: #24406b; }
+
+  .empty { padding: 28px; text-align: center; color: var(--dim); }
+
+  .drawer { position: fixed; inset: 0; background: #0009; display: flex; justify-content: flex-end; z-index: 20; }
+  .drawer .body { width: min(620px, 100%); background: var(--panel); height: 100%; overflow: auto; border-left: 1px solid var(--line); }
+  .drawer .head { display: flex; align-items: center; gap: 10px; padding: 14px 16px; border-bottom: 1px solid var(--line); position: sticky; top: 0; background: var(--panel); }
+  .drawer .head h2 { font-size: 15px; margin: 0; flex: 1; }
+
+  .stream { padding: 12px 16px; border-bottom: 1px solid var(--line); }
+  .stream .url { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12px; color: var(--dim); word-break: break-all; margin: 4px 0 8px; }
+  .stream .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+
+  .form { padding: 14px 16px; border-bottom: 1px solid var(--line); display: grid; gap: 8px; }
+  .form .line { display: flex; gap: 8px; flex-wrap: wrap; }
+  .form input { flex: 1; min-width: 140px; }
+
+  .login { max-width: 320px; margin: 16vh auto; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 24px; }
+  .login h1 { font-size: 16px; margin: 0 0 4px; }
+  .login p { color: var(--dim); font-size: 13px; margin: 0 0 16px; }
+  .login input { width: 100%; margin-bottom: 10px; text-align: center; letter-spacing: 4px; }
+  .login button { width: 100%; }
+
+  .toast { position: fixed; left: 50%; bottom: 28px; transform: translateX(-50%); background: #2b313c; border: 1px solid var(--line); border-radius: 8px; padding: 9px 16px; z-index: 40; }
+  .muted { color: var(--dim); }
+</style>
+</head>
+<body>
+<div id="app"></div>
+
+<script>
+"use strict";
+
+const TOKEN_KEY = "litv_admin_token";
+
+const state = {
+  token: localStorage.getItem(TOKEN_KEY) || "",
+  tab: "channels",
+  stats: null,
+  channels: [],
+  groups: [],
+  devices: [],
+  q: "",
+  group: "",
+  drawer: null,      // { channelId, name, streams }
+  form: { url: "", ua: "", referer: "" },
+  busy: false,
+  error: "",
+};
+
+// ---------------------------------------------------------------- 工具
+
+// 频道名、URL 全部来自上游 m3u，属于不可信输入，拼进 HTML 前必须转义
+function esc(v) {
+  return String(v ?? "").replace(/[&<>"']/g, (c) => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+  })[c]);
+}
+
+function toast(msg, bad) {
+  const el = document.createElement("div");
+  el.className = "toast";
+  el.textContent = msg;
+  if (bad) el.style.color = "var(--bad)";
+  document.body.appendChild(el);
+  setTimeout(() => el.remove(), 2600);
+}
+
+async function api(path, opts = {}) {
+  const headers = { "content-type": "application/json" };
+  if (state.token) headers.authorization = "Bearer " + state.token;
+  const res = await fetch(path, { ...opts, headers: { ...headers, ...(opts.headers || {}) } });
+  let body;
+  try {
+    body = await res.json();
+  } catch {
+    throw new Error("服务器返回了非 JSON 响应");
+  }
+  if (body.code === 2003) {
+    logout();
+    throw new Error("会话已过期，请重新登录");
+  }
+  if (body.code !== 0) throw new Error(body.msg || "请求失败");
+  return body.data;
+}
+
+function logout() {
+  state.token = "";
+  localStorage.removeItem(TOKEN_KEY);
+  state.stats = null;
+  state.channels = [];
+  state.devices = [];
+  state.drawer = null;
+  render();
+}
+
+function healthTag(h) {
+  if (h === 1) return '<span class="tag ok">正常</span>';
+  if (h === 0) return '<span class="tag bad">失效</span>';
+  return '<span class="tag">未测</span>';
+}
+
+// ---------------------------------------------------------------- 数据加载
+
+async function loadAll() {
+  try {
+    const [stats, ch, dev] = await Promise.all([
+      api("/api/v1/admin/stats"),
+      api("/api/v1/admin/channels?limit=500"),
+      api("/api/v1/admin/devices"),
+    ]);
+    state.stats = stats;
+    state.channels = ch.items;
+    state.groups = ch.groups;
+    state.devices = dev;
+  } catch (e) {
+    toast(e.message, true);
+  }
+  render();
+}
+
+async function reloadChannels() {
+  const qs = new URLSearchParams({ limit: "500" });
+  if (state.q) qs.set("q", state.q);
+  if (state.group) qs.set("group", state.group);
+  try {
+    const ch = await api("/api/v1/admin/channels?" + qs);
+    state.channels = ch.items;
+    state.groups = ch.groups;
+  } catch (e) {
+    toast(e.message, true);
+  }
+  render();
+}
+
+async function openStreams(channelId, name) {
+  state.drawer = { channelId, name, streams: [], loading: true };
+  render();
+  try {
+    const streams = await api("/api/v1/admin/streams?channel_id=" + channelId);
+    state.drawer.streams = streams;
+  } catch (e) {
+    toast(e.message, true);
+  }
+  state.drawer.loading = false;
+  render();
+}
+
+async function refreshStreams() {
+  if (!state.drawer) return;
+  try {
+    state.drawer.streams = await api("/api/v1/admin/streams?channel_id=" + state.drawer.channelId);
+  } catch (e) {
+    toast(e.message, true);
+  }
+  render();
+}
+
+// ---------------------------------------------------------------- 动作
+
+async function login(code) {
+  try {
+    const data = await api("/api/v1/admin/login", {
+      method: "POST",
+      body: JSON.stringify({ code }),
+    });
+    state.token = data.token;
+    localStorage.setItem(TOKEN_KEY, data.token);
+    await loadAll();
+  } catch (e) {
+    toast(e.message, true);
+  }
+}
+
+async function patchChannel(id, patch) {
+  try {
+    await api("/api/v1/admin/channel/" + id, {
+      method: "PATCH",
+      body: JSON.stringify(patch),
+    });
+    await Promise.all([loadAll()]);
+    if (state.drawer && state.drawer.channelId === id) await refreshStreams();
+  } catch (e) {
+    toast(e.message, true);
+  }
+}
+
+async function deleteChannel(id, origin) {
+  const msg = origin === "manual"
+    ? "删除这个手工频道？它和它的线路都会被移除。"
+    : "隐藏这个订阅频道？下次重建后它仍然是隐藏状态。";
+  if (!confirm(msg)) return;
+  try {
+    await api("/api/v1/admin/channel/" + id, { method: "DELETE" });
+    state.drawer = null;
+    await loadAll();
+  } catch (e) {
+    toast(e.message, true);
+  }
+}
+
+async function addStream() {
+  const f = state.form;
+  if (!f.url.trim()) return toast("请填线路地址", true);
+  try {
+    await api("/api/v1/admin/stream", {
+      method: "POST",
+      body: JSON.stringify({
+        channel_id: state.drawer.channelId,
+        url: f.url.trim(),
+        ua: f.ua.trim(),
+        referer: f.referer.trim(),
+      }),
+    });
+    state.form = { url: "", ua: "", referer: "" };
+    await refreshStreams();
+    toast("已添加");
+  } catch (e) {
+    toast(e.message, true);
+  }
+}
+
+async function deleteStream(id) {
+  if (!confirm("删除这条线路？")) return;
+  try {
+    await api("/api/v1/admin/stream/" + id, { method: "DELETE" });
+    await refreshStreams();
+  } catch (e) {
+    toast(e.message, true);
+  }
+}
+
+async function probeStream(id, btn) {
+  btn.disabled = true;
+  btn.textContent = "测试中…";
+  try {
+    const r = await api("/api/v1/admin/stream/" + id + "/probe", { method: "POST" });
+    toast(r.health === 1 ? `通了（${r.latency_ms}ms）` : `不通（HTTP ${r.status}）`, r.health !== 1);
+    await refreshStreams();
+  } catch (e) {
+    toast(e.message, true);
+    btn.disabled = false;
+    btn.textContent = "测试";
+  }
+}
+
+async function deleteDevice(id) {
+  if (!confirm("吊销这台设备？它会立刻掉线，需要重新绑定。")) return;
+  try {
+    await api("/api/v1/admin/device/" + id, { method: "DELETE" });
+    await loadAll();
+  } catch (e) {
+    toast(e.message, true);
+  }
+}
+
+// ---------------------------------------------------------------- 渲染
+
+function renderLogin() {
+  return `
+    <div class="login">
+      <h1>LITV 边缘管理台</h1>
+      <p>输入 6 位绑定码</p>
+      <input id="code" inputmode="numeric" maxlength="6" placeholder="••••••" autocomplete="off">
+      <button class="primary" id="doLogin">登录</button>
+    </div>`;
+}
+
+function renderStats() {
+  const s = state.stats || {};
+  const cards = [
+    ["频道", s.channels ?? "–"],
+    ["启用中", s.enabled ?? "–"],
+    ["线路", s.streams ?? "–"],
+    ["分组", s.groups ?? "–"],
+    ["设备", s.devices ?? "–"],
+    ["人工改动", s.overrides ?? "–"],
+  ];
+  return `<div class="cards">${cards.map(([l, n]) => `
+    <div class="card"><div class="n">${esc(n)}</div><div class="l">${esc(l)}</div></div>`).join("")}</div>`;
+}
+
+function renderChannels() {
+  const rows = state.channels.map((c) => `
+    <tr>
+      <td class="num">${esc(c.number)}</td>
+      <td>
+        <div>${esc(c.name)}</div>
+        ${c.tvg_id ? `<div class="muted" style="font-size:12px">${esc(c.tvg_id)}</div>` : ""}
+      </td>
+      <td>${esc(c.grp)}</td>
+      <td>${esc(c.streams)}</td>
+      <td>
+        ${c.enabled ? '<span class="tag ok">显示</span>' : '<span class="tag bad">隐藏</span>'}
+        ${c.origin === "manual" ? '<span class="tag manual">手工</span>' : ""}
+      </td>
+      <td style="text-align:right; white-space:nowrap">
+        <button data-act="streams" data-id="${c.id}" data-name="${esc(c.name)}">线路</button>
+        <button data-act="toggle" data-id="${c.id}" data-on="${c.enabled ? 0 : 1}">${c.enabled ? "隐藏" : "显示"}</button>
+        <button data-act="rename" data-id="${c.id}" data-name="${esc(c.name)}" data-group="${esc(c.grp)}">编辑</button>
+        <button class="danger" data-act="delch" data-id="${c.id}" data-origin="${esc(c.origin)}">${c.origin === "manual" ? "删除" : "隐藏"}</button>
+      </td>
+    </tr>`).join("");
+
+  const groupOpts = state.groups.map((g) =>
+    `<option value="${esc(g.name)}"${state.group === g.name ? " selected" : ""}>${esc(g.name)} (${esc(g.count)})</option>`
+  ).join("");
+
+  return `
+    <div class="panel">
+      <div class="toolbar">
+        <input type="search" id="q" placeholder="搜索频道名或 tvg-id" value="${esc(state.q)}">
+        <select id="groupFilter"><option value="">全部分组</option>${groupOpts}</select>
+        <button id="doSearch">搜索</button>
+      </div>
+      ${state.channels.length === 0
+        ? '<div class="empty">没有频道。先跑一次 Actions 生成数据。</div>'
+        : `<table>
+             <thead><tr><th class="num">#</th><th>频道</th><th>分组</th><th>线路</th><th>状态</th><th></th></tr></thead>
+             <tbody>${rows}</tbody>
+           </table>`}
+    </div>`;
+}
+
+function renderDevices() {
+  if (state.devices.length === 0) {
+    return '<div class="panel"><div class="empty">还没有设备绑上来。</div></div>';
+  }
+  const rows = state.devices.map((d) => `
+    <tr>
+      <td>${esc(d.name || "未命名")}</td>
+      <td><span class="tag">${esc(d.platform || "?")}</span></td>
+      <td class="muted" style="font-family:ui-monospace,monospace">${esc(d.device_key)}</td>
+      <td class="muted">${fmtTime(d.last_seen)}</td>
+      <td style="text-align:right"><button class="danger" data-act="deldev" data-id="${d.id}">吊销</button></td>
+    </tr>`).join("");
+
+  return `<div class="panel"><table>
+    <thead><tr><th>设备</th><th>平台</th><th>标识</th><th>最近在线</th><th></th></tr></thead>
+    <tbody>${rows}</tbody></table></div>`;
+}
+
+function fmtTime(sec) {
+  if (!sec) return "–";
+  const d = new Date(sec * 1000); // 服务端是 Unix 秒，JS 要毫秒
+  const p = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
+function renderDrawer() {
+  const d = state.drawer;
+  if (!d) return "";
+  const body = d.loading
+    ? '<div class="empty">加载中…</div>'
+    : (d.streams.length === 0
+        ? '<div class="empty">这个频道还没有线路</div>'
+        : d.streams.map((s) => `
+          <div class="stream">
+            <div class="row">
+              <strong>${esc(s.label || "线路")}</strong>
+              ${healthTag(s.health)}
+              <span class="tag">优先级 ${esc(s.priority)}</span>
+              ${s.origin === "manual" ? '<span class="tag manual">手工</span>' : ""}
+              ${s.latency_ms ? `<span class="muted">${esc(s.latency_ms)}ms</span>` : ""}
+            </div>
+            <div class="url">${esc(s.url)}</div>
+            <div class="row">
+              ${s.ua ? `<span class="tag">UA</span>` : ""}
+              ${s.headers && s.headers.Referer ? `<span class="tag">Referer</span>` : ""}
+              <span style="flex:1"></span>
+              <button data-act="probe" data-id="${s.id}">测试</button>
+              <button class="danger" data-act="delst" data-id="${s.id}">删除</button>
+            </div>
+          </div>`).join(""));
+
+  return `
+    <div class="drawer" data-act="closeDrawerBg">
+      <div class="body">
+        <div class="head">
+          <h2>${esc(d.name)} · 线路</h2>
+          <button data-act="closeDrawer">关闭</button>
+        </div>
+        <div class="form">
+          <div class="line">
+            <input id="fUrl" placeholder="线路地址 http(s)://…" value="${esc(state.form.url)}">
+          </div>
+          <div class="line">
+            <input id="fUa" placeholder="User-Agent（可空）" value="${esc(state.form.ua)}">
+            <input id="fRef" placeholder="Referer（可空）" value="${esc(state.form.referer)}">
+          </div>
+          <div class="line">
+            <button class="primary" data-act="addStream">添加线路</button>
+            <span class="muted" style="font-size:12px">手工添加的线路在每天重建后仍然保留</span>
+          </div>
+        </div>
+        ${body}
+      </div>
+    </div>`;
+}
+
+function render() {
+  const app = document.getElementById("app");
+
+  if (!state.token) {
+    app.innerHTML = renderLogin();
+    const btn = document.getElementById("doLogin");
+    const input = document.getElementById("code");
+    btn.onclick = () => login(input.value.trim());
+    input.onkeydown = (e) => { if (e.key === "Enter") btn.onclick(); };
+    input.focus();
+    return;
+  }
+
+  const tabBody = state.tab === "channels" ? renderChannels()
+    : state.tab === "devices" ? renderDevices()
+    : `<div class="panel"><div class="empty">
+         这是 NAS 挂掉之后的降级部署：只做频道表分发，播放时客户端直连上游源站。<br><br>
+         <span class="muted">没有中转、没有 EPG、没有时移、没有录制、没有投屏。</span>
+       </div></div>`;
+
+  app.innerHTML = `
+    <div class="wrap">
+      <div class="top">
+        <h1>LITV 边缘管理台</h1>
+        <span class="spacer"></span>
+        <button class="ghost" id="refresh">刷新</button>
+        <button class="ghost" id="logout">退出</button>
+      </div>
+      ${renderStats()}
+      <div class="tabs">
+        <button data-tab="channels" class="${state.tab === "channels" ? "on" : ""}">频道</button>
+        <button data-tab="devices" class="${state.tab === "devices" ? "on" : ""}">设备</button>
+        <button data-tab="about" class="${state.tab === "about" ? "on" : ""}">关于</button>
+      </div>
+      ${tabBody}
+    </div>
+    ${renderDrawer()}`;
+
+  document.getElementById("refresh").onclick = () => loadAll();
+  document.getElementById("logout").onclick = () => logout();
+
+  app.querySelectorAll("[data-tab]").forEach((el) => {
+    el.onclick = () => { state.tab = el.dataset.tab; render(); };
+  });
+
+  const search = document.getElementById("doSearch");
+  if (search) {
+    const q = document.getElementById("q");
+    const gf = document.getElementById("groupFilter");
+    search.onclick = () => {
+      state.q = q.value.trim();
+      state.group = gf.value;
+      reloadChannels();
+    };
+    q.onkeydown = (e) => { if (e.key === "Enter") search.onclick(); };
+    gf.onchange = () => search.onclick();
+  }
+
+  const fUrl = document.getElementById("fUrl");
+  if (fUrl) {
+    fUrl.oninput = (e) => { state.form.url = e.target.value; };
+    document.getElementById("fUa").oninput = (e) => { state.form.ua = e.target.value; };
+    document.getElementById("fRef").oninput = (e) => { state.form.referer = e.target.value; };
+  }
+}
+
+// ---------------------------------------------------------------- 事件委托
+
+document.addEventListener("click", (e) => {
+  const el = e.target.closest("[data-act]");
+  if (!el) return;
+  const act = el.dataset.act;
+  const id = Number(el.dataset.id || 0);
+
+  if (act === "closeDrawerBg" && e.target === el) { state.drawer = null; render(); }
+  else if (act === "closeDrawer") { state.drawer = null; render(); }
+  else if (act === "streams") openStreams(id, el.dataset.name);
+  else if (act === "toggle") patchChannel(id, { enabled: el.dataset.on === "1" });
+  else if (act === "rename") {
+    const name = prompt("频道名", el.dataset.name);
+    if (name === null) return;
+    const group = prompt("分组", el.dataset.group);
+    if (group === null) return;
+    patchChannel(id, { name: name.trim(), group: group.trim() });
+  }
+  else if (act === "delch") deleteChannel(id, el.dataset.origin);
+  else if (act === "addStream") addStream();
+  else if (act === "probe") probeStream(id, el);
+  else if (act === "delst") deleteStream(id);
+  else if (act === "deldev") deleteDevice(id);
+});
+
+// ---------------------------------------------------------------- 启动
+
+render();
+if (state.token) loadAll();
+</script>
+</body>
+</html>

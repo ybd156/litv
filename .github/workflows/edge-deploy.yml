@@ -1,0 +1,104 @@
+# 边缘降级部署（edge/）。
+#
+# 注意：这是**可选的**部署工作流，需要在本仓库配好四个 Secrets 才会成功：
+#   SOURCE_URLS / BIND_CODE / CLOUDFLARE_API_TOKEN / CLOUDFLARE_ACCOUNT_ID
+# 没配的话 deploy 会失败，但不影响 check 任务，也不影响其它工作流。
+#
+# 只改 edge/ 才会触发，避免普通提交白白重建一遍。
+name: Edge Deploy
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "edge/**"
+      - ".github/workflows/edge-deploy.yml"
+  pull_request:
+    paths:
+      - "edge/**"
+  schedule:
+    # UTC 21:17 = 北京时间 05:17。错开整点。
+    - cron: "17 21 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: edge-deploy
+  cancel-in-progress: false
+
+defaults:
+  run:
+    working-directory: edge
+
+jobs:
+  # 所有工具链（node 依赖、tsc、wrangler）只在 CI 里装。
+  # 本地不搭环境，见 AGENTS.md §8。
+  check:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: 安装依赖
+        run: npm install --no-audit --no-fund
+
+      - name: 类型检查
+        run: npm run typecheck
+
+      - name: 自测
+        run: npm test
+
+      - name: 打包检查（不部署）
+        run: npx --yes wrangler@4 deploy --dry-run --outdir=.wrangler/dry
+
+  deploy:
+    needs: check
+    # PR 只跑检查，绝不部署
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: 安装依赖
+        run: npm install --no-audit --no-fund
+
+      # 生成失败会 exit 1，后面的部署全部短路，线上继续用上一次的好数据。
+      - name: 生成播放列表与 seed.sql
+        env:
+          SOURCE_URLS: ${{ secrets.SOURCE_URLS }}
+          SOURCE_UA: ${{ secrets.SOURCE_UA }}
+        run: node scripts/build.mjs
+
+      - name: 建表（幂等）
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: npx --yes wrangler@4 d1 execute DB --remote --file=schema.sql
+
+      - name: 灌数据
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: npx --yes wrangler@4 d1 execute DB --remote --file=sql/seed.sql
+
+      - name: 部署
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        # 首次运行会创建 Worker。正式用之前把版本钉死，例如 wrangler@4.42.0
+        run: npx --yes wrangler@4 deploy
+
+      # 放在 deploy 之后：Worker 不存在时 secret put 会失败。
+      # 每次覆盖写入，改 Secret 就生效，不需要额外操作。
+      - name: 写入绑定码
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          BIND_CODE: ${{ secrets.BIND_CODE }}
+        run: echo "$BIND_CODE" | npx --yes wrangler@4 secret put BIND_CODE

@@ -28,6 +28,9 @@
 - `build/test/` — 集成测试脚本（版本管理，不是产物）
 - `tools/` — 开发辅助脚本，分 `checks/`（一致性检查）、`inspect/`（分析外部产物）、
   `ops/`（对 NAS/设备操作）。见 `tools/README.md`
+- `edge/` — Cloudflare Workers 边缘降级部署（NAS 不可用时的备选）。
+  **代码开源、实例私有**：源地址只在部署者自己的 Secrets 里，
+  仓库内不得出现任何源清单或凭据。部署说明见 `edge/README.md`
 - `docs/` — 设计文档、调研、审查记录、安全分析
 - `.github/workflows/` — 编译与发布（见 §8）
 
@@ -168,6 +171,7 @@ packaging/fnos/app/server/litvd_*
 | `.github/workflows/build-check.yml` | push 到 main、PR、手动 | Go 编译+vet+test、管理台 typecheck+build、Android 两个 flavor 编译+单测 |
 | `.github/workflows/ios-check.yml` | 只在 `ios/**` 变化时 | 编译 iOS（不发版） |
 | `.github/workflows/release.yml` | `v*` tag 或手动 | 出三端产物（APK / fpk / ipa） |
+| `.github/workflows/edge-deploy.yml` | 只在 `edge/**` 变化、每日定时、手动 | 边缘降级部署：typecheck + 自测 + 部署到 Cloudflare。**可选**，需要仓库配好四个 Secrets，没配就只在 `check` 阶段失败 |
 
 改完代码看 `Build Check` 的结论就够了。要产物走 `Release`。
 

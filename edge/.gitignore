@@ -1,0 +1,8 @@
+node_modules/
+.wrangler/
+.npm-cache/
+.tmp/
+
+# 生成物不入库：里面有上游源地址和凭据
+public/playlist.m3u
+sql/seed.sql

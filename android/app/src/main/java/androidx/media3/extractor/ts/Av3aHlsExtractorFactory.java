@@ -26,6 +26,11 @@ import java.util.Map;
  * 其它格式（fMP4 等）原样交给 media3 默认实现，避免把能播的流搞坏。
  */
 @UnstableApi
+// media3 1.4.1 里 BundledHlsMediaChunkExtractor 的三参构造被标了 deprecated，
+// 但它是把自定义 TsExtractor 接进 HLS 分片解析的唯一公开入口——
+// 换别的写法就得自己实现 HlsMediaChunkExtractor，反而更脆。
+// 等 media3 升级到提供替代 API 时再改。
+@SuppressWarnings("deprecation")
 public final class Av3aHlsExtractorFactory implements HlsExtractorFactory {
 
     private final HlsExtractorFactory delegate = new DefaultHlsExtractorFactory();

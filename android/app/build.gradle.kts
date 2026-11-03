@@ -47,8 +47,8 @@ android {
         // 低端盒子（1GB RAM）是这个项目的性能下限。
         minSdk = 21
         targetSdk = 35
-        versionCode = 20
-        versionName = "0.1.10"
+        versionCode = 21
+        versionName = "0.1.11"
 
         // 架构过滤走下面的 splits.abi —— 两者互斥，不能同时用。
     }

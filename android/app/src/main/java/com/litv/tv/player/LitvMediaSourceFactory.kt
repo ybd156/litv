@@ -17,10 +17,25 @@ import androidx.media3.extractor.ts.Av3aHlsExtractorFactory
  * 所以这里自己按 URL 分派。判据就是 .m3u8 后缀——IPTV 场景够用。
  */
 @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
-class LitvMediaSourceFactory(dsFactory: DataSource.Factory) : MediaSource.Factory {
+class LitvMediaSourceFactory(
+    dsFactory: DataSource.Factory,
+    private val av3aEnabled: Boolean = false,
+) : MediaSource.Factory {
 
-    private val hls: HlsMediaSource.Factory =
-        HlsMediaSource.Factory(dsFactory).setExtractorFactory(Av3aHlsExtractorFactory())
+    /**
+     * HLS 解析器。
+     *
+     * 只有**装了 AV3A 解码库**时才替换成自定义解析器——
+     * 没库的时候必须用 media3 默认实现。
+     *
+     * 这里踩过坑：之前无条件套用 Av3aHlsExtractorFactory，
+     * 结果所有 HLS 频道都被迫走自定义 TsExtractor 路径，
+     * 直连播放时 Exo 拿不到任何轨道，15 秒超时后黑屏。
+     * 用户机器上根本没放 AV3A 库，却因为这个改动影响了全部频道。
+     */
+    private val hls: HlsMediaSource.Factory = HlsMediaSource.Factory(dsFactory).apply {
+        if (av3aEnabled) setExtractorFactory(Av3aHlsExtractorFactory())
+    }
 
     private val progressive = ProgressiveMediaSource.Factory(dsFactory)
 

@@ -159,7 +159,11 @@ class ExoEngine : PlayerEngine {
             .setTrackSelector(trackSelector)
             .setLoadControl(loadControl)
             // 用我们自己的媒体源工厂：HLS 走带 AV3A 支持的解析器
-            .setMediaSourceFactory(LitvMediaSourceFactory(dsFactory))
+            // 只有真正加载到 AV3A 解码库时才启用自定义 HLS 解析器；
+            // 否则用 media3 默认实现（否则普通频道会受影响）。
+            .setMediaSourceFactory(
+                LitvMediaSourceFactory(dsFactory, Av3aLoader.available(ctx))
+            )
             .build()
 
         exoFirstFrameRendered = false

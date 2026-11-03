@@ -434,6 +434,32 @@ extension RegisterResult {
 
 /// 服务端来源：handlers_client.go 的 tvTimeshift。
 /// 时移未开启时只回 {"available_seconds":0,"enabled":false} —— **没有 url 键**。
+/// 局域网里一个可投屏的 DLNA 设备（GET /tv/dlna/renderers）。
+///
+/// 发现是**服务端**做的：iOS 14+ 对本地网络多播有限制，SSDP 需要 Apple
+/// 单独批准的 multicast 权限，自签包拿不到。服务端和电视在同一局域网，
+/// 由它发 M-SEARCH 没有限制，手机只要调接口拿列表。
+struct DlnaRenderer: Codable, Identifiable, Hashable {
+    var udn: String = ""
+    var name: String = ""
+    var model: String = ""
+    var location: String = ""
+    var controlUrl: String = ""
+
+    var id: String { udn.isEmpty ? name : udn }
+
+    enum CodingKeys: String, CodingKey {
+        case udn, name, model, location
+        case controlUrl = "control_url"
+    }
+}
+
+/// /tv/dlna/renderers 的返回外壳
+struct DlnaRenderersResponse: Codable {
+    var total: Int = 0
+    var items: [DlnaRenderer] = []
+}
+
 /// 可被遥控的设备（GET /tv/remote/targets）。
 struct RemoteTarget: Codable, Identifiable, Hashable {
     var id: Int64 = 0

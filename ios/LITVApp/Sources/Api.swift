@@ -222,6 +222,35 @@ struct ApiClient {
         _ = try await send(req, as: EmptyResponse.self)
     }
 
+    /// 列出局域网里可投屏的 DLNA 设备。
+    func dlnaRenderers() async throws -> [DlnaRenderer] {
+        guard let req = request("/api/v1/tv/dlna/renderers", method: "GET", body: nil) else {
+            throw ApiError(message: "地址无效")
+        }
+        let r = try await send(req, as: DlnaRenderersResponse.self)
+        return r.items
+    }
+
+    /// 让指定设备播放某个频道。
+    func dlnaCast(channelId: Int64, controlUrl: String, name: String) async throws {
+        guard let req = request("/api/v1/tv/dlna/cast", method: "POST",
+                                body: ["channel_id": channelId,
+                                       "control_url": controlUrl,
+                                       "name": name]) else {
+            throw ApiError(message: "地址无效")
+        }
+        _ = try await send(req, as: EmptyResponse.self)
+    }
+
+    /// 让指定设备停止投屏。
+    func dlnaStop(controlUrl: String) async throws {
+        guard let req = request("/api/v1/tv/dlna/stop", method: "POST",
+                                body: ["control_url": controlUrl]) else {
+            throw ApiError(message: "地址无效")
+        }
+        _ = try await send(req, as: EmptyResponse.self)
+    }
+
     /// 设置节目开播提醒。
     /// 服务端：POST /api/v1/tv/reminder（按设备存，电视和手机各设各的）
     func createReminder(channelId: Int64, title: String, startAt: Int64) async throws {

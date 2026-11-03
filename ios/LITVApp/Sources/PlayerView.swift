@@ -31,6 +31,11 @@ struct PlayerView: View {
     @State private var epgTip: String?
     /// 手势提示（亮度/音量百分比）
     @State private var gestureTip: String?
+    // 投屏
+    @State private var showCast = false
+    @State private var renderers: [DlnaRenderer] = []
+    @State private var castLoading = false
+    @State private var castTip: String?
     @State private var dragStartBrightness: CGFloat?
     @State private var dragStartVolume: Float?
     @State private var streamId: Int64 = 0
@@ -115,6 +120,7 @@ struct PlayerView: View {
             }
         }
         .sheet(isPresented: $showEpg) { epgSheet }
+        .sheet(isPresented: $showCast) { castSheet }
         .onAppear {
             showControls()
             Task { await start() }
@@ -336,6 +342,9 @@ struct PlayerView: View {
     /// 之前只有 OSD 显示信息，没有任何操作控件——用户只能靠手势，
     /// 而且不知道能干什么。这里补齐成常规播放器的样子。
     private var controls: some View {
+        // 横向可滚动：按钮已经有 8 个，iPhone 竖屏宽度放不下，
+        // 直接塞 HStack 会被压缩变形。用 ScrollView 保证每个按钮都能点到。
+        ScrollView(.horizontal, showsIndicators: false) {
         HStack(spacing: 12) {
             ctlButton("backward.end.fill", "上一台", size: 18) { switchBy(-1) }
             ctlButton(paused ? "play.fill" : "pause.fill", paused ? "播放" : "暂停", size: 22) { togglePause() }
@@ -352,13 +361,90 @@ struct PlayerView: View {
                         ? "arrow.down.right.and.arrow.up.left"
                         : "arrow.up.left.and.arrow.down.right",
                       isFullscreen ? "退出全屏" : "全屏", size: 18) { toggleFullscreen() }
+            // 投屏：把当前频道推给局域网里的电视/盒子
+            ctlButton("airplayvideo", "投屏", size: 18) {
+                showCast = true
+                Task { await loadRenderers() }
+            }
+        }
+        .padding(.horizontal, 4)
         }
         .foregroundColor(.white)
-        .padding(.horizontal, 14)
+        .padding(.horizontal, 10)
         .padding(.vertical, 10)
         .background(.ultraThinMaterial)
         .cornerRadius(20)
         .padding(.bottom, 18)
+    }
+
+    // ---------------------------------------------------------------- 投屏
+
+    private var castSheet: some View {
+        NavigationView {
+            List {
+                if castLoading {
+                    Text("正在搜索可投屏设备…").foregroundColor(.gray)
+                } else if renderers.isEmpty {
+                    Text("没找到可投屏的设备
+确认电视/盒子已开机，且和 NAS 在同一个局域网")
+                        .foregroundColor(.gray)
+                        .font(.system(size: 13))
+                }
+                ForEach(renderers) { r in
+                    Button {
+                        Task { await doCast(r) }
+                    } label: {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(r.name).foregroundColor(.primary)
+                            if !r.model.isEmpty {
+                                Text(r.model).font(.caption).foregroundColor(.gray)
+                            }
+                        }
+                    }
+                }
+                if let tip = castTip {
+                    Text(tip).font(.caption).foregroundColor(.orange)
+                }
+            }
+            .navigationTitle("投屏到")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button {
+                        Task { await loadRenderers() }
+                    } label: { Image(systemName: "arrow.clockwise") }
+                }
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button("关闭") { showCast = false }
+                }
+            }
+        }
+        .navigationViewStyle(.stack)
+    }
+
+    private func loadRenderers() async {
+        castLoading = true
+        castTip = nil
+        defer { castLoading = false }
+        do {
+            renderers = try await session.api.dlnaRenderers()
+            if renderers.isEmpty {
+                castTip = "局域网里没找到 DLNA 设备"
+            }
+        } catch {
+            renderers = []
+            castTip = "搜索失败：\(error.localizedDescription)"
+        }
+    }
+
+    private func doCast(_ r: DlnaRenderer) async {
+        do {
+            try await session.api.dlnaCast(
+                channelId: active.id, controlUrl: r.controlUrl, name: r.name)
+            castTip = "已投屏到 \(r.name)"
+        } catch {
+            castTip = "投屏失败：\(error.localizedDescription)"
+        }
     }
 
     /// 图标 + 文字两行。只有图标的话不看说明书不知道哪个是换台、哪个是静音。

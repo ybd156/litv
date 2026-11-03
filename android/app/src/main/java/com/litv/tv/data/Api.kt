@@ -289,6 +289,32 @@ class Api(private val prefs: Prefs) {
         )
     }
 
+    /** 列出局域网里可投屏的 DLNA 设备（发现由服务端做，iOS 拿不到多播权限）。 */
+    fun dlnaRenderers(onOk: (List<DlnaRenderer>) -> Unit, onErr: (String) -> Unit) {
+        call("/api/v1/tv/dlna/renderers", clazz = DlnaRenderersResponse::class.java,
+            onOk = { onOk(it?.items ?: emptyList()) }, onErr = onErr)
+    }
+
+    /** 让指定设备播放某个频道。 */
+    fun dlnaCast(
+        channelId: Long,
+        controlUrl: String,
+        name: String,
+        onOk: () -> Unit = {},
+        onErr: (String) -> Unit = {},
+    ) {
+        call("/api/v1/tv/dlna/cast", "POST",
+            mapOf("channel_id" to channelId, "control_url" to controlUrl, "name" to name),
+            clazz = Any::class.java,
+            onOk = { onOk() }, onErr = onErr)
+    }
+
+    /** 让指定设备停止投屏。 */
+    fun dlnaStop(controlUrl: String, onOk: () -> Unit = {}, onErr: (String) -> Unit = {}) {
+        call("/api/v1/tv/dlna/stop", "POST", mapOf("control_url" to controlUrl),
+            clazz = Any::class.java, onOk = { onOk() }, onErr = onErr)
+    }
+
     /** 时移回看：问服务端这个台能回看多久，拿带签名的地址。 */
     fun timeshift(
         channelId: Long,

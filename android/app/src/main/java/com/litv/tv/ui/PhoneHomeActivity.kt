@@ -210,6 +210,9 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
 
         findViewById<TextView>(R.id.btnFullscreen).setOnClickListener { toggleOrientation() }
 
+        // 投屏：发现由服务端做（iOS 拿不到多播权限，安卓也统一走服务端）
+        findViewById<TextView>(R.id.btnCast).setOnClickListener { openCastPicker() }
+
         // 点画面：呼出/收起控件浮层（现代播放器的通用交互）。
         // 原来点一下就直接暂停，用户完全看不到有哪些控件。
         surface.setOnClickListener { toggleControls() }
@@ -252,6 +255,60 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
         } else {
             c.show(WindowInsetsCompat.Type.systemBars())
         }
+    }
+
+    /**
+     * 投屏选择器：列出局域网里能投的设备，点一个就让电视播当前频道。
+     *
+     * 发现放在服务端：手机端不需要多播权限，安卓和 iOS 也能共用同一套逻辑。
+     */
+    private fun openCastPicker() {
+        val ch = currentChannel
+        if (ch == null) {
+            android.widget.Toast.makeText(this, "先选一个频道", android.widget.Toast.LENGTH_SHORT).show()
+            switchTab(TAB_CHANNEL)
+            return
+        }
+        android.widget.Toast.makeText(this, "正在搜索可投屏设备…", android.widget.Toast.LENGTH_SHORT).show()
+        app.api.dlnaRenderers(
+            onOk = { list ->
+                runOnUiThread {
+                    if (list.isEmpty()) {
+                        android.widget.Toast.makeText(this, "局域网里没找到可投屏设备",
+                            android.widget.Toast.LENGTH_LONG).show()
+                        return@runOnUiThread
+                    }
+                    val labels = list.map { r ->
+                        if (r.model.isBlank()) r.name else r.name + "  ·  " + r.model
+                    }.toTypedArray()
+                    android.app.AlertDialog.Builder(this)
+                        .setTitle("投屏到")
+                        .setItems(labels) { _, i ->
+                            val r = list[i]
+                            app.api.dlnaCast(ch.id, r.controlUrl, r.name,
+                                onOk = {
+                                    runOnUiThread {
+                                        android.widget.Toast.makeText(this, "已投屏到 " + r.name,
+                                            android.widget.Toast.LENGTH_SHORT).show()
+                                    }
+                                },
+                                onErr = { msg ->
+                                    runOnUiThread {
+                                        android.widget.Toast.makeText(this, "投屏失败：" + msg,
+                                            android.widget.Toast.LENGTH_LONG).show()
+                                    }
+                                })
+                        }
+                        .setNegativeButton("取消", null)
+                        .show()
+                }
+            },
+            onErr = { msg ->
+                runOnUiThread {
+                    android.widget.Toast.makeText(this, "搜索失败：" + msg,
+                        android.widget.Toast.LENGTH_LONG).show()
+                }
+            })
     }
 
     private fun toggleOrientation() {

@@ -65,6 +65,21 @@ data class EpgProgram(
  * 于是永远解析失败 —— 表现就是「节目单一直无法获取」。
  * iOS 侧已修过同类问题（R07），安卓漏了。
  */
+/** 局域网里一个可投屏的 DLNA 设备。 */
+data class DlnaRenderer(
+    val udn: String = "",
+    val name: String = "",
+    val model: String = "",
+    val location: String = "",
+    @SerializedName("control_url") val controlUrl: String = "",
+)
+
+/** /tv/dlna/renderers 的返回：{total, items} */
+data class DlnaRenderersResponse(
+    val total: Int = 0,
+    val items: List<DlnaRenderer> = emptyList(),
+)
+
 data class EpgResponse(
     val channel: Channel? = null,
     val programs: List<EpgProgram> = emptyList(),

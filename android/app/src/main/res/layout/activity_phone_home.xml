@@ -136,6 +136,11 @@
                         android:id="@+id/btnFullscreen"
                         style="@style/PhoneCtl"
                         android:text="⛶&#10;全屏" />
+
+                    <TextView
+                        android:id="@+id/btnCast"
+                        style="@style/PhoneCtl"
+                        android:text="📺&#10;投屏" />
                 </LinearLayout>
             </FrameLayout>
 

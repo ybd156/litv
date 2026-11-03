@@ -266,6 +266,10 @@ func (a *API) Handler(viaGateway bool) http.Handler {
 		pr.Delete("/api/v1/tv/reminder/{id}", a.tvDeleteReminder)
 		// C6：从节目单预约录制
 		pr.Post("/api/v1/tv/record", a.tvCreateRecording)
+		// DLNA 投屏：发现由服务端做（iOS 拿不到多播权限），手机只调接口
+		pr.Get("/api/v1/tv/dlna/renderers", a.tvDLNARenderers)
+		pr.Post("/api/v1/tv/dlna/cast", a.tvDLNACast)
+		pr.Post("/api/v1/tv/dlna/stop", a.tvDLNAStop)
 	})
 
 	// ---- 流出口（签名 URL，不走身份中间件） ----

@@ -200,25 +200,37 @@ class PlayerManager(
         if (kind == EngineKind.EXO) {
             main.postDelayed(frameWatchdog, 8000)
         }
+        // 所有内核回调统一 post 到主线程。
+        //
+        // mpv 的日志/状态回调是从 native 线程发出来的，以前直接往下走，
+        // 一路调到 PlayerActivity 里去 setVisibility，触发
+        // "Only the original thread that created a view hierarchy can touch its views"
+        // ——表现为切到 mpv 内核后 App 直接闪退。
         engine.listener = object : PlayerEngine.Listener {
             override fun onPrepared(durationMs: Long) {
-                prepared = true
-                main.removeCallbacks(startTimeout)
-                prefs.setEngineFor(pendingChannelId, kind.key)
+                main.post {
+                    prepared = true
+                    main.removeCallbacks(startTimeout)
+                    prefs.setEngineFor(pendingChannelId, kind.key)
+                }
             }
 
             override fun onPlaying() {
-                prepared = true
-                main.removeCallbacks(startTimeout)
-                callback?.onPlaying()
+                main.post {
+                    prepared = true
+                    main.removeCallbacks(startTimeout)
+                    callback?.onPlaying()
+                }
             }
 
             override fun onError(message: String) {
-                if (currentKind == kind) tryNext(message)
+                main.post {
+                    if (currentKind == kind) tryNext(message)
+                }
             }
 
             override fun onVideoSizeChanged(width: Int, height: Int) {
-                callback?.onVideoSizeChanged(width, height)
+                main.post { callback?.onVideoSizeChanged(width, height) }
             }
 
             override fun onEnded() = Unit

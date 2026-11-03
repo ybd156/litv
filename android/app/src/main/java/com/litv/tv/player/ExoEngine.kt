@@ -208,6 +208,10 @@ class ExoEngine : PlayerEngine {
         if (playerView != null) {
             playerView!!.player = p
             playerView!!.useController = false
+            // tunneled 模式下视频走独立硬件图层，PlayerView 默认的黑色
+            // 遮罩（shutter）会把它整块盖住——表现为"解码器在解、首帧也
+            // 触发了，但屏幕全黑"。必须把遮罩设成透明才能看到画面。
+            playerView!!.setShutterBackgroundColor(android.graphics.Color.TRANSPARENT)
             // 画面比例：让设置里的选项真正生效。
             //
             // auto = 保持比例**裁切铺满**（zoom）：电视上最符合"铺满屏幕"的预期，

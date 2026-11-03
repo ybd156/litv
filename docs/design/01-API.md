@@ -1,6 +1,6 @@
 # LITV API 契约 v1
 
-> 所有路径前缀：管理台 `/app/litv/api/v1/*`（网关） · 终端 `:9527/api/v1/*`（TCP）
+> 所有路径前缀：管理台 `/app/litv/api/v1/*`（网关） · 终端 `:28027/api/v1/*`（TCP）
 > 响应统一：`{"code":0,"msg":"ok","data":{...}}`，失败 `code!=0` + HTTP 4xx/5xx。
 
 ## 鉴权
@@ -107,7 +107,7 @@
 ```json
 {
   "version":"1.0.0","uptime_s":3600,"active_channels":3,"max_concurrent":100,
-  "port":9527,"prefix":"/app/litv","gateway_socket":"...","transcode":false,"db_path":"...",
+  "port":28027,"prefix":"/app/litv","gateway_socket":"...","transcode":false,"db_path":"...",
   "channels_total":51,"channels_enabled":48,
   "devices_total":5,"devices_online":2,"devices_pending":1,
   "sources_total":4,"sources_failed":1,
@@ -120,7 +120,7 @@
 ## 3. `GET /api/v1/system/config` / `PUT`
 ```json
 {
-  "port":9527,"prefix":"/app/litv","max_concurrent":100,"ring_size":2097152,
+  "port":28027,"prefix":"/app/litv","max_concurrent":100,"ring_size":2097152,
   "transcode":false,"transcode_enabled":false,
   "hwaccel":"qsv","epg_enabled":true,"epg_refresh_hour":3,
   "token_hours":8760,"log_level":"info","allow_lan":true

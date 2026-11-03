@@ -2,11 +2,17 @@
 
 | 设备 | 文件 |
 |---|---|
-| **安卓电视 / 盒子（Android 9 及以下、32 位）** | `LITV-<版本>-tv-armv7.apk` |
-| 64 位设备（新电视 / 手机） | `LITV-<版本>-arm64.apk` |
+| **电视 / 盒子，32 位**（Android 9 及以下装这个） | `LITV-<版本>-tv-armv7.apk` |
+| 电视 / 盒子，64 位 | `LITV-<版本>-tv-arm64.apk` |
+| 手机，32 位（2018 年前的老机型） | `LITV-<版本>-phone-armv7.apk` |
+| 手机，64 位（绝大多数手机） | `LITV-<版本>-phone-arm64.apk` |
 | 飞牛 NAS（N100 等 x86） | `litv_x86_<版本>.fpk` |
 | 飞牛 NAS（ARM 机型） | `litv_arm_<版本>.fpk` |
 | iPhone / iPad | `LITV-<版本>-unsigned.ipa` |
+
+不确定架构：设备上跑 `adb shell getprop ro.product.cpu.abi`，
+`armeabi-v7a` 装 armv7，`arm64-v8a` 装 arm64。
+电视版和手机版包名不同（`com.litv.tv` / `com.litv.tv.phone`），可以同时装。
 
 ## 安装说明
 

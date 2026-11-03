@@ -5,7 +5,9 @@ import java.util.Locale
 
 /** Strict server-origin parsing; preserves HTTPS and never accepts embedded credentials. */
 internal object ServerAddress {
-    private const val DEFAULT_PORT = 9527
+    // 必须与服务端默认端口一致（server/internal/config/config.go 的 Default()，
+    // 以及安装向导的 config.yaml.template）。写错了用户只输 IP 不输端口就连不上。
+    private const val DEFAULT_PORT = 28027
 
     fun parse(input: String): URI? {
         val raw = input.trim()

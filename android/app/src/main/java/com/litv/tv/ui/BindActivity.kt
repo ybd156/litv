@@ -51,7 +51,7 @@ class BindActivity : AppCompatActivity() {
         setContentView(R.layout.activity_bind)
         app = application as LitvApp
 
-        // 服务器地址拆成 4 段 IP + 端口：遥控器上输 "http://192.168.1.10:9527"
+        // 服务器地址拆成 4 段 IP + 端口：遥控器上输 "http://192.168.1.10:28027"
         // 要反复切数字/符号键，拆框后只输数字、还能自动跳格。
         ipBoxes = listOf(
             findViewById(R.id.ip1),

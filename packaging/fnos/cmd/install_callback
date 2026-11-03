@@ -39,7 +39,7 @@ PORT_FILE="${TRIM_PKGVAR}/server_port"
 DATA_PATH_FILE="${TRIM_PKGVAR}/wizard_data_path"
 INIT_PWD_FILE="${TRIM_PKGVAR}/initial_admin_password"
 DATA_DIR="${TRIM_PKGVAR}/data"
-DEFAULT_PORT=9527
+DEFAULT_PORT=28027
 
 log() { echo "[install_callback] $1"; }
 die() {

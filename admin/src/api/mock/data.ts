@@ -285,7 +285,7 @@ export const seedDevices: Device[] = [
 ]
 
 export const seedConfig: SystemConfig = {
-  port: 9527,
+  port: 28027,
   max_concurrent: 6,
   transcode_enabled: false,
   log_level: 'info',

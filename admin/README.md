@@ -8,7 +8,7 @@ Vue 3 + Vite + TypeScript + Naive UI 的 Web 管理台，构建产物 `admin/dis
 ```bash
 cd admin
 npm install --registry=https://registry.npmmirror.com   # 见下方「关于 registry」
-npm run dev          # 开发模式，接口走 vite proxy -> http://127.0.0.1:9527
+npm run dev          # 开发模式，接口走 vite proxy -> http://127.0.0.1:28027
 npm run dev:mock     # 纯前端预览（不需要服务端，全部走假数据）
 npm run build        # 类型检查 + 生产构建 -> dist/
 npm run build:mock   # 带假数据的构建，用来离线验证界面

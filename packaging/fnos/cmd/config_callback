@@ -92,7 +92,7 @@ if [ -n "${NEW_PORT}" ]; then
         log "警告: 端口写入失败（模板缺少 @@SERVER_PORT@@ 标记）"
     fi
 else
-    log "端口未填写，保持 $([ -f "${PORT_FILE}" ] && head -n1 "${PORT_FILE}" || echo 9527)"
+    log "端口未填写，保持 $([ -f "${PORT_FILE}" ] && head -n1 "${PORT_FILE}" || echo 28027)"
 fi
 
 # ---- 2. 管理员密码 ----

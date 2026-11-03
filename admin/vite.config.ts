@@ -21,12 +21,12 @@ export default defineConfig(({ mode }) => ({
     // 本地开发时把网关前缀也代理掉，这样前端代码里的相对路径 api/v1 在 dev 下同样成立
     proxy: {
       '/app/litv/api/v1': {
-        target: 'http://127.0.0.1:9527',
+        target: 'http://127.0.0.1:28027',
         changeOrigin: true,
         rewrite: (p: string) => p.replace('/app/litv', ''),
       },
       '/api/v1': {
-        target: 'http://127.0.0.1:9527',
+        target: 'http://127.0.0.1:28027',
         changeOrigin: true,
       },
     },

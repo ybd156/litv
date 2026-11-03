@@ -191,7 +191,7 @@ func main() {
 	//
 	// 为什么：服务端下发给终端的播放地址里带 /app/litv 前缀（因为管理台在网关下），
 	// 但终端是直连 TCP 端口的。如果这里不剥前缀，终端拿到的
-	// http://ip:9527/app/litv/live/1/stream.ts 会落到静态处理器 → 返回首页 HTML，
+	// http://ip:28027/app/litv/live/1/stream.ts 会落到静态处理器 → 返回首页 HTML，
 	// 表现就是"能播但一直黑屏/无数据"。e2e 测试抓到的就是这个。
 	stripIfPrefixed := func(prefix string, h http.Handler) http.Handler {
 		if prefix == "" {
@@ -492,7 +492,7 @@ func isAPIPath(p string) bool {
 // 为什么不在端口被占时直接退出：
 //
 //	NAS 上端口冲突太常见（用户自己装过别的东西、装了两份 LITV、
-//	系统服务恰好用了 9527……）。直接退出的话用户只看到"启动失败"，
+//	系统服务恰好占了这个端口……）。直接退出的话用户只看到"启动失败"，
 //	根本不知道换个端口就好。
 //
 // 只有「端口被占用」才顺延；权限不足之类的错误立即返回，别掩盖真正的问题。

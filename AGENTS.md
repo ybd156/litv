@@ -17,12 +17,19 @@
 
 ## 2. 边界
 
-- `server/` — Go 服务端。认证、SQLite、源解析、EPG、流扇出、录制、时移、遥控中转、DLNA、HTTP API
+- `server/` — Go 服务端。认证、SQLite、源解析、EPG、流扇出、录制、时移、
+  遥控中转、DLNA（服务端 + 投屏控制端）、HTTP API
 - `admin/` — Vue 3 + TypeScript + Vite 管理台，部署在 `/app/litv/`
-- `android/` — Android TV 与手机，**同一份代码**。Media3 主，VLC / mpv 兜底
+- `android/` — Android TV 与手机，**同一份代码、两个 flavor**
+  （`tv` → `com.litv.tv`，`phone` → `com.litv.tv.phone`，可同时安装）。
+  Media3 主，VLC / mpv 兜底
 - `ios/` — SwiftUI。MobileVLCKit 主，AVPlayer 兜底
 - `packaging/fnos/` — fpk 清单、生命周期脚本、安装向导
-- `build/test/` — 集成测试脚本
+- `build/test/` — 集成测试脚本（版本管理，不是产物）
+- `tools/` — 开发辅助脚本，分 `checks/`（一致性检查）、`inspect/`（分析外部产物）、
+  `ops/`（对 NAS/设备操作）。见 `tools/README.md`
+- `docs/` — 设计文档、调研、审查记录、安全分析
+- `.github/workflows/` — 编译与发布（见 §8）
 
 ---
 
@@ -327,15 +334,31 @@ cd packaging/fnos
 
 ### AV3A（AVS3-P3）音频
 
-- FFmpeg 主线没有它的解码器（社区靠打补丁）
-- VLC / mpv 基于 FFmpeg → 同样不支持
-- ExoPlayer 完全不支持
+AV3A 是 Audio Vivid，中国国家标准。**没有任何开源解码器**：
+FFmpeg 主线没有 → VLC / mpv 同样不支持；ExoPlayer 完全不认这个编码。
 
-**集成更多解码器解决不了这个问题。** 可行方向：换非 AV3A 线路，或丢弃音频轨。
+本项目补了一套 media3 扩展把链路接通：
 
-不要为了"支持 AV3A"去接来路不明的二进制解码库。
+| 环节 | 类 | 作用 |
+|---|---|---|
+| 解复用 | `Av3aReader` + `Av3aTsPayloadReaderFactory` | 认出 AV3A 的 stream_type（0xD5 等） |
+| 解复用 | `Av3aHlsExtractorFactory`（Java） | 把上面的工厂接到 HLS 分片解析 |
+| 解码 | `Av3aDecoder`（`SimpleDecoder`） | 调原生库 |
+| 输出 | `Av3aAudioRenderer`（`DecoderAudioRenderer`） | 交给 AudioSink |
+| 装配 | `LitvRenderersFactory` + `LitvMediaSourceFactory` | 只在库加载成功时才挂上去 |
 
----
+**硬约束，别越线：**
+
+- **解码库不进仓库、不进 Release**。没有合法来源，用户自己放
+  `Android/data/<包名>/files/av3a/`（`Av3aLoader` 负责拷进 `filesDir` 再 `System.load`，
+  Android 9+ 不允许从 `/sdcard` 直接 dlopen）
+- **绝不**从网上找来路不明的 `.so` 提交进来，也不写进打包脚本
+- 没库时这条链路完全不参与，其它音频照常走系统解码——不要让它影响常规播放
+
+**状态：代码接通了，真机还没验证出声。** 所以遇到 AV3A 源没声音，
+优先建议换同频道非 AV3A 线路，不要先怀疑别的地方。
+
+iOS 侧没有对应的解码库，AV3A 频道在 iOS 上只能有画面。
 
 ## 14. 完成的标准
 

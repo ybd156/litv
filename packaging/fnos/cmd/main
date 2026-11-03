@@ -35,7 +35,7 @@ BIN_NAME="litvd"
 GATEWAY_PREFIX="/app/litv"
 # 必须与 app/ui/config 里的 gatewaySocket 完全一致，网关按这个名字去 target 下找 socket
 GATEWAY_SOCKET="app.sock"
-DEFAULT_PORT="9527"
+DEFAULT_PORT="28027"
 
 LOG_MAX_BYTES=$((10 * 1024 * 1024))   # 10MB 触发轮转，只保留一份 .1
 SOCKET_WAIT_TICKS=50                  # 50 * 0.2s = 最多等 10s

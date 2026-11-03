@@ -4,7 +4,7 @@ import SwiftUI
 ///
 /// 地址输入有两种模式：
 ///   分框  四段 IP + 端口，纯数字键盘，输满自动跳下一格
-///   域名  tv.example.com[:9527]，用 DDNS 或反向代理的走这个
+///   域名  tv.example.com[:28027]，用 DDNS 或反向代理的走这个
 ///
 /// 为什么两种都留：分框对遥控器/小屏更友好，但只收数字；
 /// 用域名访问的人必须能填字母。
@@ -17,7 +17,7 @@ struct BindView: View {
 
     // 地址：分框模式
     @State private var ip = ["", "", "", ""]
-    @State private var port = "9527"
+    @State private var port = "28027"
 
     // 地址：域名模式
     @State private var domain = ""
@@ -133,7 +133,7 @@ struct BindView: View {
     }
 
     private var domainField: some View {
-        TextField("tv.example.com 或 tv.example.com:9527", text: $domain)
+        TextField("tv.example.com 或 tv.example.com:28027", text: $domain)
             .textInputAutocapitalization(.never)
             .autocorrectionDisabled()
             .keyboardType(.URL)
@@ -188,7 +188,7 @@ struct BindView: View {
         for i in 0..<4 { ip[i] = i < parts.count ? parts[i] : "" }
     }
 
-    /// 从 "http://a.b.c.d:9527" / "a.b.c.d:9527" / "域名" 里拆出 host 和 port
+    /// 从 "http://a.b.c.d:28027" / "a.b.c.d:28027" / "域名" 里拆出 host 和 port
     private func parseHostPort(_ raw: String) -> (host: String, port: String) {
         var s = raw.trimmingCharacters(in: .whitespaces)
         if s.hasPrefix("http://") { s.removeFirst(7) }

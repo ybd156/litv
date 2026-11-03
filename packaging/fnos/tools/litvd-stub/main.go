@@ -13,7 +13,7 @@
 //   LITV_WWW_DIR         $TRIM_APPDEST/www
 //   LITV_LISTEN_SOCKET   $TRIM_APPDEST/app.sock   （统一网关）
 //   LITV_URL_PREFIX      /app/litv                （必须与 gatewayPrefix 一致）
-//   LITV_LISTEN_ADDR     0.0.0.0:9527             （原生客户端直连端口，可选）
+//   LITV_LISTEN_ADDR     0.0.0.0:28027             （原生客户端直连端口，可选）
 package main
 
 import (

@@ -31,7 +31,7 @@ struct ApiClient {
 
     func url(_ path: String) -> URL? {
         // 直连模式下服务端给的是**上游绝对地址**，不能再拼 base，
-        // 否则会拼成 http://nas:9527/http://源站/xxx.m3u8
+        // 否则会拼成 http://nas:28027/http://源站/xxx.m3u8
         if path.hasPrefix("http://") || path.hasPrefix("https://") {
             return URL(string: path)
         }

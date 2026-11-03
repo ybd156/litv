@@ -4,7 +4,7 @@
 
 - 服务端：Go 单二进制 `litvd`（无 systemd 依赖，由 `cmd/main` 自己拉起/守护）
 - 入口一：**飞牛统一网关** `/app/litv` → `target/app.sock`（管理台，免二次登录，网关注入 `X-Trim-*` 身份）
-- 入口二：**独立 TCP 端口**（默认 9527）→ Android TV / 手机 / iOS 原生客户端直连
+- 入口二：**独立 TCP 端口**（默认 28027）→ Android TV / 手机 / iOS 原生客户端直连
 - 数据：SQLite，落在 `$TRIM_PKGVAR`（跨重启、跨升级保留）
 
 ---
@@ -114,7 +114,7 @@ dist/litv_x86_v1.0.0.fpk.sha256     # sha256sum 格式，可直接 sha256sum -c
 
 1. 把 `dist/litv_x86_v1.0.0.fpk` 拷到能访问的共享目录，或直接在飞牛 Web 界面里上传
 2. **应用中心 → 手动安装 → 选择 .fpk**
-3. 按向导填：服务端口（默认 9527）、管理员密码、媒体库目录（可留空）
+3. 按向导填：服务端口（默认 28027）、管理员密码、媒体库目录（可留空）
 4. 装完桌面出现 **LITV 直播管理** 图标，点开即进管理台
 
 ### 方式 B：命令行（推荐给运维）
@@ -141,8 +141,8 @@ appcenter-cli install-local       # 需要把 packaging/fnos 拷到 NAS 上
 | 入口 | 地址 | 鉴权 |
 |---|---|---|
 | 统一网关（管理台） | `https://<nas域名>/app/litv` | 飞牛登录态，网关注入 `X-Trim-Userid` / `X-Trim-Username` / `X-Trim-Isadmin` |
-| TCP 直连（原生客户端） | `http://<nas-ip>:9527` | LITV 自建 device token |
-| 健康检查 | `/app/litv/api/v1/health` 或 `http://<nas-ip>:9527/api/v1/health` | 无 |
+| TCP 直连（原生客户端） | `http://<nas-ip>:28027` | LITV 自建 device token |
+| 健康检查 | `/app/litv/api/v1/health` 或 `http://<nas-ip>:28027/api/v1/health` | 无 |
 
 ---
 
@@ -215,7 +215,7 @@ install → start → 网关探活 → 身份 Header 透传 → 双实例防护 
 | `LITV_LISTEN_ADDR` | `0.0.0.0:<port>` | 原生客户端 TCP 端口 |
 | `LITV_DATA_DIR` / `LITV_ETC_DIR` / `LITV_CONFIG` / `LITV_WWW_DIR` / `LITV_LOG_FILE` | 对应目录 | 便于服务端/占位实现统一取路径 |
 
-端口来源优先级：`$TRIM_PKGVAR/server_port`（`install_callback` 写入）→ 默认 `9527`。
+端口来源优先级：`$TRIM_PKGVAR/server_port`（`install_callback` 写入）→ 默认 `28027`。
 
 ---
 

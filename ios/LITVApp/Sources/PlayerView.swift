@@ -29,6 +29,10 @@ struct PlayerView: View {
     /// 节目单当前看的是第几天：0=今天，-1=昨天，+1=明天
     @State private var epgDay = 0
     @State private var epgTip: String?
+    /// 手势提示（亮度/音量百分比）
+    @State private var gestureTip: String?
+    @State private var dragStartBrightness: CGFloat?
+    @State private var dragStartVolume: Float?
     @State private var streamId: Int64 = 0
     @State private var streams: [TvStream] = []
     /// VLC 失败降级正在进行。VLCKit 一次失败可能连发两个状态回调
@@ -138,6 +142,16 @@ struct PlayerView: View {
                 ProgressView().tint(.white)
             }
 
+            if let tip = gestureTip {
+                Text(tip)
+                    .font(.system(size: 15, weight: .medium))
+                    .foregroundColor(.white)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 10)
+                    .background(Color.black.opacity(0.6))
+                    .cornerRadius(10)
+            }
+
             if let err = errorText {
                 errorOverlay(err)
             }
@@ -147,6 +161,20 @@ struct PlayerView: View {
                 Color.clear
                     .contentShape(Rectangle())
                     .onTapGesture { toggleControls() }
+                    // 上下滑动：左半边调亮度，右半边调音量。
+                    // 用 minimumDistance 区分点击和滑动，两者不冲突。
+                    .gesture(
+                        DragGesture(minimumDistance: 25)
+                            .onChanged { v in handleVerticalDrag(v) }
+                            .onEnded { _ in
+                                dragStartBrightness = nil
+                                dragStartVolume = nil
+                                let tip = gestureTip
+                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
+                                    if gestureTip == tip { gestureTip = nil }
+                                }
+                            }
+                    )
 
                 if controlsVisible {
                     VStack {
@@ -177,7 +205,8 @@ struct PlayerView: View {
     private var videoContent: some View {
         // VLCKit 可用就用它（能解 AC3/裸 TS），否则退回 AVPlayer
         if usingVLC, let u = playURL {
-            VLCPlayerView(url: u, userAgent: playUA, headers: playHeaders, control: vlc) { st in
+            VLCPlayerView(url: u, userAgent: playUA, headers: playHeaders,
+                          decodeMode: session.decodeMode, control: vlc) { st in
                 // VLCKit 的状态通知是在它自己的线程上发出的，直接改 @State
                 // 属于跨线程写 UI 状态；统一切回主线程再处理。
                 Task { @MainActor in
@@ -455,6 +484,30 @@ struct PlayerView: View {
             }
         }
         .navigationViewStyle(.stack)
+    }
+
+    /// 上下滑动：左半边调屏幕亮度，右半边调播放器音量。
+    ///
+    /// 为什么用 VLC 的音量而不是系统音量：系统音量要 MPVolumeView 那套私有手法，
+    /// 而且会和用户的系统音量设置互相打架；VLC 自己的音量只影响这个播放器。
+    /// 代价是 AVPlayer 兜底路径没有音量手势（那条路只认系统音量）。
+    private func handleVerticalDrag(_ v: DragGesture.Value) {
+        let screen = UIScreen.main.bounds
+        guard screen.height > 0 else { return }
+        // 上滑为正
+        let delta = -v.translation.height / screen.height
+
+        if v.startLocation.x < screen.width / 2 {
+            if dragStartBrightness == nil { dragStartBrightness = UIScreen.main.brightness }
+            let b = min(1.0, max(0.0, (dragStartBrightness ?? 0.5) + delta))
+            UIScreen.main.brightness = b
+            gestureTip = "亮度 \(Int(b * 100))%"
+        } else {
+            if dragStartVolume == nil { dragStartVolume = vlc.volume() }
+            let vol = min(200, max(0, (dragStartVolume ?? 100) + Float(delta) * 200))
+            vlc.setVolume(vol)
+            gestureTip = "音量 \(Int(vol))%"
+        }
     }
 
     private func dayLabel(_ d: Int) -> String {

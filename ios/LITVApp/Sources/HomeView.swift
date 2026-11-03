@@ -178,6 +178,15 @@ struct HomeView: View {
 /// 设置页。
 struct SettingsView: View {
     /// 从 Info.plist 读真实版本号（project.yml 里注入）。
+    /// 解码方式的显示文案。
+    static func decodeLabel(_ mode: String) -> String {
+        switch mode {
+        case "hard": return "强制硬件解码"
+        case "soft": return "强制软件解码"
+        default: return "自动"
+        }
+    }
+
     static var appVersion: String {
         let v = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "—"
         let b = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "—"
@@ -204,6 +213,25 @@ struct SettingsView: View {
                             .foregroundColor(.gray)
                     }
                 }
+                Section("播放") {
+                    // 解码方式：老设备硬解会花屏/卡住，需要能手动切软解。
+                    // 用 HStack + 点击循环切换，和「关于」的写法保持一致（iOS 15 兼容）。
+                    Button {
+                        switch session.decodeMode {
+                        case "auto": session.decodeMode = "hard"
+                        case "hard": session.decodeMode = "soft"
+                        default: session.decodeMode = "auto"
+                        }
+                    } label: {
+                        HStack {
+                            Text("解码方式").foregroundColor(.primary)
+                            Spacer()
+                            Text(Self.decodeLabel(session.decodeMode))
+                                .foregroundColor(.gray)
+                        }
+                    }
+                }
+
                 Section {
                     Button(role: .destructive) {
                         session.unbind()

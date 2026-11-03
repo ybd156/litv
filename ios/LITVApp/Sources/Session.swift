@@ -27,6 +27,12 @@ final class Session: ObservableObject {
     /// 有就继续播这个台，没有就提示去「频道」页选一个。
     @Published var lastChannel: Channel?
 
+    /// 解码方式：auto / hard / soft。持久化，重开 App 仍生效。
+    @Published var decodeMode: String =
+        UserDefaults.standard.string(forKey: "decodeMode") ?? "auto" {
+        didSet { UserDefaults.standard.set(decodeMode, forKey: "decodeMode") }
+    }
+
     /// 频道页点台时发出的「请播放这个台」请求。
     ///
     /// 不直接在频道页 push 播放器：TabView 会把「播放」tab 一起保留在视图树里，

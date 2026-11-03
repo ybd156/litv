@@ -28,6 +28,24 @@ final class VLCControl: ObservableObject {
         p.audio?.volume = muted ? 0 : 100
         #endif
     }
+
+    /// 当前音量（0~200，100 为原始音量）。拿不到时返回 100。
+    func volume() -> Float {
+        #if canImport(MobileVLCKit)
+        if let p = player as? VLCMediaPlayer {
+            return Float(p.audio?.volume ?? 100)
+        }
+        #endif
+        return 100
+    }
+
+    /// 设置音量，自动夹在 0~200。
+    func setVolume(_ v: Float) {
+        #if canImport(MobileVLCKit)
+        guard let p = player as? VLCMediaPlayer else { return }
+        p.audio?.volume = Int32(min(200, max(0, v)))
+        #endif
+    }
 }
 
 #if canImport(MobileVLCKit)
@@ -42,6 +60,8 @@ struct VLCPlayerView: UIViewRepresentable {
 
     let url: URL
     var autoplay: Bool = true
+    /// 解码方式：auto（默认，让 VLC 自己选）/ hard（强制硬件）/ soft（强制软件）
+    var decodeMode: String = "auto"
     /// 源配置里指定的 User-Agent（空 = 用 VLC 默认）
     var userAgent: String = ""
     /// 这条线路的完整请求头（R09）。VLCKit 只对 UA / Referer 提供专用 option，
@@ -100,7 +120,16 @@ struct VLCPlayerView: UIViewRepresentable {
         media.addOption("--no-skip-frames")
         media.addOption("--network-caching=1500")
         media.addOption("--live-caching=1500")
-        media.addOption("--avcodec-hw=any")
+        // 解码方式：auto 不传参（VLC 自己挑），hard 强制硬解，soft 强制软解。
+        // 有些老设备硬解会花屏或卡住，用户需要能手动切软解。
+        switch decodeMode {
+        case "hard":
+            media.addOption("--avcodec-hw=any")
+        case "soft":
+            media.addOption("--avcodec-hw=none")
+        default:
+            break
+        }
         // 源站校验 UA 时必须带，否则 403。headers 里的优先级高于历史 ua 字段。
         let ua = headerValue("User-Agent")
         if !ua.isEmpty {

@@ -27,6 +27,7 @@ class SettingsActivity : AppCompatActivity() {
     private lateinit var valueBuffer: TextView
     private lateinit var valueAspect: TextView
     private lateinit var valueReverse: TextView
+    private lateinit var valueAv3a: TextView
     private lateinit var valueAutoPlay: TextView
     private lateinit var valueNumberTimeout: TextView
     private lateinit var valueUiMode: TextView
@@ -53,6 +54,7 @@ class SettingsActivity : AppCompatActivity() {
         valueBuffer = findViewById(R.id.valueBuffer)
         valueAspect = findViewById(R.id.valueAspect)
         valueReverse = findViewById(R.id.valueReverse)
+        valueAv3a = findViewById(R.id.valueAv3a)
         valueAutoPlay = findViewById(R.id.valueAutoPlay)
         valueNumberTimeout = findViewById(R.id.valueNumberTimeout)
         valueUiMode = findViewById(R.id.valueUiMode)
@@ -79,6 +81,13 @@ class SettingsActivity : AppCompatActivity() {
             if (app.prefs.reverseChannelKeys) "on" else "off") { v ->
             app.prefs.reverseChannelKeys = (v == "on"); labelReverse(v == "on")
         }
+        // AV3A 这行不走 bindCycle：那边会在回调后把文字覆盖成 "off"/"on"，
+        // 而我们要显示的是加载状态（"开 · 已加载" / "开 · 未找到解码库"）。
+        findViewById<View>(R.id.rowAv3a).setOnClickListener {
+            app.prefs.av3aEnabled = !app.prefs.av3aEnabled
+            labelAv3a()
+        }
+        labelAv3a()
         bindCycle(R.id.rowAutoPlay, valueAutoPlay, listOf("off", "on"),
             if (app.prefs.autoPlayLast) "on" else "off") { v ->
             app.prefs.autoPlayLast = (v == "on")
@@ -206,6 +215,21 @@ class SettingsActivity : AppCompatActivity() {
             "fill" -> "铺满"
             else -> "自动"
         }
+    }
+
+    /**
+     * AV3A 状态文字。
+     *
+     * 开关只是"允不允许加载"；真正能不能用取决于用户有没有把 .so 放到位。
+     * 所以这里直接把加载结果摊开显示，用户不用去翻日志。
+     */
+    private fun labelAv3a() = run {
+        if (!app.prefs.av3aEnabled) {
+            valueAv3a.text = "关"
+            return@run
+        }
+        val st = com.litv.tv.player.Av3aLoader.load(this)
+        valueAv3a.text = if (st.ok) "开 · 已加载" else "开 · " + st.message
     }
 
     private fun labelReverse(on: Boolean) = run {

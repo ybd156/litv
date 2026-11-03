@@ -153,6 +153,16 @@ class Prefs(ctx: Context) {
      *
      * 电视的使用习惯就是「打开就看」，不该先让人在列表里找台。
      */
+    /**
+     * 是否启用 AV3A（AVS3-P3）音频解码。
+     *
+     * 默认关闭。解码库不随本包分发（没有合法的开源实现），
+     * 需要用户自己把 .so 放进 Av3aLoader 指定的目录。
+     */
+    var av3aEnabled: Boolean
+        get() = sp.getBoolean(K_AV3A, false)
+        set(v) = sp.edit().putBoolean(K_AV3A, v).apply()
+
     var autoPlayLast: Boolean
         get() = sp.getBoolean(K_AUTOPLAY, true)
         set(v) = sp.edit().putBoolean(K_AUTOPLAY, v).apply()
@@ -215,6 +225,7 @@ class Prefs(ctx: Context) {
         const val K_NUM_TIMEOUT = "num_timeout"
         const val K_UI_MODE = "ui_mode"
         const val K_AUTOPLAY = "auto_play_last"
+        const val K_AV3A = "av3a_enabled"
         const val K_DIRECT_MODE = "direct_mode"
         const val K_CACHE = "bootstrap_cache"
     }

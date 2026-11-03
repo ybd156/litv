@@ -77,7 +77,9 @@ enum class EngineKind(val key: String, val label: String) {
     EXO("exo", "系统硬解 (Media3)"),
     MPV("mpv", "libmpv 软解"),
     VLC("vlc", "libVLC"),
-    AVS3("avs3", "AVS3 专用 (libuavs3d)");
+    // 注意：这个内核只是 mpv 强制软解，并没有单独集成 libuavs3d。
+    // 之前标签写 "AVS3 专用 (libuavs3d)" 是错的，会让人以为 AVS3 视频能解。
+    AVS3("avs3", "AVS3 软解 (mpv)");
 
     companion object {
         fun from(key: String?): EngineKind? = entries.firstOrNull { it.key == key }

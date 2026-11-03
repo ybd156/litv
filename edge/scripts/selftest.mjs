@@ -170,24 +170,28 @@ try {
   console.error("bootstrap 响应体不是合法 JSON：" + e.message);
 }
 
+const data = body && body.data;
+
 check("bootstrap 是合法 JSON", body !== null);
-check("隐藏的频道不出现在响应里", body && !body.channels.some((c) => c.name.includes("CCTV-2")));
-check("改名生效", body && body.channels.some((c) => c.name === "改过的CCTV1"));
+// 跨端契约：{ code, msg, data }。只拼 data 不套信封，客户端会当成错误码 -1。
+check("bootstrap 是标准信封 {code,msg,data}", !!data && body.code === 0 && body.msg === "ok");
+check("隐藏的频道不出现在响应里", !!data && !data.channels.some((c) => c.name.includes("CCTV-2")));
+check("改名生效", !!data && data.channels.some((c) => c.name === "改过的CCTV1"));
 check(
   "频道按 sort/number 排序",
-  body && JSON.stringify(body.channels.map((c) => c.name)) ===
+  !!data && JSON.stringify(data.channels.map((c) => c.name)) ===
     JSON.stringify(["改过的CCTV1", "我的测试台", "湖南卫视", '测试"引号"台']),
 );
-check("频道总数 = 4", body && body.channels.length === 4);
-check("stream_count 含手工线路（CCTV-1 共 3 条）", body && body.channels[0].stream_count === 3);
-check("enabled 是布尔 true 不是 1", body && body.channels[0].enabled === true);
-check("device.config.autoplay 是布尔 true", body && body.device.config.autoplay === true);
-check("groups 计数正确", body && JSON.stringify(body.groups.map((g) => g.name).sort()) ===
+check("频道总数 = 4", !!data && data.channels.length === 4);
+check("stream_count 含手工线路（CCTV-1 共 3 条）", !!data && data.channels[0].stream_count === 3);
+check("enabled 是布尔 true 不是 1", !!data && data.channels[0].enabled === true);
+check("device.config.autoplay 是布尔 true", !!data && data.device.config.autoplay === true);
+check("groups 计数正确", !!data && JSON.stringify(data.groups.map((g) => g.name).sort()) ===
   JSON.stringify(["手工", "卫视", "央视", "新闻,财经"].sort()));
-check("sources / now / favorites 是空数组", body &&
-  Array.isArray(body.sources) && body.sources.length === 0 &&
-  Array.isArray(body.now) && body.now.length === 0 &&
-  Array.isArray(body.favorites) && body.favorites.length === 0);
+check("sources / now / favorites 是空数组", !!data &&
+  Array.isArray(data.sources) && data.sources.length === 0 &&
+  Array.isArray(data.now) && data.now.length === 0 &&
+  Array.isArray(data.favorites) && data.favorites.length === 0);
 
 // ---------------------------------------------------------------- C. 源清单 / TXT / HTML
 

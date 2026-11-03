@@ -17,7 +17,13 @@
 // 万一哪天顺序乱了，只是频道排序不对，不会坏。
 export const BOOTSTRAP_SQL = `
 SELECT json_object(
-  'server', json_object('version', 'edge', 'name', ?),
+  -- 响应信封必须是 { code, msg, data }，这是跨端契约（AGENTS.md §4）。
+  -- 只拼 data 而不套信封，客户端解析 code 拿到 null → 当成 -1 →
+  -- 界面上就是「加载失败：错误码 -1」。
+  'code', 0,
+  'msg', 'ok',
+  'data', json_object(
+    'server', json_object('version', 'edge', 'name', ?),
   'device', json_object(
     'id', 0,
     'name', 'TV',
@@ -73,5 +79,6 @@ SELECT json_object(
   'favorites', json('[]'),
   'now', json('[]'),
   'sources', json('[]')
+  )
 ) AS body
 `;

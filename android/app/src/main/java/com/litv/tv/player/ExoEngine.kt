@@ -25,7 +25,21 @@ import androidx.media3.ui.AspectRatioFrameLayout
  *   直播 setBufferDurationsMs(1000, 60000, 500, 1000)
  *   起播阈值只给 500ms —— 这是「秒开」的关键，给大了用户就觉得卡。
  */
+/**
+ * 是否强制软解。由 PlayerManager 在检测到硬解出不了帧时置位。
+ *
+ * Amlogic 盒子上默认的 OMX.amlogic.avc.decoder.awesome 会 "wait timeout"：
+ * 数据喂进去了却吐不出帧，画面全黑。置位后所有频道直接用
+ * OMX.google.h264.decoder（软解），能出画面但更吃 CPU。
+ *
+ * 放在顶层而不是 companion：ExoEngine 的 companion 是 private 的，
+ * 外部拿不到。
+ */
+@Volatile
+var exoForceSoftwareDecode: Boolean = false
+
 class ExoEngine : PlayerEngine {
+
 
     override val id = EngineKind.EXO.key
     override val displayName = EngineKind.EXO.label
@@ -85,8 +99,39 @@ class ExoEngine : PlayerEngine {
         // 这台电视的 Amlogic AVC 硬解会抛
         //   MediaCodecVideoDecoderException: Decoder failed
         // 不开这个开关 Exo 就直接报错退出，表现为黑屏/闪退。
+        // 显式挑解码器。
+        //
+        // 这台 Amlogic 盒子上，默认选中的 OMX.amlogic.avc.decoder.awesome
+        // 会一直报 "wait timeout"，喂了数据也不吐帧（画面全黑），
+        // 而网络/取流都正常（代理实测分片 200）。
+        // 手机用同一份代码能播，差别只剩"选了哪个 MediaCodec"。
+        //
+        // 策略：把软解（c2.android / OMX.google）排到前面先试，
+        // 硬件解码器排在后面兜底。软解更慢，但至少能出画面。
+        val selector = object : androidx.media3.exoplayer.mediacodec.MediaCodecSelector {
+            override fun getDecoderInfos(
+                mimeType: String,
+                requiresSecureDecoder: Boolean,
+                requiresTunnelingDecoder: Boolean,
+            ): List<androidx.media3.exoplayer.mediacodec.MediaCodecInfo> {
+                val all = androidx.media3.exoplayer.mediacodec.MediaCodecSelector.DEFAULT
+                    .getDecoderInfos(mimeType, requiresSecureDecoder, requiresTunnelingDecoder)
+                if (!mimeType.startsWith("video/")) return all
+                Log.i(TAG, "解码器候选($mimeType): " + all.joinToString(", ") { it.name })
+                val soft = all.filter {
+                    it.name.contains("c2.android") || it.name.contains("OMX.google") ||
+                        it.name.contains(".sw.")
+                }
+                val hard = all.filterNot { it in soft }
+                // 自适应：默认硬解优先（省 CPU、支持 4K）；
+                // 一旦检测到硬解出不了帧（PlayerManager 置位），后续全部走软解。
+                return if (exoForceSoftwareDecode) soft + hard else hard + soft
+            }
+        }
+
         val renderers = androidx.media3.exoplayer.DefaultRenderersFactory(ctx)
             .setEnableDecoderFallback(true)
+            .setMediaCodecSelector(selector)
 
         val p = ExoPlayer.Builder(ctx, renderers)
             .setLoadControl(loadControl)

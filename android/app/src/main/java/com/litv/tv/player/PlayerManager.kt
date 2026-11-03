@@ -58,6 +58,21 @@ class PlayerManager(
             startCurrent()
             return@Runnable
         }
+        // 自适应：Exo 起播超时且还没试过软解 → 先用软解重试同一个内核。
+        //
+        // 这台 Amlogic 盒子的硬解器（OMX.amlogic.avc.decoder.awesome）
+        // 在部分码流上会 wait timeout：数据喂进去了但不吐帧，画面全黑。
+        // 换内核解决不了（VLC/mpv 同样起不来），但换成软解
+        // （OMX.google.h264.decoder）就能正常出画面。
+        // 所以先试软解，再考虑降级到别的内核。
+        if (currentKind == EngineKind.EXO && !exoForceSoftwareDecode) {
+            exoForceSoftwareDecode = true
+            retried = 0
+            Log.w(TAG, "exo 起播超时，改用软解重试")
+            startCurrent()
+            return@Runnable
+        }
+
         retried = 0
         Log.w(TAG, "内核 ${currentKind?.key} 起播超时，降级")
         tryNext("起播超时")

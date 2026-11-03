@@ -207,7 +207,15 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
      */
     private fun setupRenderTarget() {
         val mode = app.prefs.renderView
-        val useTexture = mode != "surface"
+        // 默认改为 SurfaceView。
+        //
+        // 历史：这台 Amlogic 盒子用 SurfaceView 曾报 DequeueBuffer time out，
+        // 于是改成优先 TextureView。但实测 TextureView 下解码器同样出不了帧
+        // （wait timeout 刷屏，画面全黑），两条路都试过。
+        // 现在以 SurfaceView 为默认——它是硬解的正常输出路径，
+        // TextureView 需要 GPU 拷贝，在 Amlogic 上更容易出问题。
+        // 设置里仍可切回 TextureView。
+        val useTexture = mode == "texture"
         Log.i(TAG, "渲染方式=$mode 使用=" + if (useTexture) "TextureView" else "SurfaceView")
 
         // 渲染目标必须真正 VISIBLE。

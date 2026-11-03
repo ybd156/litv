@@ -320,14 +320,24 @@ cd packaging/fnos
 ## 12. 发版
 
 1. 同步 §11 的五个版本号位置
-2. **更新 `README.md` 的「下载」表**——里面是**写死的直链**和版本号
-   （`releases/download/vX.Y.Z/<文件名>`），不改就会 404。
-   已经发生过一次：README 写 tv-arm64/phone-*，而实际 release 里是旧的 arm64 命名。
-   改完用 `curl -s -o /dev/null -w "%{http_code}" -L <url>` 逐个验证返回 200/206
-3. 在 `CHANGELOG.md` 写这一版改了什么（面向用户，不写实现细节）
-4. 等 `Build Check` 变绿（不要用本地编译代替，见 §8）
-5. `git tag -a vX.Y.Z && git push origin main --tags`
-6. 等 `Release` 工作流出三端产物，**核对产物名和 README 表是否一致**
+2. 在 `CHANGELOG.md` 写这一版改了什么（面向用户，不写实现细节）
+3. 等 `Build Check` 变绿（不要用本地编译代替，见 §8）
+4. `git tag -a vX.Y.Z && git push origin main --tags`
+5. 等 `Release` 工作流出三端产物
+
+**README 的下载表不用手动改**——`readme-downloads.yml` 在 release published
+之后自动把「当前版本」和下载表同步成最新产物，并逐个校验链接可用。
+
+它的边界：只替换 README 里这两对标记之间的内容，别处不碰。
+**不要手动编辑标记之间的文字**（下次会被覆盖）：
+
+```
+<!-- AUTO:VERSION:START -->  ...  <!-- AUTO:VERSION:END -->
+<!-- AUTO:DOWNLOAD:START --> ...  <!-- AUTO:DOWNLOAD:END -->
+```
+
+想手动核对：`GITHUB_TOKEN=xxx python3 tools/ops/update-downloads.py --check`
+（有不一致返回 1）。
 
 **注意**：release 工作流会先删掉同名 tag 再发布。所以
 **已发布的版本号不能复用**，只能往上加。

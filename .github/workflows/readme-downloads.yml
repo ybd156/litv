@@ -1,0 +1,83 @@
+name: README Downloads
+
+# 发版后自动把 README 的「当前版本」和「下载」表同步成最新 Release。
+#
+# 为什么需要：这两块是写死的版本号和直链（releases/download/vX.Y.Z/文件名），
+# 发版后不更新就会 404 或指向不存在的产物。手工维护漏过一次——
+# README 写的是 tv-arm64/phone-*，而实际 release 里是旧的 arm64 命名。
+#
+# 触发：
+#   - release published：release.yml 里 `gh release create` 之后自动跑
+#   - 手动：改完 README 想核对时
+#
+# 只改 README.md 里 AUTO:VERSION / AUTO:DOWNLOAD 两对标记之间的内容，
+# 其它部分不碰。没有差异就不提交。
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+concurrency:
+  group: readme-downloads
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: 同步 README 下载表
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python3 tools/ops/update-downloads.py
+
+      - name: 有变化就提交
+        run: |
+          if git diff --quiet README.md; then
+            echo "README 已是最新，无需提交"
+            exit 0
+          fi
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add README.md
+          # [skip ci]：纯文档改动，没必要再跑一轮 Build Check
+          git commit -m "docs: README 下载表同步到 $(git describe --tags --abbrev=0 2>/dev/null || echo 最新版) [skip ci]"
+          git push
+
+      - name: 校验链接可用
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # 光生成表格不够——还要证明每个链接真能下。
+          # 用 -r 0-0 只取 1 字节，避免真下几十 MB。
+          fail=0
+          grep -oE 'https://github\.com/[^)]*releases/download/[^)]*' README.md \
+            | sort -u | while read -r u; do
+              code=$(curl -s -o /dev/null -w "%{http_code}" -L -r 0-0 "$u")
+              case "$code" in
+                200|206) echo "OK   $code  ${u##*/}" ;;
+                *)       echo "FAIL $code  ${u##*/}"; fail=1 ;;
+              esac
+            done
+          # 上面在管道里跑，fail 传不出来，这里再单独确认一次关键产物
+          for name in $(grep -oE 'releases/download/[^)]*' README.md \
+                        | sed 's#releases/download/##' | sort -u); do
+            code=$(curl -s -o /dev/null -w "%{http_code}" -L -r 0-0 \
+                   "https://github.com/ybd156/litv/releases/download/$name")
+            case "$code" in
+              200|206) ;;
+              *) echo "❌ 链接不可用: $name (HTTP $code)"; exit 1 ;;
+            esac
+          done
+          echo "✅ 所有下载链接可用"

@@ -48,6 +48,7 @@ stream_type=0xD5 (213)  PID=0x0101  未知
 | `check-approve.sh` | 查某台设备当前的绑定状态 |
 | `audit-requests.py` | 拉服务端审计日志，看谁在什么时候做了什么 |
 | `clean-workflow-runs.py` | 清理 GitHub Actions 的历史运行记录 |
+| `update-downloads.py` | 把 README 的版本号和下载表同步成最新 Release（CI 自动跑） |
 | `sweep-channels.sh` | 批量探测频道可用性 |
 | `sweep-recursive.sh` | 递归探测（含分组） |
 | `tvshot.sh` | adb 截图电视当前画面 |

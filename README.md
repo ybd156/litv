@@ -6,7 +6,9 @@
 > **本仓库不提供、不内置、不托管任何直播源。** 所有源由使用者自行导入，
 > 源的合法性由使用者自负。
 
+<!-- AUTO:VERSION:START -->
 当前版本：**0.1.8** · [下载](https://github.com/ybd156/litv/releases/latest)
+<!-- AUTO:VERSION:END -->
 
 ---
 
@@ -68,6 +70,7 @@
 
 ## 下载
 
+<!-- AUTO:DOWNLOAD:START 本段由 .github/workflows/readme-downloads.yml 自动生成，不要手改 -->
 当前发布版 **[v0.1.8](https://github.com/ybd156/litv/releases/tag/v0.1.8)**，点文件名直接下载：
 
 | 产物 | 大小 | 用途 |
@@ -78,6 +81,12 @@
 | [`litv_x86_0.1.8.fpk`](https://github.com/ybd156/litv/releases/download/v0.1.8/litv_x86_0.1.8.fpk) | 6.1 MB | 飞牛 NAS（x86_64） |
 | [`litv_arm_0.1.8.fpk`](https://github.com/ybd156/litv/releases/download/v0.1.8/litv_arm_0.1.8.fpk) | 5.7 MB | 飞牛 NAS（ARM） |
 | [`SHA256SUMS.txt`](https://github.com/ybd156/litv/releases/download/v0.1.8/SHA256SUMS.txt) | — | 校验和 |
+
+**不知道装哪个**：在设备上跑 `adb shell getprop ro.product.cpu.abi`
+（或看系统信息），`armeabi-v7a` 装 armv7，`arm64-v8a` 装 arm64。
+
+旧版本在 [Releases 列表](https://github.com/ybd156/litv/releases)。
+<!-- AUTO:DOWNLOAD:END -->
 
 **不知道装哪个**：在设备上跑 `adb shell getprop ro.product.cpu.abi`
 （或看系统信息），`armeabi-v7a` 装 armv7，`arm64-v8a` 装 arm64。

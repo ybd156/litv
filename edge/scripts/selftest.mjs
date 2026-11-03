@@ -1,10 +1,11 @@
 // 自测：不需要任何外部依赖，也不需要真的订阅地址。
 //
-// 两段：
-//   A. 起本地 http 服务喂两份构造好的 m3u，跑 build.mjs，
-//      对产出的 playlist.m3u / seed.sql 做断言
+// 三段：
+//   A. 起本地 http 服务喂两份 m3u，跑 build.mjs，断言 playlist.m3u / seed.sql
 //   B. 把 schema.sql + seed.sql 灌进内存 SQLite（node:sqlite，Node 24 自带），
 //      模拟"第二天重建"，再跑 BOOTSTRAP_SQL，断言响应体
+//   C. 再喂一份 GBK 编码的 TXT 和一份 HTML 登录页，断言：
+//      TXT 能被认出来并解析（含名字里带逗号），HTML 给出可读提示而不是静默失败
 //
 // 只在 CI 里跑（.github/workflows/edge-deploy.yml 的 check 任务）。
 //
@@ -16,6 +17,7 @@
 //   - 重建后手工线路重新挂到新 id 上（不是挂空）
 //   - channel_overrides 的改名 / 隐藏生效
 //   - bootstrap 响应体是合法 JSON，频道按 sort 排序，stream_count 正确
+//   - TXT 格式（含 GBK 编码、名字带逗号）能认；HTML/JSON 给出可读诊断
 import { createServer } from "node:http";
 import { spawn } from "node:child_process";
 import { readFile } from "node:fs/promises";
@@ -25,7 +27,7 @@ import { BOOTSTRAP_SQL } from "../src/bootstrap.sql.js";
 const checks = [];
 const check = (name, ok) => checks.push([name, !!ok]);
 
-// ---------------------------------------------------------------- A. m3u 生成
+// ---------------------------------------------------------------- 素材
 
 const SRC_A = `#EXTM3U
 #EXTINF:-1 tvg-id="cctv1" tvg-name="CCTV-1" tvg-logo="http://logo/1.png" group-title="央视",CCTV-1 综合
@@ -45,28 +47,51 @@ http://b.example/1.ts
 http://b.example/2.ts
 `;
 
+// GBK 编码的 TXT：整份文件都是 GBK，这里只有分组名"央视"是非 ASCII，
+// 用它的 GBK 字节（D1 EB CA D3）表示。其余故意保持 ASCII——
+// 真实 GBK 文件不会混着 UTF-8，混了就没法测编码判定了。
+const TXT_GBK = Buffer.concat([
+  Buffer.from([0xd1, 0xeb, 0xca, 0xd3]),
+  Buffer.from(",#genre#\n"),
+  Buffer.from("CCTV-1 Test,http://t.example/1.ts\n"),
+  Buffer.from("CCTV-2 Test,http://t.example/2.ts\n"),
+  Buffer.from("Drama,HD,http://t.example/3.ts\n"),
+]);
+
+const HTML_LOGIN = `<!doctype html><html><head><title>登录</title></head>
+<body><form>请登录</form></body></html>`;
+
+// ---------------------------------------------------------------- 服务
+
 const server = createServer((req, res) => {
   if (req.url === "/a.m3u") { res.writeHead(200); res.end(SRC_A); }
   else if (req.url === "/b.m3u") { res.writeHead(200); res.end(SRC_B); }
+  else if (req.url === "/c.txt") { res.writeHead(200); res.end(TXT_GBK); }
+  else if (req.url === "/d.html") { res.writeHead(200); res.end(HTML_LOGIN); }
   else { res.writeHead(404); res.end("no"); }
 });
 
 await new Promise((r) => server.listen(0, "127.0.0.1", r));
-const port = server.address().port;
+const base = `http://127.0.0.1:${server.address().port}`;
 
-const child = spawn(process.execPath, ["scripts/build.mjs"], {
-  env: {
-    ...process.env,
-    SOURCE_URLS: `http://127.0.0.1:${port}/a.m3u\nhttp://127.0.0.1:${port}/b.m3u`,
-  },
-  stdio: "inherit",
-});
+function runBuild(sources) {
+  return new Promise((resolve) => {
+    const child = spawn(process.execPath, ["scripts/build.mjs"], {
+      env: { ...process.env, SOURCE_URLS: sources },
+    });
+    let out = "";
+    let err = "";
+    child.stdout.on("data", (d) => { out += d; process.stdout.write(d); });
+    child.stderr.on("data", (d) => { err += d; process.stderr.write(d); });
+    child.on("exit", (code) => resolve({ code, out, err }));
+  });
+}
 
-const exitCode = await new Promise((r) => child.on("exit", r));
-server.close();
+// ---------------------------------------------------------------- A. m3u 生成
 
-if (exitCode !== 0) {
-  console.error(`build 退出码 ${exitCode}`);
+const first = await runBuild(`${base}/a.m3u\n${base}/b.m3u`);
+if (first.code !== 0) {
+  console.error(`build 退出码 ${first.code}`);
   process.exit(1);
 }
 
@@ -144,7 +169,7 @@ check("改名生效", body && body.channels.some((c) => c.name === "改过的CCT
 check(
   "频道按 sort/number 排序",
   body && JSON.stringify(body.channels.map((c) => c.name)) ===
-    JSON.stringify(['改过的CCTV1', "我的测试台", "湖南卫视", '测试"引号"台']),
+    JSON.stringify(["改过的CCTV1", "我的测试台", "湖南卫视", '测试"引号"台']),
 );
 check("频道总数 = 4", body && body.channels.length === 4);
 check("stream_count 含手工线路（CCTV-1 共 3 条）", body && body.channels[0].stream_count === 3);
@@ -156,6 +181,22 @@ check("sources / now / favorites 是空数组", body &&
   Array.isArray(body.sources) && body.sources.length === 0 &&
   Array.isArray(body.now) && body.now.length === 0 &&
   Array.isArray(body.favorites) && body.favorites.length === 0);
+
+// ---------------------------------------------------------------- C. TXT / HTML
+
+console.log("\n--- TXT + HTML ---");
+const second = await runBuild(`${base}/c.txt\n${base}/d.html`);
+
+check("TXT + HTML 混合源仍然成功（部分源失败不拖垮整体）", second.code === 0);
+
+const m3u2 = await readFile("public/playlist.m3u", "utf8");
+check("GBK 编码的 TXT 被正确解码", m3u2.includes('group-title="央视"'));
+check("TXT 的 3 个频道都进来了", (m3u2.match(/#EXTINF/g) || []).length === 3);
+check("名字里带逗号时按协议头从右往左拆", m3u2.includes(",Drama,HD"));
+check("HTML 源给出可读提示，不是静默失败", second.err.includes("HTML"));
+check("诊断信息里不带完整地址（脱敏）", !second.err.includes("d.html"));
+
+server.close();
 
 // ---------------------------------------------------------------- 汇总
 

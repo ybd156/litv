@@ -115,6 +115,106 @@ function dedupeKey(e) {
   return e.tvgId ? `id:${e.tvgId}` : `name:${normalizeName(e.name)}`;
 }
 
+// ---------- 格式嗅探 ----------
+
+// 与 server/internal/parse/parse.go 的 looksLikeURL 保持一致。
+const PROTOCOLS = [
+  "http://", "https://", "rtsp://", "rtmp://", "rtp://", "udp://",
+  "rtp2://", "p3p://", "p2p://", "mitv://", "igmp://", "file://",
+];
+
+function looksLikeURL(s) {
+  const t = String(s).trim().toLowerCase();
+  return PROTOCOLS.some((p) => t.startsWith(p));
+}
+
+// 国内 TXT 源经常是 GBK，先按 UTF-8 严格解，失败再退 GBK。
+function decodeBody(buf) {
+  if (buf[0] === 0xef && buf[1] === 0xbb && buf[2] === 0xbf) {
+    return new TextDecoder("utf-8").decode(buf.subarray(3));
+  }
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(buf);
+  } catch {
+    try {
+      return new TextDecoder("gbk").decode(buf);
+    } catch {
+      return new TextDecoder("utf-8").decode(buf);
+    }
+  }
+}
+
+// 判据照抄 server/internal/parse 的 Detect()，别自己另立一套。
+function detectFormat(text) {
+  const t = text.replace(/^\uFEFF/, "").trimStart();
+  if (!t) return "empty";
+  if (t[0] === "{" || t[0] === "[") return "json";
+  if (t[0] === "<") return "html";
+
+  const head = t.slice(0, 512);
+  if (head.includes("#EXTM3U") || head.includes("#EXTINF")) return "m3u";
+  if (head.includes("#genre#")) return "txt";
+  for (const line of head.split(/\r?\n/)) {
+    if (line.includes(",") && line.includes("://")) return "txt";
+  }
+  return "unknown";
+}
+
+// `名字,地址` 从右往左找第一个后面紧跟协议头的逗号——
+// 频道名里可能带逗号，地址也可能是 rtp:// 这类。
+function splitNameURL(line) {
+  for (let i = line.length - 1; i >= 0; i--) {
+    if (line[i] !== ",") continue;
+    if (looksLikeURL(line.slice(i + 1))) {
+      return [line.slice(0, i).trim(), line.slice(i + 1).trim()];
+    }
+  }
+  const parts = line.split(",");
+  if (parts.length < 2) return ["", ""];
+  return [parts[0].trim(), parts.slice(1).join(",").trim()];
+}
+
+// TXT：`分组,#genre#` 切组，`频道名,地址` 一条频道。
+function parseTXT(text) {
+  const entries = [];
+  let group = "未分组";
+
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!line || line.startsWith("#")) continue;
+
+    if (line.includes("#genre#")) {
+      const g = line.split(",")[0].replace("#genre#", "").trim();
+      if (g) group = g;
+      continue;
+    }
+
+    const [name, url] = splitNameURL(line);
+    if (!url || !looksLikeURL(url)) continue;
+
+    entries.push({
+      name,
+      tvgId: "",
+      tvgName: "",
+      logo: "",
+      group,
+      ua: "",
+      headers: {},
+      extras: [],
+      url,
+    });
+  }
+  return entries;
+}
+
+// 诊断信息脱敏：日志在公开仓库里可见，不能把带账号的地址打出去。
+function redact(s) {
+  return String(s)
+    .replace(/\/\/[^\s"']+/g, "//…")
+    .replace(/\b[A-Za-z0-9_-]{24,}\b/g, "…")
+    .slice(0, 100);
+}
+
 // ---------- 抓取 ----------
 
 async function fetchOne(url, index) {
@@ -128,8 +228,40 @@ async function fetchOne(url, index) {
       console.warn(`[源 ${index}] HTTP ${res.status}`);
       return [];
     }
-    const entries = parseM3U(await res.text());
-    console.log(`[源 ${index}] ${entries.length} 条`);
+
+    const buf = new Uint8Array(await res.arrayBuffer());
+    const text = decodeBody(buf);
+    const format = detectFormat(text);
+
+    let entries;
+    switch (format) {
+      case "m3u":
+        entries = parseM3U(text);
+        break;
+      case "txt":
+        entries = parseTXT(text);
+        break;
+      case "html":
+        console.warn(
+          `[源 ${index}] 拿到的是网页（HTML），不是播放列表。` +
+            `需要面板里「订阅 / 播放列表」那个地址，通常带 get.php?...type=m3u_plus 之类。`,
+        );
+        return [];
+      case "json":
+        console.warn(
+          `[源 ${index}] 拿到的是 JSON，不是播放列表。` +
+            `这多半是面板的 API，请改用订阅导出地址。`,
+        );
+        return [];
+      case "empty":
+        console.warn(`[源 ${index}] 响应是空的`);
+        return [];
+      default:
+        console.warn(`[源 ${index}] 认不出格式，开头是：${redact(text.trimStart())}`);
+        return [];
+    }
+
+    console.log(`[源 ${index}] ${format} 格式，${entries.length} 条`);
     return entries;
   } catch (err) {
     // 只报错误类型，不带 URL

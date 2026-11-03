@@ -68,20 +68,21 @@
 
 ## 下载
 
-当前发布版 **0.1.8** 的产物（就是 [Releases](https://github.com/ybd156/litv/releases/latest)
-里能直接下到的这几个）：
+当前发布版 **[v0.1.8](https://github.com/ybd156/litv/releases/tag/v0.1.8)**，点文件名直接下载：
 
-| 产物 | 用途 |
-|---|---|
-| `LITV-0.1.8-tv-armv7.apk` | **电视 / 盒子，32 位**（Android 9 及以下装这个） |
-| `LITV-0.1.8-arm64.apk` | 64 位设备（新电视 / 手机） |
-| `LITV-0.1.8-unsigned.ipa` | iOS（需自签） |
-| `litv_x86_0.1.8.fpk` | 飞牛 NAS（x86_64） |
-| `litv_arm_0.1.8.fpk` | 飞牛 NAS（ARM） |
-| `SHA256SUMS.txt` | 校验和 |
+| 产物 | 大小 | 用途 |
+|---|---|---|
+| [`LITV-0.1.8-tv-armv7.apk`](https://github.com/ybd156/litv/releases/download/v0.1.8/LITV-0.1.8-tv-armv7.apk) | 67.8 MB | **电视 / 盒子，32 位**（Android 9 及以下装这个） |
+| [`LITV-0.1.8-arm64.apk`](https://github.com/ybd156/litv/releases/download/v0.1.8/LITV-0.1.8-arm64.apk) | 74.6 MB | 64 位设备（新电视 / 手机） |
+| [`LITV-0.1.8-unsigned.ipa`](https://github.com/ybd156/litv/releases/download/v0.1.8/LITV-0.1.8-unsigned.ipa) | 16.4 MB | iOS（需自签） |
+| [`litv_x86_0.1.8.fpk`](https://github.com/ybd156/litv/releases/download/v0.1.8/litv_x86_0.1.8.fpk) | 6.1 MB | 飞牛 NAS（x86_64） |
+| [`litv_arm_0.1.8.fpk`](https://github.com/ybd156/litv/releases/download/v0.1.8/litv_arm_0.1.8.fpk) | 5.7 MB | 飞牛 NAS（ARM） |
+| [`SHA256SUMS.txt`](https://github.com/ybd156/litv/releases/download/v0.1.8/SHA256SUMS.txt) | — | 校验和 |
 
 **不知道装哪个**：在设备上跑 `adb shell getprop ro.product.cpu.abi`
 （或看系统信息），`armeabi-v7a` 装 armv7，`arm64-v8a` 装 arm64。
+
+旧版本在 [Releases 列表](https://github.com/ybd156/litv/releases)。
 
 ### 下一版的产物会变
 

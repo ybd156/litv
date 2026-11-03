@@ -64,15 +64,20 @@ struct PlayerView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            // 竖屏：信息卡在**画面上面**（频道名、当前节目、下一档），
-            // 下面才是 16:9 的画面。
+            // 竖屏布局：频道名在上，16:9 画面在中间，节目信息在下。
             if !isFullscreen {
-                osd
+                osdHeader
+                    .padding(.horizontal, 16)
+                    .padding(.top, 8)
+                    .padding(.bottom, 10)
             }
 
             videoArea
 
             if !isFullscreen {
+                osdDetails
+                    .padding(.horizontal, 16)
+                    .padding(.top, 10)
                 Spacer(minLength: 0)
             }
         }
@@ -238,13 +243,18 @@ struct PlayerView: View {
         return mode + " · " + ua
     }
 
-    private var osd: some View {
+    /// 标题栏：频道名 + 分组。竖屏时放在画面**上方**。
+    private var osdHeader: some View {
+        HStack {
+            Text(active.name).font(.headline).foregroundColor(.white)
+            Spacer()
+            Text(active.group).font(.caption).foregroundColor(.gray)
+        }
+    }
+
+    /// 节目信息：当前节目 + 进度 + 下一档 + 播放链路。竖屏时放在画面**下方**。
+    private var osdDetails: some View {
         VStack(alignment: .leading, spacing: 4) {
-            HStack {
-                Text(active.name).font(.headline).foregroundColor(.white)
-                Spacer()
-                Text(active.group).font(.caption).foregroundColor(.gray)
-            }
             if let now = programs.first(where: { $0.isNow }) {
                 Text("\(now.timeText) \(now.title)")
                     .font(.caption).foregroundColor(.gray).lineLimit(1)
@@ -271,6 +281,14 @@ struct PlayerView: View {
             // 播放链路 + 实际用的 UA：排查源站校验时一眼能看到
             Text(routeText)
                 .font(.system(size: 10)).foregroundColor(.gray.opacity(0.8)).lineLimit(1)
+        }
+    }
+
+    /// 浮层里用的完整信息卡（横屏时用；竖屏已拆到画面上/下）。
+    private var osd: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            osdHeader
+            osdDetails
         }
         .padding(12)
         .background(.ultraThinMaterial)

@@ -193,19 +193,21 @@ check("sources / now / favorites 是空数组", body &&
 
 console.log("\n--- 源清单 + TXT + HTML ---");
 
-// 模拟 CI 从 D1 读出来的源清单（wrangler d1 execute --json 的形状）
+// 模拟 CI 从 D1 读出来的源清单。故意在前面加一行噪声——
+// wrangler 会往 stdout 打进度行，JSON 前后不一定干净。
 const sourcesFile = "sources.test.json";
 await writeFile(
   sourcesFile,
-  JSON.stringify([
-    {
-      results: [
-        { id: 7, name: "txt源", url: `${base}/c.txt`, ua: "CustomUA/1.0", referer: "http://ref.example/" },
-        { id: 8, name: "html源", url: `${base}/d.html`, ua: "", referer: "" },
-      ],
-      success: true,
-    },
-  ]),
+  "🚣 Executing on remote database (litv-edge)\n" +
+    JSON.stringify([
+      {
+        results: [
+          { id: 7, name: "txt源", url: `${base}/c.txt`, ua: "CustomUA/1.0", referer: "http://ref.example/" },
+          { id: 8, name: "html源", url: `${base}/d.html`, ua: "", referer: "" },
+        ],
+        success: true,
+      },
+    ]),
   "utf8",
 );
 
@@ -231,6 +233,22 @@ check("失败的源也回写状态", statusSql.includes("'html'"));
 
 const metaSql = await readFile("sql/meta.sql", "utf8");
 check("写入重建信息（管理台显示上次重建时间）", metaSql.includes("'last_build'"));
+
+// 源上配的 UA 不只是拉取用，也要落到线路的播放 UA 上——
+// 很多源拉取不校验 UA，但播放分片校验，只配拉取会"能导入不能播"。
+const seed2 = await readFile("sql/seed.sql", "utf8");
+check("源上配的 UA 会灌到线路的播放 UA", seed2.includes("CustomUA/1.0"));
+check("源上配的 Referer 也会灌到线路", seed2.includes("ref.example"));
+
+// 源清单读坏了必须明确报错，不能静默当成"没有源"
+const badFile = "sources.bad.json";
+await writeFile(badFile, "this is not json at all", "utf8");
+const brokenRun = await runBuild({ SOURCES_FILE: badFile, SOURCE_URLS: "" });
+await unlink(badFile);
+check(
+  "源清单解析失败时明确报错（不静默跳过）",
+  brokenRun.code !== 0 && brokenRun.err.includes("不是可解析的 JSON"),
+);
 
 // 没有源时不该炸：首次部署就是这个状态，得能正常发上去
 const third = await runBuild({ SOURCES_FILE: "", SOURCE_URLS: "" });

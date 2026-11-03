@@ -241,8 +241,37 @@ function extractRows(json) {
 async function loadSources() {
   const file = process.env.SOURCES_FILE;
   if (file) {
+    let raw;
     try {
-      const rows = extractRows(JSON.parse(await readFile(file, "utf8")));
+      raw = await readFile(file, "utf8");
+    } catch {
+      // 文件不存在 = 这次没读（比如首次部署还没建表），走回退
+      raw = "";
+    }
+
+    if (raw.trim()) {
+      // wrangler 会往 stdout 打进度行，JSON 前后可能有噪声，切出数组再解析
+      const a = raw.indexOf("[");
+      const b = raw.lastIndexOf("]");
+      let rows = null;
+      if (a >= 0 && b > a) {
+        try {
+          rows = extractRows(JSON.parse(raw.slice(a, b + 1)));
+        } catch {
+          rows = null;
+        }
+      }
+
+      if (rows === null) {
+        // 读到了文件却解析不了，绝不能静默当成"没有源"——
+        // 那样会表现为"重建成功但一个频道都没有"，极难排查。
+        console.error(
+          `SOURCES_FILE（${file}）不是可解析的 JSON，拒绝继续。` +
+            `前 120 字符：${redact(raw.trimStart())}`,
+        );
+        process.exit(1);
+      }
+
       const list = rows
         .map((r) => ({
           id: Number(r.id) || 0,
@@ -252,19 +281,20 @@ async function loadSources() {
           referer: String(r.referer ?? ""),
         }))
         .filter((s) => s.url);
-      if (list.length > 0) return list;
-      console.log("D1 里没有启用的源");
-      return [];
-    } catch (err) {
-      console.warn(`读 SOURCES_FILE 失败（${err.message}），回退到 SOURCE_URLS`);
+
+      console.log(`源清单：${list.length} 个启用`);
+      return list;
     }
   }
 
-  return (process.env.SOURCE_URLS || "")
+  const fallback = (process.env.SOURCE_URLS || "")
     .split(/\r?\n/)
     .map((s) => s.trim())
     .filter((s) => s && !s.startsWith("#"))
     .map((url) => ({ id: 0, name: "", url, ua: "", referer: "" }));
+
+  if (fallback.length > 0) console.log(`源清单：回退到 SOURCE_URLS，${fallback.length} 个`);
+  return fallback;
 }
 
 // ---------- 抓取 ----------
@@ -322,6 +352,17 @@ async function fetchOne(src, index) {
     }
 
     console.log(`[${label}] ${format} 格式，${entries.length} 条`);
+
+    // 源上配的 UA / Referer 是"这个源认的头"，既用于拉取，也作为
+    // 每条线路的播放兜底——条目自己带了（#EXTVLCOPT）就不覆盖。
+    // 很多源拉取不校验 UA，但播放分片校验，只配拉取会表现为"能导入不能播"。
+    if (src.ua || src.referer) {
+      for (const e of entries) {
+        if (!e.ua) e.ua = src.ua;
+        if (src.referer && !e.headers["Referer"]) e.headers["Referer"] = src.referer;
+      }
+    }
+
     return { entries, status: entries.length > 0 ? "ok" : "empty_list" };
   } catch (err) {
     // 只报错误类型，不带 URL

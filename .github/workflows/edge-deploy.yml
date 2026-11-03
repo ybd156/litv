@@ -20,8 +20,11 @@ on:
       - "edge/**"
       - "admin/**"
   schedule:
-    # UTC 21:17 = 北京时间 05:17。错开整点。
-    - cron: "17 21 * * *"
+    # 每小时一次，不是每天。
+    # 很多面板（比如 live.ottiptv.cc）在 m3u 里下发的是**带 sign 的临时地址**，
+    # 每次拉取都不一样、会过期。每天重建一次的话，隔天线路就播不动了。
+    # public 仓库的 runner 免费，多跑几次不花钱。
+    - cron: "17 * * * *"
   workflow_dispatch:
 
 concurrency:
@@ -97,8 +100,8 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: npx --yes wrangler@4 d1 execute DB --remote --file=schema.sql
 
-      # 源清单是管理台维护的，CI 只读。读不出来（比如首次还没建表成功）
-      # 就让文件为空，build.mjs 会回退到 SOURCE_URLS 或直接跳过数据更新。
+      # 源清单是管理台维护的，CI 只读。读失败就让这一步红掉——
+      # 以前吞掉错误会表现为"重建成功但一个频道都没有"，极难排查。
       - name: 读取源清单
         if: env.CONFIGURED == 'true'
         env:
@@ -107,8 +110,9 @@ jobs:
         run: |
           npx --yes wrangler@4 d1 execute DB --remote --json \
             --command "SELECT id, name, url, ua, referer FROM sources WHERE enabled = 1 ORDER BY sort, id" \
-            > sources.json || echo "[]" > sources.json
-          node -e "const j=require('fs').readFileSync('sources.json','utf8');console.log('源清单字节数', j.length)"
+            > sources.json
+          echo "源清单前 300 字节："
+          head -c 300 sources.json; echo
 
       # 生成失败会 exit 1，后面的部署全部短路，线上继续用上一次的好数据。
       - name: 生成播放列表与 seed.sql

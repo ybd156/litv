@@ -139,7 +139,8 @@ class ExoEngine : PlayerEngine {
             }
         }
 
-        val renderers = androidx.media3.exoplayer.DefaultRenderersFactory(ctx)
+        // 用我们自己的工厂：在默认音频渲染器之后补一个 AV3A（有库时才加）
+        val renderers = LitvRenderersFactory(ctx)
             .setEnableDecoderFallback(true)
             .setMediaCodecSelector(selector)
 

@@ -24,10 +24,17 @@ class LauncherActivity : AppCompatActivity() {
             android.content.Intent.CATEGORY_LEANBACK_LAUNCHER
         ) == true
 
+        // 优先级：用户在设置里手动指定 > 打包时的 flavor > 设备特征自动判断。
+        // 电视版/手机版是两个独立的包，flavor 决定了默认形态，
+        // 免得把手机版装到电视上时又跑成竖屏小窗。
         val isTV = when (app.prefs.uiMode) {
             "tv" -> true
             "phone" -> false
-            else -> fromLeanback || DeviceType.isTV(this)
+            else -> when (com.litv.tv.BuildConfig.UI_MODE) {
+                "tv" -> true
+                "phone" -> false
+                else -> fromLeanback || DeviceType.isTV(this)
+            }
         }
         // 把判定依据打出来：用户反馈"电视上跑成了手机界面"时，
         // 一眼就能看出是哪个信号判错了。

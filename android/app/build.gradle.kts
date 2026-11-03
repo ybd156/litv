@@ -63,7 +63,28 @@ android {
             // arm 两个是发布用（电视/手机）；x86 只在模拟器上验证界面用
             // （tv28 这个 AVD 是 32 位 x86），发布工作流只取 armv7/arm64。
             include("armeabi-v7a", "arm64-v8a", "x86")
-            isUniversalApk = false
+            // 额外产出一个「多架构通用包」：一个 APK 同时带三套 .so，
+            // 装到任何设备都能用（体积大，但不用挑架构）。
+            isUniversalApk = true
+        }
+    }
+
+    // 电视版 / 手机版分开出包。
+    //
+    // 代码完全相同，差别只有两点：
+    //   1) 默认界面形态（电视走全屏播放+浮层，手机走竖屏列表）
+    //   2) 包名：手机版加 .phone 后缀，这样电视版和手机版可以同时装在一台机器上
+    // 用户仍可在设置里用「界面模式」覆盖。
+    flavorDimensions += "form"
+    productFlavors {
+        create("tv") {
+            dimension = "form"
+            buildConfigField("String", "UI_MODE", "\"tv\"")
+        }
+        create("phone") {
+            dimension = "form"
+            applicationIdSuffix = ".phone"
+            buildConfigField("String", "UI_MODE", "\"phone\"")
         }
     }
 

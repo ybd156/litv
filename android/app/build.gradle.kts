@@ -87,7 +87,12 @@ android {
     }
     kotlinOptions { jvmTarget = "17" }
 
-    buildFeatures { viewBinding = true }
+    // buildConfig：AGP 8 起默认不生成 BuildConfig，
+    // 而我们要把 VERSION_NAME 上报给服务端（管理台显示"装的哪版"）。
+    buildFeatures {
+        viewBinding = true
+        buildConfig = true
+    }
 
     packaging {
         resources {

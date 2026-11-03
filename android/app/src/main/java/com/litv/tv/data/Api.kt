@@ -179,6 +179,8 @@ class Api(private val prefs: Prefs) {
             "name" to prefs.deviceName.ifBlank { model },
             "platform" to "androidtv",
             "model" to model,
+            // 版本号只用于管理台展示"这台设备装的是哪版"
+            "app_version" to com.litv.tv.BuildConfig.VERSION_NAME,
             "code" to (bindCode ?: ""),
         )
         call("/api/v1/device/register", "POST", body, auth = false,
@@ -348,7 +350,11 @@ class Api(private val prefs: Prefs) {
 
     fun heartbeat(playingChannel: Long, state: String, onOk: (HeartbeatResult) -> Unit = {}) {
         call("/api/v1/tv/heartbeat", "POST",
-            mapOf("playing_channel" to playingChannel, "state" to state),
+            mapOf(
+                "playing_channel" to playingChannel,
+                "state" to state,
+                "app_version" to com.litv.tv.BuildConfig.VERSION_NAME,
+            ),
             clazz = HeartbeatResult::class.java,
             onOk = { if (it != null) onOk(it) }, onErr = { /* 心跳失败不打扰用户 */ })
     }

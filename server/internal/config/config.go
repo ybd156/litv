@@ -59,6 +59,14 @@ type Server struct {
 	// 用 UTC 零点截断会让东八区用户看到错位 8 小时的节目单。
 	// 留空按 UTC 处理（行为确定，不猜）。
 	Timezone string `yaml:"timezone"`
+	// TrustProxy 是否采信反向代理传来的 X-Forwarded-For / X-Real-IP。
+	//
+	// 只用于「记录并显示客户端 IP」，**绝不参与任何鉴权判断**——
+	// 否则伪造一个头就能冒充别人。
+	TrustProxy bool `yaml:"trust_proxy"`
+	// TrustedProxies 受信代理网段（CIDR）。
+	// 只有直接对端落在这里面时，才采信上面的转发头。
+	TrustedProxies []string `yaml:"trusted_proxies"`
 }
 
 // Database 数据库配置。当前只支持 SQLite（单机 NAS 最省事）。
@@ -228,6 +236,10 @@ func Default() *Config {
 			ReadTimeout:  30,
 			WriteTimeout: 0,
 			Timezone:     "Asia/Shanghai",
+			// 默认只信任本机回环：反向代理通常和 litvd 在同一台机器上。
+			// 这个范围很窄，伪造者必须先能连上本机 127.0.0.1 才可能影响显示。
+			TrustProxy:     true,
+			TrustedProxies: []string{"127.0.0.1/32", "::1/128"},
 		},
 		Database: Database{Path: "./data/litv.db"},
 		Auth: Auth{

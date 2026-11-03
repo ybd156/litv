@@ -37,6 +37,8 @@ func (a *API) deviceRegister(w http.ResponseWriter, r *http.Request) {
 		Platform  string `json:"platform"`
 		Model     string `json:"model"`
 		Code      string `json:"code"` // 可选：直接带绑定码则跳过审批
+		// AppVersion 客户端版本号，仅用于管理台展示"装的是哪版"。
+		AppVersion string `json:"app_version"`
 	}
 	if err := decode(r, &body); err != nil {
 		fail(w, http.StatusBadRequest, 1001, "参数错误: "+err.Error())
@@ -87,6 +89,9 @@ func (a *API) deviceRegister(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
+
+	// 记录来源 IP 与版本号（只用于展示，不参与鉴权）。
+	_ = a.st.UpdateDeviceClientInfo(r.Context(), id, clientIP(r, a.cfg), body.AppVersion)
 
 	ok(w, map[string]any{
 		"device_id": id,
@@ -267,9 +272,11 @@ func (a *API) tvHeartbeat(w http.ResponseWriter, r *http.Request) {
 		State   string `json:"state"`
 		// 客户端上次看到的版本：用来判断"我是不是该重新拉配置了"
 		ConfigVersion int64 `json:"config_version"`
+		// AppVersion 客户端版本号（仅展示用）
+		AppVersion string `json:"app_version"`
 	}
 	_ = decode(r, &body)
-	_ = a.st.TouchDevice(r.Context(), dev.ID)
+	_ = a.st.TouchDeviceWithInfo(r.Context(), dev.ID, clientIP(r, a.cfg), body.AppVersion)
 	ok(w, map[string]any{
 		// R17：用独立的 config_version，不再用 bound_at。
 		// bound_at 是绑定时间，管理台改配置时它不变，

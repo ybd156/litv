@@ -107,6 +107,10 @@ type Device struct {
 	BoundAt       int64 `json:"bound_at"`
 	LastSeen      int64 `json:"last_seen"`
 	CreatedAt     int64 `json:"created_at"`
+	// IP 最近一次上报/心跳时的客户端地址（仅用于显示，不参与鉴权）。
+	IP string `json:"ip"`
+	// AppVersion 客户端上报的版本号（如 0.1.8），便于排查"装的是哪版"。
+	AppVersion string `json:"app_version"`
 }
 
 // EPGSource 是节目单来源。

@@ -18,6 +18,12 @@ struct ApiError: LocalizedError {
 /// 用 async/await + URLSession，不引第三方库：
 /// iOS 端依赖越少，侧载后出问题的概率越低。
 struct ApiClient {
+    /// 客户端版本号（读 Info.plist，由 project.yml 注入）。
+    /// 只用于上报给服务端做展示，不参与任何逻辑判断。
+    static var appVersion: String {
+        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? ""
+    }
+
     var base: String
     var token: String
 
@@ -95,6 +101,8 @@ struct ApiClient {
             "name": name,
             "platform": "ios",
             "model": model,
+            // 版本号只用于管理台展示"这台设备装的是哪版"
+            "app_version": ApiClient.appVersion,
         ]
         if let code = code, !code.isEmpty { body["code"] = code }
         guard let req = request("/api/v1/device/register", method: "POST", body: body) else {
@@ -180,7 +188,8 @@ struct ApiClient {
 
     func heartbeat(channelId: Int64) async {
         guard let req = request("/api/v1/tv/heartbeat", method: "POST",
-                                body: ["playing_channel": channelId, "state": "playing"]) else { return }
+                                body: ["playing_channel": channelId, "state": "playing",
+                                       "app_version": ApiClient.appVersion]) else { return }
         _ = try? await send(req, as: HeartbeatResult.self)
     }
 

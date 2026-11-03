@@ -272,6 +272,10 @@ func (s *Store) migrate(ctx context.Context) error {
 		`ALTER TABLE epg_sources ADD COLUMN kind TEXT NOT NULL DEFAULT 'url'`,
 		// D4：连续失败次数。成功清零，失败累加；到阈值就发告警。
 		`ALTER TABLE epg_sources ADD COLUMN fail_streak INTEGER NOT NULL DEFAULT 0`,
+		// 管理台设备列表要显示「IP」和「版本」，之前这两列根本不存在，
+		// handler 里硬编码返回空串，界面上永远显示「—」。
+		`ALTER TABLE devices ADD COLUMN ip TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE devices ADD COLUMN app_version TEXT NOT NULL DEFAULT ''`,
 	} {
 		if _, err := s.db.ExecContext(ctx, stmt); err != nil &&
 			!strings.Contains(strings.ToLower(err.Error()), "duplicate column") {

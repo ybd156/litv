@@ -557,7 +557,7 @@ func (s *Store) CreateDevice(ctx context.Context, key, tokenHash, name, platform
 
 // ListDevices 列出设备。
 func (s *Store) ListDevices(ctx context.Context, status string) ([]Device, error) {
-	q := `SELECT id,device_key,name,platform,model,status,config_json,config_version,bound_at,last_seen,created_at FROM devices`
+	q := `SELECT id,device_key,name,platform,model,status,config_json,config_version,bound_at,last_seen,created_at,ip,app_version FROM devices`
 	var args []any
 	if status != "" {
 		q += ` WHERE status=?`
@@ -572,7 +572,7 @@ func (s *Store) ListDevices(ctx context.Context, status string) ([]Device, error
 	out := []Device{}
 	for rows.Next() {
 		var d Device
-		if err := rows.Scan(&d.ID, &d.DeviceKey, &d.Name, &d.Platform, &d.Model, &d.Status, &d.ConfigJSON, &d.ConfigVersion, &d.BoundAt, &d.LastSeen, &d.CreatedAt); err != nil {
+		if err := rows.Scan(&d.ID, &d.DeviceKey, &d.Name, &d.Platform, &d.Model, &d.Status, &d.ConfigJSON, &d.ConfigVersion, &d.BoundAt, &d.LastSeen, &d.CreatedAt, &d.IP, &d.AppVersion); err != nil {
 			return nil, err
 		}
 		out = append(out, d)
@@ -593,10 +593,10 @@ func (s *Store) GetDeviceByToken(ctx context.Context, tokenHash string, ttlHours
 	var d Device
 	var sessionExpires int64
 	err := s.db.QueryRowContext(ctx,
-		`SELECT id,device_key,name,platform,model,status,config_json,config_version,bound_at,last_seen,created_at,session_expires_at
+		`SELECT id,device_key,name,platform,model,status,config_json,config_version,bound_at,last_seen,created_at,session_expires_at,ip,app_version
 		FROM devices WHERE token_hash=? AND status='bound'`, tokenHash).
 		Scan(&d.ID, &d.DeviceKey, &d.Name, &d.Platform, &d.Model, &d.Status,
-			&d.ConfigJSON, &d.ConfigVersion, &d.BoundAt, &d.LastSeen, &d.CreatedAt, &sessionExpires)
+			&d.ConfigJSON, &d.ConfigVersion, &d.BoundAt, &d.LastSeen, &d.CreatedAt, &sessionExpires, &d.IP, &d.AppVersion)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, ErrNotFound
@@ -689,6 +689,25 @@ func (s *Store) DeleteDevice(ctx context.Context, id int64) error {
 func (s *Store) TouchDevice(ctx context.Context, id int64) error {
 	_, err := s.db.ExecContext(ctx, `UPDATE devices SET last_seen=? WHERE id=?`, Now(), id)
 	return err
+}
+
+// TouchDeviceWithInfo 更新心跳，同时记录客户端 IP 与版本号。
+//
+// 这两个值只用于管理台展示（"这台设备是谁、装的是哪版"），
+// 不参与任何鉴权判断。
+func (s *Store) TouchDeviceWithInfo(ctx context.Context, id int64, ip, appVersion string) error {
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE devices SET last_seen=?,
+			ip=CASE WHEN ?<>'' THEN ? ELSE ip END,
+			app_version=CASE WHEN ?<>'' THEN ? ELSE app_version END
+		 WHERE id=?`,
+		Now(), ip, ip, appVersion, appVersion, id)
+	return err
+}
+
+// UpdateDeviceClientInfo 在注册/心跳时补写客户端 IP 与版本号。
+func (s *Store) UpdateDeviceClientInfo(ctx context.Context, id int64, ip, appVersion string) error {
+	return s.TouchDeviceWithInfo(ctx, id, ip, appVersion)
 }
 
 // SetDeviceConfig 下发/覆盖终端配置。

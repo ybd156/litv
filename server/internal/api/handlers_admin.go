@@ -933,8 +933,8 @@ func (a *API) listDevices(w http.ResponseWriter, r *http.Request) {
 			"last_seen":         d.LastSeen,
 			"bound_at":          d.BoundAt,
 			"created_at":        d.CreatedAt,
-			"ip":                "",
-			"app_version":       "",
+			"ip":                d.IP,
+			"app_version":       d.AppVersion,
 			"config":            cfg,
 		})
 	}

@@ -972,12 +972,21 @@ func (a *API) rejectDevice(w http.ResponseWriter, r *http.Request) {
 	ok(w, map[string]any{"rejected": true})
 }
 
+// revokeDevice 对应 DELETE /devices/{id}，语义是**删除**，不是仅吊销。
+//
+// 之前只把 status 改成 revoked，行还在，管理台上点删除看不到任何变化。
 func (a *API) revokeDevice(w http.ResponseWriter, r *http.Request) {
-	if err := a.st.RevokeDevice(r.Context(), pathInt64(r, "id")); err != nil {
+	id := pathInt64(r, "id")
+	if err := a.st.DeleteDevice(r.Context(), id); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			fail(w, http.StatusNotFound, 3001, "设备不存在")
+			return
+		}
 		fail(w, http.StatusInternalServerError, 5001, err.Error())
 		return
 	}
-	ok(w, map[string]any{"revoked": true})
+	a.st.Audit(r.Context(), 0, "device.delete", fmt.Sprint(id), "", r.RemoteAddr)
+	ok(w, map[string]any{"deleted": true})
 }
 
 func (a *API) setDeviceConfig(w http.ResponseWriter, r *http.Request) {

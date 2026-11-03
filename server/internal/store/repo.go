@@ -646,6 +646,45 @@ func (s *Store) RevokeDevice(ctx context.Context, id int64) error {
 	return err
 }
 
+// DeleteDevice 真正删除一台设备及其关联数据。
+//
+// 管理台的「删除」按钮走的是 DELETE /devices/{id}，但之前那个 handler 只调
+// RevokeDevice（把状态改成 revoked），**行还在**——用户点完删除发现设备
+// 依然在列表里，看起来就是「删不掉」。
+//
+// 这里改成真删，并在同一事务里清掉所有引用 device_id 的表，
+// 否则外键约束会让删除失败、或者留下孤儿记录。
+func (s *Store) DeleteDevice(ctx context.Context, id int64) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	for _, stmt := range []string{
+		`DELETE FROM favorites WHERE device_id=?`,
+		`DELETE FROM watch_progress WHERE device_id=?`,
+		`DELETE FROM play_events WHERE device_id=?`,
+		`DELETE FROM epg_reminders WHERE device_id=?`,
+		// 绑定码只清掉尚未使用的，已用过的保留审计痕迹
+		`DELETE FROM bind_codes WHERE device_id=? AND used=0`,
+	} {
+		if _, e := tx.ExecContext(ctx, stmt, id); e != nil {
+			// 表可能不存在（老库升级），跳过但继续
+			continue
+		}
+	}
+
+	res, err := tx.ExecContext(ctx, `DELETE FROM devices WHERE id=?`, id)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	return tx.Commit()
+}
+
 // TouchDevice 更新心跳。
 func (s *Store) TouchDevice(ctx context.Context, id int64) error {
 	_, err := s.db.ExecContext(ctx, `UPDATE devices SET last_seen=? WHERE id=?`, Now(), id)

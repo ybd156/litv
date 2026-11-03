@@ -38,6 +38,16 @@ import androidx.media3.ui.AspectRatioFrameLayout
 @Volatile
 var exoForceSoftwareDecode: Boolean = false
 
+/**
+ * 是否已经渲染出第一帧。
+ *
+ * 关键：不能用 "音频开始播" 当作起播成功——Amlogic 硬解器出不了画面时，
+ * 音频照常播放、Exo 也报告 playing，但视频一帧都没有（屏幕全黑）。
+ * 只有 onRenderedFirstFrame 才能真正说明"画面上有东西了"。
+ */
+@Volatile
+var exoFirstFrameRendered: Boolean = false
+
 class ExoEngine : PlayerEngine {
 
 
@@ -133,10 +143,34 @@ class ExoEngine : PlayerEngine {
             .setEnableDecoderFallback(true)
             .setMediaCodecSelector(selector)
 
+        // 开启 tunneled 播放。
+        //
+        // Amlogic 的硬件解码器有两条输出路径：普通模式和 tunneled 模式。
+        // 实测普通模式下这个解码器会 wait timeout（数据喂进去不吐帧），
+        // 但很多盒子的 tunneled 路径是好的——系统播放器走的正是这条路。
+        // 解码器不支持 tunneled 时 Media3 会自动回落到普通模式，所以开了不亏。
+        val trackSelector = androidx.media3.exoplayer.trackselection.DefaultTrackSelector(ctx)
+        trackSelector.parameters = trackSelector.buildUponParameters()
+            .setTunnelingEnabled(true)
+            .build()
+
         val p = ExoPlayer.Builder(ctx, renderers)
+            .setTrackSelector(trackSelector)
             .setLoadControl(loadControl)
             .setMediaSourceFactory(DefaultMediaSourceFactory(dsFactory))
             .build()
+
+        exoFirstFrameRendered = false
+        p.addAnalyticsListener(object : androidx.media3.exoplayer.analytics.AnalyticsListener {
+            override fun onRenderedFirstFrame(
+                eventTime: androidx.media3.exoplayer.analytics.AnalyticsListener.EventTime,
+                output: Any,
+                renderTimeMs: Long,
+            ) {
+                exoFirstFrameRendered = true
+                Log.i(TAG, "视频首帧已渲染")
+            }
+        })
 
         player?.setVideoSurface(videoSurface)
 

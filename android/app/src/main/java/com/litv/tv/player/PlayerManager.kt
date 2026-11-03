@@ -78,6 +78,22 @@ class PlayerManager(
         tryNext("起播超时")
     }
 
+    /**
+     * 首帧看门狗。
+     *
+     * 起播超时那个机制只看 "有没有 READY / 有没有开始播"，但 Amlogic 硬解器
+     * 出不了画面时音频照常在放、Exo 照样报告 playing——超时永远不会触发，
+     * 屏幕一直黑着。所以另开一个只看"有没有真的渲染出第一帧"的检查。
+     */
+    private val frameWatchdog = Runnable {
+        if (currentKind == EngineKind.EXO && !exoFirstFrameRendered && !exoForceSoftwareDecode) {
+            Log.w(TAG, "exo 已起播但没有渲染出画面，改用软解")
+            exoForceSoftwareDecode = true
+            retried = 0
+            startCurrent()
+        }
+    }
+
     /** 当前内核是否已经起播（用于 Surface 晚就绪时决定要不要补播） */
     val isPlaying: Boolean get() = prepared
 
@@ -180,6 +196,10 @@ class PlayerManager(
             return
         }
         engine.attach(context, surface, container)
+        main.removeCallbacks(frameWatchdog)
+        if (kind == EngineKind.EXO) {
+            main.postDelayed(frameWatchdog, 8000)
+        }
         engine.listener = object : PlayerEngine.Listener {
             override fun onPrepared(durationMs: Long) {
                 prepared = true
@@ -251,6 +271,7 @@ class PlayerManager(
     }
 
     fun release() {
+        main.removeCallbacks(frameWatchdog)
         main.removeCallbacks(startTimeout)
         disposeEngine(current)
         current = null

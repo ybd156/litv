@@ -156,7 +156,7 @@ packaging/fnos/app/server/litvd_*
 
 理由：
 
-- 本地要装一整套（Go 1.23 + JDK + Android SDK 35 + build-tools + NDK + Gradle 8.7 + Node 22），
+- 本地要装一整套（Go 1.23 + JDK + Android SDK 35 + build-tools + NDK + Gradle 8.7 + Node 24），
   换台机器就得重搭一遍
 - 版本稍有差异就会出现「我这里能编过」的问题
 - iOS 本地根本编不了（需要 Apple SDK）

@@ -142,7 +142,7 @@
 
 原因：
 
-- 本地要装 Go 1.23 + JDK + Android SDK 35 + NDK + Gradle 8.7 + Node 22 一整套，
+- 本地要装 Go 1.23 + JDK + Android SDK 35 + NDK + Gradle 8.7 + Node 24 一整套，
   换台机器就得重搭
 - 版本稍有差异就会出现「我这里能编过」
 - **iOS 本地根本编不了**（需要 Apple SDK）

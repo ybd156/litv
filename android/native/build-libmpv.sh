@@ -20,10 +20,12 @@
 # =============================================================================
 set -uo pipefail
 
-ROOT="$HOME/android-dev"
+# 构建根目录可用 BUILD_ROOT 覆盖；默认放在工程内的 native/.build，
+# 不写死任何本机绝对路径。
+PROJ="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT="${BUILD_ROOT:-$PROJ/native/.build}"
 SRC="$ROOT/src"
 OUT="$ROOT/out"
-PROJ="/mnt/d/Documents/deepseek-harness/default-workspace/LITV2/android"
 
 # 默认只编 arm64-v8a：现在主流电视盒子都是 64 位，先跑通一条链路，
 # 成功后再 ABIS="armeabi-v7a" 补 32 位（老盒子）。

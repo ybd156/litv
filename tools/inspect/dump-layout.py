@@ -5,11 +5,29 @@ aapt2 的 xmltree 输出靠**缩进**表示层级（E: 行前导空格数），
 """
 import os
 import re
+import shutil
 import subprocess
 import sys
 
-BT = os.path.expanduser("~/android-dev/sdk/build-tools/35.0.0")
+def _build_tools():
+    """找 aapt2：优先 $ANDROID_HOME，其次 PATH。不写死任何本机路径。"""
+    home = os.environ.get("ANDROID_HOME") or os.environ.get("ANDROID_SDK_ROOT")
+    if home:
+        bt = os.path.join(home, "build-tools")
+        if os.path.isdir(bt):
+            for ver in sorted(os.listdir(bt), reverse=True):
+                cand = os.path.join(bt, ver, "aapt2")
+                if os.path.exists(cand) or os.path.exists(cand + ".exe"):
+                    return os.path.dirname(cand)
+    found = shutil.which("aapt2")
+    if found:
+        return os.path.dirname(found)
+    sys.exit("找不到 aapt2：设置 ANDROID_HOME，或把 build-tools 加到 PATH")
+
+
+BT = _build_tools()
 AAPT2 = os.path.join(BT, "aapt2")
+
 
 WANT = re.compile(r":(textSize|orientation|gravity|layout_weight|layout_width|layout_height|text|src|background|focusable|visibility)\(")
 

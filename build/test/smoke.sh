@@ -3,7 +3,8 @@
 # 用法：bash build/test/smoke.sh
 set -uo pipefail
 
-ROOT="/mnt/d/Documents/deepseek-harness/default-workspace/LITV2"
+# 仓库根目录 = 本脚本往上两级，不写死任何绝对路径
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 WORK=/tmp/litv-test
 GW_BASE="http://localhost/app/litv"
 TCP_BASE="http://127.0.0.1:19527"

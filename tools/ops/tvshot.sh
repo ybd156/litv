@@ -1,13 +1,24 @@
 #!/usr/bin/env bash
-# 用 D:\Android 上的 TV 模拟器（Android 9 / armeabi-v7a）截图 + 操作
+# 对已连接的设备/模拟器截图 + 按键操作
+# 用法：LITV_DEV=192.168.1.10:5555 bash tools/ops/tvshot.sh
 #
 # ★ 截图必须走「设备内 screencap 落盘 + adb pull」。
 #   adb exec-out 经过 WSL 的 Windows 互操作会把二进制截断，拿到的 PNG 是坏的。
 set -uo pipefail
 
-ADB=/mnt/d/Android/sdk/platform-tools/adb.exe
-DEV=${LITV_DEV:-192.168.250.11:5555}
-OUT=/mnt/d/Documents/deepseek-harness/default-workspace/LITV2/build/shots
+# adb 从 PATH 或 $ANDROID_HOME 找，不写死本机路径
+ADB="${ADB:-$(command -v adb || true)}"
+if [ -z "$ADB" ] && [ -n "${ANDROID_HOME:-}" ]; then
+  ADB="$ANDROID_HOME/platform-tools/adb"
+fi
+[ -x "$ADB" ] || { echo "找不到 adb：装 platform-tools 或设置 ANDROID_HOME" >&2; exit 1; }
+
+# 设备地址必须显式给：LITV_DEV=192.168.1.10:5555
+DEV="${LITV_DEV:-}"
+[ -n "$DEV" ] || { echo "用法：LITV_DEV=<ip:port> bash tools/ops/tvshot.sh" >&2; exit 1; }
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+OUT="$ROOT/build/shots"
 mkdir -p "$OUT"
 
 a() { "$ADB" -s "$DEV" "$@" 2>/dev/null | tr -d '\r'; }

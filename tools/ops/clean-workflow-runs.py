@@ -12,8 +12,10 @@ import sys
 
 REPO = "ybd156/litv"
 KEEP = {".github/workflows/release.yml"}
-TOKEN = open(os.path.expanduser("~/.gh_token")).read().strip()
-PROXY = "http://172.27.32.1:10808"
+# token 从环境变量读，不读本机的某个文件，也不走任何固定代理
+TOKEN = os.environ.get("GITHUB_TOKEN", "").strip()
+if not TOKEN:
+    sys.exit("请设置 GITHUB_TOKEN（需要 repo 权限）")
 
 
 def api(path, method="GET"):
@@ -23,8 +25,8 @@ def api(path, method="GET"):
         "-H", "Accept: application/vnd.github+json",
         f"https://api.github.com/repos/{REPO}{path}",
     ]
-    out = subprocess.run(cmd, capture_output=True, text=True,
-                         env={**os.environ, "https_proxy": PROXY, "http_proxy": PROXY}).stdout
+    # 走系统环境里的代理（如果有），不写死任何地址
+    out = subprocess.run(cmd, capture_output=True, text=True).stdout
     return out
 
 

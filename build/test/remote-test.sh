@@ -56,7 +56,8 @@ $G -X POST "$GWURL/devices/$TV_ID/approve" >/dev/null
 $G -X POST "$GWURL/devices/$PH_ID/approve" >/dev/null
 
 # 同步最新的 WS 客户端源码
-cp /mnt/d/Documents/deepseek-harness/default-workspace/LITV2/build/test/wstv.go /tmp/wsc/wstv.go
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+cp "$ROOT/build/test/wstv.go" /tmp/wsc/wstv.go
 
 cd /tmp/wsc || exit 1
 rm -f /tmp/wsc/tv.log

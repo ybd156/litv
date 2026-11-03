@@ -1,7 +1,12 @@
 #!/bin/bash
 # 验证刷新是否原地更新线路（不再重复追加）
-S=/vol1/@appcenter/litv/app.sock
-DB=/vol1/@appdata/litv/data/litv.db
+# 连接参数全部走环境变量，不写死任何本机路径：
+#   LITV_SOCK  litvd 的 unix socket（必填）
+#   LITV_DB    SQLite 数据库路径（需要查库的脚本必填）
+#   LITV_BASE  HTTP 基地址，默认 http://localhost/app/litv/api/v1
+S="${LITV_SOCK:?请设置 LITV_SOCK（litvd 的 unix socket 路径）}"
+B="${LITV_BASE:-http://localhost/app/litv/api/v1}"
+DB="${LITV_DB:?请设置 LITV_DB（SQLite 数据库路径）}"
 g() { curl -sS --unix-socket "$S" -H "X-Trim-Userid:1" -H "X-Trim-Username:admin" -H "X-Trim-Isadmin:true" "$@"; }
 
 count() {

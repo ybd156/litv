@@ -1,12 +1,17 @@
 #!/bin/bash
 # 抽查 N 个频道，统计实际可播比例
-S=/vol1/@appcenter/litv/app.sock
+# 连接参数全部走环境变量，不写死任何本机路径：
+#   LITV_SOCK  litvd 的 unix socket（必填）
+#   LITV_DB    SQLite 数据库路径（需要查库的脚本必填）
+#   LITV_BASE  HTTP 基地址，默认 http://localhost/app/litv/api/v1
+S="${LITV_SOCK:?请设置 LITV_SOCK（litvd 的 unix socket 路径）}"
+B="${LITV_BASE:-http://localhost/app/litv/api/v1}"
 g() { curl -sS --unix-socket "$S" -H "X-Trim-Userid:1" -H "X-Trim-Username:admin" -H "X-Trim-Isadmin:true" "$@"; }
-B=http://localhost/app/litv/api/v1
+
 
 python3 - <<'PY'
-import sqlite3
-c = sqlite3.connect('/vol1/@appdata/litv/data/litv.db')
+import os, sqlite3
+c = sqlite3.connect(os.environ['LITV_DB'])
 rows = c.execute("SELECT id, name FROM channels ORDER BY id LIMIT 60").fetchall()
 open('/tmp/sweep.tsv','w').write('\n'.join(f"{r[0]}\t{r[1]}" for r in rows))
 print(f"  抽查 {len(rows)} 个频道")

@@ -1,27 +1,36 @@
 #!/usr/bin/env bash
 # =============================================================================
-# gradlew —— 本地 Gradle 启动器
+# gradlew —— Gradle 启动器（不依赖任何本地路径）
 #
-# 为什么不用标准 wrapper：
-#   标准 `gradle wrapper` 任务会去 services.gradle.org 校验分发地址，
-#   国内基本必失败。这个 shim 直接用本地已解压的 Gradle，行为等价。
+# 为什么不是标准 wrapper：
+#   标准 `gradle wrapper` 会去 services.gradle.org 下载分发包，
+#   国内网络下基本必失败。这里直接用环境里已有的 Gradle。
 #
-# 换机器/上 CI 时，跑一次真正的 wrapper 生成即可：
-#   gradle wrapper --gradle-version 8.7 --distribution-type bin
+# 查找顺序：
+#   1. $GRADLE_BIN          显式指定
+#   2. $GRADLE_HOME/bin/gradle
+#   3. PATH 上的 gradle     （CI 用 gradle/actions/setup-gradle 装的就是这个）
+#
+# CI 上其实不经过这个脚本（workflow 里直接调 `gradle`），
+# 保留它是为了让本地手动跑 `./gradlew xxx` 的习惯不失效。
 # =============================================================================
 set -euo pipefail
 
-GRADLE_BIN="${GRADLE_BIN:-$HOME/android-dev/gradle-dist/gradle-8.7/bin/gradle}"
-
-if [ -f "$HOME/android-dev/env.sh" ]; then
-  # shellcheck disable=SC1091
-  source "$HOME/android-dev/env.sh"
+if [ -n "${GRADLE_BIN:-}" ] && [ -x "${GRADLE_BIN}" ]; then
+  exec "$GRADLE_BIN" "$@"
 fi
 
-if [ ! -x "$GRADLE_BIN" ]; then
-  echo "找不到 Gradle：$GRADLE_BIN" >&2
-  echo "先执行：bash tools/setup-gradle-wsl.sh" >&2
-  exit 1
+if [ -n "${GRADLE_HOME:-}" ] && [ -x "${GRADLE_HOME}/bin/gradle" ]; then
+  exec "${GRADLE_HOME}/bin/gradle" "$@"
 fi
 
-exec "$GRADLE_BIN" "$@"
+if command -v gradle >/dev/null 2>&1; then
+  exec gradle "$@"
+fi
+
+echo "找不到 Gradle。请任选一种：" >&2
+echo "  1) 装 Gradle 到 PATH" >&2
+echo "  2) export GRADLE_HOME=/path/to/gradle-8.7" >&2
+echo "  3) export GRADLE_BIN=/path/to/gradle" >&2
+echo "  4) 推上去让 GitHub Actions 编（见 AGENTS.md §8）" >&2
+exit 1

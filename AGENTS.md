@@ -184,8 +184,9 @@ packaging/fnos/app/server/litvd_*
 
 ### CI 上的几个坑（改工作流前必读）
 
-- **`android/gradlew` 不是标准 wrapper**，是给本地 WSL 用的转发脚本
-  （硬编码 `~/android-dev/env.sh`）。CI 上**必须**用 setup-gradle 装的 `gradle` 命令
+- **`android/gradlew` 不是标准 wrapper**，是一个按顺序找 Gradle 的启动脚本
+  （`$GRADLE_BIN` → `$GRADLE_HOME` → `PATH`）。CI 上直接用 setup-gradle 装的
+  `gradle` 命令，不经过它
 - `android/local.properties` 被 gitignore，CI 靠 `ANDROID_HOME` 环境变量找 SDK。
   **不要**把它提交上去，会写死本地路径
 - `server/` 用 `modernc.org/sqlite`（纯 Go），不需要 cgo；测试跑 `-race` 也没问题
@@ -199,17 +200,18 @@ packaging/fnos/app/server/litvd_*
 - Android：`e:` 开头的 Kotlin 编译错误；`assembleRelease` 才暴露的 R8/JNI 问题
 - iOS：用了 iOS 16+ 的 API（部署目标是 **15**）
 
-### 历史遗留（不推荐，仅作参考）
+### 不要在仓库里写本机信息
 
-早期为了本地调试在 WSL 里搭过工具链，**现在不作为标准路径**。
-如果机器上恰好已经有，可以临时用：
+路径、IP、设备型号、账号、代理地址这些**一律不进仓库**——换台机器就失效，
+也会把环境细节暴露出去。
 
-```bash
-wsl.exe -e bash -lc 'cd /mnt/d/Documents/deepseek-harness/default-workspace/LITV2/server && go build ./...'
-```
+脚本要能跑在任何机器上：
 
-但**不要**为了本地编译去新装任何东西，也不要把这套路径写进文档或脚本。
-`wsl.exe` 的输出管道进 Git Bash 会变成 UTF-16，读中文时加 `| tr -d '\r'`。
+- 仓库内路径用 `$(cd "$(dirname "$0")/../.." && pwd)` 推，不写绝对路径
+- SDK / 工具用 `$ANDROID_HOME`、`PATH` 找，不写安装位置
+- 需要外部参数（socket、数据库、设备地址）走环境变量，
+  **且不给默认值**：`S="${LITV_SOCK:?请设置 LITV_SOCK}"`
+- 参考文件（别人的 APK 之类）从命令行传，不写进代码
 
 ## 9. 验证命令
 

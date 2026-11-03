@@ -95,8 +95,8 @@ jobs:
       - name: 编译两个 flavor
         working-directory: android
         run: |
-          # 仓库里的 ./gradlew 是给本地 WSL 用的 shim（硬编码路径），CI 上不能用，
-          # 必须用 setup-gradle 装的 gradle 命令。
+          # 用 setup-gradle 装的 gradle 命令，不经过仓库里的 ./gradlew
+          # （那个是本地用的启动脚本，按 PATH/GRADLE_HOME 找 Gradle）。
           gradle --no-daemon assembleTvDebug assemblePhoneDebug
 
       - name: 单元测试

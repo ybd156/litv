@@ -24,6 +24,11 @@ server/litvd
 *.aab
 *.ipa
 *.so
+# 例外：jniLibs 里的预编译库是**必需的构建输入**，必须进仓库。
+# 之前这里把整个目录忽略了，导致 CI 从 git 克隆构建时拿不到任何 .so，
+# 正式包里 libmpv/libplayer/libav* 全部缺失 —— 表现为 mpv 内核"未打包"，
+# 少了一个兜底内核。本地构建有这些文件，所以一直没发现。
+!android/app/src/main/jniLibs/**/*.so
 *.db
 *.log
 
@@ -57,8 +62,9 @@ nul
 # Third-party reference code used only for local research
 ref/
 
-# Android native libraries built locally
-android/app/src/main/jniLibs/
+# Android native libraries：**不要忽略**。
+# 这些 .so 不是本地构建产物，是打包时必须带上的预编译库。
+# （曾经忽略过，直接导致正式版 APK 缺 mpv/ffmpeg，见上面 *.so 处的说明）
 
 # iOS
 ios/build/

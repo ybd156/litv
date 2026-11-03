@@ -17,6 +17,9 @@ const MIN_CHANNELS = Number(process.env.MIN_CHANNELS || "1");
 const FETCH_TIMEOUT_MS = 30_000;
 const INSERT_BATCH = 50;
 
+// 从 m3u 头里的 x-tvg-url 收集节目单地址
+const epgUrls = new Set();
+
 // ---------- 解析 ----------
 
 // #EXTINF 的属性段和频道名之间用逗号分隔，但属性值里也可能有逗号
@@ -321,6 +324,12 @@ async function fetchOne(src, index) {
 
     const buf = new Uint8Array(await res.arrayBuffer());
     const text = decodeBody(buf);
+
+    // 节目单地址写在 m3u 第一行的 x-tvg-url 上，顺手收走
+    for (const m of text.slice(0, 500).matchAll(/x-tvg-url="([^"]+)"/gi)) {
+      for (const u of m[1].split(",")) if (u.trim()) epgUrls.add(u.trim());
+    }
+
     const format = detectFormat(text);
 
     let entries;
@@ -526,6 +535,217 @@ function renderMeta(channels, sourceCount, lineCount) {
   ].join("\n");
 }
 
+// ---------- 节目单 ----------
+
+// 往前留 6 小时（正在播的节目要有），往后 3 天。
+const EPG_BACK_SEC = 6 * 3600;
+const EPG_FWD_SEC = 72 * 3600;
+// 至少隔 6 小时才刷一次：D1 免费版每天只给 10 万行写入，
+// 小时级重建 + 全量节目单会直接打爆。
+const EPG_MIN_INTERVAL_SEC = 6 * 3600;
+
+function decodeEntities(s) {
+  return String(s)
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&#(\d+);/g, (_, d) => String.fromCodePoint(Number(d)))
+    .replace(/&amp;/g, "&");
+}
+
+function normName(s) {
+  return String(s).toLowerCase().replace(/[\s\-_.·|/\\()（）\[\]【】]+/g, "");
+}
+
+// XMLTV 时间："20261029175900 +0800"
+function parseXmltvTime(s) {
+  const m = /^(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})(?:\s*([+-])(\d{2})(\d{2}))?$/.exec(
+    String(s).trim(),
+  );
+  if (!m) return 0;
+  const [, y, mo, d, h, mi, se, sign, oh, om] = m;
+  let t = Date.UTC(+y, +mo - 1, +d, +h, +mi, +se) / 1000;
+  if (sign) {
+    const off = Number(oh) * 3600 + Number(om) * 60;
+    t -= sign === "-" ? -off : off;
+  }
+  return t;
+}
+
+function parseXmltv(xml) {
+  const channels = new Set();
+  for (const m of xml.matchAll(/<channel\b[^>]*\bid="([^"]+)"/g)) channels.add(m[1]);
+
+  const programs = [];
+  for (const m of xml.matchAll(/<programme\b([^>]*)>([\s\S]*?)<\/programme>/g)) {
+    const attrs = m[1];
+    const body = m[2];
+    const ch = /channel="([^"]+)"/.exec(attrs);
+    const st = /start="([^"]+)"/.exec(attrs);
+    if (!ch || !st) continue;
+    const sp = /stop="([^"]+)"/.exec(attrs);
+    const pick = (tag) => {
+      const r = new RegExp(`<${tag}[^>]*>([\\s\\S]*?)</${tag}>`).exec(body);
+      return r ? decodeEntities(r[1]).replace(/<[^>]*>/g, "").trim() : "";
+    };
+    programs.push({
+      channel: ch[1],
+      start: parseXmltvTime(st[1]),
+      stop: sp ? parseXmltvTime(sp[1]) : 0,
+      title: pick("title"),
+      desc: pick("desc"),
+      cat: pick("category"),
+    });
+  }
+  return { channels, programs };
+}
+
+/**
+ * 把我们的频道对上 XMLTV 的频道 id。
+ *
+ * 我们的 m3u 里没有 tvg-id（实测 223 个全是空），只能按名字对：
+ *   1. 归一化后精确相等
+ *   2. 最长前缀——必须"最长"，否则 CCTV1 会把 CCTV10~19 全抢走
+ */
+function matchEpg(ourChannels, xmlChannelIds) {
+  const ids = [...xmlChannelIds];
+  const exact = new Map(ids.map((id) => [normName(id), id]));
+  const byLen = ids
+    .map((id) => ({ id, n: normName(id) }))
+    .filter((x) => x.n)
+    .sort((a, b) => b.n.length - a.n.length);
+
+  const map = new Map(); // stable_key -> xmltv id
+  for (const ch of ourChannels) {
+    const n = normName(ch.name);
+    if (!n) continue;
+    if (exact.has(n)) {
+      map.set(dedupeKey(ch), exact.get(n));
+      continue;
+    }
+    const p = byLen.find((x) => n.startsWith(x.n));
+    if (p) map.set(dedupeKey(ch), p.id);
+  }
+  return map;
+}
+
+async function loadEpgState() {
+  const file = process.env.EPG_STATE_FILE;
+  if (!file) return 0;
+  try {
+    const raw = await readFile(file, "utf8");
+    const a = raw.indexOf("[");
+    const b = raw.lastIndexOf("]");
+    if (a < 0 || b <= a) return 0;
+    const rows = extractRows(JSON.parse(raw.slice(a, b + 1)));
+    return rows.length ? Number(rows[0].v) || 0 : 0;
+  } catch {
+    return 0;
+  }
+}
+
+function renderEpg(rows, matched, now) {
+  const lines = ["-- 由 scripts/build.mjs 生成：节目单（整表替换）", "DELETE FROM epg_programs;"];
+
+  const values = rows.map((r) =>
+    [
+      `(SELECT id FROM channels WHERE stable_key = ${sqlStr(r.key)})`,
+      sqlStr(r.xmltv),
+      sqlInt(r.start),
+      sqlInt(r.stop),
+      sqlStr(r.title),
+      sqlStr(r.desc),
+      sqlStr(r.cat),
+    ].join(", "),
+  );
+
+  if (values.length) {
+    for (let i = 0; i < values.length; i += INSERT_BATCH) {
+      lines.push(
+        "INSERT INTO epg_programs (channel_id, xmltv_id, start_at, end_at, title, description, category) VALUES\n  (" +
+          values.slice(i, i + INSERT_BATCH).join("),\n  (") +
+          ");",
+      );
+    }
+  }
+
+  // 把匹配结果写回频道，客户端和节目单页都要看这个
+  for (const [key, xmltv] of matched) {
+    lines.push(
+      `UPDATE channels SET epg_id = ${sqlStr(xmltv)}, tvg_id = CASE WHEN tvg_id = '' THEN ${sqlStr(xmltv)} ELSE tvg_id END WHERE stable_key = ${sqlStr(key)};`,
+    );
+  }
+
+  lines.push(
+    `INSERT INTO kv (k, v) VALUES ('last_epg_at', ${sqlStr(String(now))}) ON CONFLICT(k) DO UPDATE SET v = excluded.v;`,
+  );
+  return lines.join("\n") + "\n";
+}
+
+async function buildEpg(channels, urls) {
+  const now = Math.floor(Date.now() / 1000);
+  const from = now - EPG_BACK_SEC;
+  const to = now + EPG_FWD_SEC;
+
+  const xmlIds = new Set();
+  const programs = [];
+
+  for (const u of urls) {
+    try {
+      const res = await fetch(u, {
+        headers: { "User-Agent": UA, Accept: "*/*" },
+        signal: AbortSignal.timeout(60_000),
+        redirect: "follow",
+      });
+      if (!res.ok) {
+        console.warn(`[EPG] HTTP ${res.status}`);
+        continue;
+      }
+      const parsed = parseXmltv(decodeBody(new Uint8Array(await res.arrayBuffer())));
+      for (const id of parsed.channels) xmlIds.add(id);
+      programs.push(...parsed.programs);
+      console.log(`[EPG] ${parsed.channels.size} 个频道 / ${parsed.programs.length} 条节目`);
+    } catch (err) {
+      console.warn(`[EPG] 拉取失败：${err.name}`);
+    }
+  }
+
+  if (xmlIds.size === 0) {
+    console.warn("[EPG] 没拿到任何节目单，跳过（保留线上已有的）");
+    return null;
+  }
+
+  const matched = matchEpg(channels, xmlIds);
+  console.log(`[EPG] 频道匹配 ${matched.size}/${channels.length}`);
+
+  // xmltv id -> 我们的 stable_key，避免在下面循环里做 O(n²) 反查
+  const keyOf = new Map();
+  for (const [key, xmltv] of matched) if (!keyOf.has(xmltv)) keyOf.set(xmltv, key);
+
+  const rows = [];
+  for (const p of programs) {
+    const key = keyOf.get(p.channel);
+    if (!key) continue;
+    if (p.start < from || p.start > to) continue;
+    // 没有 stop 的用 +1 小时兜底
+    const stop = p.stop > p.start ? p.stop : p.start + 3600;
+    rows.push({
+      key,
+      xmltv: p.channel,
+      start: p.start,
+      stop,
+      title: p.title,
+      desc: p.desc,
+      cat: p.cat,
+    });
+  }
+
+  rows.sort((a, b) => a.start - b.start);
+  console.log(`[EPG] 窗口内 ${rows.length} 条`);
+  return { rows, matched, now };
+}
+
 // ---------- 主流程 ----------
 
 async function main() {
@@ -539,6 +759,7 @@ async function main() {
     await writeFile(`${SQL_DIR}/seed.sql`, "-- 没有启用的订阅源，本次不更新频道数据\n", "utf8");
     await writeFile(`${SQL_DIR}/source-status.sql`, "", "utf8");
     await writeFile(`${SQL_DIR}/meta.sql`, "", "utf8");
+    await writeFile(`${SQL_DIR}/epg.sql`, "", "utf8");
     return;
   }
 
@@ -593,6 +814,27 @@ async function main() {
   await writeFile(`${SQL_DIR}/seed.sql`, renderSeed(channels), "utf8");
   await writeFile(`${SQL_DIR}/source-status.sql`, renderSourceStatus(statuses), "utf8");
   await writeFile(`${SQL_DIR}/meta.sql`, renderMeta(channels, sources.length, totalLines), "utf8");
+
+  // 节目单：至少隔 6 小时刷一次。D1 免费版每天 10 万行写入，
+  // 小时级重建再叠全量节目单会打爆，所以这里单独限速。
+  const epgLast = await loadEpgState();
+  const nowTs = Math.floor(Date.now() / 1000);
+
+  if (nowTs - epgLast < EPG_MIN_INTERVAL_SEC) {
+    const hours = Math.round((nowTs - epgLast) / 3600);
+    console.log(`[EPG] 上次 ${hours} 小时前刷过，本次跳过`);
+    await writeFile(`${SQL_DIR}/epg.sql`, "-- 本次不刷新节目单\n", "utf8");
+  } else if (epgUrls.size === 0) {
+    console.log("[EPG] 源里没有 x-tvg-url，跳过");
+    await writeFile(`${SQL_DIR}/epg.sql`, "-- 源里没有节目单地址\n", "utf8");
+  } else {
+    const built = await buildEpg(channels, [...epgUrls]);
+    await writeFile(
+      `${SQL_DIR}/epg.sql`,
+      built ? renderEpg(built.rows, built.matched, built.now) : "-- 本次没拿到节目单，保留线上数据\n",
+      "utf8",
+    );
+  }
 
   const withHeaders = channels.filter((c) => c.lines.some((l) => l.ua || Object.keys(l.headers).length));
   const groups = new Map();

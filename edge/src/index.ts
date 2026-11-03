@@ -21,6 +21,8 @@ interface Env {
   DB: D1Database;
   BIND_CODE: string;
   SERVER_NAME?: string;
+  // 节目单的日边界用哪个时区算，默认东八区
+  TZ_NAME?: string;
   // 可选：配了才能在管理台里一键触发重建。没配就只靠每天定时。
   GITHUB_DISPATCH_TOKEN?: string;
   GITHUB_REPO?: string;
@@ -339,22 +341,101 @@ async function tvStreams(env: Env, channelId: number): Promise<Response> {
   return ok(results ?? []);
 }
 
-async function tvEpg(env: Env, channelId: number): Promise<Response> {
+// 节目单的日边界必须按**当地日历日**算，不能按 UTC 零点截断——
+// 东八区用户会看到节目单整体错位 8 小时。
+function tzOffsetSec(tz: string, atSec: number): number {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: tz,
+    hour12: false,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  }).formatToParts(new Date(atSec * 1000));
+  const g = (t: string) => Number(parts.find((p) => p.type === t)?.value ?? 0);
+  const asUTC = Date.UTC(
+    g("year"),
+    g("month") - 1,
+    g("day"),
+    g("hour") % 24,
+    g("minute"),
+    g("second"),
+  );
+  return Math.round(asUTC / 1000) - atSec;
+}
+
+function localDayRange(nowSec: number, tz: string, day: number): [number, number] {
+  const off = tzOffsetSec(tz, nowSec);
+  const localMidnight = Math.floor((nowSec + off) / 86400) * 86400 + day * 86400;
+  const start = localMidnight - off;
+  return [start, start + 86400];
+}
+
+interface EpgRow {
+  id: number;
+  channel_id: number;
+  start_at: number;
+  end_at: number;
+  title: string;
+  description: string;
+  category: string;
+}
+
+async function tvEpg(env: Env, channelId: number, url: URL): Promise<Response> {
   const ch = await env.DB.prepare(
-    `SELECT c.id, COALESCE(o.name, c.name) AS name, COALESCE(o.logo, c.logo) AS logo
+    `SELECT c.id,
+            COALESCE(o.name, c.name) AS name,
+            COALESCE(o.logo, c.logo) AS logo,
+            COALESCE(c.epg_id, '') AS epg_id
        FROM channels c
        LEFT JOIN channel_overrides o ON o.stable_key = c.stable_key
       WHERE c.id = ?`,
   )
     .bind(channelId)
-    .first<{ id: number; name: string; logo: string }>();
+    .first<{ id: number; name: string; logo: string; epg_id: string }>();
 
   if (!ch) return fail(2004, "频道不存在");
 
+  const day = Math.max(-7, Math.min(7, Number(url.searchParams.get("day") || "0") || 0));
+  const now = nowSec();
+  const tz = env.TZ_NAME || "Asia/Shanghai";
+  const [start, end] = localDayRange(now, tz, day);
+
+  // 日边界和时区一起下发，客户端不要自己按设备时区算
+  const date = new Date((start + tzOffsetSec(tz, start)) * 1000).toISOString().slice(0, 10);
+
+  if (!ch.epg_id) {
+    return ok({ channel: ch, programs: [], note: "该频道未关联 EPG" });
+  }
+
+  const { results } = await env.DB.prepare(
+    `SELECT id, channel_id, start_at, end_at, title, description, category
+       FROM epg_programs
+      WHERE channel_id = ? AND start_at >= ? AND start_at < ?
+      ORDER BY start_at`,
+  )
+    .bind(channelId, start, end)
+    .all<EpgRow>();
+
   return ok({
-    channel: { id: ch.id, name: ch.name, logo: ch.logo },
-    programs: [],
-    note: "边缘模式没有节目单",
+    channel: ch,
+    programs: (results ?? []).map((p) => ({
+      id: p.id,
+      epg_channel_id: p.channel_id,
+      start_at: p.start_at,
+      end_at: p.end_at,
+      title: p.title,
+      description: p.description,
+      category: p.category,
+    })),
+    day,
+    date,
+    timezone: tz,
+    server_time: now,
+    day_start: start,
+    day_end: end,
   });
 }
 
@@ -1435,20 +1516,69 @@ async function compatAdmin(
   }
   if (path === "/api/v1/system/logs") return ok([]);
 
-  // epg：边缘没有节目单
+  // epg：节目单由 CI 从源的 x-tvg-url 拉取并解析，这里只读
   if (path.startsWith("/api/v1/epg/")) {
-    if (path === "/api/v1/epg/sources") return ok([]);
-    if (path === "/api/v1/epg/channels") return ok([]);
-    if (path === "/api/v1/epg/mapping") return ok([]);
-    if (path === "/api/v1/epg/search") return ok([]);
+    if (path === "/api/v1/epg/channels") {
+      const { results } = await env.DB.prepare(
+        `SELECT xmltv_id AS id, COUNT(*) AS program_count
+           FROM epg_programs GROUP BY xmltv_id ORDER BY program_count DESC`,
+      ).all();
+      return ok(results ?? []);
+    }
+
     if (path === "/api/v1/epg/stats") {
+      const row = await env.DB.prepare(
+        `SELECT COUNT(DISTINCT xmltv_id) AS channels, COUNT(*) AS programs,
+                MIN(start_at) AS earliest_start, MAX(end_at) AS latest_end
+           FROM epg_programs`,
+      ).first<{
+        channels: number;
+        programs: number;
+        earliest_start: number | null;
+        latest_end: number | null;
+      }>();
+
+      const sync = await env.DB.prepare("SELECT v FROM kv WHERE k = 'last_epg_at'").first<{
+        v: string;
+      }>();
+
+      const earliest = row?.earliest_start ?? 0;
+      const latest = row?.latest_end ?? 0;
       return ok({
-        sources: 0, enabled_sources: 0, channels: 0, programs: 0,
-        earliest_start: 0, latest_end: 0, covered_days: 0, last_sync: 0,
-        db_bytes: 0, keep_days: 0,
+        sources: 0,
+        enabled_sources: 0,
+        channels: row?.channels ?? 0,
+        programs: row?.programs ?? 0,
+        earliest_start: earliest,
+        latest_end: latest,
+        covered_days: earliest && latest ? Math.ceil((latest - earliest) / 86400) : 0,
+        last_sync: Number(sync?.v ?? 0) || 0,
+        db_bytes: 0,
+        keep_days: 3,
       });
     }
-    return notSupported("EPG 相关操作（边缘模式没有节目单）");
+
+    if (path === "/api/v1/epg/search") {
+      const q = (url.searchParams.get("q") || "").trim();
+      if (!q) return ok([]);
+      const { results } = await env.DB.prepare(
+        `SELECT p.channel_id AS epg_channel_id, p.xmltv_id,
+                COALESCE(o.name, c.name) AS channel_name,
+                p.title, p.start_at, p.end_at, p.category
+           FROM epg_programs p
+           JOIN channels c ON c.id = p.channel_id
+           LEFT JOIN channel_overrides o ON o.stable_key = c.stable_key
+          WHERE p.title LIKE ?
+          ORDER BY p.start_at LIMIT 100`,
+      )
+        .bind(`%${q}%`)
+        .all();
+      return ok(results ?? []);
+    }
+
+    if (path === "/api/v1/epg/sources" || path === "/api/v1/epg/mapping") return ok([]);
+
+    return notSupported("EPG 导入与映射（节目单由 CI 从源的 x-tvg-url 自动拉取）");
   }
 
   return null;
@@ -1571,7 +1701,7 @@ export default {
     if (streamsMatch) return tvStreams(env, Number(streamsMatch[1]));
 
     const epgMatch = /^\/api\/v1\/tv\/epg\/(\d+)$/.exec(path);
-    if (epgMatch) return tvEpg(env, Number(epgMatch[1]));
+    if (epgMatch) return tvEpg(env, Number(epgMatch[1]), url);
 
     // ---- 边缘模式明确不支持的：返回空，让客户端自然降级 ----
     if (path.startsWith("/api/v1/tv/timeshift/")) {

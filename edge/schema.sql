@@ -111,3 +111,21 @@ CREATE TABLE IF NOT EXISTS kv (
   k TEXT PRIMARY KEY,
   v TEXT NOT NULL
 );
+
+-- 节目单。时间一律 Unix 秒（和服务端其它地方一致；JS 里用要 ×1000）。
+--
+-- 为什么按 channel_id 存而不是 xmltv_id：客户端是按频道 id 查的，
+-- 一次索引就能取到，不用先查映射。
+-- 数据量控制：只存匹配上的频道 + 前后几天的窗口，重建时整表替换。
+CREATE TABLE IF NOT EXISTS epg_programs (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  channel_id  INTEGER NOT NULL,
+  xmltv_id    TEXT    NOT NULL DEFAULT '',
+  start_at    INTEGER NOT NULL,
+  end_at      INTEGER NOT NULL,
+  title       TEXT    NOT NULL DEFAULT '',
+  description TEXT    NOT NULL DEFAULT '',
+  category    TEXT    NOT NULL DEFAULT ''
+);
+
+CREATE INDEX IF NOT EXISTS idx_epg_channel_time ON epg_programs (channel_id, start_at);

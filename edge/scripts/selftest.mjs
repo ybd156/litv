@@ -255,6 +255,88 @@ const third = await runBuild({ SOURCES_FILE: "", SOURCE_URLS: "" });
 check("没有源时不算失败（首次部署靠它）", third.code === 0);
 check("没有源时给的是可读提示", third.out.includes("没有启用的订阅源"));
 
+// ---------------------------------------------------------------- D. 节目单
+
+// XMLTV 时间：东八区 "YYYYMMDDHHMMSS +0800"
+function xmltvTime(ms) {
+  const p = (n) => String(n).padStart(2, "0");
+  const t = new Date(ms + 8 * 3600 * 1000);
+  return (
+    `${t.getUTCFullYear()}${p(t.getUTCMonth() + 1)}${p(t.getUTCDate())}` +
+    `${p(t.getUTCHours())}${p(t.getUTCMinutes())}${p(t.getUTCSeconds())} +0800`
+  );
+}
+
+const nowMs = Date.now();
+const EPG_XML = `<?xml version="1.0" encoding="UTF-8"?>
+<tv>
+  <channel id="CCTV1"><display-name>CCTV-1</display-name></channel>
+  <channel id="CCTV10"><display-name>CCTV-10</display-name></channel>
+  <programme channel="CCTV1" start="${xmltvTime(nowMs + 3600_000)}" stop="${xmltvTime(nowMs + 7200_000)}">
+    <title>新闻联播</title><desc>测试描述</desc><category>新闻</category>
+  </programme>
+  <programme channel="CCTV10" start="${xmltvTime(nowMs + 3600_000)}" stop="${xmltvTime(nowMs + 7200_000)}">
+    <title>科教片</title>
+  </programme>
+  <programme channel="CCTV1" start="${xmltvTime(nowMs + 400 * 86400_000)}" stop="${xmltvTime(nowMs + 401 * 86400_000)}">
+    <title>太远的节目不该入库</title>
+  </programme>
+</tv>`;
+
+const EPG_M3U_TEMPLATE = `#EXTM3U x-tvg-url="__EPG__"
+#EXTINF:-1 group-title="央视",CCTV-1 综合
+http://e.example/1.ts
+#EXTINF:-1 group-title="央视",CCTV-10 科教
+http://e.example/10.ts
+`;
+
+const epgServer = createServer((req, res) => {
+  if (req.url === "/e.m3u") {
+    const host = `http://${req.headers.host}`;
+    res.writeHead(200);
+    res.end(EPG_M3U_TEMPLATE.replace("__EPG__", `${host}/epg.xml`));
+  } else if (req.url === "/epg.xml") {
+    res.writeHead(200);
+    res.end(EPG_XML);
+  } else {
+    res.writeHead(404);
+    res.end("no");
+  }
+});
+await new Promise((r) => epgServer.listen(0, "127.0.0.1", r));
+const epgBase = `http://127.0.0.1:${epgServer.address().port}`;
+
+console.log("\n--- 节目单 ---");
+
+const epgRun = await runBuild({
+  SOURCE_URLS: `${epgBase}/e.m3u`,
+  EPG_STATE_FILE: "",
+});
+check("带 x-tvg-url 的源能跑通", epgRun.code === 0);
+
+const epgSql = await readFile("sql/epg.sql", "utf8");
+check("节目单写进了 epg.sql", epgSql.includes("新闻联播"));
+check(
+  "节目单按 channel_id 关联（用 stable_key 反查）",
+  epgSql.includes("(SELECT id FROM channels WHERE stable_key"),
+);
+check("窗口外的节目不入库", !epgSql.includes("太远的节目"));
+check("频道回写 epg_id", epgSql.includes("SET epg_id = 'CCTV1'"));
+
+const cctv10Line = epgSql.split("\n").find((l) => l.includes("name:cctv10科教"));
+check("最长前缀匹配：CCTV-10 不会错配到 CCTV1", !!cctv10Line && cctv10Line.includes("'CCTV10'"));
+check("记录上次刷新时间", epgSql.includes("'last_epg_at'"));
+
+// 刚刷过就跳过（D1 写入预算）
+const stateFile = "epg-state.test.json";
+await writeFile(stateFile, JSON.stringify([{ results: [{ v: String(Math.floor(Date.now() / 1000)) }] }]), "utf8");
+const skipRun = await runBuild({ SOURCE_URLS: `${epgBase}/e.m3u`, EPG_STATE_FILE: stateFile });
+await unlink(stateFile);
+const skipSql = await readFile("sql/epg.sql", "utf8");
+check("6 小时内不重复刷节目单", skipRun.code === 0 && skipSql.includes("本次不刷新"));
+
+epgServer.close();
+
 server.close();
 
 // ---------------------------------------------------------------- 汇总

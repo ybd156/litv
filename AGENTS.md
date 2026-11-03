@@ -171,7 +171,7 @@ packaging/fnos/app/server/litvd_*
 | `.github/workflows/build-check.yml` | push 到 main、PR、手动 | Go 编译+vet+test、管理台 typecheck+build、Android 两个 flavor 编译+单测 |
 | `.github/workflows/ios-check.yml` | 只在 `ios/**` 变化时 | 编译 iOS（不发版） |
 | `.github/workflows/release.yml` | `v*` tag 或手动 | 出三端产物（APK / fpk / ipa） |
-| `.github/workflows/edge-deploy.yml` | 只在 `edge/**` 变化、每日定时、手动 | 边缘降级部署：typecheck + 自测 + 部署到 Cloudflare。**可选**，需要仓库配好四个 Secrets，没配就只在 `check` 阶段失败 |
+| `.github/workflows/edge-deploy.yml` | 只在 `edge/**` 变化、每日定时、手动 | 边缘降级部署：typecheck + 自测 + 部署到 Cloudflare。**可选**，四个 Secrets 没配全时自动跳过部署（只跑检查），不会让 main 变红 |
 
 改完代码看 `Build Check` 的结论就够了。要产物走 `Release`。
 

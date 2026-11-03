@@ -236,7 +236,13 @@ async function deviceRegister(req: Request, env: Env): Promise<Response> {
   return ok({ device_id: deviceId, token, status: "bound", hint: "" });
 }
 
-async function tvBootstrap(env: Env): Promise<Response> {
+async function tvBootstrap(env: Env, device: DeviceRow): Promise<Response> {
+  // 顺手记一次在线时间。只在 bootstrap 里写（一次 App 启动一次），
+  // 心跳太频繁，每次都写会吃掉 D1 每天 10 万行的写入预算。
+  await env.DB.prepare("UPDATE devices SET last_seen = ? WHERE id = ?")
+    .bind(nowSec(), device.id)
+    .run();
+
   // 整个响应体在 SQLite 里拼成 JSON 字符串，Worker 只负责吐字节。
   // 不在 JS 里 map + JSON.stringify，所以 CPU 开销与频道数无关——
   // 这是这个接口能撑住几千个频道的原因。D1 的查询耗时算 wall time，
@@ -1690,9 +1696,12 @@ export default {
     }
 
     // ---- 以下都要设备 token ----
-    if (!(await authDevice(req, env))) return fail(2003, "设备未认证");
+    const device = await authDevice(req, env);
+    // 消息里带「未绑定」是有意的：客户端看到这个词会自动跳回绑定页，
+    // 否则 token 失效时用户只会看到一个死界面。
+    if (!device) return fail(2003, "设备未绑定或会话已失效，请重新绑定");
 
-    if (path === "/api/v1/tv/bootstrap") return tvBootstrap(env);
+    if (path === "/api/v1/tv/bootstrap") return tvBootstrap(env, device);
 
     const playMatch = /^\/api\/v1\/tv\/play\/(\d+)$/.exec(path);
     if (playMatch) return tvPlay(env, Number(playMatch[1]), url);

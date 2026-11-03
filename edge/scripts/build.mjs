@@ -613,7 +613,9 @@ function matchEpg(ourChannels, xmlChannelIds) {
   const exact = new Map(ids.map((id) => [normName(id), id]));
   const byLen = ids
     .map((id) => ({ id, n: normName(id) }))
-    .filter((x) => x.n)
+    // 太短的 id 不能拿来做前缀匹配：节目源里有个脏 id 就叫 "C"，
+    // 它会把所有 C 开头的频道（CGTN、CHC…）全吞掉。实测线上确实发生了一次。
+    .filter((x) => x.n.length >= 3)
     .sort((a, b) => b.n.length - a.n.length);
 
   const map = new Map(); // stable_key -> xmltv id

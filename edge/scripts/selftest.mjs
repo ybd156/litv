@@ -272,11 +272,15 @@ const EPG_XML = `<?xml version="1.0" encoding="UTF-8"?>
 <tv>
   <channel id="CCTV1"><display-name>CCTV-1</display-name></channel>
   <channel id="CCTV10"><display-name>CCTV-10</display-name></channel>
+  <channel id="C"><display-name>C</display-name></channel>
   <programme channel="CCTV1" start="${xmltvTime(nowMs + 3600_000)}" stop="${xmltvTime(nowMs + 7200_000)}">
     <title>新闻联播</title><desc>测试描述</desc><category>新闻</category>
   </programme>
   <programme channel="CCTV10" start="${xmltvTime(nowMs + 3600_000)}" stop="${xmltvTime(nowMs + 7200_000)}">
     <title>科教片</title>
+  </programme>
+  <programme channel="C" start="${xmltvTime(nowMs + 3600_000)}" stop="${xmltvTime(nowMs + 7200_000)}">
+    <title>脏id不该吞频道</title>
   </programme>
   <programme channel="CCTV1" start="${xmltvTime(nowMs + 400 * 86400_000)}" stop="${xmltvTime(nowMs + 401 * 86400_000)}">
     <title>太远的节目不该入库</title>
@@ -288,6 +292,8 @@ const EPG_M3U_TEMPLATE = `#EXTM3U x-tvg-url="__EPG__"
 http://e.example/1.ts
 #EXTINF:-1 group-title="央视",CCTV-10 科教
 http://e.example/10.ts
+#EXTINF:-1 group-title="外语",CGTN外语纪录
+http://e.example/cgtn.ts
 `;
 
 const epgServer = createServer((req, res) => {
@@ -325,6 +331,7 @@ check("频道回写 epg_id", epgSql.includes("SET epg_id = 'CCTV1'"));
 
 const cctv10Line = epgSql.split("\n").find((l) => l.includes("name:cctv10科教"));
 check("最长前缀匹配：CCTV-10 不会错配到 CCTV1", !!cctv10Line && cctv10Line.includes("'CCTV10'"));
+check("过短的 xmltv id 不参与前缀匹配（脏 id「C」不会吞掉 CGTN）", !epgSql.includes("脏id不该吞频道"));
 check("记录上次刷新时间", epgSql.includes("'last_epg_at'"));
 
 // 刚刷过就跳过（D1 写入预算）

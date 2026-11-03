@@ -218,6 +218,15 @@ jobs:
   # ---------------------------------------------------------------- 发 Release
   release:
     needs: [android, fpk, ios]
+    # iOS 失败不该拖住安卓和飞牛包：
+    #   - android / fpk 必须成功（没有它们发布没意义）
+    #   - ios 只要"跑完了"就放行，成功就带上 ipa，失败就只发安卓和 fpk
+    # 之前写成 needs 三者全成功，结果 macOS runner 排队被取消，
+    # 整个 0.1.11 一个产物都没发出去。
+    if: |
+      always() &&
+      needs.android.result == 'success' &&
+      needs.fpk.result == 'success'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7

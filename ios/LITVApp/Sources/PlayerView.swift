@@ -205,8 +205,11 @@ struct PlayerView: View {
     private var videoContent: some View {
         // VLCKit 可用就用它（能解 AC3/裸 TS），否则退回 AVPlayer
         if usingVLC, let u = playURL {
-            VLCPlayerView(url: u, userAgent: playUA, headers: playHeaders,
-                          decodeMode: session.decodeMode, control: vlc) { st in
+            // 参数顺序必须与 VLCPlayerView 的属性声明顺序一致
+            // （Swift 的逐成员初始化器按声明顺序传参）
+            VLCPlayerView(url: u, decodeMode: session.decodeMode,
+                          userAgent: playUA, headers: playHeaders,
+                          control: vlc) { st in
                 // VLCKit 的状态通知是在它自己的线程上发出的，直接改 @State
                 // 属于跨线程写 UI 状态；统一切回主线程再处理。
                 Task { @MainActor in

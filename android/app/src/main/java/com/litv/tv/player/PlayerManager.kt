@@ -41,6 +41,9 @@ class PlayerManager(
     private var currentKind: EngineKind? = null
     private var chain: List<EngineKind> = emptyList()
     private var chainIndex = 0
+
+    /** 上次设置「强制软解」时对应的频道，用来判断换台要不要重置 */
+    private var lastChannelForSoftFlag = -1L
     private var pendingUrl = ""
     private var pendingHeaders: Map<String, String> = emptyMap()
     private var pendingChannelId = 0L
@@ -145,6 +148,13 @@ class PlayerManager(
         val remembered = prefs.engineFor(channelId).ifBlank { null }
         chain = EngineChain.chainFor(preferredEngine, remembered)
         chainIndex = 0
+        // 换台必须重置「强制软解」。
+        // 否则在某个 4K 台上硬解失败一次之后，后面所有频道都会走软解——
+        // 1080p 本来硬解好好的，却因为上一个台的问题被拖成软解，白白吃 CPU。
+        if (channelId != lastChannelForSoftFlag) {
+            exoForceSoftwareDecode = false
+            lastChannelForSoftFlag = channelId
+        }
         prepared = false
         startCurrent()
     }
@@ -198,7 +208,7 @@ class PlayerManager(
         engine.attach(context, surface, container)
         main.removeCallbacks(frameWatchdog)
         if (kind == EngineKind.EXO) {
-            main.postDelayed(frameWatchdog, 8000)
+            main.postDelayed(frameWatchdog, 5000)
         }
         // 所有内核回调统一 post 到主线程。
         //
@@ -229,6 +239,29 @@ class PlayerManager(
                 }
             }
 
+            override fun onDecoderFailed(message: String) {
+                main.post {
+                    if (currentKind != kind) return@post
+                    // 解码器失败：先换软解重试同一个内核。
+                    // 换内核没用——VLC/mpv 用的是同一批 MediaCodec，
+                    // 会拿同样的参数再失败一遍（实测 VLC 报
+                    // "AMediaCodec.queueInputBuffer failed"），白等好几秒。
+                    if (currentKind == EngineKind.EXO && !exoForceSoftwareDecode) {
+                        Log.w(TAG, "解码器失败($message)，改用软解重试")
+                        exoForceSoftwareDecode = true
+                        retried = 0
+                        startCurrent()
+                        return@post
+                    }
+                    // 已经是软解还失败，说明这路码流本机真的解不了
+                    if (currentKind == EngineKind.EXO && exoForceSoftwareDecode) {
+                        Log.w(TAG, "软解也失败，该码流可能超出本机能力")
+                        failLog += "exo软解: $message"
+                    }
+                    tryNext(message)
+                }
+            }
+
             override fun onVideoSizeChanged(width: Int, height: Int) {
                 main.post { callback?.onVideoSizeChanged(width, height) }
             }
@@ -237,7 +270,11 @@ class PlayerManager(
         }
 
         engine.aspect = prefs.aspect
-        engine.prepare(pendingUrl, pendingHeaders, prefs.bufferMs, prefs.decode)
+        // 硬解已经被证明在这路码流上不行（exoForceSoftwareDecode 已置位）时，
+        // 后面兜底的内核直接用软解——VLC/mpv 用的是同一批 MediaCodec，
+        // 让它再试一遍硬解只会多黑屏几秒。
+        val decodeMode = if (exoForceSoftwareDecode) "soft" else prefs.decode
+        engine.prepare(pendingUrl, pendingHeaders, prefs.bufferMs, decodeMode)
         // 超时和重试次数都从设置里读，不再写死
         main.postDelayed(startTimeout, prefs.startTimeoutMs.toLong())
     }

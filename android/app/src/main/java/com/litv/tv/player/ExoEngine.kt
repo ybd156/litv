@@ -200,7 +200,16 @@ class ExoEngine : PlayerEngine {
                     error.cause?.message?.let { append(": ").append(it) }
                 }
                 Log.w(TAG, "Exo 播放失败: $msg")
-                listener?.onError(msg)
+
+                // 区分「解码器失败」和「其它失败」。
+                // 解码器失败要换解码方式（硬→软），换内核没用——
+                // VLC/mpv 也是走同一批 MediaCodec，会再失败一遍。
+                if (isDecoderFailure(error, msg)) {
+                    Log.w(TAG, "判定为解码器失败，交由上层切换解码方式")
+                    listener?.onDecoderFailed(msg)
+                } else {
+                    listener?.onError(msg)
+                }
             }
         })
 
@@ -241,6 +250,36 @@ class ExoEngine : PlayerEngine {
     }
 
     override var aspect: String = "auto"
+
+    /**
+     * 判断这个错误是不是解码器层面的。
+     *
+     * 依据：Exo 的 errorCode 落在解码区间，或底层抛的是 MediaCodec 异常。
+     * Amlogic 上 4K 码流会报 "not enough codec memory for this file"
+     * 加 CodecException 0x80001000。
+     */
+    private fun isDecoderFailure(error: PlaybackException, msg: String): Boolean {
+        if (error.errorCode == PlaybackException.ERROR_CODE_DECODING_FAILED ||
+            error.errorCode == PlaybackException.ERROR_CODE_DECODING_FORMAT_UNSUPPORTED ||
+            error.errorCode == PlaybackException.ERROR_CODE_DECODER_INIT_FAILED ||
+            error.errorCode == PlaybackException.ERROR_CODE_DECODER_QUERY_FAILED ||
+            error.errorCode == PlaybackException.ERROR_CODE_DECODING_FORMAT_EXCEEDS_CAPABILITIES
+        ) return true
+
+        var c: Throwable? = error.cause
+        var depth = 0
+        while (c != null && depth < 6) {
+            if (c is android.media.MediaCodec.CodecException) return true
+            val m = c.message ?: ""
+            if (m.contains("codec memory", true) ||
+                m.contains("0x80001000", true) ||
+                m.contains("Decoder failed", true)
+            ) return true
+            c = c.cause
+            depth++
+        }
+        return msg.contains("codec memory", true) || msg.contains("0x80001000", true)
+    }
 
     override fun play() { player?.playWhenReady = true }
     override fun pause() { player?.playWhenReady = false }

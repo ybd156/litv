@@ -25,6 +25,16 @@ interface PlayerEngine {
         fun onError(message: String)
         fun onVideoSizeChanged(width: Int, height: Int)
         fun onEnded()
+
+        /**
+         * 解码器本身失败（不是网络/取流问题）。
+         *
+         * 为什么要和 onError 分开：两者的正确处置完全不同——
+         * 网络问题该换线路或换内核，解码器问题该换解码方式（硬解→软解）。
+         * 混在一起会出现「硬解失败就去试 VLC，结果 VLC 又用硬解再失败一遍」
+         * 这种白绕一圈的情况。
+         */
+        fun onDecoderFailed(message: String) = onError(message)
     }
 
     var listener: Listener?

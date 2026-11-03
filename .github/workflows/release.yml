@@ -38,10 +38,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 40
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: 准备 JDK 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: "17"
@@ -55,7 +55,7 @@ jobs:
           ls "$ANDROID_HOME/platforms" || true
 
       - name: 安装 Gradle 8.7
-        uses: gradle/actions/setup-gradle@v4
+        uses: gradle/actions/setup-gradle@v6
         with:
           gradle-version: "8.7"
 
@@ -90,7 +90,7 @@ jobs:
           cp $APK/phone/release/app-phone-arm64-v8a-release.apk   "out/LITV-${V}-phone-arm64.apk"
           ls -lh out/
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: android-apk
           path: out/*.apk
@@ -100,13 +100,13 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version: "1.23"
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: "24"
 
@@ -149,7 +149,7 @@ jobs:
           cp packaging/fnos/dist/litv_arm_v*.fpk "out/litv_arm_${V}.fpk"
           ls -lh out/
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: fnos-fpk
           path: out/*.fpk
@@ -159,7 +159,7 @@ jobs:
     runs-on: macos-latest
     timeout-minutes: 40
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: 安装工具
         run: brew install xcodegen
@@ -210,7 +210,7 @@ jobs:
           cp ios/LITV-unsigned.ipa "out/LITV-${V}-unsigned.ipa"
           ls -lh out/
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: ios-ipa
           path: out/*.ipa
@@ -220,10 +220,10 @@ jobs:
     needs: [android, fpk, ios]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: 下载全部产物
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: artifacts
 

@@ -25,8 +25,8 @@ jobs:
     name: Go 服务端
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version: "1.23"
           cache-dependency-path: server/go.sum
@@ -53,8 +53,8 @@ jobs:
     name: 管理台
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: "24"
           cache: npm
@@ -73,10 +73,10 @@ jobs:
     name: Android（电视版 + 手机版）
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: 准备 JDK 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: "17"
@@ -88,7 +88,7 @@ jobs:
             "platforms;android-35" "build-tools;35.0.0" >/dev/null 2>&1 || true
 
       - name: 安装 Gradle 8.7
-        uses: gradle/actions/setup-gradle@v4
+        uses: gradle/actions/setup-gradle@v6
         with:
           gradle-version: "8.7"
 

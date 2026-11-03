@@ -1,5 +1,6 @@
 import AVKit
 import SwiftUI
+import UIKit
 
 /// 播放页。
 ///
@@ -42,6 +43,10 @@ struct PlayerView: View {
     /// 控件浮层是否可见。和 Android 手机端一致：
     /// 点画面呼出、4 秒自动收起，不常驻遮挡画面。
     @State private var controlsVisible = true
+
+    /// 手机横过来时自动全屏；也可以点控制条上的「全屏」按钮强制全屏。
+    @Environment(\.verticalSizeClass) private var vSize
+    @State private var forceFullscreen = false
     @State private var controlsHideTask: Task<Void, Never>?
     @State private var muted = false
     @StateObject private var vlc = VLCControl()
@@ -53,77 +58,23 @@ struct PlayerView: View {
     /// 当前实际在播的频道
     private var active: Channel { switched ?? channel }
 
+    /// 是否处于全屏：手机横过来（verticalSizeClass == .compact）自动全屏，
+    /// 或者用户点了「全屏」按钮。
+    private var isFullscreen: Bool { vSize == .compact || forceFullscreen }
+
     var body: some View {
-        ZStack {
-            Color.black.ignoresSafeArea()
+        VStack(spacing: 0) {
+            videoArea
 
-            // VLCKit 可用就用它（能解 AC3/裸 TS），否则退回 AVPlayer
-            if usingVLC, let u = playURL {
-                VLCPlayerView(url: u, userAgent: playUA, headers: playHeaders, control: vlc) { st in
-                    // VLCKit 的状态通知是在它自己的线程上发出的，直接改 @State
-                    // 属于跨线程写 UI 状态；统一切回主线程再处理。
-                    Task { @MainActor in
-                        switch st {
-                        case .playing:
-                            loading = false
-                        case .buffering:
-                            loading = true
-                        case .failed:
-                            // R08：VLC 起不来就退回 AVPlayer，别让用户卡死。
-                            // 这里只置位，真正的取地址在 onChange 里跑（见上面的说明）。
-                            fallbackRequested = true
-                        }
-                    }
-                }
-                // 必须显式撑满：UIViewRepresentable 默认按 UIView 的理想尺寸布局，
-                // 而裸 UIView 没有 intrinsic size，结果画面缩成一小块。
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .ignoresSafeArea()
-            } else if let p = player {
-                VideoPlayer(player: p)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .ignoresSafeArea()
-            }
-
-            if loading {
-                ProgressView().tint(.white)
-            }
-
-            if let err = errorText {
-                VStack(spacing: 12) {
-                    Image(systemName: "exclamationmark.triangle")
-                        .font(.system(size: 36)).foregroundColor(.orange)
-                    Text(err)
-                        .foregroundColor(.white)
-                        .multilineTextAlignment(.center)
-                        .padding(.horizontal, 32)
-                    // 降级全失败了给一条"再试一次"的路，否则用户只能杀进程
-                    if !loading {
-                        Button("重试") {
-                            Task { await start() }
-                        }
-                        .foregroundColor(Color(red: 0.176, green: 0.831, blue: 0.749))
-                    }
-                }
-            }
-
-            // 点画面呼出/收起浮层（和 Android 手机端一致）。
-            // 出错时不铺这层：否则会盖住错误页的「重试」按钮。
-            if errorText == nil {
-                Color.clear
-                    .contentShape(Rectangle())
-                    .onTapGesture { toggleControls() }
-
-                if controlsVisible {
-                    VStack {
-                        osd
-                        Spacer()
-                        controls
-                    }
-                    .transition(.opacity)
-                }
+            // 竖屏时在画面下方补上「在看什么」——和 Android 手机端一致。
+            // 以前这里是整屏视频，竖屏下 16:9 的画面缩成中间一条，
+            // 上下全黑，看着像没加载出来。
+            if !isFullscreen {
+                osd
+                Spacer(minLength: 0)
             }
         }
+        .background(Color.black.ignoresSafeArea())
         .navigationTitle(active.name)
         .navigationBarTitleDisplayMode(.inline)
         .onChange(of: switched?.id) { _ in
@@ -161,6 +112,121 @@ struct PlayerView: View {
             loadingWatchdog = nil
             controlsHideTask?.cancel()
             controlsHideTask = nil
+        }
+    }
+
+    // ---------------------------------------------------------------- 布局
+
+    @ViewBuilder
+    private var videoArea: some View {
+        let content = ZStack {
+            Color.black
+
+            videoContent
+
+            if loading {
+                ProgressView().tint(.white)
+            }
+
+            if let err = errorText {
+                errorOverlay(err)
+            }
+
+            // 点画面呼出/收起浮层。出错时不铺这层，否则会盖住「重试」按钮。
+            if errorText == nil {
+                Color.clear
+                    .contentShape(Rectangle())
+                    .onTapGesture { toggleControls() }
+
+                if controlsVisible {
+                    VStack {
+                        // 竖屏时信息卡已经在画面下方常显，这里不再重复
+                        if isFullscreen {
+                            osd
+                        }
+                        Spacer()
+                        controls
+                    }
+                    .transition(.opacity)
+                }
+            }
+        }
+
+        if isFullscreen {
+            content
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .ignoresSafeArea()
+        } else {
+            // 竖屏固定 16:9，画面在顶部，下面留给信息区
+            content
+                .aspectRatio(16.0 / 9.0, contentMode: .fit)
+        }
+    }
+
+    @ViewBuilder
+    private var videoContent: some View {
+        // VLCKit 可用就用它（能解 AC3/裸 TS），否则退回 AVPlayer
+        if usingVLC, let u = playURL {
+            VLCPlayerView(url: u, userAgent: playUA, headers: playHeaders, control: vlc) { st in
+                // VLCKit 的状态通知是在它自己的线程上发出的，直接改 @State
+                // 属于跨线程写 UI 状态；统一切回主线程再处理。
+                Task { @MainActor in
+                    switch st {
+                    case .playing:
+                        loading = false
+                    case .buffering:
+                        loading = true
+                    case .failed:
+                        // R08：VLC 起不来就退回 AVPlayer，别让用户卡死。
+                        // 这里只置位，真正的取地址在 onChange 里跑。
+                        fallbackRequested = true
+                    }
+                }
+            }
+            // 必须显式撑满：UIViewRepresentable 默认按 UIView 的理想尺寸布局，
+            // 而裸 UIView 没有 intrinsic size，结果画面缩成一小块。
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else if let p = player {
+            VideoPlayer(player: p)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+
+    private func errorOverlay(_ err: String) -> some View {
+        VStack(spacing: 12) {
+            Image(systemName: "exclamationmark.triangle")
+                .font(.system(size: 36)).foregroundColor(.orange)
+            Text(err)
+                .foregroundColor(.white)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 32)
+            // 降级全失败了给一条"再试一次"的路，否则用户只能杀进程
+            if !loading {
+                Button("重试") {
+                    Task { await start() }
+                }
+                .foregroundColor(Color(red: 0.176, green: 0.831, blue: 0.749))
+            }
+        }
+    }
+
+    /// 切换全屏：既改布局，也尽量真的转屏。
+    ///
+    /// iOS 15 没有 requestGeometryUpdate，只能走 UIDevice 的 KVC 办法；
+    /// 转屏失败也不影响——forceFullscreen 已经让布局变成全屏了。
+    private func toggleFullscreen() {
+        forceFullscreen.toggle()
+        let wantLandscape = forceFullscreen
+        if #available(iOS 16.0, *) {
+            if let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene {
+                scene.requestGeometryUpdate(
+                    .iOS(interfaceOrientations: wantLandscape ? .landscapeRight : .portrait))
+            }
+        } else {
+            UIDevice.current.setValue(
+                wantLandscape ? UIInterfaceOrientation.landscapeRight.rawValue
+                              : UIInterfaceOrientation.portrait.rawValue,
+                forKey: "orientation")
         }
     }
 
@@ -215,7 +281,7 @@ struct PlayerView: View {
     /// 之前只有 OSD 显示信息，没有任何操作控件——用户只能靠手势，
     /// 而且不知道能干什么。这里补齐成常规播放器的样子。
     private var controls: some View {
-        HStack(spacing: 16) {
+        HStack(spacing: 12) {
             ctlButton("backward.end.fill", "上一台", size: 18) { switchBy(-1) }
             ctlButton(paused ? "play.fill" : "pause.fill", paused ? "播放" : "暂停", size: 22) { togglePause() }
             ctlButton("forward.end.fill", "下一台", size: 18) { switchBy(+1) }
@@ -226,9 +292,14 @@ struct PlayerView: View {
             ctlButton("arrow.triangle.2.circlepath", "线路", size: 18) {
                 Task { await loadStreams() }
             }
+            // 竖屏时手动切全屏（横过来也会自动全屏）
+            ctlButton(isFullscreen
+                        ? "arrow.down.right.and.arrow.up.left"
+                        : "arrow.up.left.and.arrow.down.right",
+                      isFullscreen ? "退出全屏" : "全屏", size: 18) { toggleFullscreen() }
         }
         .foregroundColor(.white)
-        .padding(.horizontal, 18)
+        .padding(.horizontal, 14)
         .padding(.vertical, 10)
         .background(.ultraThinMaterial)
         .cornerRadius(20)

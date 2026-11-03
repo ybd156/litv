@@ -111,9 +111,17 @@ class Prefs(ctx: Context) {
         get() = sp.getInt(K_BUFFER, 3000)
         set(v) = sp.edit().putInt(K_BUFFER, v).apply()
 
-    /** 起播超时（毫秒）。超过这个时间还没 READY 就换下一个内核。 */
+    /**
+     * 起播超时（毫秒）。超过这个时间还没 READY 就换下一个内核。
+     *
+     * 默认从 5 秒提到 15 秒：电视盒子（尤其 32 位 Amlogic）上，
+     * HLS 要经历 TCP+TLS 握手、下载 m3u8、拉分片、初始化解码器，
+     * 5 秒经常不够——表现为"Exo 起播超时"直接跳到 VLC，
+     * 而 VLC 又可能因为别的原因失败，最后报"所有内核都无法播放"。
+     * 手机（arm64）够快所以看不出问题。
+     */
     var startTimeoutMs: Int
-        get() = sp.getInt(K_START_TIMEOUT, 5000)
+        get() = sp.getInt(K_START_TIMEOUT, 15000)
         set(v) = sp.edit().putInt(K_START_TIMEOUT, v).apply()
 
     /** 超时后重试几次再换内核。网络抖动时多试几次比直接降级好。 */

@@ -50,22 +50,20 @@ android {
         versionCode = 18
         versionName = "0.1.8"
 
-        // 注意：abiFilters 与 splits.abi 互斥（AGP 会报冲突）。
-        // 这里只用 splits 声明 ABI，debug 包同理生效。
+        // 架构过滤走下面的 splits.abi —— 两者互斥，不能同时用。
     }
 
-    // ABI 分包：libVLC 一个 ABI 就 40MB，不分包整包会到 138MB。
-    // 分包后每个 APK 只带自己那套 .so，体积降一个数量级。
+    // 按 ABI 拆包：每个 flavor 各出 armv7 / arm64 两个包。
+    //
+    // 一个"全架构通用包"要 138MB，拆开后每个约 70~75MB——
+    // 电视盒子存储普遍紧张，装包体积是实际痛点。
+    // x86 系列不参与发布：只有模拟器用得上，白白让包体翻倍。
     splits {
         abi {
             isEnable = true
             reset()
-            // arm 两个是发布用（电视/手机）；x86 只在模拟器上验证界面用
-            // （tv28 这个 AVD 是 32 位 x86），发布工作流只取 armv7/arm64。
-            include("armeabi-v7a", "arm64-v8a", "x86")
-            // 额外产出一个「多架构通用包」：一个 APK 同时带三套 .so，
-            // 装到任何设备都能用（体积大，但不用挑架构）。
-            isUniversalApk = true
+            include("armeabi-v7a", "arm64-v8a")
+            isUniversalApk = false
         }
     }
 

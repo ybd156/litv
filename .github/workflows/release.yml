@@ -4,10 +4,10 @@ name: Release
 # 一键出三端安装包并发布到 Releases。
 #
 # 产物：
-#   LITV-<ver>-tv.apk          ← 电视版（多架构通用包，装哪台都行）
-#   LITV-<ver>-phone.apk       ← 手机版（多架构通用包）
-#   LITV-<ver>-tv-armv7.apk    ← 电视版 32 位小包（Android 9 老盒子，体积小）
-#   LITV-<ver>-phone-arm64.apk ← 手机版 64 位小包
+#   LITV-<ver>-tv-armv7.apk    ← 电视版 32 位（Android 9 老盒子，约 68MB）
+#   LITV-<ver>-tv-arm64.apk    ← 电视版 64 位（约 75MB）
+#   LITV-<ver>-phone-armv7.apk ← 手机版 32 位
+#   LITV-<ver>-phone-arm64.apk ← 手机版 64 位（绝大多数手机装这个）
 #   litv_x86_<ver>.fpk         ← 飞牛 NAS（N100 等 x86）
 #   litv_arm_<ver>.fpk         ← 飞牛 NAS（ARM 机型）
 #   LITV-<ver>-unsigned.ipa    ← iOS（未签名，自己用 Sideloadly 签）
@@ -83,11 +83,11 @@ jobs:
           mkdir -p out
           V="${{ github.event.inputs.version || env.DEFAULT_VERSION }}"
           # 电视版 / 手机版分开出包（flavor: tv / phone），
-          # 每个 flavor 再给「多架构通用包」和一个按架构的小包。
+          # 每个 flavor 再按 ABI 拆成 armv7 / arm64 两个包。
           APK=android/app/build/outputs/apk
-          cp $APK/tv/release/app-tv-universal-release.apk        "out/LITV-${V}-tv.apk"
-          cp $APK/phone/release/app-phone-universal-release.apk   "out/LITV-${V}-phone.apk"
-          cp $APK/tv/release/app-tv-armeabi-v7a-release.apk       "out/LITV-${V}-tv-armv7.apk"
+          cp $APK/tv/release/app-tv-armeabi-v7a-release.apk      "out/LITV-${V}-tv-armv7.apk"
+          cp $APK/tv/release/app-tv-arm64-v8a-release.apk        "out/LITV-${V}-tv-arm64.apk"
+          cp $APK/phone/release/app-phone-armeabi-v7a-release.apk "out/LITV-${V}-phone-armv7.apk"
           cp $APK/phone/release/app-phone-arm64-v8a-release.apk   "out/LITV-${V}-phone-arm64.apk"
           ls -lh out/
 

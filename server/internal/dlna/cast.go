@@ -30,10 +30,11 @@ const avTransportType = "urn:schemas-upnp-org:service:AVTransport:1"
 // DiscoverRenderers 在局域网里找可投屏的设备。
 //
 // 为什么放在服务端而不是手机端：
-//   iOS 从 14 开始对本地网络多播有严格限制，SSDP 需要 Apple 单独批准的
-//   multicast 权限（要审核，自签包拿不到）。而 NAS 和电视在同一个局域网，
-//   由服务端发 M-SEARCH 没有任何限制——手机只需要调接口拿列表。
-//   顺带安卓也不用申请多播权限，两端逻辑还能完全一致。
+//
+//	iOS 从 14 开始对本地网络多播有严格限制，SSDP 需要 Apple 单独批准的
+//	multicast 权限（要审核，自签包拿不到）。而 NAS 和电视在同一个局域网，
+//	由服务端发 M-SEARCH 没有任何限制——手机只需要调接口拿列表。
+//	顺带安卓也不用申请多播权限，两端逻辑还能完全一致。
 func DiscoverRenderers(ctx context.Context, timeout time.Duration) ([]Renderer, error) {
 	if timeout <= 0 {
 		timeout = 2 * time.Second

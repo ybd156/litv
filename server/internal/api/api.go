@@ -38,26 +38,26 @@ import (
 
 // API 聚合所有依赖。
 type API struct {
-	cfg     *config.Config
-	st      *store.Store
-	hub     *stream.Hub
-	remote  *remote.Hub
-	ts      *timeshift.Manager
-	rx      *remux.Manager
-	rec     *record.Manager
-	alert   *alert.Notifier
-	dlna    *dlna.Server
-	logos   *logo.Store
-	signer  *auth.Signer
+	cfg          *config.Config
+	st           *store.Store
+	hub          *stream.Hub
+	remote       *remote.Hub
+	ts           *timeshift.Manager
+	rx           *remux.Manager
+	rec          *record.Manager
+	alert        *alert.Notifier
+	dlna         *dlna.Server
+	logos        *logo.Store
+	signer       *auth.Signer
 	loginLimiter *auth.LoginLimiter
-	authAudit *authAuditGate
-	now func() time.Time
+	authAudit    *authAuditGate
+	now          func() time.Time
 
 	// 运行时事实（由 main 注入）
 	actualPort int
 	ffmpegPath string
-	startAt time.Time
-	version string
+	startAt    time.Time
+	version    string
 
 	// cfgPath 是配置文件的真实路径（由 main 注入）。
 	//
@@ -70,16 +70,16 @@ type API struct {
 // New 创建 API。
 func New(cfg *config.Config, st *store.Store, hub *stream.Hub, version string) *API {
 	return &API{
-		cfg:     cfg,
-		st:      st,
-		hub:     hub,
-		remote:  remote.NewHub(),
-		signer:  auth.NewSigner(cfg.Auth.Secret),
+		cfg:          cfg,
+		st:           st,
+		hub:          hub,
+		remote:       remote.NewHub(),
+		signer:       auth.NewSigner(cfg.Auth.Secret),
 		loginLimiter: auth.NewLoginLimiter(),
-		authAudit: &authAuditGate{},
-		now: time.Now,
-		startAt: time.Now(),
-		version: version,
+		authAudit:    &authAuditGate{},
+		now:          time.Now,
+		startAt:      time.Now(),
+		version:      version,
 	}
 }
 

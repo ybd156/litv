@@ -30,13 +30,13 @@ const MaxBytes = 2 << 20
 // 允许的图片类型 → 扩展名。刻意不支持 SVG：
 // SVG 可以内嵌脚本，用 <img> 之外的方式打开会有 XSS 风险。
 var allowedTypes = map[string]string{
-	"image/png":  ".png",
-	"image/jpeg": ".jpg",
-	"image/jpg":  ".jpg",
-	"image/webp": ".webp",
-	"image/gif":  ".gif",
-	"image/bmp":  ".bmp",
-	"image/x-icon": ".ico",
+	"image/png":                ".png",
+	"image/jpeg":               ".jpg",
+	"image/jpg":                ".jpg",
+	"image/webp":               ".webp",
+	"image/gif":                ".gif",
+	"image/bmp":                ".bmp",
+	"image/x-icon":             ".ico",
 	"image/vnd.microsoft.icon": ".ico",
 }
 

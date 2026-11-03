@@ -16,7 +16,7 @@ var (
 // AdminSession contains no plaintext token or token hash. Device identity is
 // deliberately absent: an emergency session can never become a native device.
 type AdminSession struct {
-	ID int64 `json:"id"`
+	ID        int64 `json:"id"`
 	CreatedAt int64 `json:"created_at"`
 	ExpiresAt int64 `json:"expires_at"`
 }

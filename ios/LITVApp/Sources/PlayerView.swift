@@ -385,8 +385,7 @@ struct PlayerView: View {
                 if castLoading {
                     Text("正在搜索可投屏设备…").foregroundColor(.gray)
                 } else if renderers.isEmpty {
-                    Text("没找到可投屏的设备
-确认电视/盒子已开机，且和 NAS 在同一个局域网")
+                    Text("没找到可投屏的设备\n确认电视/盒子已开机，且和 NAS 在同一个局域网")
                         .foregroundColor(.gray)
                         .font(.system(size: 13))
                 }

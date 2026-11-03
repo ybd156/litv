@@ -7,10 +7,10 @@ import (
 
 // EPGStats 是 EPG 模块的总览统计（D1）。
 type EPGStats struct {
-	Sources        int   `json:"sources"`
-	EnabledSources int   `json:"enabled_sources"`
-	Channels       int   `json:"channels"`
-	Programs       int   `json:"programs"`
+	Sources        int `json:"sources"`
+	EnabledSources int `json:"enabled_sources"`
+	Channels       int `json:"channels"`
+	Programs       int `json:"programs"`
 	// EarliestStart / LatestEnd 是节目覆盖的时间范围（unix 秒），0 表示没有节目。
 	EarliestStart int64 `json:"earliest_start"`
 	LatestEnd     int64 `json:"latest_end"`

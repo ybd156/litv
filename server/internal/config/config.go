@@ -266,8 +266,8 @@ func Default() *Config {
 			Enabled:  true,
 			KeepDays: 3,
 			// 默认每小时整点同步一次。用户可在「应用设置」里改小时。
-			RefreshCron: "0 3 * * *",
-			MaxBytesMB:  64,
+			RefreshCron:   "0 3 * * *",
+			MaxBytesMB:    64,
 			MaxProgrammes: 200000,
 		},
 		Probe: Probe{

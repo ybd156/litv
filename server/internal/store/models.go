@@ -38,18 +38,18 @@ type Source struct {
 
 // Channel 是编排后的频道。
 type Channel struct {
-	ID         int64  `json:"id"`
-	Number     int    `json:"number"`
-	Name       string `json:"name"`
-	Group      string `json:"group"`
-	Logo       string `json:"logo"`
-	TvgID      string `json:"tvg_id"`
-	EpgID      string `json:"epg_id"`
-	Enabled    bool   `json:"enabled"`
-	Sort       int    `json:"sort"`
-	SourceID   int64  `json:"source_id"`
-	StreamCnt  int    `json:"stream_count"`
-	CreatedAt  int64  `json:"created_at"`
+	ID        int64  `json:"id"`
+	Number    int    `json:"number"`
+	Name      string `json:"name"`
+	Group     string `json:"group"`
+	Logo      string `json:"logo"`
+	TvgID     string `json:"tvg_id"`
+	EpgID     string `json:"epg_id"`
+	Enabled   bool   `json:"enabled"`
+	Sort      int    `json:"sort"`
+	SourceID  int64  `json:"source_id"`
+	StreamCnt int    `json:"stream_count"`
+	CreatedAt int64  `json:"created_at"`
 
 	// PendingURL 只在「解析结果 → 入库」之间传递首条线路地址，不对外暴露。
 	PendingURL string `json:"-"`

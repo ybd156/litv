@@ -12,28 +12,28 @@ type AuthAuditAction string
 type AuthAuditReason string
 
 const (
-	AuthLoginSuccess AuthAuditAction = "auth.login_success"
-	AuthLoginFailure AuthAuditAction = "auth.login_failure"
-	AuthLoginLimited AuthAuditAction = "auth.login_limited"
+	AuthLoginSuccess   AuthAuditAction = "auth.login_success"
+	AuthLoginFailure   AuthAuditAction = "auth.login_failure"
+	AuthLoginLimited   AuthAuditAction = "auth.login_limited"
 	AuthSessionExpired AuthAuditAction = "auth.session_expired"
 	AuthSessionRevoked AuthAuditAction = "auth.session_revoked"
-	AuthLegacyRevoked AuthAuditAction = "auth.legacy_revoked"
+	AuthLegacyRevoked  AuthAuditAction = "auth.legacy_revoked"
 
-	AuditCredentials AuthAuditReason = "credentials"
+	AuditCredentials    AuthAuditReason = "credentials"
 	AuditInvalidRequest AuthAuditReason = "invalid_request"
-	AuditDisabled AuthAuditReason = "disabled"
-	AuditStorageError AuthAuditReason = "storage_error"
-	AuditIPWindow AuthAuditReason = "ip_window"
-	AuditIPLockout AuthAuditReason = "ip_lockout"
-	AuditGlobalWindow AuthAuditReason = "global_window"
-	AuditCapacity AuthAuditReason = "capacity"
-	AuditTTL AuthAuditReason = "ttl"
-	AuditCleanup AuthAuditReason = "cleanup"
-	AuditLogout AuthAuditReason = "logout"
-	AuditRevoke AuthAuditReason = "revoke"
-	AuditMigration AuthAuditReason = "migration"
+	AuditDisabled       AuthAuditReason = "disabled"
+	AuditStorageError   AuthAuditReason = "storage_error"
+	AuditIPWindow       AuthAuditReason = "ip_window"
+	AuditIPLockout      AuthAuditReason = "ip_lockout"
+	AuditGlobalWindow   AuthAuditReason = "global_window"
+	AuditCapacity       AuthAuditReason = "capacity"
+	AuditTTL            AuthAuditReason = "ttl"
+	AuditCleanup        AuthAuditReason = "cleanup"
+	AuditLogout         AuthAuditReason = "logout"
+	AuditRevoke         AuthAuditReason = "revoke"
+	AuditMigration      AuthAuditReason = "migration"
 
-	MaxAuthAuditRows = 10000
+	MaxAuthAuditRows          = 10000
 	authAuditRetentionSeconds = 30 * 24 * 60 * 60
 )
 

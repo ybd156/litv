@@ -4,8 +4,8 @@
 // 本来就把字节流读进来了，顺手 tee 一份到磁盘就是天然的时移缓冲。
 //
 // 存储策略：按频道切分段落文件，环形保留最近 N 段。
-//  - 单文件无限长会越滚越大（NAS 硬盘会被吃光）
-//  - 分段后删除最旧的一段只是 unlink，不影响正在读的句柄
+//   - 单文件无限长会越滚越大（NAS 硬盘会被吃光）
+//   - 分段后删除最旧的一段只是 unlink，不影响正在读的句柄
 //
 // 索引：内存里记 (段落文件, 该段的起始时间, 大小)。
 // 时移请求 → 二分找到目标时间所在的段落 → 从对应偏移开始读。
@@ -34,11 +34,11 @@ type Ring struct {
 	segBytes  int64 // 单段最大字节数
 	maxSegs   int   // 最多保留几段
 
-	mu      sync.RWMutex
-	segs    []*Segment
-	cur     *os.File
-	curSeg  *Segment
-	closed  bool
+	mu     sync.RWMutex
+	segs   []*Segment
+	cur    *os.File
+	curSeg *Segment
+	closed bool
 }
 
 // Options 是 Ring 的参数。

@@ -8,21 +8,21 @@ import (
 )
 
 const (
-	LoginIPLimit = 5
+	LoginIPLimit     = 5
 	LoginGlobalLimit = 30
-	LoginWindow = time.Minute
-	LoginLockout = 15 * time.Minute
-	loginMaxIPs = 4096
-	loginIdleTTL = 15 * time.Minute
+	LoginWindow      = time.Minute
+	LoginLockout     = 15 * time.Minute
+	loginMaxIPs      = 4096
+	loginIdleTTL     = 15 * time.Minute
 )
 
 type LoginLimitReason string
 
 const (
-	LimitIPWindow LoginLimitReason = "ip_window"
-	LimitIPLockout LoginLimitReason = "ip_lockout"
+	LimitIPWindow     LoginLimitReason = "ip_window"
+	LimitIPLockout    LoginLimitReason = "ip_lockout"
 	LimitGlobalWindow LoginLimitReason = "global_window"
-	LimitCapacity LoginLimitReason = "capacity"
+	LimitCapacity     LoginLimitReason = "capacity"
 )
 
 // PeerIP canonicalizes a socket peer address, never a forwarded HTTP header.
@@ -41,11 +41,11 @@ func PeerIP(remoteAddr string) string {
 }
 
 type loginBucket struct {
-	attempts []time.Time
-	failures int
+	attempts    []time.Time
+	failures    int
 	lockedUntil time.Time
 	lastAttempt time.Time
-	inFlight int
+	inFlight    int
 }
 
 // LoginLimiter is shared by every listener of one API instance. Sliding-window
@@ -54,16 +54,16 @@ type loginBucket struct {
 // streaks expire after 15 minutes, while denied requests cannot extend a lockout.
 // Cleanup is lazy and bounded, with no goroutine or per-request timer.
 type LoginLimiter struct {
-	mu sync.Mutex
-	ips map[string]*loginBucket
-	global []time.Time
+	mu        sync.Mutex
+	ips       map[string]*loginBucket
+	global    []time.Time
 	lastSweep time.Time
-	maxIPs int
+	maxIPs    int
 }
 
 func NewLoginLimiter() *LoginLimiter {
 	return &LoginLimiter{
-		ips: make(map[string]*loginBucket),
+		ips:    make(map[string]*loginBucket),
 		global: make([]time.Time, 0, LoginGlobalLimit),
 		maxIPs: loginMaxIPs,
 	}
@@ -72,8 +72,8 @@ func NewLoginLimiter() *LoginLimiter {
 // LoginAttempt is a lease on a bucket so cleanup cannot forget an in-flight
 // credential failure. Finish is idempotent and is safe to call from a defer.
 type LoginAttempt struct {
-	limiter *LoginLimiter
-	bucket *loginBucket
+	limiter  *LoginLimiter
+	bucket   *loginBucket
 	finished bool
 }
 

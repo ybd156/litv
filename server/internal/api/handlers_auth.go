@@ -18,7 +18,7 @@ import (
 )
 
 const (
-	loginBodyBytes = 4096
+	loginBodyBytes   = 4096
 	loginLimitedCode = 2004
 )
 
@@ -56,7 +56,7 @@ func adminSessionFrom(ctx context.Context) (*store.AdminSession, bool) {
 // traffic needs coalescing: one event per fixed reason/minute, across ALL IPs.
 // No attacker-controlled key can grow this map or flood the database/log sink.
 type authAuditGate struct {
-	mu sync.Mutex
+	mu        sync.Mutex
 	limitedAt map[store.AuthAuditReason]time.Time
 }
 

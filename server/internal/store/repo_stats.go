@@ -30,16 +30,16 @@ func (s *Store) AddPlayEvent(ctx context.Context, e PlayEvent) error {
 
 // StatsOverview 是总览指标。
 type StatsOverview struct {
-	Days          int     `json:"days"`
-	TotalPlays    int     `json:"total_plays"`
-	UniqueChannels int    `json:"unique_channels"`
-	UniqueDevices int     `json:"unique_devices"`
-	AvgStartupMs  int     `json:"avg_startup_ms"`
-	P90StartupMs  int     `json:"p90_startup_ms"`
-	Stalls        int     `json:"stalls"`
-	Errors        int     `json:"errors"`
-	StallRate     float64 `json:"stall_rate"` // 卡顿次数 / 起播次数
-	ErrorRate     float64 `json:"error_rate"`
+	Days           int     `json:"days"`
+	TotalPlays     int     `json:"total_plays"`
+	UniqueChannels int     `json:"unique_channels"`
+	UniqueDevices  int     `json:"unique_devices"`
+	AvgStartupMs   int     `json:"avg_startup_ms"`
+	P90StartupMs   int     `json:"p90_startup_ms"`
+	Stalls         int     `json:"stalls"`
+	Errors         int     `json:"errors"`
+	StallRate      float64 `json:"stall_rate"` // 卡顿次数 / 起播次数
+	ErrorRate      float64 `json:"error_rate"`
 }
 
 // StatsOverview 统计最近 N 天的播放质量。

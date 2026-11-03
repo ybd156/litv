@@ -292,10 +292,10 @@ class BindActivity : AppCompatActivity() {
 
     private fun goHome() {
         main.postDelayed({
-            // 必须按设备类型分流：之前这里写死 HomeActivity，
-            // 结果手机绑完也进电视端三列布局（还会被强制横屏）。
+            // 按设备类型分流。电视端没有"首页"这个概念：绑完直接进全屏播放，
+            // 频道列表是按 ← 呼出的浮层。
             val target = if (DeviceType.isTV(this)) {
-                HomeActivity::class.java
+                PlayerActivity::class.java
             } else {
                 PhoneHomeActivity::class.java
             }

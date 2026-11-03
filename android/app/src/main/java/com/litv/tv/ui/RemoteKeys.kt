@@ -30,8 +30,7 @@ object RemoteKeys {
                 val chId = cmd.optLong("channel_id", 0)
                 if (chId <= 0) return false
                 app.prefs.lastChannelId = chId
-                val target = if (DeviceType.isTV(activity)) HomeActivity::class.java
-                else PhoneHomeActivity::class.java
+                val target = PhoneHomeActivity::class.java
                 // 电视端直接进播放页；手机端先进首页再点（保持返回栈正常）
                 val intent = if (DeviceType.isTV(activity)) {
                     Intent(activity, PlayerActivity::class.java)

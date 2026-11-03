@@ -44,14 +44,6 @@
             </intent-filter>
         </activity>
 
-        <!-- TV 首页（遥控器 + 网格） -->
-        <activity
-            android:name=".ui.HomeActivity"
-            android:exported="false"
-            android:launchMode="singleTask"
-            android:screenOrientation="landscape"
-            android:configChanges="keyboard|keyboardHidden|navigation|orientation|screenSize|screenLayout|smallestScreenSize|uiMode" />
-
         <!-- 手机首页（触摸 + 列表 + 底部 Tab） -->
         <activity
             android:name=".ui.PhoneHomeActivity"

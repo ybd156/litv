@@ -29,6 +29,8 @@ class VlcEngine : PlayerEngine {
     private var player: MediaPlayer? = null
     private var videoSurface: android.view.Surface? = null
     private var appCtx: android.content.Context? = null
+    /** 承载画面的容器，用来取真实窗口尺寸 */
+    private var hostView: android.view.View? = null
     private var videoW = 0
     private var videoH = 0
 
@@ -46,16 +48,45 @@ class VlcEngine : PlayerEngine {
         // Surface 可能**晚于** prepare 就绪（TextureView 要等一次布局）。
         // 那种情况下 prepare 里拿不到 Surface，vlcVout 没挂上，
         // 画面永远出不来。Surface 到达后必须补挂一次。
+        if (container != null) hostView = container
         val mp = player
         if (mp != null && surface != null) {
             try {
                 mp.vlcVout.setVideoSurface(surface, null)
                 mp.vlcVout.attachViews()
                 Log.i(TAG, "Surface 晚到，已补挂 VLC 画面")
+                syncWindowSize(mp)
             } catch (t: Throwable) {
                 Log.w(TAG, "补挂 VLC 画面出错", t)
             }
         }
+    }
+
+    /**
+     * 把真实窗口尺寸告诉 libVLC。
+     *
+     * 不告诉它会出事：用裸 Surface 挂载时，VLC 拿不到显示尺寸，
+     * 就按**视频原始像素**1:1 画，而且贴在左下角。
+     * 实测 1080p 屏幕上播 720p 频道，画面只占 1277x717（屏的 67%），
+     * 四周一大片黑——看起来就像"画面没铺满"。
+     *
+     * setWindowSize 是 libVLC Android 的标准接口，这里用反射调，
+     * 是因为不同小版本的方法签名有过变动，反射可以避免版本不匹配时直接崩。
+     */
+    private fun syncWindowSize(mp: MediaPlayer) {
+        val v = hostView ?: return
+        val apply = Runnable {
+            val w = if (v.width > 0) v.width else 1920
+            val h = if (v.height > 0) v.height else 1080
+            try {
+                val m = mp.vlcVout.javaClass.getMethod("setWindowSize", Int::class.java, Int::class.java)
+                m.invoke(mp.vlcVout, w, h)
+                Log.i(TAG, "已设置 VLC 窗口尺寸 ${w}x${h}")
+            } catch (t: Throwable) {
+                Log.w(TAG, "setWindowSize 不可用（忽略）：${t.message}")
+            }
+        }
+        if (v.width > 0) apply.run() else v.post(apply)
     }
 
     private fun ensureLib(context: Context): LibVLC {
@@ -97,6 +128,7 @@ class VlcEngine : PlayerEngine {
         videoSurface?.let {
             mp.vlcVout.setVideoSurface(it, null)
             mp.vlcVout.attachViews()
+            syncWindowSize(mp)
         }
 
         val media = Media(lib, Uri.parse(url)).apply {

@@ -68,25 +68,35 @@
 
 ## 下载
 
+当前发布版 **0.1.8** 的产物（就是 [Releases](https://github.com/ybd156/litv/releases/latest)
+里能直接下到的这几个）：
+
 | 产物 | 用途 |
 |---|---|
-| `LITV-<ver>-tv-armv7.apk` | **电视 / 盒子，32 位**（Android 9 及以下装这个） |
-| `LITV-<ver>-tv-arm64.apk` | 电视 / 盒子，64 位 |
-| `LITV-<ver>-phone-armv7.apk` | 手机，32 位（2018 年前的老机型） |
-| `LITV-<ver>-phone-arm64.apk` | 手机，64 位（绝大多数手机装这个） |
-| `LITV-<ver>-unsigned.ipa` | iOS（需自签） |
-| `litv_x86_<ver>.fpk` | 飞牛 NAS（x86_64） |
-| `litv_arm_<ver>.fpk` | 飞牛 NAS（ARM） |
+| `LITV-0.1.8-tv-armv7.apk` | **电视 / 盒子，32 位**（Android 9 及以下装这个） |
+| `LITV-0.1.8-arm64.apk` | 64 位设备（新电视 / 手机） |
+| `LITV-0.1.8-unsigned.ipa` | iOS（需自签） |
+| `litv_x86_0.1.8.fpk` | 飞牛 NAS（x86_64） |
+| `litv_arm_0.1.8.fpk` | 飞牛 NAS（ARM） |
 | `SHA256SUMS.txt` | 校验和 |
 
 **不知道装哪个**：在设备上跑 `adb shell getprop ro.product.cpu.abi`
 （或看系统信息），`armeabi-v7a` 装 armv7，`arm64-v8a` 装 arm64。
 
-**电视版和手机版有什么区别**：代码是同一份，差别只有默认界面形态和包名
-（`com.litv.tv` / `com.litv.tv.phone`）。包名不同，所以**两个可以同时装**。
-界面形态优先级：设置里手动指定 > 打包时的 flavor > 设备特征自动判断。
+### 下一版的产物会变
 
----
+安卓已经拆成**电视版 / 手机版**两个 flavor（代码同一份，差别是默认界面形态
+和包名 `com.litv.tv` / `com.litv.tv.phone`，**可以同时安装**）。
+所以从下一版起产物变成四个，命名也改了：
+
+| 下一版的文件名 | 用途 |
+|---|---|
+| `LITV-<ver>-tv-armv7.apk` | 电视 / 盒子，32 位 |
+| `LITV-<ver>-tv-arm64.apk` | 电视 / 盒子，64 位 |
+| `LITV-<ver>-phone-armv7.apk` | 手机，32 位（2018 年前的老机型） |
+| `LITV-<ver>-phone-arm64.apk` | 手机，64 位（绝大多数手机装这个） |
+
+界面形态优先级：设置里手动指定 > 打包时的 flavor > 设备特征自动判断。
 
 ## 安装
 

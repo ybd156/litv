@@ -320,10 +320,13 @@ cd packaging/fnos
 ## 12. 发版
 
 1. 同步 §11 的五个版本号位置
-2. 在 `CHANGELOG.md` 写这一版改了什么（面向用户，不写实现细节）
-3. 等 `Build Check` 变绿（不要用本地编译代替，见 §8）
-4. `git tag -a vX.Y.Z && git push origin main --tags`
-5. 等 `Release` 工作流出三端产物
+2. **更新 `README.md` 的「下载」表**——里面的文件名和版本号是写死的，
+   不改就会指向不存在的产物（已经发生过一次：README 写 tv-arm64/phone-*，
+   而实际 release 里是旧的 arm64 命名）
+3. 在 `CHANGELOG.md` 写这一版改了什么（面向用户，不写实现细节）
+4. 等 `Build Check` 变绿（不要用本地编译代替，见 §8）
+5. `git tag -a vX.Y.Z && git push origin main --tags`
+6. 等 `Release` 工作流出三端产物，**核对产物名和 README 表是否一致**
 
 **注意**：release 工作流会先删掉同名 tag 再发布。所以
 **已发布的版本号不能复用**，只能往上加。

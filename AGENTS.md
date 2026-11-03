@@ -164,6 +164,17 @@ packaging/fnos/app/server/litvd_*
 
 改完代码看 `Build Check` 的结论就够了。要产物走 `Release`。
 
+### 费用：只能用免费 runner
+
+仓库是 **public**，所以标准 GitHub-hosted runner 全部免费（含 macOS）。
+
+**必须遵守：**
+
+- 只用 `runs-on: ubuntu-latest` / `macos-latest` 这类**标准** runner
+- **不要**用 larger runner（`ubuntu-latest-4-core`、`macos-14-xlarge` 等），那些按分钟计费
+- 仓库一旦转成 **private**，macOS 立刻按 **10 倍**扣分钟——
+  届时必须把 `ios-check.yml` 改成只在手动触发时跑，或干脆停掉
+
 ### CI 上的几个坑（改工作流前必读）
 
 - **`android/gradlew` 不是标准 wrapper**，是给本地 WSL 用的转发脚本
@@ -171,7 +182,7 @@ packaging/fnos/app/server/litvd_*
 - `android/local.properties` 被 gitignore，CI 靠 `ANDROID_HOME` 环境变量找 SDK。
   **不要**把它提交上去，会写死本地路径
 - `server/` 用 `modernc.org/sqlite`（纯 Go），不需要 cgo；测试跑 `-race` 也没问题
-- macOS runner 按 **10 倍**计费，所以 iOS 单独一个工作流、只在 `ios/**` 变化时跑
+- iOS 单独一个工作流、只在 `ios/**` 变化时跑：macOS runner 排队久、单次耗时长，没必要每次主分支推送都编一遍（私有仓库时它还是 10 倍计费）
 
 ### 如果 CI 编不过
 

@@ -35,6 +35,14 @@ interface PlayerEngine {
          * 这种白绕一圈的情况。
          */
         fun onDecoderFailed(message: String) = onError(message)
+
+        /**
+         * Surface 被系统回收（切后台、Activity 重建）。
+         *
+         * 这不是播放内容的问题，换内核/换解码都没用——上层重接 Surface
+         * 或按缓存重新拉流即可恢复。默认退回 onError，避免漏处理。
+         */
+        fun onSurfaceLost(message: String) = onError(message)
     }
 
     var listener: Listener?

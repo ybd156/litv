@@ -246,6 +246,12 @@ class PlayerManager(
                 }
             }
 
+            override fun onSurfaceLost(message: String) {
+                Log.w(TAG, "Surface 丢失：$message")
+                // 先把当前 Surface 重新挂上（Activity 那边可能已经有新的了）
+                current?.attach(context, surface, container)
+            }
+
             override fun onDecoderFailed(message: String) {
                 main.post {
                     if (currentKind != kind) return@post

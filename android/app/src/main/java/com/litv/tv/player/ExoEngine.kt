@@ -84,7 +84,12 @@ class ExoEngine : PlayerEngine {
         appContext = context.applicationContext
         videoSurface = surface
         player?.let { p ->
-            if (playerView != null) playerView!!.player = p else p.setVideoSurface(surface)
+            // 无论走 playerView 还是裸 SurfaceView，都必须显式设置 surface。
+            // 之前只有 playerView == null 时才 setVideoSurface，
+            // 结果传 null 解绑时旧 Surface 一直留在渲染器里，
+            // Surface 被系统销毁后就抛 "The surface has been released"。
+            runCatching { p.setVideoSurface(surface) }
+            playerView?.player = p
         }
     }
 
@@ -231,6 +236,17 @@ class ExoEngine : PlayerEngine {
                     error.cause?.message?.let { append(": ").append(it) }
                 }
                 Log.w(TAG, "Exo 播放失败: $msg")
+
+                // Surface 被系统回收导致的报错：不是内容/解码问题，
+                // 换内核、换解码方式都没用，只会白折腾一轮。
+                // 上层重接 Surface 后自然会恢复。
+                if (msg.contains("surface has been released", ignoreCase = true) ||
+                    msg.contains("surface", ignoreCase = true) && msg.contains("release", ignoreCase = true)
+                ) {
+                    Log.w(TAG, "Surface 已释放，交由上层重接，不当作播放失败")
+                    listener?.onSurfaceLost(msg)
+                    return
+                }
 
                 // 区分「解码器失败」和「其它失败」。
                 // 解码器失败要换解码方式（硬→软），换内核没用——

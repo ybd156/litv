@@ -64,7 +64,13 @@
                 android:layout_height="wrap_content"
                 android:background="@android:color/black">
 
-                <SurfaceView
+                <!-- 用 TextureView 而不是 SurfaceView：
+                     SurfaceView 的 Surface 在 Activity 停止时必被销毁，
+                     ExoPlayer 换不过去，切后台回来只能重新拉流（3-4 秒）。
+                     TextureView 的 Surface 是普通 View 的一部分，
+                     Activity 停止时不会销毁 —— 回来时播放器还连着同一个 Surface，
+                     可以直接接着播。 -->
+                <TextureView
                     android:id="@+id/surface"
                     android:layout_width="match_parent"
                     android:layout_height="match_parent" />

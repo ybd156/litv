@@ -8,7 +8,7 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.view.Gravity
-import android.view.SurfaceView
+import android.view.TextureView
 import android.view.View
 import android.view.ViewGroup
 import android.widget.EditText
@@ -52,7 +52,15 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
     // 播放页
     private lateinit var panelPlay: View
     private lateinit var panelChannel: View
-    private lateinit var surface: SurfaceView
+    private lateinit var surface: TextureView
+
+    /**
+     * TextureView 对应的 Surface。
+     *
+     * 必须自己持有并复用：每次 new Surface(surfaceTexture) 都是一个新对象，
+     * 泄漏会占满 BufferQueue。只在 surfaceTexture 真正销毁时 release。
+     */
+    private var videoSurface: android.view.Surface? = null
     private lateinit var loading: ProgressBar
     private lateinit var playName: TextView
     private lateinit var playEngine: TextView
@@ -85,8 +93,8 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
 
     private var currentChannel: Channel? = null
     private var programs: List<EpgProgram> = emptyList()
-    /** 第一次拿到 Surface 了吗（用来区分「首次创建」和「重建」） */
-    private var surfaceReadyOnce = false
+    /** 等 Surface 可用后再起播的台（首次启动时数据可能早于 Surface 到达） */
+    private var pendingPlay: Channel? = null
 
     /**
      * **用户意图**：true 表示用户主动暂停了。
@@ -193,44 +201,43 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
         com.litv.tv.player.PlaybackService.ensureRunning(this)
         player = app.player.also { it.callback = this }
 
-        // 必须监听 Surface 生命周期，不能只在 onCreate 里 attach 一次。
-        // SurfaceView 被设为 GONE（切 Tab）或 Activity 被覆盖（去设置页）时，
-        // Surface 会被销毁；回来时系统会给一个**全新的** Surface，
-        // 播放器还指着旧的 —— 表现就是画面全黑但台名还在。
-        surface.holder.addCallback(object : android.view.SurfaceHolder.Callback {
-            override fun surfaceCreated(h: android.view.SurfaceHolder) {
-                // 首次创建：正常 attach，等上层 playChannel
-                if (!surfaceReadyOnce) {
-                    surfaceReadyOnce = true
-                    player.attach(h.surface, findViewById(android.R.id.content))
-                    return
+        // TextureView 的 Surface 生命周期由 SurfaceTextureListener 管。
+        // 关键区别：Activity 停止（按 HOME、跳设置页）时**不会**触发
+        // onSurfaceTextureDestroyed，Surface 一直有效——
+        // 所以回来时播放器不用重新拉流，直接继续。
+        surface.surfaceTextureListener = object : TextureView.SurfaceTextureListener {
+            override fun onSurfaceTextureAvailable(
+                st: android.graphics.SurfaceTexture, width: Int, height: Int,
+            ) {
+                android.util.Log.i(TAG, "TextureView Surface 可用 ${width}x$height")
+                videoSurface?.release()
+                videoSurface = android.view.Surface(st)
+                player.attach(videoSurface, findViewById(android.R.id.content))
+                // 有排队的台就现在播（首次启动时 Surface 可能晚于数据到达）
+                pendingPlay?.let {
+                    pendingPlay = null
+                    playChannel(it)
                 }
-                // 重建（切 Tab / 从设置页回来 / 退后台再进）
-                val ch = currentChannel
-                val sameChannelPlaying = ch != null &&
-                    player.playingChannelId == ch.id && player.isPlaying
-
-                if (sameChannelPlaying) {
-                    // 播放器一直活着（Service 保活），缓冲也没断——
-                    // 只要把新 Surface 接上去就行，不要重新拉流。
-                    android.util.Log.i(TAG, "Surface 重建，播放器仍在播，只接 Surface")
-                    player.attach(h.surface, findViewById(android.R.id.content))
-                    return
-                }
-
-                // 播放器已经不在了（进程被杀/换了台）：重新拉流
-                android.util.Log.i(TAG, "Surface 重建，播放器已停，重新拉流")
-                recoverPlayback()
             }
 
-            override fun surfaceChanged(h: android.view.SurfaceHolder, format: Int, width: Int, height: Int) {
-                player.attach(h.surface, findViewById(android.R.id.content))
+            override fun onSurfaceTextureSizeChanged(
+                st: android.graphics.SurfaceTexture, width: Int, height: Int,
+            ) {
+                // Surface 对象没变，不用重接
+                android.util.Log.i(TAG, "TextureView 尺寸变化 ${width}x$height")
             }
 
-            override fun surfaceDestroyed(h: android.view.SurfaceHolder) = Unit
-        })
+            override fun onSurfaceTextureDestroyed(st: android.graphics.SurfaceTexture): Boolean {
+                // 只有 Activity 真正销毁/视图移除时才会走到这里
+                android.util.Log.i(TAG, "TextureView Surface 销毁")
+                runCatching { player.attach(null, null) }
+                videoSurface?.release()
+                videoSurface = null
+                return true   // 让系统回收 SurfaceTexture
+            }
 
-        player.attach(surface.holder.surface, findViewById(android.R.id.content))
+            override fun onSurfaceTextureUpdated(st: android.graphics.SurfaceTexture) = Unit
+        }
     }
 
     private fun setupTabs() {
@@ -471,17 +478,18 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
         playChannel(ch)
     }
 
-    /** 把播放器重新接到当前的 Surface 上，并按用户意图恢复播放。 */
+    /**
+     * 回到播放页时恢复播放。
+     *
+     * 用 TextureView 之后这里不用重接 Surface —— 它一直有效。
+     * 只要播放器还在、用户没主动暂停，直接 resume 就行。
+     */
     private fun reattachVideo() {
-        if (!::surface.isInitialized) return
-        surface.post {
-            val h = surface.holder
-            val sv = h.surface
-            if (sv != null && sv.isValid) {
-                player.attach(sv, findViewById(android.R.id.content))
-                // resume() 才是「继续播」；play() 是「换台播放」，签名不同
-                if (!paused) player.resume()
-            }
+        if (!::surface.isInitialized || paused) return
+        val ch = currentChannel ?: return
+        if (player.playingChannelId == ch.id && player.isPlaying) {
+            android.util.Log.i(TAG, "播放器仍在播 ${ch.name}，直接恢复")
+            player.resume()
         }
     }
 
@@ -530,18 +538,20 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
         if (currentChannel == null && all.isNotEmpty()) {
             val last = all.firstOrNull { it.id == app.prefs.lastChannelId } ?: all.first()
 
-            // 关键：如果服务里的播放器**已经在播这个台**（退后台再回来、
-            // 或者 Activity 被重建），只接上就行，不要重新拉流——
-            // 否则 Service 保活省下的时间会全部赔回去。
             if (player.playingChannelId == last.id && player.isPlaying) {
-                android.util.Log.i(TAG, "播放器已在播 ${last.name}，直接接上，不重新拉流")
+                // 播放器还在播这个台（退后台再回来 / Activity 重建）：
+                // TextureView 的 Surface 一直有效，只更新 UI 接着播，绝不重拉。
+                android.util.Log.i(TAG, "播放器仍在播 ${last.name}，直接接上")
                 currentChannel = last
                 playName.text = last.name
                 loading.visibility = View.GONE
                 paused = false
-        btnPlayPause.text = "⏸\n暂停"
-            } else {
+                btnPlayPause.text = "⏸\n暂停"
+            } else if (videoSurface != null) {
                 playChannel(last)
+            } else {
+                android.util.Log.i(TAG, "Surface 未就绪，${last.name} 排队")
+                pendingPlay = last
             }
         }
     }

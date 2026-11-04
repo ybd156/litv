@@ -204,6 +204,10 @@ build_ffmpeg() {
     avs3_flags=(--enable-libuavs3d)
   fi
 
+  # openssl 装到 $prefix，必须让 pkg-config 找到它的 .pc，
+  # 否则 ffmpeg 的 check_pkg_config 找不到 openssl 会直接 die。
+  export PKG_CONFIG_PATH="$prefix/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
+
   "$SRC/ffmpeg/configure" \
     --prefix="$prefix" \
     --target-os=android --arch="${abi%%-*}" \
@@ -222,7 +226,13 @@ build_ffmpeg() {
     --enable-demuxer=mpegts,hls,mov,flv,matroska,rtsp,h264,hevc,aac,mp3 \
     --enable-protocol=http,https,tcp,udp,rtp,rtsp,file,tls \
     --enable-openssl \
-    >"$bdir/configure.log" 2>&1 || { err "ffmpeg configure 失败，见 $bdir/configure.log"; tail -20 "$bdir/configure.log"; return 1; }
+    >"$bdir/configure.log" 2>&1 || {
+    err "ffmpeg configure 失败"
+    # ffmpeg 的 configure 最后总是打一段"如果这是未预期的错误请报告"的废话，
+    # 真正的原因在上面。把 ERROR 行挑出来才有用。
+    grep -iE "error|not found|requires|unknown option" "$bdir/configure.log" | tail -12
+    return 1
+  }
 
   # 确认 TLS 真的编进去了。不做这个检查的话，configure 找不到库时
   # 只打印警告然后继续，最后又产出一个 https 连不上的 .so——这个坑踩过一次。

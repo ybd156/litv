@@ -20,11 +20,6 @@ name: Native Build
 
 on:
   workflow_dispatch:
-    inputs:
-      abis:
-        description: '要编的 ABI，逗号分隔'
-        required: false
-        default: 'arm64-v8a,armeabi-v7a,x86'
   push:
     branches: [main]
     paths:
@@ -39,26 +34,14 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  prepare:
-    runs-on: ubuntu-24.04
-    outputs:
-      abis: ${{ steps.set.outputs.abis }}
-    steps:
-      - id: set
-        run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ -n "${{ inputs.abis }}" ]; then
-            echo "abis=${{ inputs.abis }}" >> "$GITHUB_OUTPUT"
-          else
-            echo "abis=arm64-v8a,armeabi-v7a,x86" >> "$GITHUB_OUTPUT"
-          fi
-
   build:
-    needs: prepare
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
-        abi: ${{ fromJSON(format('["{0}"]', replace(needs.prepare.outputs.abis, ',', '","'))) }}
+        # 静态列出，不用动态表达式——之前用 fromJSON(format(...)) 生成矩阵，
+        # GitHub 直接 startup_failure（连 job 都起不来）。
+        abi: [arm64-v8a, armeabi-v7a, x86]
     steps:
       - uses: actions/checkout@v7
 
@@ -109,15 +92,14 @@ jobs:
       - name: 校验 TLS 真的编进去了
         run: |
           abi="${{ matrix.abi }}"
-          fmt=$(ls android/app/src/main/jniLibs/$abi/libavformat.so 2>/dev/null || true)
-          [ -n "$fmt" ] || { echo "没有 libavformat.so"; exit 1; }
-          # 有 openssl 的构建，符号表里能查到 TLS 相关符号
-          if ! strings "$fmt" | grep -qi "openssl\|tls_"; then
-            echo "::error::$abi 的 libavformat.so 里找不到 TLS 符号，https 会连不上"
+          fmt="android/app/src/main/jniLibs/$abi/libavformat.so"
+          [ -f "$fmt" ] || { echo "没有 libavformat.so"; exit 1; }
+          if ! strings "$fmt" | grep -qi "openssl"; then
+            echo "::error::$abi 的 libavformat.so 里找不到 OpenSSL 符号，https 会连不上"
             exit 1
           fi
           echo "$abi TLS 符号存在"
-          ls -lh android/app/src/main/jniLibs/$abi/
+          ls -lh "android/app/src/main/jniLibs/$abi/"
 
       - name: 上传 ${{ matrix.abi }} 产物
         uses: actions/upload-artifact@v4
@@ -127,7 +109,7 @@ jobs:
           if-no-files-found: error
 
   publish:
-    needs: [prepare, build]
+    needs: build
     runs-on: ubuntu-24.04
     if: always() && needs.build.result == 'success'
     steps:

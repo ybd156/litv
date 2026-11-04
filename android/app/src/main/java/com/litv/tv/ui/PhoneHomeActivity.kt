@@ -96,6 +96,7 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
     private var videoHeight169 = 0
 
     private companion object {
+        const val TAG = "PhoneHome"
         const val TAB_PLAY = "play"
         const val TAB_CHANNEL = "channel"
     }
@@ -179,6 +180,27 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
 
     private fun setupPlayer() {
         player = PlayerManager(this, app.prefs).also { it.callback = this }
+
+        // 必须监听 Surface 生命周期，不能只在 onCreate 里 attach 一次。
+        // SurfaceView 被设为 GONE（切 Tab）或 Activity 被覆盖（去设置页）时，
+        // Surface 会被销毁；回来时系统会给一个**全新的** Surface，
+        // 播放器还指着旧的 —— 表现就是画面全黑但台名还在。
+        surface.holder.addCallback(object : android.view.SurfaceHolder.Callback {
+            override fun surfaceCreated(h: android.view.SurfaceHolder) {
+                android.util.Log.i(TAG, "surfaceCreated 重建，重新绑定播放器 paused=$paused")
+                player.attach(h.surface, findViewById(android.R.id.content))
+                if (!paused) player.resume()
+            }
+
+            override fun surfaceChanged(h: android.view.SurfaceHolder, format: Int, width: Int, height: Int) {
+                android.util.Log.i(TAG, "surfaceChanged ${width}x$height，重新绑定 paused=$paused")
+                player.attach(h.surface, findViewById(android.R.id.content))
+                if (!paused) player.resume()
+            }
+
+            override fun surfaceDestroyed(h: android.view.SurfaceHolder) = Unit
+        })
+
         player.attach(surface.holder.surface, findViewById(android.R.id.content))
     }
 

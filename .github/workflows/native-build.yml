@@ -1,0 +1,171 @@
+name: Native Build
+
+# 交叉编译 libmpv + ffmpeg（带 OpenSSL）供 Android 使用。
+#
+# 为什么单独一个工作流：
+#   这套东西编一次要 40 分钟以上，而绝大多数提交只改 Kotlin/Go，
+#   没必要每次都重编。所以 .so 编好后发到滚动 Release（tag: native-libs），
+#   日常构建直接下载，只有 native/ 目录变了才重新编。
+#
+# 为什么要自己编（而不是用现成的 mpv aar）：
+#   mpv-android 官方明确说「不是可以 import 的 AAR」，市面上的 mpv aar
+#   都是个人发布、编解码器集合不受控。而且**必须自己编才能带上 TLS**——
+#   现成的构建普遍没启用 openssl，https 源直接连不上。
+#
+# 触发：
+#   - native/ 目录有改动（push 到 main）
+#   - 手动 workflow_dispatch
+#
+# 产物：android/app/src/main/jniLibs/<abi>/*.so → Release native-libs
+
+on:
+  workflow_dispatch:
+    inputs:
+      abis:
+        description: '要编的 ABI，逗号分隔'
+        required: false
+        default: 'arm64-v8a,armeabi-v7a,x86'
+  push:
+    branches: [main]
+    paths:
+      - 'android/native/**'
+      - '.github/workflows/native-build.yml'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: native-build
+  cancel-in-progress: true
+
+jobs:
+  prepare:
+    runs-on: ubuntu-24.04
+    outputs:
+      abis: ${{ steps.set.outputs.abis }}
+    steps:
+      - id: set
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ -n "${{ inputs.abis }}" ]; then
+            echo "abis=${{ inputs.abis }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "abis=arm64-v8a,armeabi-v7a,x86" >> "$GITHUB_OUTPUT"
+          fi
+
+  build:
+    needs: prepare
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        abi: ${{ fromJSON(format('["{0}"]', replace(needs.prepare.outputs.abis, ',', '","'))) }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: 准备 JDK 17
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: 安装 Android SDK 与 NDK
+        uses: android-actions/setup-android@v3
+
+      - name: 安装 NDK 27
+        run: |
+          yes | sdkmanager --licenses >/dev/null 2>&1 || true
+          sdkmanager "ndk;27.0.12077973" >/dev/null
+          echo "ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/27.0.12077973" >> "$GITHUB_ENV"
+          ls "$ANDROID_SDK_ROOT/ndk/27.0.12077973" >/dev/null && echo "NDK ok"
+
+      - name: 安装构建工具
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq build-essential perl pkg-config >/dev/null
+          pip3 install --quiet "cmake==3.31.6" ninja meson
+          cmake --version | head -1
+          ninja --version
+          meson --version
+
+      # 源码和中间产物缓存起来：失败重试时不用重新下载 + 重编 openssl
+      - name: 缓存源码与中间产物
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/.native-build
+          key: native-${{ matrix.abi }}-${{ hashFiles('android/native/build-libmpv.sh') }}
+          restore-keys: |
+            native-${{ matrix.abi }}-
+
+      - name: 编译 ${{ matrix.abi }}
+        working-directory: android
+        env:
+          ABIS: ${{ matrix.abi }}
+          BUILD_ROOT: ${{ github.workspace }}/.native-build
+          JOBS: 4
+        run: |
+          chmod +x native/build-libmpv.sh
+          ./native/build-libmpv.sh
+
+      - name: 校验 TLS 真的编进去了
+        run: |
+          abi="${{ matrix.abi }}"
+          fmt=$(ls android/app/src/main/jniLibs/$abi/libavformat.so 2>/dev/null || true)
+          [ -n "$fmt" ] || { echo "没有 libavformat.so"; exit 1; }
+          # 有 openssl 的构建，符号表里能查到 TLS 相关符号
+          if ! strings "$fmt" | grep -qi "openssl\|tls_"; then
+            echo "::error::$abi 的 libavformat.so 里找不到 TLS 符号，https 会连不上"
+            exit 1
+          fi
+          echo "$abi TLS 符号存在"
+          ls -lh android/app/src/main/jniLibs/$abi/
+
+      - name: 上传 ${{ matrix.abi }} 产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: jniLibs-${{ matrix.abi }}
+          path: android/app/src/main/jniLibs/${{ matrix.abi }}/
+          if-no-files-found: error
+
+  publish:
+    needs: [prepare, build]
+    runs-on: ubuntu-24.04
+    if: always() && needs.build.result == 'success'
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: 汇总产物
+        uses: actions/download-artifact@v4
+        with:
+          pattern: jniLibs-*
+          path: _libs
+
+      - name: 整理目录结构
+        run: |
+          mkdir -p out
+          for d in _libs/jniLibs-*; do
+            abi="$(basename "$d" | sed 's/^jniLibs-//')"
+            mkdir -p "out/$abi"
+            cp -f "$d"/*.so "out/$abi/" 2>/dev/null || true
+          done
+          find out -name '*.so' | sort
+          test -n "$(find out -name '*.so' -print -quit)" || { echo "没有产物"; exit 1; }
+
+      - name: 打包
+        run: |
+          cd out
+          for abi in */; do
+            abi="${abi%/}"
+            tar czf "../jniLibs-$abi.tgz" -C "$abi" .
+          done
+          cd ..
+          ls -lh jniLibs-*.tgz
+
+      - name: 发布到滚动 Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="native-libs"
+          NOTES="libmpv + ffmpeg（带 OpenSSL）的 Android 预编译产物。由 native-build 工作流自动生成。"
+          gh release delete "$TAG" --yes --cleanup-tag 2>/dev/null || true
+          gh release create "$TAG" jniLibs-*.tgz --prerelease --title "Native libs (libmpv + ffmpeg + TLS)" --notes "$NOTES"
+          echo "下载地址：https://github.com/${{ github.repository }}/releases/tag/$TAG"

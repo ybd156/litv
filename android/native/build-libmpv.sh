@@ -17,6 +17,16 @@
 #   - 不开 --enable-gpl：先避开 GPL 传染；需要 x264/x265 等编码器时再开。
 #
 # 耗时：首次约 40~90 分钟（ffmpeg 全量解码器编译是大头）。
+#
+# ---------------------------------------------------------------------------
+# TLS 必须编进去（2026-11 补）
+#
+# 之前的 configure 只写了 --enable-protocol=https,tls，但**没有 TLS 后端**，
+# 结果 tls 协议是空壳：https 源连不上，libmpv 对我们的源（全是 https）完全不可用。
+# 这个问题一直没暴露，因为默认内核链里 Exo 排前面，mpv 从来没真正上过场。
+#
+# 现在编 openssl（静态，no-shared），ffmpeg 用 --enable-openssl 链进去，
+# 不用额外往 APK 里塞 libssl.so / libcrypto.so。
 # =============================================================================
 set -uo pipefail
 
@@ -60,8 +70,9 @@ command -v meson  >/dev/null || err "缺少 meson（pip3 install --user --break-
 command -v make   >/dev/null || err "缺少 make（apt-get download make && dpkg-deb -x make_*.deb \$ROOT/toolpkg）"
 say "cmake=$(cmake --version | head -1 | awk '{print $3}') ninja=$(ninja --version) meson=$(meson --version)"
 
-# 构建期统一走代理（境外源码站），国内镜像直连由 NO_PROXY 兜底
-if [ -z "${https_proxy:-}" ]; then
+# 构建期统一走代理（境外源码站），国内镜像直连由 NO_PROXY 兜底。
+# CI（GitHub Actions）直连就够快，不需要也不该走代理。
+if [ -z "${CI:-}" ] && [ -z "${https_proxy:-}" ]; then
   HOSTIP="$(ip route show default | awk '{print $3}' | head -1)"
   export http_proxy="http://$HOSTIP:10808"
   export https_proxy="http://$HOSTIP:10808"
@@ -75,6 +86,7 @@ triple_for() {
   case "$1" in
     arm64-v8a)   echo "aarch64-linux-android" ;;
     armeabi-v7a) echo "armv7a-linux-androideabi" ;;
+    x86)         echo "i686-linux-android" ;;
     x86_64)      echo "x86_64-linux-android" ;;
     *) echo "" ;;
   esac
@@ -119,6 +131,45 @@ build_uavs3d() {
   ninja -C . >>"$bdir/cmake.log" 2>&1 || { err "uavs3d 编译失败"; return 1; }
   ninja -C . install >>"$bdir/cmake.log" 2>&1
   ok "uavs3d[$abi] 完成"
+}
+
+# ---------------------------------------------------------------- 1.5 openssl
+#
+# ffmpeg 的 tls 协议必须有后端才能用，否则 https 是空壳。
+# 编成**静态库**（no-shared），ffmpeg 直接链进去，
+# APK 里就不用额外带 libssl.so / libcrypto.so。
+build_openssl() {
+  local abi="$1" prefix target
+  prefix="$OUT/$abi"
+  [ -f "$prefix/lib/libssl.a" ] && { ok "openssl[$abi] 已编译"; return 0; }
+
+  say "编译 openssl [$abi]"
+  if [ ! -d "$SRC/openssl" ]; then
+    # 用 GitHub release 归档：openssl.org 在国内/代理下经常 TLS handshake failure
+    fetch_tar "https://github.com/openssl/openssl/releases/download/openssl-3.0.15/openssl-3.0.15.tar.gz"       "$ROOT/dl/openssl.tar.gz" || return 1
+    mkdir -p "$SRC" && tar xzf "$ROOT/dl/openssl.tar.gz" -C "$SRC" && mv "$SRC/openssl-3.0.15" "$SRC/openssl"
+  fi
+
+  case "$abi" in
+    arm64-v8a)   target=android-arm64 ;;
+    armeabi-v7a) target=android-arm ;;
+    x86)         target=android-x86 ;;
+    x86_64)      target=android-x86_64 ;;
+    *) err "openssl 不认识的 ABI: $abi"; return 1 ;;
+  esac
+
+  local log="$ROOT/dl/openssl-$abi.log"
+  cd "$SRC/openssl" || return 1
+
+  # OpenSSL 的 Configure 靠 ANDROID_NDK_ROOT 找工具链
+  ANDROID_NDK_ROOT="$NDK" PATH="$TOOLCHAIN/bin:$PATH"   ./Configure "$target"     -D__ANDROID_API__="$API"     --prefix="$prefix"     --openssldir="$prefix/ssl"     no-shared no-tests no-asm no-ui-console     >"$log" 2>&1 || { err "openssl Configure 失败，见 $log"; tail -20 "$log"; return 1; }
+
+  ANDROID_NDK_ROOT="$NDK" PATH="$TOOLCHAIN/bin:$PATH"     make -j"$JOBS" >>"$log" 2>&1 || { err "openssl make 失败，见 $log"; tail -20 "$log"; return 1; }
+  ANDROID_NDK_ROOT="$NDK" PATH="$TOOLCHAIN/bin:$PATH"     make install_sw >>"$log" 2>&1 || { err "openssl install 失败，见 $log"; tail -20 "$log"; return 1; }
+  make clean >>"$log" 2>&1
+
+  [ -f "$prefix/lib/libssl.a" ] || { err "openssl[$abi] 没产出 libssl.a"; return 1; }
+  ok "openssl[$abi] 完成"
 }
 
 # ---------------------------------------------------------------- 2. ffmpeg
@@ -170,7 +221,18 @@ build_ffmpeg() {
     --enable-parser=h264,hevc,mpegvideo,avs3,aac,ac3 \
     --enable-demuxer=mpegts,hls,mov,flv,matroska,rtsp,h264,hevc,aac,mp3 \
     --enable-protocol=http,https,tcp,udp,rtp,rtsp,file,tls \
+    --enable-openssl \
     >"$bdir/configure.log" 2>&1 || { err "ffmpeg configure 失败，见 $bdir/configure.log"; tail -20 "$bdir/configure.log"; return 1; }
+
+  # 确认 TLS 真的编进去了。不做这个检查的话，configure 找不到库时
+  # 只打印警告然后继续，最后又产出一个 https 连不上的 .so——这个坑踩过一次。
+  if grep -q "CONFIG_OPENSSL=yes" "$bdir/config.h" 2>/dev/null; then
+    ok "ffmpeg[$abi] TLS 已启用（openssl）"
+  else
+    err "ffmpeg[$abi] 没启用 openssl，https 会连不上"
+    grep -i openssl "$bdir/configure.log" | tail -5
+    return 1
+  fi
 
   make -j"$JOBS" >>"$bdir/build.log" 2>&1 || { err "ffmpeg make 失败，见 $bdir/build.log"; return 1; }
   # 关键：make install 默认会用宿主 strip，而宿主 strip 不认识 Android ARM 的 .so，
@@ -207,8 +269,8 @@ pkg-config = 'pkg-config'
 
 [host_machine]
 system = 'android'
-cpu_family = '$( [ "$abi" = "arm64-v8a" ] && echo aarch64 || echo arm )'
-cpu = '$( [ "$abi" = "arm64-v8a" ] && echo aarch64 || echo armv7a )'
+cpu_family = '$( case "$abi" in arm64-v8a) echo aarch64 ;; x86) echo x86 ;; x86_64) echo x86_64 ;; *) echo arm ;; esac )'
+cpu = '$( case "$abi" in arm64-v8a) echo aarch64 ;; x86) echo i686 ;; x86_64) echo x86_64 ;; *) echo armv7a ;; esac )'
 endian = 'little'
 CROSS
 
@@ -261,6 +323,7 @@ for abi in $ABIS; do
   else
     say "跳过 uavs3d（ENABLE_AVS3=0，AVS3 解码暂不编入）"
   fi
+  build_openssl "$abi" || { err "openssl[$abi] 失败，跳过该 ABI"; continue; }
   build_ffmpeg  "$abi" || { err "ffmpeg[$abi] 失败，跳过该 ABI"; continue; }
   build_mpv     "$abi" || { err "mpv[$abi] 失败，跳过该 ABI"; continue; }
   collect       "$abi"

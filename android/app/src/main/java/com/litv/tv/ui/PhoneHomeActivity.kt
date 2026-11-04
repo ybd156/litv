@@ -179,6 +179,9 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
     }
 
     private fun setupPlayer() {
+        // 手机端不用 tunneled 播放：它会和 Surface 强绑定，
+        // 切 Tab 回来 Surface 重建后画面会卡死（全黑）。
+        com.litv.tv.player.exoEnableTunneling = false
         player = PlayerManager(this, app.prefs).also { it.callback = this }
 
         // 必须监听 Surface 生命周期，不能只在 onCreate 里 attach 一次。

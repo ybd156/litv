@@ -48,6 +48,20 @@ var exoForceSoftwareDecode: Boolean = false
 @Volatile
 var exoFirstFrameRendered: Boolean = false
 
+/**
+ * 是否启用 tunneled 播放。**只在电视端开启**。
+ *
+ * 为什么：tunneled 是把解码后的画面交给独立硬件图层显示，
+ * 某些 Amlogic 电视的硬解器只有这个模式能出画面（普通模式 wait timeout）。
+ *
+ * 但它在手机上有副作用：tunneled 图层和 Surface 强绑定，
+ * 切 Tab / 去设置页回来时 Surface 是新建的，播放器会卡在旧 Surface 的
+ * 缓冲队列上（日志刷 BufferQueueProducer dequeueBuffer），画面全黑。
+ * 手机不需要 tunneled，关掉即可。
+ */
+@Volatile
+var exoEnableTunneling: Boolean = true
+
 class ExoEngine : PlayerEngine {
 
 
@@ -152,7 +166,7 @@ class ExoEngine : PlayerEngine {
         // 解码器不支持 tunneled 时 Media3 会自动回落到普通模式，所以开了不亏。
         val trackSelector = androidx.media3.exoplayer.trackselection.DefaultTrackSelector(ctx)
         trackSelector.parameters = trackSelector.buildUponParameters()
-            .setTunnelingEnabled(true)
+            .setTunnelingEnabled(exoEnableTunneling)
             .build()
 
         val p = ExoPlayer.Builder(ctx, renderers)

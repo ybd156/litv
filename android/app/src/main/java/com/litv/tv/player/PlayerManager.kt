@@ -206,19 +206,31 @@ class PlayerManager(
             return
         }
         val kind = chain[chainIndex]
-        val engine = create(kind)
-        if (engine == null || !engine.isAvailable(context)) {
-            Log.i(TAG, "内核 ${kind.key} 不可用，跳过")
-            failLog += "${kind.key}: 不可用"
-            chainIndex++
-            startCurrent()
-            return
-        }
 
-        disposeEngine(current)
-        current = engine
-        currentKind = kind
-        callback?.onEngineChanged(kind)
+        // 换台时如果还是同一个内核，**复用引擎实例**。
+        //
+        // 为什么重要：每次 new ExoEngine() 都意味着底层 ExoPlayer 要销毁重建，
+        // 实测这 0.7 秒纯属浪费（换台总耗时 2.65s 里占 1/4）。
+        // 引擎内部已经做了「配置没变就复用播放器」，前提是引擎实例本身别换。
+        val engine: PlayerEngine
+        if (current != null && currentKind == kind) {
+            engine = current!!
+            Log.i(TAG, "复用 ${kind.key} 引擎实例")
+        } else {
+            val created = create(kind)
+            if (created == null || !created.isAvailable(context)) {
+                Log.i(TAG, "内核 ${kind.key} 不可用，跳过")
+                failLog += "${kind.key}: 不可用"
+                chainIndex++
+                startCurrent()
+                return
+            }
+            disposeEngine(current)
+            current = created
+            currentKind = kind
+            callback?.onEngineChanged(kind)
+            engine = created
+        }
 
         // PlayerView 模式下不需要外部 Surface —— 它自己管 Surface 生命周期，
         // 所以只有两条都没有时才算「视图未就绪」。

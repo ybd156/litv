@@ -169,6 +169,121 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         // 这一刻 channels 还是空的，直接判断会永远不播。交给 applyBootstrap 触发。
         pendingChannelId = intent.getLongExtra(EXTRA_CHANNEL_ID, 0)
         Log.i(TAG, "onCreate: 初始 channels=${channels.size} 待播=$pendingChannelId")
+
+        setupTouchGestures()
+    }
+
+    // ---------------------------------------------------------------- 触控手势
+    //
+    // 电视上很多场景没有遥控器（触摸屏一体机、用鼠标的盒子、模拟器调试），
+    // 所以补一套和遥控器等价的手势：
+    //
+    //   单击画面        呼出 / 收起 OSD
+    //   左滑            打开频道面板（分类 + 频道 + 节目单）
+    //   右滑            打开设置菜单
+    //   上滑 / 下滑     下一个台 / 上一个台
+    //   左侧边缘上下拖  调亮度（和换台区分开，否则垂直方向会打架）
+    private var gestureDetector: android.view.GestureDetector? = null
+    private var downX = 0f
+    private var downY = 0f
+    private var brightnessDragging = false
+    private var brightnessStart = -1f
+
+    private fun setupTouchGestures() {
+        val root = findViewById<android.view.View>(R.id.root) ?: return
+        gestureDetector = android.view.GestureDetector(this,
+            object : android.view.GestureDetector.SimpleOnGestureListener() {
+                override fun onSingleTapConfirmed(e: android.view.MotionEvent): Boolean {
+                    // 面板开着时点画面交给面板自己处理
+                    if (panelVisible) return false
+                    if (osdVisible) hideOsd() else showOsd()
+                    return true
+                }
+            })
+
+        root.setOnTouchListener { _, ev ->
+            gestureDetector?.onTouchEvent(ev)
+            handleGesture(ev)
+            true
+        }
+    }
+
+    private fun handleGesture(ev: android.view.MotionEvent): Boolean {
+        val slop = (24 * resources.displayMetrics.density).coerceAtLeast(24f)
+        val screenW = resources.displayMetrics.widthPixels.toFloat().coerceAtLeast(1f)
+        val screenH = resources.displayMetrics.heightPixels.toFloat().coerceAtLeast(1f)
+
+        when (ev.actionMasked) {
+            android.view.MotionEvent.ACTION_DOWN -> {
+                downX = ev.x
+                downY = ev.y
+                brightnessDragging = false
+                brightnessStart = -1f
+            }
+
+            android.view.MotionEvent.ACTION_MOVE -> {
+                val dx = ev.x - downX
+                val dy = ev.y - downY
+                // 只在「左边缘 + 以垂直为主」时进入亮度模式，
+                // 避免和上下滑换台抢事件。
+                if (!brightnessDragging &&
+                    downX < screenW * 0.25f &&
+                    Math.abs(dy) > slop &&
+                    Math.abs(dy) > Math.abs(dx) * 1.5f
+                ) {
+                    brightnessDragging = true
+                    brightnessStart = currentScreenBrightness()
+                }
+                if (brightnessDragging) {
+                    val v = (brightnessStart - dy / screenH).coerceIn(0.05f, 1f)
+                    setScreenBrightness(v)
+                    switchTip.text = "亮度 ${(v * 100).toInt()}%"
+                    switchTip.visibility = android.view.View.VISIBLE
+                }
+            }
+
+            android.view.MotionEvent.ACTION_UP -> {
+                if (brightnessDragging) {
+                    brightnessDragging = false
+                    main.postDelayed({
+                        if (switchTip.text.startsWith("亮度")) switchTip.visibility = android.view.View.GONE
+                    }, 900)
+                    return true
+                }
+                val dx = ev.x - downX
+                val dy = ev.y - downY
+                when {
+                    Math.abs(dx) > slop && Math.abs(dx) > Math.abs(dy) * 1.5f -> {
+                        if (dx < 0) openPanel() else toggleSettingsMenu()
+                    }
+                    Math.abs(dy) > slop && Math.abs(dy) > Math.abs(dx) * 1.5f -> {
+                        // 上滑 = 下一个台，下滑 = 上一个台
+                        switchBy(if (dy < 0) +1 else -1)
+                    }
+                }
+            }
+        }
+        return false
+    }
+
+    /** 当前窗口亮度；未显式设置过时返回系统亮度。 */
+    private fun currentScreenBrightness(): Float {
+        val v = window.attributes.screenBrightness
+        if (v >= 0f) return v
+        return try {
+            android.provider.Settings.System.getInt(
+                contentResolver, android.provider.Settings.System.SCREEN_BRIGHTNESS
+            ) / 255f
+        } catch (t: Throwable) {
+            0.5f
+        }
+    }
+
+    /** 只改本窗口亮度，不动系统设置（退出播放页自动恢复）。 */
+    private fun setScreenBrightness(v: Float) {
+        val attrs = window.attributes
+        attrs.screenBrightness = v
+        window.attributes = attrs
     }
 
     /**

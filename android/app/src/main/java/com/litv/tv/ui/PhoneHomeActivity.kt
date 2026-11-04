@@ -229,11 +229,10 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
             }
 
             override fun surfaceDestroyed(h: android.view.SurfaceHolder) {
-                // 必须立刻解绑。否则播放器仍持有这个 Surface，系统销毁它之后
-                // ExoPlayer 会抛 "The surface has been released" 并自我了断，
-                // 回来时只能重新拉流——Service 保活就白做了。
-                android.util.Log.i(TAG, "Surface 销毁，解绑播放器")
-                player.attach(null, null)
+                // 解绑已经在 onPause 里做过了（那时 Surface 还有效）。
+                // 这里不能再碰播放器——此时 Surface 已释放，
+                // 任何 setVideoSurface 调用都会抛 "The surface has been released"。
+                android.util.Log.i(TAG, "Surface 销毁")
             }
         })
 
@@ -755,6 +754,12 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
         super.onPause()
         // 只暂停，不改 paused —— 那是用户的意图，回来还要按它恢复
         player.pause()
+
+        // 解绑 Surface 必须在这里做，不能等 surfaceDestroyed：
+        // 到那时 Surface 已经被系统释放，ExoPlayer 再去做 setVideoSurface
+        // 会抛 "The surface has been released"，播放器直接挂掉。
+        // 此刻 Surface 还有效，解绑是安全的。
+        player.attach(null, null)
     }
 
     override fun onDestroy() {

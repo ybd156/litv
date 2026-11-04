@@ -1143,11 +1143,28 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
 
     override fun onPrepared(width: Int, height: Int) = Unit
 
+    override fun onFirstFrame() {
+        // 第一帧已经画出来了，把换台快照淡出（120ms）。
+        // 直接 GONE 会看到一次硬切，淡出看着是"渐显"，不突兀。
+        if (!::snapshotView.isInitialized || snapshotView.visibility != View.VISIBLE) return
+        snapshotView.animate()
+            .alpha(0f)
+            .setDuration(120)
+            .withEndAction {
+                snapshotView.visibility = View.GONE
+                snapshotView.alpha = 1f
+            }
+            .start()
+    }
+
     override fun onPlaying() {
         loading.visibility = View.GONE
         switchTip.visibility = View.GONE
-        // 有画面了才撤掉快照遮罩
-        snapshotView.postDelayed({ snapshotView.visibility = View.GONE }, 200)
+        // 快照不在这里撤——onPlaying 时画面往往还是黑的。
+        // 等 onFirstFrame 真正画出第一帧再淡出，避免「遮罩没了→黑一下→画面出现」。
+        if (snapshotView.visibility != View.VISIBLE) {
+            snapshotView.visibility = View.GONE
+        }
 
         // 上报起播耗时（只报第一次出画面，重连不重复计）
         if (startAt > 0) {

@@ -207,6 +207,7 @@ class ExoEngine : PlayerEngine {
             ) {
                 exoFirstFrameRendered = true
                 Log.i(TAG, "视频首帧已渲染")
+                listener?.onFirstFrame()
             }
         })
 

@@ -43,6 +43,15 @@ interface PlayerEngine {
          * 或按缓存重新拉流即可恢复。默认退回 onError，避免漏处理。
          */
         fun onSurfaceLost(message: String) = onError(message)
+
+        /**
+         * 第一帧真正画到屏幕上。
+         *
+         * 和 onPlaying 的区别：onPlaying 只表示「开始播了」，
+         * 此时画面往往还是黑的。换台时的快照遮罩必须等这一帧再撤，
+         * 否则会出现「遮罩消失 → 黑屏 → 画面出来」的突兀跳变。
+         */
+        fun onFirstFrame() = Unit
     }
 
     var listener: Listener?

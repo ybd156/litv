@@ -28,6 +28,9 @@ class PlayerManager(
         fun onPlaying()
         fun onError(message: String)
         fun onVideoSizeChanged(width: Int, height: Int)
+
+        /** 第一帧真正画到屏幕上（换台快照要等这一帧再撤）。 */
+        fun onFirstFrame() = Unit
     }
 
     var callback: Callback? = null
@@ -244,6 +247,10 @@ class PlayerManager(
                 main.post {
                     if (currentKind == kind) tryNext(message)
                 }
+            }
+
+            override fun onFirstFrame() {
+                callback?.onFirstFrame()
             }
 
             override fun onSurfaceLost(message: String) {

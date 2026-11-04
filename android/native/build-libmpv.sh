@@ -329,6 +329,21 @@ CROSS
 collect() {
   local abi="$1" dest="$PROJ/app/src/main/jniLibs/$abi"
   mkdir -p "$dest"
+
+  # strip 掉调试符号。
+  # 前面 make install 传了 STRIP=true（宿主的 strip 不认 Android 的 .so，
+  # 不跳过会报 Unable to recognise the architecture 导致 install 半途而废），
+  # 结果产物带着完整调试信息：libavcodec.so 从 12MB 涨到 59MB，APK 直接翻倍。
+  # 这里用 NDK 自带的 llvm-strip 补上。
+  local strip_bin="$TOOLCHAIN/bin/llvm-strip"
+  if [ -x "$strip_bin" ]; then
+    for so in "$OUT/$abi/lib/"*.so; do
+      [ -f "$so" ] && "$strip_bin" --strip-unneeded "$so" 2>/dev/null
+    done
+    say "已 strip [$abi]"
+  else
+    err "找不到 llvm-strip，产物会很大"
+  fi
   for so in libmpv.so libavcodec.so libavformat.so libavutil.so libswscale.so libswresample.so; do
     [ -f "$OUT/$abi/lib/$so" ] && cp -f "$OUT/$abi/lib/$so" "$dest/" && echo "  → $abi/$so"
   done

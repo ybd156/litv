@@ -1,6 +1,6 @@
 name: Emulator Build
 
-# 编一份 x86 调试包，挂到滚动 Release 上，供本地 Android TV 模拟器验证界面。
+# 编一份 x86 调试包，挂到滚动 Release 上，供本地 Android TV / 手机模拟器验证界面。
 #
 # 为什么需要：
 #   模拟器（AVD）是 x86，装不了 arm-only 的正式包。
@@ -9,6 +9,10 @@ name: Emulator Build
 #   github.com 直接下载，不依赖 api.github.com。
 #
 # 产物只用于测试，**不进正式 Release**，tag 固定为 emulator-build（每次覆盖）。
+#
+# 注意：这个文件里凡是 shell 续行符，必须是单个反斜杠。
+# 之前用脚本改文件时写成了两个反斜杠，加上 --notes 里有顶格多行，
+# 导致 YAML 解析失败、工作流直接 startup_failure（连 job 都起不来）。
 
 on:
   workflow_dispatch:
@@ -38,8 +42,7 @@ jobs:
       - name: 确认 Android SDK 组件
         run: |
           yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null 2>&1 || true
-          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
-            "platforms;android-35" "build-tools;35.0.0" >/dev/null 2>&1 || true
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-35" "build-tools;35.0.0" >/dev/null 2>&1 || true
 
       - name: 安装 Gradle
         uses: gradle/actions/setup-gradle@v6
@@ -53,7 +56,7 @@ jobs:
       - name: 挑出 x86 产物
         run: |
           mkdir -p out
-          find android/app/build/outputs/apk -name "*-x86-debug.apk" -exec cp {} out/ \;
+          find android/app/build/outputs/apk -name "*-x86-debug.apk" -exec cp {} out/ ';'
           ls -lh out/
           test -n "$(ls -A out)" || { echo "没有产出 x86 包"; exit 1; }
 
@@ -62,12 +65,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           TAG="emulator-build"
-          # 先删旧的（同 tag），保证每次都是最新
+          NOTES="供模拟器（x86）验证界面用。不是正式发布版本，请勿分发给终端用户。"
           gh release delete "$TAG" --yes --cleanup-tag 2>/dev/null || true
-          gh release create "$TAG" out/*.apk \
-            --prerelease \
-            --title "模拟器测试包（非正式版）" \
-            --notes "供 Android TV 模拟器（x86）验证界面用。不是正式发布版本，请勿分发给终端用户。
-
-正式版本见 [Releases](https://github.com/${{ github.repository }}/releases)。"
+          gh release create "$TAG" out/*.apk --prerelease --title "模拟器测试包（非正式版）" --notes "$NOTES"
           echo "下载地址：https://github.com/${{ github.repository }}/releases/tag/$TAG"

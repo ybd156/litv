@@ -205,10 +205,21 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
                     player.attach(h.surface, findViewById(android.R.id.content))
                     return
                 }
-                // 重建（切 Tab / 从设置页回来）：旧 Surface 已经销毁，
-                // 解码器还在往它写（日志刷 dequeueBuffer error -19），
-                // setVideoSurface 换不过来。直接重新拉流最可靠。
-                android.util.Log.i(TAG, "Surface 重建，重新拉流")
+                // 重建（切 Tab / 从设置页回来 / 退后台再进）
+                val ch = currentChannel
+                val sameChannelPlaying = ch != null &&
+                    player.playingChannelId == ch.id && player.isPlaying
+
+                if (sameChannelPlaying) {
+                    // 播放器一直活着（Service 保活），缓冲也没断——
+                    // 只要把新 Surface 接上去就行，不要重新拉流。
+                    android.util.Log.i(TAG, "Surface 重建，播放器仍在播，只接 Surface")
+                    player.attach(h.surface, findViewById(android.R.id.content))
+                    return
+                }
+
+                // 播放器已经不在了（进程被杀/换了台）：重新拉流
+                android.util.Log.i(TAG, "Surface 重建，播放器已停，重新拉流")
                 recoverPlayback()
             }
 

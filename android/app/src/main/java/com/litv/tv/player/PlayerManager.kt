@@ -47,6 +47,13 @@ class PlayerManager(
     private var pendingUrl = ""
     private var pendingHeaders: Map<String, String> = emptyMap()
     private var pendingChannelId = 0L
+
+    /**
+     * 当前（或最近一次）播放的频道 id。
+     * 上层用它判断「播放器是不是已经在播这个台」——是的话只接 Surface 就行，
+     * 不要再重新拉流（否则 Service 保活省下来的时间全白费）。
+     */
+    val playingChannelId: Long get() = pendingChannelId
     private var prepared = false
 
     /** 本次内核已经重试过几次 */

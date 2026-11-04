@@ -539,8 +539,7 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
                 playName.text = last.name
                 loading.visibility = View.GONE
                 paused = false
-                btnPlayPause.text = "⏸
-暂停"
+        btnPlayPause.text = "⏸\n暂停"
             } else {
                 playChannel(last)
             }

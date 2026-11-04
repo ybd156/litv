@@ -236,7 +236,9 @@ build_ffmpeg() {
 
   # 确认 TLS 真的编进去了。不做这个检查的话，configure 找不到库时
   # 只打印警告然后继续，最后又产出一个 https 连不上的 .so——这个坑踩过一次。
-  if grep -q "CONFIG_OPENSSL=yes" "$bdir/config.h" 2>/dev/null; then
+  # ffmpeg 7.x 把开关写在 ffbuild/config.mak（CONFIG_OPENSSL=yes），
+  # config.h 里是 #define CONFIG_OPENSSL 1。两处都查，别只查一处。
+  if grep -q "^CONFIG_OPENSSL=yes" "$bdir/ffbuild/config.mak" 2>/dev/null      || grep -q "define CONFIG_OPENSSL 1" "$bdir/config.h" 2>/dev/null; then
     ok "ffmpeg[$abi] TLS 已启用（openssl）"
   else
     err "ffmpeg[$abi] 没启用 openssl，https 会连不上"

@@ -96,8 +96,12 @@ class VlcEngine : PlayerEngine {
             add("--no-drop-late-frames")
             add("--no-skip-frames")
             add("--avcodec-hw=any")          // 尽量硬解
-            add("--network-caching=1500")    // 直播缓冲（毫秒）
-            add("--live-caching=1500")
+            // 直播缓冲从 1500ms 降到 800ms。
+            // VLC 的 network-caching 同时决定「起播前等多久」，1500ms 意味着
+            // 至少白等 1.5 秒——参考的 ijkplayer 用 packet-buffering=0 直接跳过这段。
+            // 800ms 在局域网/中转场景够用，再低容易花屏。
+            add("--network-caching=800")
+            add("--live-caching=800")
             add("--no-audio-time-stretch")
             add("-vvv")
         }

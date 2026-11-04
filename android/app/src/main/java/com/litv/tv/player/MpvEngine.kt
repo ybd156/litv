@@ -105,10 +105,17 @@ class MpvEngine(private val avs3Mode: Boolean = false) : PlayerEngine, MPVLib.Li
         opt("ao", "audiotrack,opensles")
         opt("audio-set-media-role", "yes")
 
-        // ---- 直播低延迟（关键三连）----
+        // ---- 直播低延迟 ----
+        //
+        // 这组数值是照着 ijkplayer（酷9/DIYP 用的内核）的实测配置来的：
+        //   probesize      1.5MB -> 400KB
+        //   analyzeduration 1.5s -> 0.1s
+        // ffmpeg 起播前会先"分析"一段流来确定编码参数，默认要好几秒。
+        // ijk 把它压到 0.1 秒，代价是极少数畸形流可能识别不出编码——
+        // 真遇到会走"分析失败→增大探测"的兜底，不影响正常源。
         opt("profile", "fast")
         opt("video-latency-hacks", "yes")
-        opt("demuxer-lavf-o", "probesize=1500000,analyzeduration=1500000")
+        opt("demuxer-lavf-o", "probesize=400000,analyzeduration=100000")
 
         // ---- 同步与掉帧 ----
         opt("vd-lavc-threads", "0")
@@ -118,7 +125,9 @@ class MpvEngine(private val avs3Mode: Boolean = false) : PlayerEngine, MPVLib.Li
 
         // ---- 网络 ----
         opt("cache", "yes")
-        opt("cache-pause", "yes")
+        // cache-pause=yes 会让 mpv 等缓存填到一定量才开始播（默认等 3 秒），
+        // 直播场景这 3 秒纯属浪费。ijk 对应的是 packet-buffering=0。
+        opt("cache-pause", "no")
         opt("network-timeout", "15")
         opt("rtsp-transport", "tcp")
         opt("user-agent", headers["User-Agent"] ?: "LITV/1.0 (Android)")

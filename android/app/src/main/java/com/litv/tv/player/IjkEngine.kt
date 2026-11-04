@@ -166,7 +166,8 @@ class IjkEngine : PlayerEngine {
             }
         })
 
-        p.setOnVideoSizeChangedListener { _, w, h ->
+        // ijk 这个回调有 5 个参数：(mp, width, height, sarNum, sarDen)
+        p.setOnVideoSizeChangedListener { _, w, h, _, _ ->
             videoW = w
             videoH = h
             listener?.onVideoSizeChanged(w, h)

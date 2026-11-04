@@ -102,6 +102,8 @@ data class EngineStats(
 /** 内核类型。 */
 enum class EngineKind(val key: String, val label: String) {
     EXO("exo", "系统硬解 (Media3)"),
+    /** ffmpeg 内核，直播起播最快。酷9/DIYP 用的就是它。 */
+    IJK("ijk", "ijkplayer (ffmpeg)"),
     MPV("mpv", "libmpv 软解"),
     VLC("vlc", "libVLC"),
     // 注意：这个内核只是 mpv 强制软解，并没有单独集成 libuavs3d。
@@ -123,7 +125,20 @@ enum class EngineKind(val key: String, val label: String) {
  * AVS3 不放进默认链——它只在探测到 avs3 编码时才主动选。
  */
 object EngineChain {
-    val DEFAULT = listOf(EngineKind.EXO, EngineKind.VLC, EngineKind.MPV)
+    /**
+     * 默认降级链。
+     *
+     * 顺序变了：以前是 Exo 打头（赌硬解快），现在把 ijk 放前面。
+     *
+     * 依据是实测 + 拆参考包：IPTV 直播场景下 ffmpeg 内核
+     * （ijk / mpv）起播明显快于 ExoPlayer——因为 Exo 播 HLS 必须
+     * 等一整个分片下载完，而 ffmpeg 读到几百 KB 就能出画面。
+     * 酷9、DIYP 都用 ijk 打头，mediaplayer 直接只用 mpv。
+     *
+     * 仍然保留 Exo 在链上：ijk 遇到畸形流或解码失败时能立刻降级，
+     * 而 Exo 的硬解在部分 Amlogic 盒子上画质更好。
+     */
+    val DEFAULT = listOf(EngineKind.IJK, EngineKind.EXO, EngineKind.VLC, EngineKind.MPV)
 
     /** 用户强制指定内核时，仍然允许它失败后回退到通用链。 */
     fun chainFor(preferred: String?, remembered: String?): List<EngineKind> {

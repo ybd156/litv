@@ -321,6 +321,7 @@ class PlayerManager(
 
     private fun create(kind: EngineKind): PlayerEngine? = when (kind) {
         EngineKind.EXO -> ExoEngine().also { it.playerView = playerView }
+        EngineKind.IJK -> IjkEngine()
         EngineKind.VLC -> VlcEngine()
         EngineKind.MPV -> MpvEngine(avs3Mode = false)
         EngineKind.AVS3 -> MpvEngine(avs3Mode = true)

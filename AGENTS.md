@@ -190,9 +190,6 @@ packaging/fnos/app/server/litvd_*
 
 ### CI 上的几个坑（改工作流前必读）
 
-- **`android/gradlew` 不是标准 wrapper**，是一个按顺序找 Gradle 的启动脚本
-  （`$GRADLE_BIN` → `$GRADLE_HOME` → `PATH`）。CI 上直接用 setup-gradle 装的
-  `gradle` 命令，不经过它
 - `android/local.properties` 被 gitignore，CI 靠 `ANDROID_HOME` 环境变量找 SDK。
   **不要**把它提交上去，会写死本地路径
 - `server/` 用 `modernc.org/sqlite`（纯 Go），不需要 cgo；测试跑 `-race` 也没问题
@@ -252,7 +249,7 @@ npm run build
 
 ```bash
 cd android
-./gradlew lintDebug testDebugUnitTest assembleDebug
+gradle lintDebug testDebugUnitTest assembleDebug
 ```
 
 Release/R8 行为（JNI 回调、Gson 反射）需要 `assembleRelease` 验证，

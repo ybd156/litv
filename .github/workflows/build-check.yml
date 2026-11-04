@@ -95,8 +95,8 @@ jobs:
       - name: 编译两个 flavor
         working-directory: android
         run: |
-          # 用 setup-gradle 装的 gradle 命令，不经过仓库里的 ./gradlew
-          # （那个是本地用的启动脚本，按 PATH/GRADLE_HOME 找 Gradle）。
+          # 用 setup-gradle 装的 gradle 命令。仓库里没有 gradlew wrapper——
+          # 编译统一走 CI，不需要本地 wrapper。
           gradle --no-daemon assembleTvDebug assemblePhoneDebug
 
       - name: 单元测试

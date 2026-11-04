@@ -62,7 +62,7 @@ jobs:
       - name: 构建 APK（release，已签名）
         working-directory: android
         run: |
-          # 用 setup-gradle 装的 gradle 命令，不经过仓库里的 ./gradlew。
+          # 用 setup-gradle 装的 gradle 命令（仓库里没有 gradlew wrapper）。
           # keystore 随仓库分发，口令写在 build.gradle.kts 的默认值里，
           # CI 不需要任何 secret。
           gradle --no-daemon assembleRelease

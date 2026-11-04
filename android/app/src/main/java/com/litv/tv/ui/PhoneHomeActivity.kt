@@ -205,22 +205,10 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
                     player.attach(h.surface, findViewById(android.R.id.content))
                     return
                 }
-                // 重建（切 Tab / 从设置页回来 / 退后台再进）
-                val ch = currentChannel
-                val sameChannelPlaying = ch != null &&
-                    player.playingChannelId == ch.id && player.isPlaying
-                android.util.Log.i(TAG, "Surface 重建判断: ch=${ch?.id} playing=${player.playingChannelId} isPlaying=${player.isPlaying}")
-
-                if (sameChannelPlaying) {
-                    // 播放器一直活着（Service 保活），缓冲也没断——
-                    // 只要把新 Surface 接上去就行，不要重新拉流。
-                    android.util.Log.i(TAG, "Surface 重建，播放器仍在播，只接 Surface")
-                    player.attach(h.surface, findViewById(android.R.id.content))
-                    return
-                }
-
-                // 播放器已经不在了（进程被杀/换了台）：重新拉流
-                android.util.Log.i(TAG, "Surface 重建，播放器已停，重新拉流")
+                // 重建（切 Tab / 从设置页回来 / 退后台再进）：
+                // 旧 Surface 已销毁，解码器还指着它，只换 Surface 换不过来。
+                // 按当前频道重新拉流最可靠（有缓存，通常 1-2 秒）。
+                android.util.Log.i(TAG, "Surface 重建，重新拉流")
                 recoverPlayback()
             }
 
@@ -229,9 +217,9 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
             }
 
             override fun surfaceDestroyed(h: android.view.SurfaceHolder) {
-                // 解绑已经在 onPause 里做过了（那时 Surface 还有效）。
-                // 这里不能再碰播放器——此时 Surface 已释放，
+                // 不能在这里碰播放器：此刻 Surface 已被系统释放，
                 // 任何 setVideoSurface 调用都会抛 "The surface has been released"。
+                // 真正的恢复放在下一次 surfaceCreated 里（重新拉流）。
                 android.util.Log.i(TAG, "Surface 销毁")
             }
         })
@@ -536,21 +524,7 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
         if (currentChannel == null && all.isNotEmpty()) {
             val last = all.firstOrNull { it.id == app.prefs.lastChannelId } ?: all.first()
 
-            // 关键：如果服务里的播放器**已经在播这个台**（退后台再回来、
-            // 或者 Activity 被重建），只接上就行，不要重新拉流——
-            // 否则 Service 保活省下的时间会全部赔回去。
-            android.util.Log.i(TAG, "检查是否已在播: playingChannelId=${player.playingChannelId} " +
-                "lastId=${last.id} isPlaying=${player.isPlaying}")
-            if (player.playingChannelId == last.id && player.isPlaying) {
-                android.util.Log.i(TAG, "播放器已在播 ${last.name}，直接接上，不重新拉流")
-                currentChannel = last
-                playName.text = last.name
-                loading.visibility = View.GONE
-                paused = false
-        btnPlayPause.text = "⏸\n暂停"
-            } else {
-                playChannel(last)
-            }
+            playChannel(last)
         }
     }
 
@@ -752,14 +726,12 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
 
     override fun onPause() {
         super.onPause()
-        // 只暂停，不改 paused —— 那是用户的意图，回来还要按它恢复
+        // 只暂停，不改 paused —— 那是用户的意图，回来还要按它恢复。
+        //
+        // 这里**不能**解绑 Surface：解绑后回来时新 Surface 还没就绪，
+        // 播放器会因为拿不到渲染目标而「起播超时」，进而降级到 VLC，反而更慢。
+        // Surface 生命周期交给 SurfaceHolder.Callback。
         player.pause()
-
-        // 解绑 Surface 必须在这里做，不能等 surfaceDestroyed：
-        // 到那时 Surface 已经被系统释放，ExoPlayer 再去做 setVideoSurface
-        // 会抛 "The surface has been released"，播放器直接挂掉。
-        // 此刻 Surface 还有效，解绑是安全的。
-        player.attach(null, null)
     }
 
     override fun onDestroy() {

@@ -7,7 +7,7 @@
 > 源的合法性由使用者自负。
 
 <!-- AUTO:VERSION:START -->
-当前版本：**0.1.11** · [下载](https://github.com/ybd156/litv/releases/latest)
+当前版本：**0.1.12** · [下载](https://github.com/ybd156/litv/releases/latest)
 <!-- AUTO:VERSION:END -->
 
 ---
@@ -71,18 +71,18 @@
 ## 下载
 
 <!-- AUTO:DOWNLOAD:START 本段由 .github/workflows/readme-downloads.yml 自动生成，不要手改 -->
-当前发布版 **[v0.1.11](https://github.com/ybd156/litv/releases/tag/v0.1.11)**，点文件名直接下载：
+当前发布版 **[v0.1.12](https://github.com/ybd156/litv/releases/tag/v0.1.12)**，点文件名直接下载：
 
 | 产物 | 大小 | 用途 |
 |---|---|---|
-| [`LITV-0.1.11-tv-armv7.apk`](https://github.com/ybd156/litv/releases/download/v0.1.11/LITV-0.1.11-tv-armv7.apk) | 67.8 MB | **电视 / 盒子，32 位**（Android 9 及以下装这个） |
-| [`LITV-0.1.11-tv-arm64.apk`](https://github.com/ybd156/litv/releases/download/v0.1.11/LITV-0.1.11-tv-arm64.apk) | 74.6 MB | 电视 / 盒子，64 位 |
-| [`LITV-0.1.11-phone-armv7.apk`](https://github.com/ybd156/litv/releases/download/v0.1.11/LITV-0.1.11-phone-armv7.apk) | 67.8 MB | 手机，32 位（2018 年前的老机型） |
-| [`LITV-0.1.11-phone-arm64.apk`](https://github.com/ybd156/litv/releases/download/v0.1.11/LITV-0.1.11-phone-arm64.apk) | 74.6 MB | 手机，64 位（绝大多数手机装这个） |
-| [`LITV-0.1.11-unsigned.ipa`](https://github.com/ybd156/litv/releases/download/v0.1.11/LITV-0.1.11-unsigned.ipa) | 16.4 MB | iOS（需自签） |
-| [`litv_x86_0.1.11.fpk`](https://github.com/ybd156/litv/releases/download/v0.1.11/litv_x86_0.1.11.fpk) | 6.1 MB | 飞牛 NAS（x86_64） |
-| [`litv_arm_0.1.11.fpk`](https://github.com/ybd156/litv/releases/download/v0.1.11/litv_arm_0.1.11.fpk) | 5.7 MB | 飞牛 NAS（ARM） |
-| [`SHA256SUMS.txt`](https://github.com/ybd156/litv/releases/download/v0.1.11/SHA256SUMS.txt) | — | 校验和 |
+| [`LITV-0.1.12-tv-armv7.apk`](https://github.com/ybd156/litv/releases/download/v0.1.12/LITV-0.1.12-tv-armv7.apk) | 67.8 MB | **电视 / 盒子，32 位**（Android 9 及以下装这个） |
+| [`LITV-0.1.12-tv-arm64.apk`](https://github.com/ybd156/litv/releases/download/v0.1.12/LITV-0.1.12-tv-arm64.apk) | 74.6 MB | 电视 / 盒子，64 位 |
+| [`LITV-0.1.12-phone-armv7.apk`](https://github.com/ybd156/litv/releases/download/v0.1.12/LITV-0.1.12-phone-armv7.apk) | 67.8 MB | 手机，32 位（2018 年前的老机型） |
+| [`LITV-0.1.12-phone-arm64.apk`](https://github.com/ybd156/litv/releases/download/v0.1.12/LITV-0.1.12-phone-arm64.apk) | 74.6 MB | 手机，64 位（绝大多数手机装这个） |
+| [`LITV-0.1.12-unsigned.ipa`](https://github.com/ybd156/litv/releases/download/v0.1.12/LITV-0.1.12-unsigned.ipa) | 16.4 MB | iOS（需自签） |
+| [`litv_x86_0.1.12.fpk`](https://github.com/ybd156/litv/releases/download/v0.1.12/litv_x86_0.1.12.fpk) | 6.1 MB | 飞牛 NAS（x86_64） |
+| [`litv_arm_0.1.12.fpk`](https://github.com/ybd156/litv/releases/download/v0.1.12/litv_arm_0.1.12.fpk) | 5.7 MB | 飞牛 NAS（ARM） |
+| [`SHA256SUMS.txt`](https://github.com/ybd156/litv/releases/download/v0.1.12/SHA256SUMS.txt) | — | 校验和 |
 
 **不知道装哪个**：在设备上跑 `adb shell getprop ro.product.cpu.abi`
 （或看系统信息），`armeabi-v7a` 装 armv7，`arm64-v8a` 装 arm64。

@@ -12,6 +12,9 @@ name: Emulator Build
 
 on:
   workflow_dispatch:
+  # 推 emulator 分支也能触发（api.github.com 不可用时用这个方式手动跑）
+  push:
+    branches: [emulator]
 
 permissions:
   contents: write

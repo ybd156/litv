@@ -228,7 +228,13 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
                 player.attach(h.surface, findViewById(android.R.id.content))
             }
 
-            override fun surfaceDestroyed(h: android.view.SurfaceHolder) = Unit
+            override fun surfaceDestroyed(h: android.view.SurfaceHolder) {
+                // 必须立刻解绑。否则播放器仍持有这个 Surface，系统销毁它之后
+                // ExoPlayer 会抛 "The surface has been released" 并自我了断，
+                // 回来时只能重新拉流——Service 保活就白做了。
+                android.util.Log.i(TAG, "Surface 销毁，解绑播放器")
+                player.attach(null, null)
+            }
         })
 
         player.attach(surface.holder.surface, findViewById(android.R.id.content))

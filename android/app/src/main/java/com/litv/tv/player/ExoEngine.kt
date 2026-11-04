@@ -105,8 +105,6 @@ class ExoEngine : PlayerEngine {
                 return f.createDataSource()
             }
 
-            override fun getDefaultRequestProperties(): Map<String, String> = emptyMap()
-
             override fun setDefaultRequestProperties(
                 properties: Map<String, String>,
             ): androidx.media3.datasource.HttpDataSource.Factory = this

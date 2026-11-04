@@ -97,6 +97,9 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
     private var muted = false
     private var landscape = false
 
+    /** 上一次预热过相邻频道的台 id（onPlaying 会重复回调，用它去重） */
+    private var lastPrefetchChannel: Long = 0
+
     /** 竖屏下视频区的 16:9 高度；全屏/退出全屏来回切时靠它恢复 */
     private var videoHeight169 = 0
 
@@ -719,6 +722,49 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
         playHint.visibility = View.GONE
         // 出画面时闪一下控件，让用户知道点画面能呼出操作条
         showControls()
+        prefetchNeighbors()
+    }
+
+    /**
+     * 预热上下相邻频道的播放地址。
+     *
+     * 上下键换台是最高频的操作，而每个频道都要先请求 /tv/play 才能拿到
+     * 带签名的地址。提前把相邻两个频道的地址取好放进缓存，
+     * 换台时就命中缓存、不用等这一趟网络。
+     *
+     * 只预热地址，不预开流——预开流要额外占一个解码器，低端盒子上内存吃不消。
+     */
+    private fun prefetchNeighbors() {
+        val cur = currentChannel ?: return
+        if (lastPrefetchChannel == cur.id) return   // onPlaying 会重复回调，去重
+        lastPrefetchChannel = cur.id
+
+        val i = all.indexOfFirst { it.id == cur.id }
+        if (i < 0) return
+        val now = System.currentTimeMillis() / 1000
+        val want = listOfNotNull(all.getOrNull(i + 1), all.getOrNull(i - 1))
+            .filter { PlayCacheStore.get(app.prefs, it.id, now) == null }
+        if (want.isEmpty()) return
+
+        want.forEach { nb ->
+            app.api.play(
+                nb.id,
+                direct = app.prefs.directMode != "relay",
+                onOk = { info ->
+                    PlayCacheStore.put(
+                        app.prefs,
+                        PlayCache(
+                            nb.id,
+                            app.api.absolute(info.url),
+                            info.playHeaders("LITV/1.0 (Android)"),
+                            info.mode, info.ua, info.expires,
+                        ),
+                    )
+                    android.util.Log.i(TAG, "预热相邻频道：${nb.name}")
+                },
+                onErr = { /* 预热失败无所谓，换台时再正常请求 */ },
+            )
+        }
     }
 
     override fun onError(message: String) {

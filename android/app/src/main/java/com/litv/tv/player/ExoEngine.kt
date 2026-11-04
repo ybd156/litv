@@ -84,15 +84,12 @@ class ExoEngine : PlayerEngine {
         appContext = context.applicationContext
         videoSurface = surface
         player?.let { p ->
-            val pv = playerView
-            if (pv != null) {
-                // 有 PlayerView 就完全交给它：它自己管 Surface 的创建/销毁/重建，
-                // 我们再 setVideoSurface 反而会打架。
-                pv.player = p
-            } else {
-                // 裸 SurfaceView：必须显式设置，传 null 也要设（用于解绑）。
-                runCatching { p.setVideoSurface(surface) }
-            }
+            // 无论走 playerView 还是裸 SurfaceView，都必须显式设置 surface。
+            // 之前只有 playerView == null 时才 setVideoSurface，
+            // 结果传 null 解绑时旧 Surface 一直留在渲染器里，
+            // Surface 被系统销毁后就抛 "The surface has been released"。
+            runCatching { p.setVideoSurface(surface) }
+            playerView?.player = p
         }
     }
 

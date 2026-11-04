@@ -83,6 +83,9 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
 
     private var currentChannel: Channel? = null
     private var programs: List<EpgProgram> = emptyList()
+    /** 第一次拿到 Surface 了吗（用来区分「首次创建」和「重建」） */
+    private var surfaceReadyOnce = false
+
     /**
      * **用户意图**：true 表示用户主动暂停了。
      * 只由播放/暂停按钮改；生命周期暂停播放时不动它，
@@ -190,15 +193,21 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
         // 播放器还指着旧的 —— 表现就是画面全黑但台名还在。
         surface.holder.addCallback(object : android.view.SurfaceHolder.Callback {
             override fun surfaceCreated(h: android.view.SurfaceHolder) {
-                android.util.Log.i(TAG, "surfaceCreated 重建，重新绑定播放器 paused=$paused")
-                player.attach(h.surface, findViewById(android.R.id.content))
-                if (!paused) player.resume()
+                // 首次创建：正常 attach，等上层 playChannel
+                if (!surfaceReadyOnce) {
+                    surfaceReadyOnce = true
+                    player.attach(h.surface, findViewById(android.R.id.content))
+                    return
+                }
+                // 重建（切 Tab / 从设置页回来）：旧 Surface 已经销毁，
+                // 解码器还在往它写（日志刷 dequeueBuffer error -19），
+                // setVideoSurface 换不过来。直接重新拉流最可靠。
+                android.util.Log.i(TAG, "Surface 重建，重新拉流")
+                recoverPlayback()
             }
 
             override fun surfaceChanged(h: android.view.SurfaceHolder, format: Int, width: Int, height: Int) {
-                android.util.Log.i(TAG, "surfaceChanged ${width}x$height，重新绑定 paused=$paused")
                 player.attach(h.surface, findViewById(android.R.id.content))
-                if (!paused) player.resume()
             }
 
             override fun surfaceDestroyed(h: android.view.SurfaceHolder) = Unit
@@ -418,7 +427,10 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
     private fun switchTab(tab: String) {
         currentTab = tab
         app.prefs.lastTab = tab
-        panelPlay.visibility = if (tab == TAB_PLAY) View.VISIBLE else View.GONE
+        // 播放面板**始终保持可见**：把它设成 GONE 会让 SurfaceView 的 Surface
+        // 被销毁，回来时解码器卡在旧 Surface 上（dequeueBuffer error -19）。
+        // 频道面板是不透明的全屏面板，直接盖在上面即可。
+        panelPlay.visibility = View.VISIBLE
         panelChannel.visibility = if (tab == TAB_CHANNEL) View.VISIBLE else View.GONE
         highlightTabs()
         // 切回播放页必须重新接画面。
@@ -426,6 +438,20 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
         // 回来时是一个全新的 Surface，播放器还指着旧的——表现为画面全黑、
         // 但台名和引擎标签都在。之前就是这个原因。
         if (tab == TAB_PLAY) reattachVideo()
+    }
+
+    /**
+     * Surface 重建后恢复播放。
+     *
+     * 为什么不只是 attach：SurfaceView 销毁时解码器会卡在旧 Surface 的
+     * 缓冲队列上（dequeueBuffer error -19），再 setVideoSurface 也换不过来。
+     * 直接按当前频道重新拉流，是唯一稳定的恢复方式。
+     */
+    private fun recoverPlayback() {
+        val ch = currentChannel ?: return
+        if (paused) return
+        android.util.Log.i(TAG, "恢复播放：${ch.name}")
+        playChannel(ch)
     }
 
     /** 把播放器重新接到当前的 Surface 上，并按用户意图恢复播放。 */

@@ -6,6 +6,12 @@ import { createRouter, createWebHashHistory, type RouteRecordRaw } from 'vue-rou
  */
 const routes: RouteRecordRaw[] = [
   {
+    path: '/login',
+    name: 'login',
+    component: () => import('@/views/LoginView.vue'),
+    meta: { title: '应急登录', bare: true },
+  },
+  {
     path: '/',
     name: 'dashboard',
     component: () => import('@/views/DashboardView.vue'),

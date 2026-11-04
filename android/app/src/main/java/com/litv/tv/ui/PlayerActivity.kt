@@ -561,9 +561,8 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
                     return@play
                 }
                 currentPlayMode = info.mode
-                currentPlayMode = info.mode
+                // 播放 URL 可能含签名、设备标识或上游凭据，Release 日志不得记录。
                 Log.i(TAG, "play 返回: mode=${info.mode} kind=${info.kind} 请求头=${headers.keys}")
-                Log.i(TAG, "实际播放地址: ${abs.take(160)}")
                 player.play(ch.id, abs, headers, app.prefs.engine)
                 refreshEpg(ch.id)
                 // 底部信息条：线路 x/y 与延迟

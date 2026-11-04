@@ -33,7 +33,8 @@ async function submit(): Promise<void> {
   try {
     const r = await request<{ token: string }>('auth/login', {
       method: 'POST',
-      body: { username: username.value, password: password.value },
+      // 服务端应急登录只接受 password；多传 username 会被严格 JSON 解码拒绝。
+      body: { password: password.value },
     })
     setAdminToken(r.token)
     if (remember.value) localStorage.setItem('litv_admin_user', username.value)

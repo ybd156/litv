@@ -113,10 +113,11 @@ func main() {
 	defer tsMgr.Close()
 
 	hub := stream.NewHub(stream.Options{
-		RingSize:  cfg.Stream.RingSize,
-		ChunkSize: cfg.Stream.BufferSize,
-		UserAgent: cfg.Stream.UserAgent,
-		Timeout:   time.Duration(cfg.Stream.UpstreamTimeout) * time.Second,
+		RingSize:     cfg.Stream.RingSize,
+		ChunkSize:    cfg.Stream.BufferSize,
+		UserAgent:    cfg.Stream.UserAgent,
+		Timeout:      time.Duration(cfg.Stream.UpstreamTimeout) * time.Second,
+		MaxUpstreams: cfg.Stream.MaxConcurrent,
 		OnData: func(channelID int64, data []byte) {
 			tsMgr.Write(channelID, data)
 		},

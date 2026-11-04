@@ -147,6 +147,8 @@ func viaGatewayFrom(ctx context.Context) bool {
 func (a *API) Handler(viaGateway bool) http.Handler {
 	r := chi.NewRouter()
 	r.Use(middleware.Recoverer)
+	// 必须在 RealIP 之前捕获原始 socket 对端；TCP 入口绝不能信任转发头。
+	r.Use(a.peerIPMiddleware(viaGateway))
 	r.Use(middleware.RealIP)
 	r.Use(a.accessLog)
 	r.Use(a.identityMiddleware(viaGateway))

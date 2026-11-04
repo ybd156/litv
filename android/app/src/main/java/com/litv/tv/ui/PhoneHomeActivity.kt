@@ -547,6 +547,8 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
                 loading.visibility = View.GONE
                 paused = false
                 btnPlayPause.text = "⏸\n暂停"
+                // 跳过了 playChannel，节目单要单独补一次，否则回来是空的
+                refreshEpg(last.id)
             } else if (videoSurface != null) {
                 playChannel(last)
             } else {
@@ -605,6 +607,14 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
 
     // ---------------------------------------------------------------- 播放
 
+    /** 拉当前频道的节目单。换台和「退后台回来直接接上」两条路径都要用。 */
+    private fun refreshEpg(channelId: Long) {
+        app.api.epg(channelId, 0, onOk = { p ->
+            programs = p
+            renderNow()
+        }, onErr = {})
+    }
+
     private fun playChannel(ch: Channel) {
         currentChannel = ch
         app.prefs.lastChannelId = ch.id
@@ -661,10 +671,7 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
                 }
             })
 
-        app.api.epg(ch.id, 0, onOk = { p ->
-            programs = p
-            renderNow()
-        }, onErr = {})
+        refreshEpg(ch.id)
     }
 
     private fun switchBy(delta: Int) {

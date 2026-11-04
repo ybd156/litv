@@ -616,6 +616,12 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
     }
 
     private fun playChannel(ch: Channel) {
+        // 起播前必须确保 Surface 已经挂到播放器上。
+        // 光靠 onSurfaceTextureAvailable 那次 attach 不够：
+        // 那条路径可能和这里并发，ExoPlayer 创建完才发现没有渲染目标，
+        // 于是干等到看门狗超时再重试——冷启动就白白多花十几秒。
+        videoSurface?.let { player.attach(it, findViewById(android.R.id.content)) }
+
         currentChannel = ch
         app.prefs.lastChannelId = ch.id
         playName.text = ch.name

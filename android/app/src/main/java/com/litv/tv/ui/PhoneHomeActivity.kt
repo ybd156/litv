@@ -29,6 +29,7 @@ import com.litv.tv.R
 import com.litv.tv.data.Bootstrap
 import com.litv.tv.data.Channel
 import com.litv.tv.data.EpgProgram
+import com.litv.tv.data.PlayCache
 import com.litv.tv.player.EngineKind
 import com.litv.tv.player.PlayerManager
 

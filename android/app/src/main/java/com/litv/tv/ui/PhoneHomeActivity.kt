@@ -8,7 +8,6 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.view.Gravity
-import android.view.SurfaceView
 import android.view.View
 import android.view.ViewGroup
 import android.widget.EditText
@@ -52,7 +51,7 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
     // 播放页
     private lateinit var panelPlay: View
     private lateinit var panelChannel: View
-    private lateinit var surface: SurfaceView
+    private lateinit var playerView: androidx.media3.ui.PlayerView
     private lateinit var loading: ProgressBar
     private lateinit var playName: TextView
     private lateinit var playEngine: TextView
@@ -85,15 +84,6 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
 
     private var currentChannel: Channel? = null
     private var programs: List<EpgProgram> = emptyList()
-    /** 第一次拿到 Surface 了吗（用来区分「首次创建」和「重建」） */
-    private var surfaceReadyOnce = false
-
-    /** 当前 Surface 是否可用。没就绪就起播会「起播超时」再重试，白白多等一轮。 */
-    private var surfaceReady = false
-
-    /** 等 Surface 就绪后要播的台 */
-    private var pendingPlay: Channel? = null
-
     /**
      * **用户意图**：true 表示用户主动暂停了。
      * 只由播放/暂停按钮改；生命周期暂停播放时不动它，
@@ -141,7 +131,7 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
     private fun bindViews() {
         panelPlay = findViewById(R.id.panelPlay)
         panelChannel = findViewById(R.id.panelChannel)
-        surface = findViewById(R.id.surface)
+        playerView = findViewById(R.id.surface)
         loading = findViewById(R.id.loading)
         playName = findViewById(R.id.playName)
         playEngine = findViewById(R.id.playEngine)
@@ -199,47 +189,10 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
         com.litv.tv.player.PlaybackService.ensureRunning(this)
         player = app.player.also { it.callback = this }
 
-        // 必须监听 Surface 生命周期，不能只在 onCreate 里 attach 一次。
-        // SurfaceView 被设为 GONE（切 Tab）或 Activity 被覆盖（去设置页）时，
-        // Surface 会被销毁；回来时系统会给一个**全新的** Surface，
-        // 播放器还指着旧的 —— 表现就是画面全黑但台名还在。
-        surface.holder.addCallback(object : android.view.SurfaceHolder.Callback {
-            override fun surfaceCreated(h: android.view.SurfaceHolder) {
-                // 首次创建：正常 attach，等上层 playChannel
-                surfaceReady = true
-                if (!surfaceReadyOnce) {
-                    surfaceReadyOnce = true
-                    player.attach(h.surface, findViewById(android.R.id.content))
-                    // 首次创建：如果已经有排队的台，现在开始播
-                    pendingPlay?.let {
-                        pendingPlay = null
-                        playChannel(it)
-                    }
-                    return
-                }
-                // 重建：先接上新 Surface，再按当前频道重新拉流
-                player.attach(h.surface, findViewById(android.R.id.content))
-                // 重建（切 Tab / 从设置页回来 / 退后台再进）：
-                // 旧 Surface 已销毁，解码器还指着它，只换 Surface 换不过来。
-                // 按当前频道重新拉流最可靠（有缓存，通常 1-2 秒）。
-                android.util.Log.i(TAG, "Surface 重建，重新拉流")
-                recoverPlayback()
-            }
-
-            override fun surfaceChanged(h: android.view.SurfaceHolder, format: Int, width: Int, height: Int) {
-                player.attach(h.surface, findViewById(android.R.id.content))
-            }
-
-            override fun surfaceDestroyed(h: android.view.SurfaceHolder) {
-                // 不能在这里碰播放器：此刻 Surface 已被系统释放，
-                // 任何 setVideoSurface 调用都会抛 "The surface has been released"。
-                // 真正的恢复放在下一次 surfaceCreated 里（重新拉流）。
-                surfaceReady = false
-                android.util.Log.i(TAG, "Surface 销毁")
-            }
-        })
-
-        player.attach(surface.holder.surface, findViewById(android.R.id.content))
+        // PlayerView 自己管 Surface 生命周期：Activity 停止/重建时它会把
+        // 旧的 Surface 摘掉、新的接上，不需要我们手动 attach/detach。
+        // 之前用裸 SurfaceView 时那套 Callback 逻辑就是所有黑屏问题的来源。
+        player.playerView = playerView
     }
 
     private fun setupTabs() {
@@ -281,7 +234,7 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
 
         // 点画面：呼出/收起控件浮层（现代播放器的通用交互）。
         // 原来点一下就直接暂停，用户完全看不到有哪些控件。
-        surface.setOnClickListener { toggleControls() }
+        playerView.setOnClickListener { toggleControls() }
     }
 
     /**
@@ -463,7 +416,7 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
         // SurfaceView 一旦被设为 GONE，它的 Surface 就被系统销毁了，
         // 回来时是一个全新的 Surface，播放器还指着旧的——表现为画面全黑、
         // 但台名和引擎标签都在。之前就是这个原因。
-        if (tab == TAB_PLAY) reattachVideo()
+        // PlayerView 自己管 Surface，切回播放页不用做任何事
     }
 
     /**
@@ -472,140 +425,15 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
      * 为什么要等：没有 Surface 时 ExoPlayer 拿不到渲染目标，会一直「起播超时」
      * 然后重试——用户看到的就是多等好几秒。等 Surface 真正可用再拉流，一次成功。
      */
-    private fun playWhenSurfaceReady(ch: Channel) {
-        if (surfaceReady) {
-            playChannel(ch)
-        } else {
-            android.util.Log.i(TAG, "Surface 未就绪，${ch.name} 排队等待")
-            pendingPlay = ch
-        }
-    }
-
     /**
-     * Surface 重建后恢复播放。
+     * 起播入口。
      *
-     * 为什么不只是 attach：SurfaceView 销毁时解码器会卡在旧 Surface 的
-     * 缓冲队列上（dequeueBuffer error -19），再 setVideoSurface 也换不过来。
-     * 直接按当前频道重新拉流，是唯一稳定的恢复方式。
+     * 用 PlayerView 之后不再需要等 Surface —— 它会在需要时自己接上，
+     * 播放器即使一时没有渲染目标也不会「起播超时」。
      */
-    private fun recoverPlayback() {
-        val ch = currentChannel ?: return
-        if (paused) return
-        android.util.Log.i(TAG, "恢复播放：${ch.name}")
+    private fun playWhenSurfaceReady(ch: Channel) {
         playChannel(ch)
     }
-
-    /** 把播放器重新接到当前的 Surface 上，并按用户意图恢复播放。 */
-    private fun reattachVideo() {
-        if (!::surface.isInitialized) return
-        surface.post {
-            val h = surface.holder
-            val sv = h.surface
-            if (sv != null && sv.isValid) {
-                player.attach(sv, findViewById(android.R.id.content))
-                // resume() 才是「继续播」；play() 是「换台播放」，签名不同
-                if (!paused) player.resume()
-            }
-        }
-    }
-
-    private fun highlightTabs() {
-        val on = getColor(R.color.accent)
-        val off = getColor(R.color.text_secondary)
-        findViewById<TextView>(R.id.tabPlay).setTextColor(if (currentTab == TAB_PLAY) on else off)
-        findViewById<TextView>(R.id.tabChannel).setTextColor(if (currentTab == TAB_CHANNEL) on else off)
-    }
-
-    // ---------------------------------------------------------------- 数据
-
-    private fun load() {
-        val cached = app.prefs.cachedBootstrap
-        if (cached.isNotBlank()) {
-            runCatching { apply(Gson().fromJson(cached, Bootstrap::class.java), true) }
-        }
-        app.api.bootstrap(
-            onOk = { b ->
-                app.prefs.cachedBootstrap = Gson().toJson(b)
-                apply(b, false)
-            },
-            onErr = { msg ->
-                if (all.isEmpty()) {
-                    status.text = "加载失败：$msg"
-                    if (msg.contains("未绑定") || msg.contains("token")) {
-                        app.prefs.clearSession()
-                        startActivity(Intent(this, BindActivity::class.java)); finish()
-                    }
-                } else {
-                    status.text = "刷新失败（显示缓存）"
-                }
-            })
-    }
-
-    private fun apply(b: Bootstrap, fromCache: Boolean) {
-        all = b.channels
-        favorites.clear(); favorites.addAll(b.favorites)
-        nowTitles.clear(); nowTitles.putAll(b.now.associate { it.channelId to it.title })
-        groups = all.map { it.group }.filter { it.isNotBlank() }.distinct()
-        status.text = if (fromCache) "缓存 ${all.size} 个频道" else "${all.size} 个频道"
-        renderChips()
-        render()
-
-        // 首次进来：自动播上次看的台，或第一个
-        if (currentChannel == null && all.isNotEmpty()) {
-            val last = all.firstOrNull { it.id == app.prefs.lastChannelId } ?: all.first()
-
-            playWhenSurfaceReady(last)
-        }
-    }
-
-    private fun renderChips() {
-        groupChips.removeAllViews()
-        addChip("全部") { selectedGroup = null; onlyFav = false; render() }
-        if (favorites.isNotEmpty()) addChip("★ 收藏") { onlyFav = true; render() }
-        groups.forEach { g -> addChip(g) { selectedGroup = g; onlyFav = false; render() } }
-    }
-
-    private fun addChip(label: String, onClick: () -> Unit) {
-        val tv = TextView(this)
-        tv.text = label
-        tv.setTextAppearance(R.style.GroupChip)
-        tv.setPadding(dp(14), dp(7), dp(14), dp(7))
-        val lp = LinearLayout.LayoutParams(
-            LinearLayout.LayoutParams.WRAP_CONTENT,
-            LinearLayout.LayoutParams.WRAP_CONTENT,
-        ).apply { marginEnd = dp(8) }
-        tv.layoutParams = lp
-        tv.gravity = Gravity.CENTER
-        tv.background = getDrawable(R.drawable.bg_card)
-        tv.setOnClickListener { onClick() }
-        groupChips.addView(tv)
-    }
-
-    private fun render() {
-        val kw = searchInput.text.toString().trim()
-        val filtered = all.filter { ch ->
-            val okFav = !onlyFav || favorites.contains(ch.id)
-            val okGroup = selectedGroup == null || ch.group == selectedGroup
-            val okKw = kw.isBlank() ||
-                ch.name.contains(kw, ignoreCase = true) ||
-                ch.group.contains(kw, ignoreCase = true)
-            okFav && okGroup && okKw
-        }
-        adapter.submit(filtered, nowTitles, favorites)
-        empty.visibility = if (filtered.isEmpty()) View.VISIBLE else View.GONE
-        list.visibility = if (filtered.isEmpty()) View.GONE else View.VISIBLE
-    }
-
-    private fun toggleFavorite(ch: Channel) {
-        val on = !favorites.contains(ch.id)
-        app.api.favorite(ch.id, on, onOk = {
-            if (on) favorites.add(ch.id) else favorites.remove(ch.id)
-            renderChips()
-            render()
-        }, onErr = { status.text = "收藏失败：$it" })
-    }
-
-    // ---------------------------------------------------------------- 播放
 
     private fun playChannel(ch: Channel) {
         currentChannel = ch
@@ -749,8 +577,6 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
         // 避免两个面板的可见性因为重建而错乱
         // 以 prefs 为准：别的页面（遥控器/设置）可能改过目标 Tab
         if (::panelPlay.isInitialized) switchTab(app.prefs.lastTab)
-        // 从设置页/遥控器页回来：Surface 是重建的，必须重接并恢复播放
-        if (::panelPlay.isInitialized && currentTab == TAB_PLAY) reattachVideo()
         if (::adapter.isInitialized && all.isNotEmpty()) load()
     }
 
@@ -770,7 +596,7 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
         // 只断开回调和 Surface，避免持有已销毁的 Activity / Surface。
         if (::player.isInitialized) {
             player.callback = null
-            player.attach(null, null)
+            player.playerView = null
         }
     }
 

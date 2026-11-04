@@ -10,6 +10,7 @@
   注意：XML 注释里不能出现连续两个减号，所以这里不用横线做分隔。
 -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:background="@color/bg"
@@ -64,10 +65,17 @@
                 android:layout_height="wrap_content"
                 android:background="@android:color/black">
 
-                <SurfaceView
+                <!-- 用 PlayerView（media3-ui）而不是裸 SurfaceView：
+                     它自己管 Surface 的生命周期。裸 SurfaceView 在 Activity
+                     停止时 Surface 必被销毁，ExoPlayer 换不过去，切后台回来
+                     就会「起播超时」再降级，白等十几秒。 -->
+                <androidx.media3.ui.PlayerView
                     android:id="@+id/surface"
                     android:layout_width="match_parent"
-                    android:layout_height="match_parent" />
+                    android:layout_height="match_parent"
+                    app:use_controller="false"
+                    app:resize_mode="fit"
+                    app:shutter_background_color="@android:color/transparent" />
 
                 <ProgressBar
                     android:id="@+id/loading"

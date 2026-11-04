@@ -30,6 +30,7 @@ import com.litv.tv.data.Bootstrap
 import com.litv.tv.data.Channel
 import com.litv.tv.data.EpgProgram
 import com.litv.tv.data.PlayCache
+import com.litv.tv.data.PlayCacheStore
 import com.litv.tv.player.EngineKind
 import com.litv.tv.player.PlayerManager
 
@@ -186,7 +187,11 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
         // 手机端不用 tunneled 播放：它会和 Surface 强绑定，
         // 切 Tab 回来 Surface 重建后画面会卡死（全黑）。
         com.litv.tv.player.exoEnableTunneling = false
-        player = PlayerManager(this, app.prefs).also { it.callback = this }
+
+        // 播放器是 Application 级单例 + 前台服务保活：
+        // Activity 重建、退到后台再回来都不重建播放器，缓冲也还在。
+        com.litv.tv.player.PlaybackService.ensureRunning(this)
+        player = app.player.also { it.callback = this }
 
         // 必须监听 Surface 生命周期，不能只在 onCreate 里 attach 一次。
         // SurfaceView 被设为 GONE（切 Tab）或 Activity 被覆盖（去设置页）时，
@@ -581,13 +586,8 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
         // /tv/play 的往返。而返回的地址本身带签名有效期（expires），
         // 只要还没过期就能直接用——网络请求挪到后台，起播不用等它。
         val nowSec = System.currentTimeMillis() / 1000
-        val cached = runCatching {
-            Gson().fromJson(app.prefs.playCache, PlayCache::class.java)
-        }.getOrNull()
-        val cacheUsable = cached != null &&
-            cached.channelId == ch.id &&
-            cached.url.isNotBlank() &&
-            cached.expires > nowSec + 60   // 留 60 秒余量，避免刚好卡在过期边界
+        val cached = PlayCacheStore.get(app.prefs, ch.id, nowSec)
+        val cacheUsable = cached != null   // 留 60 秒余量，避免刚好卡在过期边界
 
         if (cacheUsable) {
             android.util.Log.i(TAG, "缓存起播 ${ch.name}，签名还剩 ${cached!!.expires - nowSec}s")
@@ -608,10 +608,9 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
                 val uaText = if (info.ua.isBlank()) "默认 UA" else "UA: " + info.ua.take(30)
                 playRoute.text = modeText + " · " + uaText
 
-                // 刷新缓存供下次启动用
-                app.prefs.playCache = Gson().toJson(
-                    PlayCache(ch.id, absUrl, headers, info.mode, info.ua, info.expires)
-                )
+                // 刷新缓存供下次启动/换台直接命中
+                PlayCacheStore.put(app.prefs, PlayCache(
+                    ch.id, absUrl, headers, info.mode, info.ua, info.expires))
 
                 if (!cacheUsable) {
                     // 没有可用缓存：现在才起播
@@ -727,7 +726,12 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
 
     override fun onDestroy() {
         super.onDestroy()
-        player.release()
+        // 不释放播放器：它归前台服务管，退到后台还要继续播。
+        // 只断开回调和 Surface，避免持有已销毁的 Activity / Surface。
+        if (::player.isInitialized) {
+            player.callback = null
+            player.attach(null, null)
+        }
     }
 
     private fun dp(v: Int): Int = (v * resources.displayMetrics.density).toInt()

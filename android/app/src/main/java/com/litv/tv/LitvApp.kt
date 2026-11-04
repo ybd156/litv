@@ -52,6 +52,17 @@ class LitvApp : Application() {
         }
     }
 
+    /**
+     * 全局唯一的播放器。
+     *
+     * 放在 Application 而不是 Activity：Activity 重建（旋屏、返回再进）不该
+     * 重建播放器；配合 [com.litv.tv.player.PlaybackService] 常驻，
+     * 播放器和它的缓冲可以一直活着，再次打开时只接 Surface 就行。
+     */
+    val player: com.litv.tv.player.PlayerManager by lazy {
+        com.litv.tv.player.PlayerManager(this, prefs)
+    }
+
     companion object {
         private const val TAG = "LitvApp"
     }

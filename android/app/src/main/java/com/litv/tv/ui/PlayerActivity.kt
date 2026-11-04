@@ -24,6 +24,8 @@ import com.litv.tv.R
 import com.litv.tv.data.Bootstrap
 import com.litv.tv.data.Channel
 import com.litv.tv.data.EpgProgram
+import com.litv.tv.data.PlayCache
+import com.litv.tv.data.PlayCacheStore
 import com.litv.tv.player.EngineKind
 import com.litv.tv.player.PlayerManager
 import java.text.SimpleDateFormat
@@ -651,6 +653,20 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         // 直连失败一次后，这次强制走服务端中转
         val wantDirect = app.prefs.directMode != "relay" && !forceRelayOnce
         player.directMode = wantDirect
+
+        // ---- 先用缓存地址起播，把 /tv/play 的往返从关键路径上摘掉 ----
+        // 低端盒子上这一趟网络往返能占到起播时间的三分之一。
+        // 只在「自动选线路 + 不是中转重试」时用，避免干扰已有的线路回退逻辑。
+        val nowSec = System.currentTimeMillis() / 1000
+        val cached = if (streamId == 0L && !forceRelayOnce) {
+            PlayCacheStore.get(app.prefs, ch.id, nowSec)
+        } else null
+        val cacheUsable = cached != null
+        if (cacheUsable) {
+            Log.i(TAG, "缓存起播 ${ch.name}，签名还剩 ${cached!!.expires - nowSec}s")
+            player.play(ch.id, app.api.absolute(cached.url), cached.headers, app.prefs.engine)
+        }
+
         app.api.play(ch.id, streamId,
             direct = wantDirect,
             onOk = { info ->
@@ -676,6 +692,9 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
                     return@play
                 }
                 currentPlayMode = info.mode
+                // 刷新缓存，供下次起播/换台直接命中
+                PlayCacheStore.put(app.prefs, PlayCache(
+                    ch.id, abs, headers, info.mode, info.ua, info.expires))
                 // 播放 URL 可能含签名、设备标识或上游凭据，Release 日志不得记录。
                 Log.i(TAG, "play 返回: mode=${info.mode} kind=${info.kind} 请求头=${headers.keys}")
                 player.play(ch.id, abs, headers, app.prefs.engine)

@@ -62,7 +62,9 @@ android {
         abi {
             isEnable = true
             reset()
-            include("armeabi-v7a", "arm64-v8a")
+            // x86 只给模拟器用：本地/CI 跑 AVD 验证界面时需要有 x86 包，
+            // 发布工作流只挑 arm 的两个文件，x86 不会进 Release。
+            include("armeabi-v7a", "arm64-v8a", "x86")
             isUniversalApk = false
         }
     }

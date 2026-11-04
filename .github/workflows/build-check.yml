@@ -103,5 +103,17 @@ jobs:
         working-directory: android
         run: gradle --no-daemon testTvDebugUnitTest
 
+      - name: 上传模拟器用的 x86 包
+        # 给 AVD 验证界面用：模拟器是 x86，装不了 arm 包。
+        # 只上传 x86，不污染 Release。
+        uses: actions/upload-artifact@v7
+        with:
+          name: emulator-x86-debug
+          path: |
+            android/app/build/outputs/apk/tv/debug/app-tv-x86-debug.apk
+            android/app/build/outputs/apk/phone/debug/app-phone-x86-debug.apk
+          if-no-files-found: warn
+          retention-days: 7
+
 # 注：iOS 不在这里编。它有自己的 .github/workflows/ios-check.yml，
 # 只在 ios/** 变化时触发——macOS runner 按 10 倍计费，没必要每次主分支推送都跑。

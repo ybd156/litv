@@ -51,6 +51,15 @@ JOBS="$(nproc)"
 # 需要时：ENABLE_AVS3=1 ./build-libmpv.sh（并换 NDK r26 或给 uavs3d 打补丁）
 ENABLE_AVS3="${ENABLE_AVS3:-0}"
 
+# 只重编 ffmpeg（复用仓库里已有的 libmpv.so）。
+#
+# 为什么需要这个开关：mpv 0.39 强制依赖 libplacebo，而编 libplacebo 又要
+# vulkan/glslang/shaderc 一大串，CI 里成本很高。
+# 但 TLS 完全在 ffmpeg 里（openssl 编进 libavformat.so），
+# mpv 本身不需要改——只要 ffmpeg 版本一致（都是 n7.1），
+# 旧的 libmpv.so 直接链新的 libavformat.so 就行。
+SKIP_MPV="${SKIP_MPV:-0}"
+
 say()  { printf '\n\033[36m==> %s\033[0m\n' "$*"; }
 ok()   { printf '\033[32m[ok]\033[0m %s\n' "$*"; }
 err()  { printf '\033[31m[err]\033[0m %s\n' "$*"; }
@@ -337,7 +346,11 @@ for abi in $ABIS; do
   fi
   build_openssl "$abi" || { err "openssl[$abi] 失败，跳过该 ABI"; continue; }
   build_ffmpeg  "$abi" || { err "ffmpeg[$abi] 失败，跳过该 ABI"; continue; }
-  build_mpv     "$abi" || { err "mpv[$abi] 失败，跳过该 ABI"; continue; }
+  if [ "$SKIP_MPV" = "1" ]; then
+    say "跳过 mpv（SKIP_MPV=1，复用仓库里已有的 libmpv.so）"
+  else
+    build_mpv   "$abi" || { err "mpv[$abi] 失败，跳过该 ABI"; continue; }
+  fi
   collect       "$abi"
 done
 
@@ -352,7 +365,10 @@ missing=0
 for abi in $ABIS; do
   # 检查**构建输出**目录，不是 jniLibs——
   # jniLibs 里本来就有提交进仓库的旧 .so，查那里会误判成"编成功了"。
-  [ -f "$OUT/$abi/lib/libmpv.so" ] || { err "$abi 没有编出 libmpv.so"; missing=1; }
+  # libmpv 可能来自本次构建，也可能是仓库里已有的（SKIP_MPV=1 时复用）
+  if [ ! -f "$OUT/$abi/lib/libmpv.so" ] && [ ! -f "$PROJ/app/src/main/jniLibs/$abi/libmpv.so" ]; then
+    err "$abi 既没编出 libmpv.so，仓库里也没有"; missing=1
+  fi
   [ -f "$OUT/$abi/lib/libavformat.so" ] || { err "$abi 没有编出 libavformat.so"; missing=1; }
 done
 [ "$missing" = "0" ] || { err "有 ABI 没编出产物，构建失败"; exit 1; }

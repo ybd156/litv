@@ -41,7 +41,8 @@ jobs:
       matrix:
         # 静态列出，不用动态表达式——之前用 fromJSON(format(...)) 生成矩阵，
         # GitHub 直接 startup_failure（连 job 都起不来）。
-        abi: [arm64-v8a, armeabi-v7a, x86]
+        # 只编 arm：仓库里没有 x86 的 libmpv.so，编了 x86 的 ffmpeg 也没人用
+        abi: [arm64-v8a, armeabi-v7a]
     steps:
       - uses: actions/checkout@v7
 
@@ -98,6 +99,10 @@ jobs:
           ABIS: ${{ matrix.abi }}
           BUILD_ROOT: ${{ github.workspace }}/.native-build
           JOBS: 4
+          # mpv 0.39 强制依赖 libplacebo（还要 vulkan/glslang），CI 里成本太高。
+          # 而 TLS 完全在 ffmpeg 里——只要 ffmpeg 版本一致，
+          # 复用仓库里已有的 libmpv.so 链新的 libavformat.so 就行。
+          SKIP_MPV: "1"
         run: |
           chmod +x native/build-libmpv.sh
           ./native/build-libmpv.sh
@@ -106,7 +111,9 @@ jobs:
         run: |
           abi="${{ matrix.abi }}"
           fmt="android/app/src/main/jniLibs/$abi/libavformat.so"
+          mpv="android/app/src/main/jniLibs/$abi/libmpv.so"
           [ -f "$fmt" ] || { echo "没有 libavformat.so"; exit 1; }
+          [ -f "$mpv" ] || { echo "没有 libmpv.so（本次没编，仓库里也没有）"; exit 1; }
           if ! strings "$fmt" | grep -qi "openssl"; then
             echo "::error::$abi 的 libavformat.so 里找不到 OpenSSL 符号，https 会连不上"
             exit 1

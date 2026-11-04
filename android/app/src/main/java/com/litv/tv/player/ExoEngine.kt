@@ -70,6 +70,48 @@ class ExoEngine : PlayerEngine {
     override var listener: PlayerEngine.Listener? = null
 
     private var player: ExoPlayer? = null
+
+    /**
+     * 当前播放器的构建配置指纹。
+     * 换台时如果它没变，就复用播放器而不是销毁重建（省约 0.7 秒）。
+     */
+    private var builtConfig: String? = null
+
+    /** 当前频道的 UA / 请求头。复用的播放器每次建连接时现读这两个值。 */
+    @Volatile private var curUa: String = UA
+    @Volatile private var curHeaders: Map<String, String> = emptyMap()
+
+    /**
+     * 动态 DataSource 工厂。
+     *
+     * 播放器复用之后，工厂是在第一次 build 时创建的，而请求头每个频道都不同。
+     * 所以不能在 build 时把 headers 写死——必须在每次 createDataSource()
+     * 时读当前的 curUa / curHeaders。
+     */
+    private val dynamicHttpFactory: androidx.media3.datasource.HttpDataSource.Factory =
+        object : androidx.media3.datasource.HttpDataSource.Factory {
+            override fun createDataSource(): androidx.media3.datasource.HttpDataSource {
+                // ★ 源配置里的 UA 必须走 setUserAgent，不能只塞进请求头。
+                //   DefaultHttpDataSource 是「先应用 defaultRequestProperties、
+                //   再单独 setRequestProperty("User-Agent", userAgent)」——
+                //   写死的 UA 会把源 UA 覆盖掉，表现为源站校验 UA 失败。
+                val f = DefaultHttpDataSource.Factory()
+                    .setUserAgent(curUa)
+                    .setAllowCrossProtocolRedirects(true)
+                    .setConnectTimeoutMs(8000)
+                    .setReadTimeoutMs(15000)
+                val extra = curHeaders.filterKeys { !it.equals("User-Agent", ignoreCase = true) }
+                if (extra.isNotEmpty()) f.setDefaultRequestProperties(extra)
+                return f.createDataSource()
+            }
+
+            override fun getDefaultRequestProperties(): Map<String, String> = emptyMap()
+
+            override fun setDefaultRequestProperties(
+                properties: Map<String, String>,
+            ): androidx.media3.datasource.HttpDataSource.Factory = this
+        }
+
     private var appContext: Context? = null
     private var videoSurface: android.view.Surface? = null
     private var videoW = 0
@@ -98,8 +140,83 @@ class ExoEngine : PlayerEngine {
             listener?.onError("内核未初始化")
             return
         }
-        releaseInternal()
+        // 更新当前频道的请求头。播放器复用后，DataSource 工厂会在每次
+        // 建连接时现读这两个字段，所以必须先写进去。
+        curUa = headers["User-Agent"]?.takeIf { it.isNotBlank() } ?: UA
+        curHeaders = headers
 
+        // 换台时复用播放器实例。
+        //
+        // 实测（x86 模拟器，缓存命中）换台总耗时 2.65s，拆开看：
+        //   Release 旧实例 + Init 新实例   约 0.72s   ← 纯浪费
+        //   拉 m3u8 + 分片 + 解码           约 1.7s
+        // 只要解码方式 / 缓冲 / 隧道模式没变，就没有理由重建播放器。
+        val cfg = "$decode|$bufferMs|$exoEnableTunneling|${Av3aLoader.available(ctx)}"
+        val existing = player
+        val p: ExoPlayer
+        if (existing != null && builtConfig == cfg) {
+            Log.i(TAG, "复用播放器换台（省掉 ~0.7s 重建开销）")
+            runCatching {
+                existing.stop()
+                existing.clearMediaItems()
+            }
+            p = existing
+        } else {
+            releaseInternal()
+            p = buildPlayer(ctx, decode, bufferMs)
+            player = p
+            builtConfig = cfg
+        }
+
+        exoFirstFrameRendered = false
+
+        player = p
+        // 有 PlayerView 就交给它管 Surface（参考实现就是这么做的），
+        // 否则退回直接 setVideoSurface
+        if (playerView != null) {
+            playerView!!.player = p
+            playerView!!.useController = false
+            // tunneled 模式下视频走独立硬件图层，PlayerView 默认的黑色
+            // 遮罩（shutter）会把它整块盖住——表现为"解码器在解、首帧也
+            // 触发了，但屏幕全黑"。必须把遮罩设成透明才能看到画面。
+            playerView!!.setShutterBackgroundColor(android.graphics.Color.TRANSPARENT)
+            // 画面比例：让设置里的选项真正生效。
+            //
+            // auto = 保持比例**裁切铺满**（zoom）：电视上最符合"铺满屏幕"的预期，
+            //        代价是 4:3 之类的老片源会切掉上下一点点。
+            // fill = 拉伸铺满（会变形，用户明确选了才用）
+            // 16:9 / 4:3 = 强制该比例，完整显示（留黑边）
+            when (aspect) {
+                // 拉伸铺满：会变形，用户明确选了才用
+                "fill" -> playerView!!.resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FILL
+                // 裁切铺满：用户主动选才用。
+                // 默认(auto)不能用它——视频尺寸未知时 ZOOM 会把子视图算成 0 尺寸，
+                // 表现为"转圈结束后黑屏"。
+                "zoom" -> playerView!!.resizeMode = AspectRatioFrameLayout.RESIZE_MODE_ZOOM
+                // 16:9 / 4:3 / auto：完整显示留黑边。
+                // 当前 media3 版本的 PlayerView 没有 setAspectRatio(float)，
+                // 无法强制比例，只能保证不裁切。
+                else -> playerView!!.resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
+            }
+        } else {
+            p.setVideoSurface(videoSurface)
+        }
+        p.setMediaItem(MediaItem.fromUri(Uri.parse(url)))
+        p.prepare()
+        p.playWhenReady = true
+    }
+
+    /**
+     * 建一个全新的播放器。只在配置（解码方式/缓冲/隧道）变化时调用。
+     *
+     * 监听器也在这里注册——它们挂在播放器实例上，
+     * 如果放在 prepare 里，复用时会重复注册，同一个事件回调多次。
+     */
+    private fun buildPlayer(
+        ctx: android.content.Context,
+        decode: String,
+        bufferMs: Int,
+    ): ExoPlayer {
         // 直播缓冲：起播 300ms / 重缓冲 800ms；maxBufferMs 由用户「网络缓冲」设置映射
         //
         // 起播阈值从 500 降到 300：IPTV 是直播，用户对"多久出画面"极敏感，
@@ -116,17 +233,9 @@ class ExoEngine : PlayerEngine {
         //   ExoPlayer 的 DefaultHttpDataSource 是「先应用 defaultRequestProperties、
         //   再单独 setRequestProperty("User-Agent", userAgent)」——
         //   写死的 UA 会把请求头里的源 UA 覆盖掉，表现为"硬解时源站校验 UA 失败"。
-        val ua = headers["User-Agent"]?.takeIf { it.isNotBlank() } ?: UA
-        val httpFactory = DefaultHttpDataSource.Factory()
-            .setUserAgent(ua)
-            .setAllowCrossProtocolRedirects(true)
-            .setConnectTimeoutMs(8000)
-            .setReadTimeoutMs(15000)
-        // 其余头（Referer 之类）照旧；User-Agent 已经在上面设过了
-        val extraHeaders = headers.filterKeys { !it.equals("User-Agent", ignoreCase = true) }
-        if (extraHeaders.isNotEmpty()) httpFactory.setDefaultRequestProperties(extraHeaders)
-
-        val dsFactory = DefaultDataSource.Factory(ctx, httpFactory)
+        // 用动态工厂：播放器会被复用，而请求头每个频道都不一样，
+        // 不能在 build 时写死。
+        val dsFactory = DefaultDataSource.Factory(ctx, dynamicHttpFactory)
 
         // 关键：硬解失败必须能自动回退到下一个解码器（最终是软解）。
         // 这台电视的 Amlogic AVC 硬解会抛
@@ -261,40 +370,7 @@ class ExoEngine : PlayerEngine {
             }
         })
 
-        player = p
-        // 有 PlayerView 就交给它管 Surface（参考实现就是这么做的），
-        // 否则退回直接 setVideoSurface
-        if (playerView != null) {
-            playerView!!.player = p
-            playerView!!.useController = false
-            // tunneled 模式下视频走独立硬件图层，PlayerView 默认的黑色
-            // 遮罩（shutter）会把它整块盖住——表现为"解码器在解、首帧也
-            // 触发了，但屏幕全黑"。必须把遮罩设成透明才能看到画面。
-            playerView!!.setShutterBackgroundColor(android.graphics.Color.TRANSPARENT)
-            // 画面比例：让设置里的选项真正生效。
-            //
-            // auto = 保持比例**裁切铺满**（zoom）：电视上最符合"铺满屏幕"的预期，
-            //        代价是 4:3 之类的老片源会切掉上下一点点。
-            // fill = 拉伸铺满（会变形，用户明确选了才用）
-            // 16:9 / 4:3 = 强制该比例，完整显示（留黑边）
-            when (aspect) {
-                // 拉伸铺满：会变形，用户明确选了才用
-                "fill" -> playerView!!.resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FILL
-                // 裁切铺满：用户主动选才用。
-                // 默认(auto)不能用它——视频尺寸未知时 ZOOM 会把子视图算成 0 尺寸，
-                // 表现为"转圈结束后黑屏"。
-                "zoom" -> playerView!!.resizeMode = AspectRatioFrameLayout.RESIZE_MODE_ZOOM
-                // 16:9 / 4:3 / auto：完整显示留黑边。
-                // 当前 media3 版本的 PlayerView 没有 setAspectRatio(float)，
-                // 无法强制比例，只能保证不裁切。
-                else -> playerView!!.resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
-            }
-        } else {
-            p.setVideoSurface(videoSurface)
-        }
-        p.setMediaItem(MediaItem.fromUri(Uri.parse(url)))
-        p.prepare()
-        p.playWhenReady = true
+        return p
     }
 
     override var aspect: String = "auto"
@@ -340,6 +416,8 @@ class ExoEngine : PlayerEngine {
             it.release()
         }
         player = null
+        // 播放器没了，配置指纹也要清掉，否则下次 prepare 会以为还能复用
+        builtConfig = null
     }
 
     override fun setVolume(volume: Float) {

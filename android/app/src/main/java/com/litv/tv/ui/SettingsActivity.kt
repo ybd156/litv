@@ -46,6 +46,11 @@ class SettingsActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_settings)
+
+        // 这个页面电视和手机共用，操作提示得按设备类型给
+        findViewById<TextView>(R.id.settingsHint)?.text =
+            if (DeviceType.isTV(this)) "用遥控器上下移动，左右键修改，OK 确认"
+            else "点按条目切换，长按可查看说明"
         BottomTabs.wire(this, BottomTabs.TAB_SETTINGS)
         app = application as LitvApp
 

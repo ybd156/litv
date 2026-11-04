@@ -83,6 +83,11 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
 
     private var currentChannel: Channel? = null
     private var programs: List<EpgProgram> = emptyList()
+    /**
+     * **用户意图**：true 表示用户主动暂停了。
+     * 只由播放/暂停按钮改；生命周期暂停播放时不动它，
+     * 否则「切个设置页回来画面就停了」。
+     */
     private var paused = false
     private var muted = false
     private var landscape = false
@@ -391,6 +396,24 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
         panelPlay.visibility = if (tab == TAB_PLAY) View.VISIBLE else View.GONE
         panelChannel.visibility = if (tab == TAB_CHANNEL) View.VISIBLE else View.GONE
         highlightTabs()
+        // 切回播放页必须重新接画面。
+        // SurfaceView 一旦被设为 GONE，它的 Surface 就被系统销毁了，
+        // 回来时是一个全新的 Surface，播放器还指着旧的——表现为画面全黑、
+        // 但台名和引擎标签都在。之前就是这个原因。
+        if (tab == TAB_PLAY) reattachVideo()
+    }
+
+    /** 把播放器重新接到当前的 Surface 上，并按用户意图恢复播放。 */
+    private fun reattachVideo() {
+        if (!::surface.isInitialized) return
+        surface.post {
+            val h = surface.holder
+            val sv = h.surface
+            if (sv != null && sv.isValid) {
+                player.attach(sv, findViewById(android.R.id.content))
+                if (!paused) player.play()
+            }
+        }
     }
 
     private fun highlightTabs() {
@@ -536,7 +559,14 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
     private fun renderNow() {
         val now = System.currentTimeMillis() / 1000
         val cur = programs.firstOrNull { it.startAt <= now && it.endAt > now }
-        playNow.text = cur?.let { "正在播：${it.title}" } ?: "暂无节目单"
+        // 没有节目单时这里不占一行——下面的节目单区域已经会显示「暂无节目单」，
+        // 两处都显示同一句话是重复的。
+        if (programs.isEmpty()) {
+            playNow.visibility = View.GONE
+        } else {
+            playNow.visibility = View.VISIBLE
+            playNow.text = cur?.let { "正在播：${it.title}" } ?: "正在播：—"
+        }
         renderEpg()
     }
 
@@ -597,14 +627,15 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
         // 避免两个面板的可见性因为重建而错乱
         // 以 prefs 为准：别的页面（遥控器/设置）可能改过目标 Tab
         if (::panelPlay.isInitialized) switchTab(app.prefs.lastTab)
+        // 从设置页/遥控器页回来：Surface 是重建的，必须重接并恢复播放
+        if (::panelPlay.isInitialized && currentTab == TAB_PLAY) reattachVideo()
         if (::adapter.isInitialized && all.isNotEmpty()) load()
     }
 
     override fun onPause() {
         super.onPause()
+        // 只暂停，不改 paused —— 那是用户的意图，回来还要按它恢复
         player.pause()
-        paused = true
-        if (::btnPlayPause.isInitialized) btnPlayPause.text = "▶\n播放"
     }
 
     override fun onDestroy() {

@@ -88,6 +88,12 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
     /** 第一次拿到 Surface 了吗（用来区分「首次创建」和「重建」） */
     private var surfaceReadyOnce = false
 
+    /** 当前 Surface 是否可用。没就绪就起播会「起播超时」再重试，白白多等一轮。 */
+    private var surfaceReady = false
+
+    /** 等 Surface 就绪后要播的台 */
+    private var pendingPlay: Channel? = null
+
     /**
      * **用户意图**：true 表示用户主动暂停了。
      * 只由播放/暂停按钮改；生命周期暂停播放时不动它，
@@ -200,11 +206,19 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
         surface.holder.addCallback(object : android.view.SurfaceHolder.Callback {
             override fun surfaceCreated(h: android.view.SurfaceHolder) {
                 // 首次创建：正常 attach，等上层 playChannel
+                surfaceReady = true
                 if (!surfaceReadyOnce) {
                     surfaceReadyOnce = true
                     player.attach(h.surface, findViewById(android.R.id.content))
+                    // 首次创建：如果已经有排队的台，现在开始播
+                    pendingPlay?.let {
+                        pendingPlay = null
+                        playChannel(it)
+                    }
                     return
                 }
+                // 重建：先接上新 Surface，再按当前频道重新拉流
+                player.attach(h.surface, findViewById(android.R.id.content))
                 // 重建（切 Tab / 从设置页回来 / 退后台再进）：
                 // 旧 Surface 已销毁，解码器还指着它，只换 Surface 换不过来。
                 // 按当前频道重新拉流最可靠（有缓存，通常 1-2 秒）。
@@ -220,6 +234,7 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
                 // 不能在这里碰播放器：此刻 Surface 已被系统释放，
                 // 任何 setVideoSurface 调用都会抛 "The surface has been released"。
                 // 真正的恢复放在下一次 surfaceCreated 里（重新拉流）。
+                surfaceReady = false
                 android.util.Log.i(TAG, "Surface 销毁")
             }
         })
@@ -452,6 +467,21 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
     }
 
     /**
+     * Surface 就绪才起播。
+     *
+     * 为什么要等：没有 Surface 时 ExoPlayer 拿不到渲染目标，会一直「起播超时」
+     * 然后重试——用户看到的就是多等好几秒。等 Surface 真正可用再拉流，一次成功。
+     */
+    private fun playWhenSurfaceReady(ch: Channel) {
+        if (surfaceReady) {
+            playChannel(ch)
+        } else {
+            android.util.Log.i(TAG, "Surface 未就绪，${ch.name} 排队等待")
+            pendingPlay = ch
+        }
+    }
+
+    /**
      * Surface 重建后恢复播放。
      *
      * 为什么不只是 attach：SurfaceView 销毁时解码器会卡在旧 Surface 的
@@ -524,7 +554,7 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
         if (currentChannel == null && all.isNotEmpty()) {
             val last = all.firstOrNull { it.id == app.prefs.lastChannelId } ?: all.first()
 
-            playChannel(last)
+            playWhenSurfaceReady(last)
         }
     }
 

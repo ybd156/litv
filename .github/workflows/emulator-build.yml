@@ -1,0 +1,70 @@
+name: Emulator Build
+
+# 编一份 x86 调试包，挂到滚动 Release 上，供本地 Android TV 模拟器验证界面。
+#
+# 为什么需要：
+#   模拟器（AVD）是 x86，装不了 arm-only 的正式包。
+#   而本地又没有构建环境（AGENTS.md §8：不在本地搭工具链），
+#   所以让 CI 编一份 x86，挂到 Release 上——Release 资源可以从
+#   github.com 直接下载，不依赖 api.github.com。
+#
+# 产物只用于测试，**不进正式 Release**，tag 固定为 emulator-build（每次覆盖）。
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: emulator-build
+  cancel-in-progress: true
+
+jobs:
+  build-x86:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: 准备 JDK 17
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: 确认 Android SDK 组件
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null 2>&1 || true
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
+            "platforms;android-35" "build-tools;35.0.0" >/dev/null 2>&1 || true
+
+      - name: 安装 Gradle
+        uses: gradle/actions/setup-gradle@v6
+        with:
+          gradle-version: "8.14.6"
+
+      - name: 编译 x86 调试包
+        working-directory: android
+        run: gradle --no-daemon assembleTvDebug assemblePhoneDebug
+
+      - name: 挑出 x86 产物
+        run: |
+          mkdir -p out
+          find android/app/build/outputs/apk -name "*-x86-debug.apk" -exec cp {} out/ \;
+          ls -lh out/
+          test -n "$(ls -A out)" || { echo "没有产出 x86 包"; exit 1; }
+
+      - name: 发布到滚动 Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="emulator-build"
+          # 先删旧的（同 tag），保证每次都是最新
+          gh release delete "$TAG" --yes --cleanup-tag 2>/dev/null || true
+          gh release create "$TAG" out/*.apk \
+            --prerelease \
+            --title "模拟器测试包（非正式版）" \
+            --notes "供 Android TV 模拟器（x86）验证界面用。不是正式发布版本，请勿分发给终端用户。
+
+正式版本见 [Releases](https://github.com/${{ github.repository }}/releases)。"
+          echo "下载地址：https://github.com/${{ github.repository }}/releases/tag/$TAG"

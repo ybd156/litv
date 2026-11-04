@@ -156,7 +156,18 @@ class PlayerManager(
         pendingHeaders = headers
 
         val remembered = prefs.engineFor(channelId).ifBlank { null }
-        chain = EngineChain.chainFor(preferredEngine, remembered)
+        // 按地址能力过滤：ijk / mpv 的 ffmpeg 没编 TLS，https 源直接跳过，
+        // 免得每次起播都白等一轮失败再降级。
+        val rawChain = EngineChain.chainFor(preferredEngine, remembered)
+        val isHttps = url.startsWith("https://", ignoreCase = true)
+        chain = rawChain.filter { kind ->
+            val ok = !(isHttps && kind.ffmpegNoTls)
+            if (!ok) Log.i(TAG, "内核 ${kind.key} 的 ffmpeg 没编 TLS，https 源跳过")
+            ok
+        }.ifEmpty {
+            Log.w(TAG, "所有内核都不支持该地址，退回完整链")
+            rawChain
+        }
         chainIndex = 0
         // 换台必须重置「强制软解」。
         // 否则在某个 4K 台上硬解失败一次之后，后面所有频道都会走软解——

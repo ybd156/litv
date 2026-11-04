@@ -34,6 +34,7 @@ class MpvEngine(private val avs3Mode: Boolean = false) : PlayerEngine, MPVLib.Li
 
     override fun isAvailable(context: Context): Boolean = MPVLib.available
 
+
     override fun attach(context: Context, surface: android.view.Surface?, container: ViewGroup?) {
         appContext = context.applicationContext
         videoSurface = surface

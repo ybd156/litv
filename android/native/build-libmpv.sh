@@ -78,7 +78,7 @@ if [ -z "${CI:-}" ] && [ -z "${https_proxy:-}" ]; then
   export https_proxy="http://$HOSTIP:10808"
 fi
 
-mkdir -p "$SRC" "$OUT"
+mkdir -p "$SRC" "$OUT" "$ROOT/dl"
 
 # ---------------------------------------------------------------- 工具函数
 # abi 三元组映射
@@ -334,4 +334,15 @@ for abi in $ABIS; do
   echo "--- $abi ---"
   ls -lh "$PROJ/app/src/main/jniLibs/$abi" 2>/dev/null || echo "  （无产物）"
 done
+# 产物校验：脚本没有 set -e，某个 ABI 失败只会 continue，
+# 不加这一步的话 CI 会显示"成功"但其实是空的（已经骗过一次）。
+missing=0
+for abi in $ABIS; do
+  # 检查**构建输出**目录，不是 jniLibs——
+  # jniLibs 里本来就有提交进仓库的旧 .so，查那里会误判成"编成功了"。
+  [ -f "$OUT/$abi/lib/libmpv.so" ] || { err "$abi 没有编出 libmpv.so"; missing=1; }
+  [ -f "$OUT/$abi/lib/libavformat.so" ] || { err "$abi 没有编出 libavformat.so"; missing=1; }
+done
+[ "$missing" = "0" ] || { err "有 ABI 没编出产物，构建失败"; exit 1; }
+
 echo "LIBMPV_DONE"

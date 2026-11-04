@@ -95,10 +95,14 @@ class ExoEngine : PlayerEngine {
         }
         releaseInternal()
 
-        // 直播缓冲：起播 500ms / 重缓冲 1000ms；maxBufferMs 由用户「网络缓冲」设置映射
+        // 直播缓冲：起播 300ms / 重缓冲 800ms；maxBufferMs 由用户「网络缓冲」设置映射
+        //
+        // 起播阈值从 500 降到 300：IPTV 是直播，用户对"多久出画面"极敏感，
+        // 而 300ms 的缓冲在局域网/中转场景已经够用。真卡了会走重缓冲，
+        // 那时用 800ms 兜住，不会因为起播抠得太狠导致频繁卡顿。
         val maxBufferMs = bufferMs.coerceIn(2000, 60000)
         val loadControl = DefaultLoadControl.Builder()
-            .setBufferDurationsMs(1000, maxBufferMs, 500, 1000)
+            .setBufferDurationsMs(800, maxBufferMs, 300, 800)
             .setBackBuffer(0, true)                     // 直播不回退缓冲，省内存
             .setPrioritizeTimeOverSizeThresholds(false) // 优先按字节封顶，防低端盒子 OOM
             .build()

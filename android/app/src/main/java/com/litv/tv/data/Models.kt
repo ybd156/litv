@@ -128,6 +128,23 @@ data class Bootstrap(
 )
 
 /** /tv/play/{id} 的返回。 */
+/**
+ * 上次成功起播的地址缓存。
+ *
+ * 为什么要它：启动时要先请求 /tv/play 拿到带签名的地址，这一步是**串行**的
+ * 网络往返（实测占启动耗时近 3 秒）。而签名地址本身有有效期，
+ * 只要还没过期就可以直接拿来起播，网络请求放到后台去做。
+ */
+data class PlayCache(
+    val channelId: Long = 0,
+    val url: String = "",
+    val headers: Map<String, String> = emptyMap(),
+    val mode: String = "",
+    val ua: String = "",
+    /** 签名过期时间（Unix 秒） */
+    val expires: Long = 0,
+)
+
 data class PlayInfo(
     val channel: PlayChannel = PlayChannel(),
     /** hls | ts */

@@ -574,23 +574,57 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
         paused = false
         btnPlayPause.text = "⏸\n暂停"
 
+        // ---- 先用缓存地址起播，把 /tv/play 的网络往返从关键路径上摘掉 ----
+        //
+        // 启动耗时实测：应用启动 → 首帧 9.5 秒，其中约 2.8 秒是在等
+        // /tv/play 的往返。而返回的地址本身带签名有效期（expires），
+        // 只要还没过期就能直接用——网络请求挪到后台，起播不用等它。
+        val nowSec = System.currentTimeMillis() / 1000
+        val cached = runCatching {
+            Gson().fromJson(app.prefs.playCache, PlayCache::class.java)
+        }.getOrNull()
+        val cacheUsable = cached != null &&
+            cached.channelId == ch.id &&
+            cached.url.isNotBlank() &&
+            cached.expires > nowSec + 60   // 留 60 秒余量，避免刚好卡在过期边界
+
+        if (cacheUsable) {
+            android.util.Log.i(TAG, "缓存起播 ${ch.name}，签名还剩 ${cached!!.expires - nowSec}s")
+            playRoute.text = (if (cached.mode == "direct") "直连源站" else "服务端中转") +
+                " · " + (if (cached.ua.isBlank()) "默认 UA" else "UA: " + cached.ua.take(30))
+            player.play(ch.id, app.api.absolute(cached.url), cached.headers, app.prefs.engine)
+        }
+
         app.api.play(
             ch.id,
             direct = app.prefs.directMode != "relay",
             onOk = { info ->
                 // R09：带整份线路头，不再只带 UA
                 val headers = info.playHeaders("LITV/1.0 (Android)")
+                val absUrl = app.api.absolute(info.url)
                 // 把链路和实际用的 UA 显示出来，方便确认源站校验的 UA 到底带没带
                 val modeText = if (info.mode == "direct") "直连源站" else "服务端中转"
                 val uaText = if (info.ua.isBlank()) "默认 UA" else "UA: " + info.ua.take(30)
                 playRoute.text = modeText + " · " + uaText
-                player.play(ch.id, app.api.absolute(info.url), headers, app.prefs.engine)
+
+                // 刷新缓存供下次启动用
+                app.prefs.playCache = Gson().toJson(
+                    PlayCache(ch.id, absUrl, headers, info.mode, info.ua, info.expires)
+                )
+
+                if (!cacheUsable) {
+                    // 没有可用缓存：现在才起播
+                    player.play(ch.id, absUrl, headers, app.prefs.engine)
+                }
                 app.api.heartbeat(ch.id, "playing")
             },
             onErr = { msg ->
-                loading.visibility = View.GONE
-                playHint.visibility = View.VISIBLE
-                playHint.text = "播放失败：$msg"
+                // 缓存已经起播时不要把错误糊上去打断用户
+                if (!cacheUsable) {
+                    loading.visibility = View.GONE
+                    playHint.visibility = View.VISIBLE
+                    playHint.text = "播放失败：$msg"
+                }
             })
 
         app.api.epg(ch.id, 0, onOk = { p ->

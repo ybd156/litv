@@ -94,6 +94,11 @@ class Prefs(ctx: Context) {
         set(v) = sp.edit().putString(K_DEVICE_NAME, v).apply()
 
     /** 上次看的频道，开机自动续播。 */
+    /** 上次成功起播的地址（JSON），用于跳过启动时的 /tv/play 往返 */
+    var playCache: String
+        get() = sp.getString(K_PLAY_CACHE, "") ?: ""
+        set(v) = sp.edit().putString(K_PLAY_CACHE, v).apply()
+
     var lastChannelId: Long
         get() = sp.getLong(K_LAST_CH, 0)
         set(v) = sp.edit().putLong(K_LAST_CH, v).apply()
@@ -213,6 +218,7 @@ class Prefs(ctx: Context) {
         const val K_TOKEN_ENCRYPTED = "token_enc"
         const val K_DEVICE_ID = "device_id"
         const val K_DEVICE_NAME = "device_name"
+        const val K_PLAY_CACHE = "play_cache"
         const val K_LAST_CH = "last_channel"
         const val K_ENGINE = "engine"
         const val K_DECODE = "decode"

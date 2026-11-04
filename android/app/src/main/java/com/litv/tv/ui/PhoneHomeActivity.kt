@@ -209,6 +209,7 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
                 val ch = currentChannel
                 val sameChannelPlaying = ch != null &&
                     player.playingChannelId == ch.id && player.isPlaying
+                android.util.Log.i(TAG, "Surface 重建判断: ch=${ch?.id} playing=${player.playingChannelId} isPlaying=${player.isPlaying}")
 
                 if (sameChannelPlaying) {
                     // 播放器一直活着（Service 保活），缓冲也没断——
@@ -533,6 +534,8 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
             // 关键：如果服务里的播放器**已经在播这个台**（退后台再回来、
             // 或者 Activity 被重建），只接上就行，不要重新拉流——
             // 否则 Service 保活省下的时间会全部赔回去。
+            android.util.Log.i(TAG, "检查是否已在播: playingChannelId=${player.playingChannelId} " +
+                "lastId=${last.id} isPlaying=${player.isPlaying}")
             if (player.playingChannelId == last.id && player.isPlaying) {
                 android.util.Log.i(TAG, "播放器已在播 ${last.name}，直接接上，不重新拉流")
                 currentChannel = last

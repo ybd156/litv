@@ -529,7 +529,21 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
         // 首次进来：自动播上次看的台，或第一个
         if (currentChannel == null && all.isNotEmpty()) {
             val last = all.firstOrNull { it.id == app.prefs.lastChannelId } ?: all.first()
-            playChannel(last)
+
+            // 关键：如果服务里的播放器**已经在播这个台**（退后台再回来、
+            // 或者 Activity 被重建），只接上就行，不要重新拉流——
+            // 否则 Service 保活省下的时间会全部赔回去。
+            if (player.playingChannelId == last.id && player.isPlaying) {
+                android.util.Log.i(TAG, "播放器已在播 ${last.name}，直接接上，不重新拉流")
+                currentChannel = last
+                playName.text = last.name
+                loading.visibility = View.GONE
+                paused = false
+                btnPlayPause.text = "⏸
+暂停"
+            } else {
+                playChannel(last)
+            }
         }
     }
 

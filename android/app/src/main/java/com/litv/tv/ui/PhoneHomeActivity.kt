@@ -411,7 +411,8 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
             val sv = h.surface
             if (sv != null && sv.isValid) {
                 player.attach(sv, findViewById(android.R.id.content))
-                if (!paused) player.play()
+                // resume() 才是「继续播」；play() 是「换台播放」，签名不同
+                if (!paused) player.resume()
             }
         }
     }

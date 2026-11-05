@@ -444,6 +444,18 @@ build_mpv() {
     mkdir -p "$SRC" && tar xzf "$ROOT/dl/mpv.tar.gz" -C "$SRC" && mv "$SRC/mpv-0.36.0" "$SRC/mpv"
   fi
 
+  # mpv 0.36 和 ffmpeg 7+/8+ 有一处已知不兼容：
+  #   ad_spdif.c 的 write_packet 参数是 uint8_t*，
+  #   而新版 ffmpeg 的 avio_alloc_context 要求 const uint8_t*。
+  #   新 clang 把 -Wincompatible-function-pointer-types 当错误，直接编不过。
+  #   mpv 0.37+ 才修，但 0.37 强制 libplacebo，所以这里给 0.36 打补丁。
+  local spdif="$SRC/mpv/audio/decode/ad_spdif.c"
+  if [ -f "$spdif" ] && ! grep -q "const uint8_t \*buf, int buf_size" "$spdif"; then
+    # 只在 write_packet 那一行加 const，不动别的
+    sed -i '/^static int write_packet(/ s/uint8_t \*buf/const uint8_t *buf/' "$spdif"
+    say "已给 ad_spdif.c 打 const 补丁"
+  fi
+
   # mpv 用 waf/meson 构建；v0.39 已切到 meson
   local bdir="$SRC/mpv-build-$abi"
   rm -rf "$bdir" && mkdir -p "$bdir" && cd "$bdir" || return 1
@@ -476,6 +488,10 @@ CROSS
     --prefix="$prefix" \
     --buildtype=release \
     -Dlibmpv=true \
+    # 兜底：mpv 0.36 有些地方还在用非 const 的函数指针，新版 ffmpeg 改了签名。
+    # 这些差异是纯 const 正确性、行为等价，降级成警告即可，
+    # 免得每碰到一处就要打一个补丁、多跑一轮 CI。
+    -Dc_args=-Wno-incompatible-function-pointer-types \
     -Dlibplacebo=disabled \
     -Dcplayer=false \
     -Dbuild-date=false \

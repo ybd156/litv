@@ -310,6 +310,85 @@ build_ffmpeg() {
   ok "ffmpeg[$abi] 完成（$FFMPEG_TAG）"
 }
 
+# ---------------------------------------------------------------- 2.5 mpv 的依赖
+#
+# mpv 从 0.30 起就把 libass 当硬依赖（meson.build 里 dependency('libass')
+# 没有 required: 参数，等于 required: true），所以想编 mpv 必须先有 libass。
+# libass 又要 freetype 和 fribidi。
+#
+# 这条链子之前一直没编，是因为仓库里那套 .so 来自别处（版本串能对上但
+# 符号面多 30 个，明显带本地补丁）。现在要自己产出一整套一致的库，
+# 就得把这条链补齐。
+#
+# 全部装到 $OUT/<abi>-deps，和 openssl 共用，重建 ffmpeg 不会连累它们。
+
+DEPS_PREFIX() { echo "$OUT/$1-deps"; }
+
+build_fribidi() {
+  local abi="$1" triple prefix
+  triple="$(triple_for "$abi")"; prefix="$(DEPS_PREFIX "$abi")"
+  [ -f "$prefix/lib/libfribidi.a" ] && { ok "fribidi[$abi] 已编译"; return 0; }
+  say "编译 fribidi [$abi]"
+
+  if [ ! -d "$SRC/fribidi" ]; then
+    fetch_tar "https://github.com/fribidi/fribidi/archive/refs/tags/v1.0.15.tar.gz" "$ROOT/dl/fribidi.tar.gz" || return 1
+    mkdir -p "$SRC" && tar xzf "$ROOT/dl/fribidi.tar.gz" -C "$SRC" && mv "$SRC/fribidi-1.0.15" "$SRC/fribidi"
+  fi
+
+  local bdir="$SRC/fribidi-build-$abi"; rm -rf "$bdir"; mkdir -p "$bdir"
+  cat > "$bdir/cross.txt" <<CROSS
+[binaries]
+c = '$TOOLCHAIN/bin/$( [ "$abi" = "armeabi-v7a" ] && echo armv7a-linux-androideabi || echo "$triple" )$API-clang'
+cpp = c
+ar = '$TOOLCHAIN/bin/llvm-ar'
+strip = '$TOOLCHAIN/bin/llvm-strip'
+pkg-config = 'pkg-config'
+[host_machine]
+system = 'android'
+cpu_family = '$( [ "$abi" = "arm64-v8a" ] && echo aarch64 || echo arm )'
+cpu = '$( [ "$abi" = "arm64-v8a" ] && echo aarch64 || echo armv7a )'
+endian = 'little'
+CROSS
+
+  ( cd "$bdir" && meson setup build "$SRC/fribidi" --cross-file cross.txt       --prefix="$prefix" --buildtype=release --default-library=static       -Ddocs=false -Dbin=false -Dtests=false >meson.log 2>&1 &&     ninja -C build >>meson.log 2>&1 && ninja -C build install >>meson.log 2>&1 )     || { err "fribidi 编译失败"; tail -15 "$bdir/meson.log"; return 1; }
+  ok "fribidi[$abi] 完成"
+}
+
+build_freetype() {
+  local abi="$1" triple prefix cc
+  triple="$(triple_for "$abi")"; prefix="$(DEPS_PREFIX "$abi")"
+  [ -f "$prefix/lib/libfreetype.a" ] && { ok "freetype[$abi] 已编译"; return 0; }
+  say "编译 freetype [$abi]"
+
+  if [ ! -d "$SRC/freetype" ]; then
+    fetch_tar "https://github.com/freetype/freetype/archive/refs/tags/VER-2-13-3.tar.gz" "$ROOT/dl/freetype.tar.gz" || return 1
+    mkdir -p "$SRC" && tar xzf "$ROOT/dl/freetype.tar.gz" -C "$SRC" && mv "$SRC/freetype-VER-2-13-3" "$SRC/freetype"
+  fi
+
+  if [ "$abi" = "armeabi-v7a" ]; then cc="$TOOLCHAIN/bin/armv7a-linux-androideabi$API-clang"; else cc="$TOOLCHAIN/bin/${triple}$API-clang"; fi
+  local bdir="$SRC/freetype-build-$abi"; rm -rf "$bdir"; mkdir -p "$bdir"
+  ( cd "$bdir" && CC="$cc" AR="$TOOLCHAIN/bin/llvm-ar" RANLIB="$TOOLCHAIN/bin/llvm-ranlib"       "$SRC/freetype/configure" --host="$triple" --prefix="$prefix"       --enable-static --disable-shared --without-zlib --without-bzip2       --without-png --without-harfbuzz --without-brotli       >configure.log 2>&1 && make -j"$JOBS" >>build.log 2>&1 && make install >>build.log 2>&1 )     || { err "freetype 编译失败"; tail -15 "$bdir/configure.log" "$bdir/build.log" 2>/dev/null; return 1; }
+  ok "freetype[$abi] 完成"
+}
+
+build_libass() {
+  local abi="$1" triple prefix cc cxx
+  triple="$(triple_for "$abi")"; prefix="$(DEPS_PREFIX "$abi")"
+  [ -f "$prefix/lib/libass.a" ] && { ok "libass[$abi] 已编译"; return 0; }
+  say "编译 libass [$abi]"
+
+  if [ ! -d "$SRC/libass" ]; then
+    fetch_tar "https://github.com/libass/libass/releases/download/0.17.1/libass-0.17.1.tar.gz" "$ROOT/dl/libass.tar.gz" || return 1
+    mkdir -p "$SRC" && tar xzf "$ROOT/dl/libass.tar.gz" -C "$SRC" && mv "$SRC/libass-0.17.1" "$SRC/libass"
+  fi
+
+  if [ "$abi" = "armeabi-v7a" ]; then cc="$TOOLCHAIN/bin/armv7a-linux-androideabi$API-clang"; else cc="$TOOLCHAIN/bin/${triple}$API-clang"; fi
+  cxx="${cc}++"
+  local bdir="$SRC/libass-build-$abi"; rm -rf "$bdir"; mkdir -p "$bdir"
+  ( cd "$bdir" &&     PKG_CONFIG_PATH="$prefix/lib/pkgconfig"     CC="$cc" CXX="$cxx" AR="$TOOLCHAIN/bin/llvm-ar" RANLIB="$TOOLCHAIN/bin/llvm-ranlib"     "$SRC/libass/configure" --host="$triple" --prefix="$prefix"       --enable-static --disable-shared --disable-fontconfig --disable-harfbuzz       --disable-require-system-font-provider       >configure.log 2>&1 && make -j"$JOBS" >>build.log 2>&1 && make install >>build.log 2>&1 )     || { err "libass 编译失败"; tail -20 "$bdir/configure.log" "$bdir/build.log" 2>/dev/null; return 1; }
+  ok "libass[$abi] 完成"
+}
+
 # ---------------------------------------------------------------- 3. mpv
 build_mpv() {
   local abi="$1" prefix
@@ -318,8 +397,8 @@ build_mpv() {
 
   say "编译 mpv [$abi]"
   if [ ! -d "$SRC/mpv" ]; then
-    fetch_tar "https://github.com/mpv-player/mpv/archive/refs/tags/v0.39.0.tar.gz" "$ROOT/dl/mpv.tar.gz" || return 1
-    mkdir -p "$SRC" && tar xzf "$ROOT/dl/mpv.tar.gz" -C "$SRC" && mv "$SRC/mpv-0.39.0" "$SRC/mpv"
+    fetch_tar "https://github.com/mpv-player/mpv/archive/refs/tags/v0.36.0.tar.gz" "$ROOT/dl/mpv.tar.gz" || return 1
+    mkdir -p "$SRC" && tar xzf "$ROOT/dl/mpv.tar.gz" -C "$SRC" && mv "$SRC/mpv-0.36.0" "$SRC/mpv"
   fi
 
   # mpv 用 waf/meson 构建；v0.39 已切到 meson
@@ -346,12 +425,15 @@ CROSS
   #   - 没有 android 开关；Android 支持由 egl-android + android-media-ndk 组成
   #   - 没有 macos-10-15-feature（改叫 macos-10-15-4-features）
   # 给错选项 meson 会直接 "Unknown option" 退出，所以这里只列真实存在的。
-  PKG_CONFIG_PATH="$prefix/lib/pkgconfig" \
+  PKG_CONFIG_PATH="$(DEPS_PREFIX "$abi")/lib/pkgconfig:$prefix/lib/pkgconfig" \
   meson setup build "$SRC/mpv" \
     --cross-file "$bdir/cross.txt" \
     --prefix="$prefix" \
     --buildtype=release \
     -Dlibmpv=true \
+    # 0.37+ 把 libplacebo 变成硬依赖，0.36 还能关。
+    # 编 libplacebo 要 vulkan/glslang/shaderc 一整串，对 IPTV 没用（我们只用 vo=gpu）。
+    -Dlibplacebo=disabled \
     -Dcplayer=false \
     -Dbuild-date=false \
     -Dgpl=false \
@@ -407,6 +489,14 @@ for abi in $ABIS; do
   fi
   build_openssl "$abi" || { err "openssl[$abi] 失败，跳过该 ABI"; continue; }
   build_ffmpeg  "$abi" || { err "ffmpeg[$abi] 失败，跳过该 ABI"; continue; }
+  # mpv 的依赖链：libass 是硬依赖，libass 又要 freetype + fribidi。
+  # 只在真要编 mpv 时才走这条，避免浪费 CI 时间。
+  if [ "$SKIP_MPV" != "1" ]; then
+    build_fribidi  "$abi" || { err "fribidi[$abi] 失败，跳过该 ABI"; continue; }
+    build_freetype "$abi" || { err "freetype[$abi] 失败，跳过该 ABI"; continue; }
+    build_libass   "$abi" || { err "libass[$abi] 失败，跳过该 ABI"; continue; }
+  fi
+
   if [ "$SKIP_MPV" = "1" ]; then
     say "跳过 mpv（SKIP_MPV=1，复用仓库里已有的 libmpv.so）"
   else

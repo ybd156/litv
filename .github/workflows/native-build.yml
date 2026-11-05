@@ -43,6 +43,10 @@ jobs:
         # GitHub 直接 startup_failure（连 job 都起不来）。
         # 只编 arm：仓库里没有 x86 的 libmpv.so，编了 x86 的 ffmpeg 也没人用
         abi: [arm64-v8a, armeabi-v7a]
+    env:
+      # 0 = 连 mpv 一起编（产出一整套自洽的库）
+      # 1 = 只重编 ffmpeg，复用仓库里已有的 libmpv.so
+      SKIP_MPV: "0"
     steps:
       - uses: actions/checkout@v7
 
@@ -108,15 +112,15 @@ jobs:
           ABIS: ${{ matrix.abi }}
           BUILD_ROOT: ${{ github.workspace }}/.native-build
           JOBS: 4
-          # mpv 0.39 强制依赖 libplacebo（还要 vulkan/glslang），CI 里成本太高。
-          # 而 TLS 完全在 ffmpeg 里——只要 ffmpeg 版本一致，
-          # 复用仓库里已有的 libmpv.so 链新的 libavformat.so 就行。
-          SKIP_MPV: "1"
+          SKIP_MPV: ${{ env.SKIP_MPV }}
         run: |
           chmod +x native/build-libmpv.sh
           ./native/build-libmpv.sh
 
+      # 只在复用仓库里的旧 libmpv 时才需要。自己编 mpv 的话，
+      # 链接阶段就会因为缺符号直接失败，天然是更强的校验。
       - name: ABI 兼容性检查（新库能不能配旧 libmpv）
+        if: env.SKIP_MPV == '1'
         run: |
           # 用 Python 直接解析 ELF，不依赖 nm/objdump——
           # 实测那两个工具在 NDK 编出来并 strip 过的 .so 上会返回空，

@@ -32,7 +32,7 @@ import java.util.concurrent.TimeUnit
  * 注意
  * ----
  * - `seek` 直接返回 -1：直播流不可回退，ijk 拿到失败会按直播处理。
- * - `read` 返回 0 表示 EOF，-1 表示错误。直播不会 EOF。
+ * - `read` 返回 **负数** 表示 EOF（ijk 把 0 当成 EAGAIN 会无限重试）。
  * - 请求头（UA / Referer）在这里统一加，因为 ijk 的 ijkio 协议
  *   不传 headers 参数。
  */
@@ -43,6 +43,18 @@ class IjkAndroidIO(
     companion object {
         private const val TAG = "IjkAndroidIO"
         private const val DEFAULT_UA = "LITV/1.0 (Android)"
+
+        /**
+         * 表示 EOF。
+         *
+         * 这个值不能随便写。ijk 的 ijkioandroidio.c 里这样映射 Java 返回值：
+         *     ret < 0  ->  AVERROR_EOF     （结束）
+         *     ret == 0 ->  AVERROR(EAGAIN) （暂时没数据，重试）
+         *
+         * 之前返回 0 表示结束，ijk 当成「稍后再试」无限重试，
+         * 结果卡到看门狗超时（日志：open ok 200 之后 15 秒毫无进展）。
+         */
+        private const val EOF = -1
 
         // ijk 的 seek whence 常量（对应 ijkavutil 里的 IJKAVSEEK_SIZE）
         private const val IJKAVSEEK_SIZE = 0x10000
@@ -120,14 +132,14 @@ class IjkAndroidIO(
             pos += n
             return n
         }
-        if (eof) return 0
+        if (eof) return EOF
 
         val src = source ?: return -1
         return try {
             val n = src.read(buffer, 0, size)
             if (n < 0) {
                 eof = true
-                0
+                EOF
             } else {
                 ensureCap(bufLen + n)
                 System.arraycopy(buffer, 0, buf, bufLen, n)

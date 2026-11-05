@@ -372,6 +372,26 @@ build_freetype() {
   ok "freetype[$abi] 完成"
 }
 
+build_zlib() {
+  local abi="$1" prefix
+  prefix="$(DEPS_PREFIX "$abi")"
+  [ -f "$prefix/lib/libz.a" ] && { ok "zlib[$abi] 已编译"; return 0; }
+  say "编译 zlib [$abi]"
+
+  # 为什么需要：mpv 的 meson 会用宿主 pkg-config 找 zlib，
+  # 结果链到 /usr/lib/x86_64-linux-gnu/libz.so，报
+  #   "incompatible with aarch64linux"
+  # 给 Android 编一个放进 deps，pkg-config 就会优先找到它。
+  if [ ! -d "$SRC/zlib" ]; then
+    fetch_tar "https://github.com/madler/zlib/archive/refs/tags/v1.3.1.tar.gz" "$ROOT/dl/zlib.tar.gz" || return 1
+    mkdir -p "$SRC" && tar xzf "$ROOT/dl/zlib.tar.gz" -C "$SRC" && mv "$SRC/zlib-1.3.1" "$SRC/zlib"
+  fi
+
+  local bdir="$SRC/zlib-build-$abi"; rm -rf "$bdir"; mkdir -p "$bdir"
+  ( cd "$bdir" && cmake "$SRC/zlib" -G Ninja       -DCMAKE_MAKE_PROGRAM="$(command -v ninja)"       -DCMAKE_TOOLCHAIN_FILE="$NDK/build/cmake/android.toolchain.cmake"       -DANDROID_ABI="$abi" -DANDROID_PLATFORM="android-$API"       -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$prefix"       -DBUILD_SHARED_LIBS=OFF       >cmake.log 2>&1 && ninja -C . >>cmake.log 2>&1 && ninja -C . install >>cmake.log 2>&1 )     || { err "zlib 编译失败"; grep -iE "error|not found" "$bdir/cmake.log" | tail -8; return 1; }
+  ok "zlib[$abi] 完成"
+}
+
 build_harfbuzz() {
   local abi="$1" triple prefix
   triple="$(triple_for "$abi")"; prefix="$(DEPS_PREFIX "$abi")"
@@ -572,6 +592,7 @@ for abi in $ABIS; do
   if [ "$SKIP_MPV" != "1" ]; then
     build_fribidi  "$abi" || { err "fribidi[$abi] 失败，跳过该 ABI"; continue; }
     build_freetype "$abi" || { err "freetype[$abi] 失败，跳过该 ABI"; continue; }
+    build_zlib     "$abi" || { err "zlib[$abi] 失败，跳过该 ABI"; continue; }
     build_harfbuzz "$abi" || { err "harfbuzz[$abi] 失败，跳过该 ABI"; continue; }
     build_libass   "$abi" || { err "libass[$abi] 失败，跳过该 ABI"; continue; }
   fi

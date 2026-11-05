@@ -63,6 +63,7 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
     private lateinit var osd: LinearLayout
     private lateinit var osdName: TextView
     private lateinit var osdNow: TextView
+    private lateinit var osdNo: TextView
     private lateinit var osdNext: TextView
     private lateinit var osdEngine: TextView
     private lateinit var osdProgress: ProgressBar
@@ -412,6 +413,7 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         osd = findViewById(R.id.osd)
         osdName = findViewById(R.id.osdName)
         osdNow = findViewById(R.id.osdNow)
+        osdNo = findViewById(R.id.osdNo)
         osdNext = findViewById(R.id.osdNext)
         osdEngine = findViewById(R.id.osdEngine)
         osdProgress = findViewById(R.id.osdProgress)
@@ -810,6 +812,11 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         }
         osdNext.text = next?.let { "下一档 ${fmt(it.startAt)} ${it.title}" } ?: ""
         osdEngine.text = player.engineLabel()
+
+        // 台号：这个 TextView 之前从来没被赋值过，一直是空的。
+        // 用当前过滤列表里的序号，和频道面板里看到的一致，补成三位（005 这种）。
+        val pos = current?.let { c -> channels.indexOfFirst { it.id == c.id } } ?: -1
+        osdNo.text = if (pos >= 0) String.format("%03d", pos + 1) else ""
     }
 
     /**

@@ -610,7 +610,7 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
 
     /** 刷新左侧分类列表：全部 / 收藏 / 各分组，并带上数量。 */
     private fun refreshCategories() {
-        if (!::grpAdapter.isInitialized) return
+        if (!::grpList.isInitialized) return
         val rows = ArrayList<GroupAdapter.Row>()
         rows.add(GroupAdapter.Row("全部", allChannels.size))
         if (favoriteIds.isNotEmpty()) rows.add(GroupAdapter.Row("收藏", favoriteIds.size))

@@ -69,6 +69,7 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
     private lateinit var panel: LinearLayout
     private lateinit var panelTitle: TextView
     private lateinit var panelList: RecyclerView
+    private lateinit var grpList: RecyclerView
     private val srcAdapter = GroupAdapter()
     private val grpAdapter = GroupAdapter()
     /** 当前选中的源 id，0 = 全部 */
@@ -484,6 +485,17 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         )
         panelList.layoutManager = LinearLayoutManager(this)
         panelList.adapter = panelAdapter
+
+        // 左侧分类列表
+        grpList = findViewById(R.id.grpList)
+        grpList.layoutManager = LinearLayoutManager(this)
+        grpList.adapter = grpAdapter
+        grpAdapter.onPick = { name ->
+            selGroup = name ?: ""
+            applyChannelFilter()
+            index = 0
+            panelList.scrollToPosition(0)
+        }
         panelAdapter.submit(channels, emptyMap())
         panelTitle.text = "频道列表（${channels.size}）"
 
@@ -596,12 +608,26 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         }
     }
 
+    /** 刷新左侧分类列表：全部 / 收藏 / 各分组，并带上数量。 */
+    private fun refreshCategories() {
+        if (!::grpAdapter.isInitialized) return
+        val rows = ArrayList<GroupAdapter.Row>()
+        rows.add(GroupAdapter.Row("全部", allChannels.size))
+        if (favoriteIds.isNotEmpty()) rows.add(GroupAdapter.Row("收藏", favoriteIds.size))
+        allChannels.map { it.group }
+            .filter { it.isNotBlank() }
+            .distinct()
+            .forEach { g -> rows.add(GroupAdapter.Row(g, allChannels.count { it.group == g })) }
+        grpAdapter.submit(rows, if (selGroup.isEmpty()) "全部" else selGroup)
+    }
+
     private fun applyGroupFilter() {
         // 四列模式下，过滤交给 rebuildColumns() + applyChannelFilter()。
         //
         // 这里原来还有一段单列时代的分组逻辑，其中 `allChannels = channels`
         // 会把全量列表覆盖成过滤后的结果（越点越少），
         // 后面再用 groupLabelText() 把四列的标题盖回去。整段删掉。
+        refreshCategories()
         if (::panelAdapter.isInitialized) {
             applyChannelFilter()
         }
@@ -882,6 +908,9 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
     }
 
     private fun showOsd() {
+        // 面板打开时不显示 OSD：面板底部已经有完整信息条，
+        // 两个同时出现会叠在一起。
+        if (panelVisible) return
         osdVisible = true
         osd.visibility = View.VISIBLE
         osdName.text = current?.name ?: ""
@@ -902,6 +931,9 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
     private fun openPanel() {
         panelVisible = true
         panel.visibility = View.VISIBLE
+        // 面板自己底部就有信息条，OSD 再压上来就重了——
+        // 真机上看到的是「线路 1/1 / 04:27 周五」叠在频道列表上。
+        hideOsd()
         // 四列：源 / 分组 / 频道。这里必须走 applyChannelFilter()，
         // 原来直接 submit(channels) 会把还没加载的空列表刷进去，频道列就是空的。
         applyChannelFilter()
@@ -1320,29 +1352,24 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
      * 左右负责跨列，比「左右键都拿来切分组」合理。
      */
     private fun movePanelFocus(dir: Int) {
-        val strip = findViewById<TextView>(R.id.grpStrip)
         when {
-            strip.hasFocus() && dir > 0 -> panelList.requestFocus()
-            panelList.hasFocus() && dir < 0 -> strip.requestFocus()
+            grpList.hasFocus() && dir > 0 -> panelList.requestFocus()
+            panelList.hasFocus() && dir < 0 -> grpList.requestFocus()
             panelList.hasFocus() && dir > 0 -> epgList.requestFocus()
             epgList.hasFocus() && dir < 0 -> panelList.requestFocus()
-            else -> if (dir > 0) panelList.requestFocus() else strip.requestFocus()
+            else -> if (dir > 0) panelList.requestFocus() else grpList.requestFocus()
         }
     }
 
-    private fun cycleGroup() {
-        val all = listOf("") + allChannels.map { it.group }.filter { it.isNotBlank() }.distinct()
-        val i = all.indexOf(selGroup)
-        selGroup = all[(i + 1).mod(all.size)]
-        findViewById<TextView>(R.id.grpStrip)?.text =
-            (if (selGroup.isEmpty()) "全部" else selGroup) + "\n《\n频道"
-        applyChannelFilter()
-    }
 
     /** 按当前源+分组过滤，刷到频道列表 */
     private fun applyChannelFilter() {
         var list = if (selSource == 0L) allChannels else allChannels.filter { it.sourceId == selSource }
-        if (selGroup.isNotEmpty()) list = list.filter { it.group == selGroup }
+        list = when {
+            selGroup == "收藏" -> list.filter { favoriteIds.contains(it.id) }
+            selGroup.isNotEmpty() -> list.filter { it.group == selGroup }
+            else -> list
+        }
         // 必须写回 channels：切台、自动播放、上下一台全靠它。
         // 改成四列浮层时这里漏了赋值，导致 channels 永远为空、自动播放从不触发，
         // 表现就是黑屏转圈、服务端收不到 /tv/play。

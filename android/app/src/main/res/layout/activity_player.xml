@@ -201,26 +201,42 @@
             android:layout_weight="1"
             android:orientation="horizontal">
 
-            <!-- 1. 分组（扁平化：所有源的分组合并成一组列表） -->
-            <TextView
-                android:id="@+id/grpStrip"
-                android:layout_width="66dp"
+            <!-- 1. 分类列表（全部 / 收藏 / 各分组）
+                 之前这里是个竖排文字的 TextView，只能点一下循环切分组，
+                 既看不出有哪些分类，也不知道当前在哪一类。
+                 现在换成真正的列表，选中项高亮。 -->
+            <LinearLayout
+                android:layout_width="150dp"
                 android:layout_height="match_parent"
-                android:background="#E60B0E11"
-                android:clickable="true"
-                android:focusable="true"
-                android:gravity="center"
-                android:lineSpacingExtra="6dp"
-                android:text="全部"
-                android:textColor="@color/text_primary"
-                android:textSize="16sp" />
+                android:background="#F20B0E11"
+                android:orientation="vertical"
+                android:paddingHorizontal="4dp"
+                android:paddingVertical="4dp">
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:paddingStart="8dp"
+                    android:paddingTop="4dp"
+                    android:paddingBottom="6dp"
+                    android:text="分类"
+                    android:textColor="@color/text_secondary"
+                    android:textSize="12sp" />
+
+                <androidx.recyclerview.widget.RecyclerView
+                    android:id="@+id/grpList"
+                    android:layout_width="match_parent"
+                    android:layout_height="0dp"
+                    android:layout_weight="1"
+                    android:scrollbars="none" />
+            </LinearLayout>
 
             <!-- 2. 频道列表：台号框 + 台名 + 当前节目 -->
             <LinearLayout
                 android:layout_width="0dp"
                 android:layout_height="match_parent"
-                android:layout_weight="0.40"
-                android:background="#E60B0E11"
+                android:layout_weight="0.44"
+                android:background="#F20B0E11"
                 android:orientation="vertical"
                 android:paddingHorizontal="8dp">
 
@@ -246,8 +262,8 @@
                 android:id="@+id/epgPanel"
                 android:layout_width="0dp"
                 android:layout_height="match_parent"
-                android:layout_weight="0.34"
-                android:background="#D90B0E11"
+                android:layout_weight="0.36"
+                android:background="#F00B0E11"
                 android:orientation="vertical"
                 android:paddingHorizontal="8dp">
 
@@ -278,7 +294,7 @@
             <View
                 android:layout_width="0dp"
                 android:layout_height="match_parent"
-                android:layout_weight="0.26" />
+                android:layout_weight="0.20" />
         </LinearLayout>
 
         <!-- 下：底部信息条（台标 / 台号名称 / 正在播 / 下一档 / 线路 / 进度 / 时间） -->
@@ -286,7 +302,7 @@
             android:id="@+id/infoBar"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:background="#E60B0E11"
+            android:background="#F20B0E11"
             android:gravity="center_vertical"
             android:orientation="horizontal"
             android:paddingHorizontal="16dp"

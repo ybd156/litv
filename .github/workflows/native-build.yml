@@ -118,8 +118,10 @@ jobs:
 
       - name: ABI 兼容性检查（新库能不能配旧 libmpv）
         run: |
-          chmod +x tools/checks/check-av-abi.sh
-          OLD_DIR=/tmp/old-libs ./tools/checks/check-av-abi.sh             android/app/src/main/jniLibs/${{ matrix.abi }}             /tmp/old-libs/libmpv.so
+          # 用 Python 直接解析 ELF，不依赖 nm/objdump——
+          # 实测那两个工具在 NDK 编出来并 strip 过的 .so 上会返回空，
+          # 导致门禁静默失效、给出假的「兼容」结论。
+          python3 tools/checks/check-av-abi.py             android/app/src/main/jniLibs/${{ matrix.abi }}             /tmp/old-libs
 
       - name: 校验 TLS 真的编进去了
         run: |

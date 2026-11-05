@@ -64,7 +64,10 @@ ENABLE_AVS3="${ENABLE_AVS3:-0}"
 #
 #   是否真的兼容**不靠猜**——CI 里有 tools/checks/check-av-abi.sh
 #   逐符号比对，不通过就不发布。
-FFMPEG_TAG="${FFMPEG_TAG:-master}"
+# 固定到仓库里现有 libmpv.so 所对应的那个 ffmpeg commit。
+# 从旧 libavutil.so 的版本串里读出来的：N-126627-g094a2f8a2a。
+# 只有用同一个 commit 重编，libmpv 引用的符号才一定都在。
+FFMPEG_TAG="${FFMPEG_TAG:-094a2f8a2a}"
 
 # 只重编 ffmpeg（复用仓库里已有的 libmpv.so）。
 #
@@ -210,13 +213,18 @@ build_ffmpeg() {
     # 用 GitHub 的 tag 归档而不是 ffmpeg.org：后者在国内/代理下经常
     # TLS handshake failure，GitHub 反而稳。
     local url dirname
-    if [ "$FFMPEG_TAG" = "master" ]; then
-      url="https://github.com/FFmpeg/FFmpeg/archive/refs/heads/master.tar.gz"
-      dirname="FFmpeg-master"
-    else
-      url="https://github.com/FFmpeg/FFmpeg/archive/refs/tags/${FFMPEG_TAG}.tar.gz"
-      dirname="FFmpeg-${FFMPEG_TAG#n}"
-    fi
+    case "$FFMPEG_TAG" in
+      master)
+        url="https://github.com/FFmpeg/FFmpeg/archive/refs/heads/master.tar.gz"
+        dirname="FFmpeg-master" ;;
+      # 纯十六进制 = commit，走 archive/<sha>
+      [0-9a-f]*)
+        url="https://github.com/FFmpeg/FFmpeg/archive/${FFMPEG_TAG}.tar.gz"
+        dirname="FFmpeg-${FFMPEG_TAG}" ;;
+      *)
+        url="https://github.com/FFmpeg/FFmpeg/archive/refs/tags/${FFMPEG_TAG}.tar.gz"
+        dirname="FFmpeg-${FFMPEG_TAG#n}" ;;
+    esac
     fetch_tar "$url" "$ROOT/dl/ffmpeg-$FFMPEG_TAG.tar.gz" || return 1
     mkdir -p "$SRC" && tar xzf "$ROOT/dl/ffmpeg-$FFMPEG_TAG.tar.gz" -C "$SRC" && mv "$SRC/$dirname" "$SRC/ffmpeg"
   fi

@@ -355,8 +355,8 @@ CROSS
 }
 
 build_freetype() {
-  local abi="$1" triple prefix cc
-  triple="$(triple_for "$abi")"; prefix="$(DEPS_PREFIX "$abi")"
+  local abi="$1" prefix
+  prefix="$(DEPS_PREFIX "$abi")"
   [ -f "$prefix/lib/libfreetype.a" ] && { ok "freetype[$abi] 已编译"; return 0; }
   say "编译 freetype [$abi]"
 
@@ -365,9 +365,10 @@ build_freetype() {
     mkdir -p "$SRC" && tar xzf "$ROOT/dl/freetype.tar.gz" -C "$SRC" && mv "$SRC/freetype-VER-2-13-3" "$SRC/freetype"
   fi
 
-  if [ "$abi" = "armeabi-v7a" ]; then cc="$TOOLCHAIN/bin/armv7a-linux-androideabi$API-clang"; else cc="$TOOLCHAIN/bin/${triple}$API-clang"; fi
+  # 用 CMake 而不是 autotools：NDK 自带 android.toolchain.cmake，
+  # 交叉编译一次就对，不用纠结 --host/--build 和 libtool。
   local bdir="$SRC/freetype-build-$abi"; rm -rf "$bdir"; mkdir -p "$bdir"
-  ( cd "$bdir" && CC="$cc" AR="$TOOLCHAIN/bin/llvm-ar" RANLIB="$TOOLCHAIN/bin/llvm-ranlib"       "$SRC/freetype/configure" --host="$triple" --prefix="$prefix"       --enable-static --disable-shared --without-zlib --without-bzip2       --without-png --without-harfbuzz --without-brotli       >configure.log 2>&1 && make -j"$JOBS" >>build.log 2>&1 && make install >>build.log 2>&1 )     || { err "freetype 编译失败"; tail -15 "$bdir/configure.log" "$bdir/build.log" 2>/dev/null; return 1; }
+  ( cd "$bdir" && cmake "$SRC/freetype" -G Ninja       -DCMAKE_MAKE_PROGRAM="$(command -v ninja)"       -DCMAKE_TOOLCHAIN_FILE="$NDK/build/cmake/android.toolchain.cmake"       -DANDROID_ABI="$abi" -DANDROID_PLATFORM="android-$API"       -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$prefix"       -DBUILD_SHARED_LIBS=OFF       -DFT_DISABLE_ZLIB=TRUE -DFT_DISABLE_PNG=TRUE -DFT_DISABLE_BZIP2=TRUE       -DFT_DISABLE_HARFBUZZ=TRUE -DFT_DISABLE_BROTLI=TRUE       >cmake.log 2>&1 && ninja -C . >>cmake.log 2>&1 && ninja -C . install >>cmake.log 2>&1 )     || { err "freetype 编译失败"; grep -iE "error|not found" "$bdir/cmake.log" | tail -10; return 1; }
   ok "freetype[$abi] 完成"
 }
 
@@ -516,9 +517,16 @@ missing=0
 for abi in $ABIS; do
   # 检查**构建输出**目录，不是 jniLibs——
   # jniLibs 里本来就有提交进仓库的旧 .so，查那里会误判成"编成功了"。
-  # libmpv 可能来自本次构建，也可能是仓库里已有的（SKIP_MPV=1 时复用）
-  if [ ! -f "$OUT/$abi/lib/libmpv.so" ] && [ ! -f "$PROJ/app/src/main/jniLibs/$abi/libmpv.so" ]; then
-    err "$abi 既没编出 libmpv.so，仓库里也没有"; missing=1
+  # libmpv 的校验分两种情况：
+  #   SKIP_MPV=0：必须本次真编出来。仓库里那份是旧 ffmpeg 的产物，
+  #               和新的 ffmpeg 库混在一起会 dlopen 失败。
+  #   SKIP_MPV=1：允许复用仓库里的旧 libmpv（这时 ABI 门禁负责把关）。
+  if [ "$SKIP_MPV" = "1" ]; then
+    if [ ! -f "$OUT/$abi/lib/libmpv.so" ] && [ ! -f "$PROJ/app/src/main/jniLibs/$abi/libmpv.so" ]; then
+      err "$abi 既没编出 libmpv.so，仓库里也没有"; missing=1
+    fi
+  else
+    [ -f "$OUT/$abi/lib/libmpv.so" ] || { err "$abi 本次没编出 libmpv.so（SKIP_MPV=0 要求必须编）"; missing=1; }
   fi
   [ -f "$OUT/$abi/lib/libavformat.so" ] || { err "$abi 没有编出 libavformat.so"; missing=1; }
 done

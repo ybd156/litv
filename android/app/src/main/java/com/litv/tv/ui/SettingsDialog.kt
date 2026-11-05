@@ -35,6 +35,10 @@ class SettingsDialog(context: Context) : Dialog(context, R.style.LitvDialog) {
 
     init {
         requestWindowFeature(Window.FEATURE_NO_TITLE)
+        // 不设这个，Dialog 会用默认的最小宽度渲染——
+        // 布局里写的 720dp 根本不生效，真机上弹窗只有屏宽的 36%，
+        // 左边主题和右边选项挤在一起，字也小。
+        window?.setBackgroundDrawableResource(android.R.color.transparent)
         val root = LayoutInflater.from(context).inflate(R.layout.dialog_settings, null)
         setContentView(root)
 
@@ -47,6 +51,16 @@ class SettingsDialog(context: Context) : Dialog(context, R.style.LitvDialog) {
         tabs.forEachIndexed { i, t -> t.setOnClickListener { switchTheme(i) } }
 
         switchTheme(0)
+    }
+
+    override fun onStart() {
+        super.onStart()
+        val dm = context.resources.displayMetrics
+        // 88% 宽、最高 84% 高，留出边距，别顶满
+        window?.setLayout(
+            (dm.widthPixels * 0.88f).toInt(),
+            (dm.heightPixels * 0.84f).toInt(),
+        )
     }
 
     private fun switchTheme(i: Int) {
@@ -111,7 +125,7 @@ class SettingsDialog(context: Context) : Dialog(context, R.style.LitvDialog) {
         val ctx = context
         val row = LinearLayout(ctx).apply {
             orientation = LinearLayout.HORIZONTAL
-            setPadding(dp(14), dp(13), dp(14), dp(13))
+            setPadding(dp(18), dp(16), dp(18), dp(16))
             background = ctx.getDrawable(R.drawable.bg_focusable)
             isFocusable = true
             isClickable = true
@@ -123,13 +137,13 @@ class SettingsDialog(context: Context) : Dialog(context, R.style.LitvDialog) {
         val name = TextView(ctx).apply {
             text = label
             setTextColor(ctx.getColor(R.color.text_primary))
-            textSize = 14f
+            textSize = 18f
             layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
         }
         val valView = TextView(ctx).apply {
             text = value
             setTextColor(ctx.getColor(R.color.accent))
-            textSize = 14f
+            textSize = 18f
         }
         row.addView(name)
         row.addView(valView)

@@ -23,30 +23,30 @@
             android:id="@+id/tabPlay"
             style="@style/SettingRow"
             android:paddingHorizontal="12dp"
-            android:paddingVertical="12dp"
+            android:paddingVertical="18dp"
             android:text="播放"
             android:textColor="@color/text_primary"
-            android:textSize="15sp" />
+            android:textSize="19sp" />
 
         <TextView
             android:id="@+id/tabInteract"
             style="@style/SettingRow"
             android:layout_marginTop="4dp"
             android:paddingHorizontal="12dp"
-            android:paddingVertical="12dp"
+            android:paddingVertical="18dp"
             android:text="交互"
             android:textColor="@color/text_primary"
-            android:textSize="15sp" />
+            android:textSize="19sp" />
 
         <TextView
             android:id="@+id/tabDevice"
             style="@style/SettingRow"
             android:layout_marginTop="4dp"
             android:paddingHorizontal="12dp"
-            android:paddingVertical="12dp"
+            android:paddingVertical="18dp"
             android:text="设备"
             android:textColor="@color/text_primary"
-            android:textSize="15sp" />
+            android:textSize="19sp" />
     </LinearLayout>
 
     <!-- 右：选项（代码里按主题动态填） -->

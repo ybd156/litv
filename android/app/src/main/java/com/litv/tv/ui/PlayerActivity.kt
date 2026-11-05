@@ -682,9 +682,15 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
             snapshotView.visibility = View.VISIBLE
         }
 
-        // 加载圈延迟出现，避免快换台时闪一下
+        // 换台时**不显示加载圈**。
+        //
+        // 旧画面已经用快照盖住了，再叠一个转圈的很突兀——
+        // 用户的反馈就是「还是有加载中的圈圈」。
+        // 只有第一次起播（没有快照可盖、屏幕是黑的）才需要圈。
         main.removeCallbacks(showLoadingRunnable)
-        main.postDelayed(showLoadingRunnable, 220)
+        if (snapshotView.visibility != View.VISIBLE) {
+            main.postDelayed(showLoadingRunnable, 300)
+        }
         switchTip.visibility = View.VISIBLE
         osdName.text = ch.name
 

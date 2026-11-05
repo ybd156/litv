@@ -434,6 +434,8 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         }
         findViewById<TextView>(R.id.miLine).setOnClickListener { openLinePicker() }
         findViewById<TextView>(R.id.miTimeout).setOnClickListener {
+            // 先收掉右侧菜单，否则弹窗和菜单叠在一起
+            closeSettingsMenu()
             SettingsDialog(this).show()
         }
         findViewById<TextView>(R.id.miCategory).setOnClickListener {
@@ -443,12 +445,18 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
             closeSettingsMenu(); openPanel()
         }
         findViewById<TextView>(R.id.miDisplay).setOnClickListener {
+            // 先收掉右侧菜单，否则弹窗和菜单叠在一起
+            closeSettingsMenu()
             SettingsDialog(this).show()
         }
         findViewById<TextView>(R.id.miPrefs).setOnClickListener {
+            // 先收掉右侧菜单，否则弹窗和菜单叠在一起
+            closeSettingsMenu()
             SettingsDialog(this).show()
         }
         findViewById<TextView>(R.id.miOther).setOnClickListener {
+            // 先收掉右侧菜单，否则弹窗和菜单叠在一起
+            closeSettingsMenu()
             SettingsDialog(this).show()
         }
         epgPanel = findViewById(R.id.epgPanel)

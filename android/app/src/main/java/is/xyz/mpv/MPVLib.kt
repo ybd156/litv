@@ -46,6 +46,13 @@ object MPVLib {
             System.loadLibrary("player")
             true
         } catch (t: Throwable) {
+            // 一定要打出来。之前这里静默吞掉，结果真机上 mpv 一直不可用，
+            // 日志只有一句「不可用」，完全看不出是缺库、ABI 不对还是符号找不到。
+            android.util.Log.e(
+                "MPVLib",
+                "libplayer.so 加载失败：" + t.javaClass.simpleName + ": " + t.message,
+                t,
+            )
             false
         }
     }

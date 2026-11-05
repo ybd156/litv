@@ -29,7 +29,7 @@
             android:layout_marginTop="4dp"
             android:text="用遥控器上下移动，左右键修改，OK 确认"
             android:textColor="@color/text_secondary"
-            android:textSize="14sp" />
+            android:textSize="16sp" />
 
         <!-- ============ 播放 ============ -->
         <TextView
@@ -235,7 +235,7 @@
             android:layout_height="wrap_content"
             android:layout_marginTop="24dp"
             android:textColor="@color/accent"
-            android:textSize="14sp" />
+            android:textSize="16sp" />
     </LinearLayout>
 </ScrollView>
 

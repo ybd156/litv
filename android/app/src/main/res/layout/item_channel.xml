@@ -38,7 +38,7 @@
         android:layout_height="wrap_content"
         android:gravity="center"
         android:textColor="@color/text_secondary"
-        android:textSize="12sp" />
+        android:textSize="15sp" />
 
     <!-- 台标：有图显示图，没图显示首字方块（不然一行只剩中间一串字，很空） -->
     <FrameLayout
@@ -53,7 +53,7 @@
             android:gravity="center"
             android:maxLines="1"
             android:textColor="@color/text_secondary"
-            android:textSize="13sp" />
+            android:textSize="16sp" />
 
         <ImageView
             android:id="@+id/logo"
@@ -93,7 +93,7 @@
             android:scrollHorizontally="true"
             android:singleLine="true"
             android:textColor="@color/text_secondary"
-            android:textSize="11sp" />
+            android:textSize="14sp" />
 
         <!-- 当前节目进度：2dp 细条，不占地方但能看出还剩多少 -->
         <ProgressBar
@@ -115,6 +115,6 @@
         android:layout_height="wrap_content"
         android:layout_marginStart="6dp"
         android:textColor="@color/accent"
-        android:textSize="12sp"
+        android:textSize="15sp"
         android:visibility="gone" />
 </LinearLayout>

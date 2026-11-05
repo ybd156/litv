@@ -96,7 +96,7 @@
             android:layout_marginTop="8dp"
             android:text="端口默认 28027。若服务端提示端口被占用，用管理台概览页显示的实际端口。"
             android:textColor="#66FFFFFF"
-            android:textSize="12sp" />
+            android:textSize="17sp" />
 
         <!-- 域名模式：DDNS / 反向代理进来的必须能填域名，分框只收数字 -->
         <EditText
@@ -183,7 +183,7 @@
         android:layout_height="wrap_content"
         android:layout_marginTop="20dp"
         android:textColor="@color/accent"
-        android:textSize="15sp" />
+        android:textSize="17sp" />
 
     <!-- 手机扫码区：扫这个码直接打开管理台，省去在电视上输入地址 -->
     <LinearLayout
@@ -211,7 +211,7 @@
             android:layout_marginTop="8dp"
             android:text="手机扫码 → 管理台「终端设备」→ 批准这台电视"
             android:textColor="@color/text_secondary"
-            android:textSize="12sp" />
+            android:textSize="17sp" />
     </LinearLayout>
 </LinearLayout>
 </ScrollView>

@@ -26,7 +26,7 @@
         android:layout_width="52dp"
         android:layout_height="wrap_content"
         android:textColor="@color/text_secondary"
-        android:textSize="12sp" />
+        android:textSize="17sp" />
 
     <TextView
         android:id="@+id/title"
@@ -37,7 +37,7 @@
         android:ellipsize="end"
         android:maxLines="1"
         android:textColor="@color/text_primary"
-        android:textSize="15sp" />
+        android:textSize="17sp" />
 
     <TextView
         android:id="@+id/replayBadge"
@@ -49,6 +49,6 @@
         android:paddingVertical="1dp"
         android:text="回看"
         android:textColor="@color/accent"
-        android:textSize="10sp"
+        android:textSize="14sp"
         android:visibility="gone" />
 </LinearLayout>

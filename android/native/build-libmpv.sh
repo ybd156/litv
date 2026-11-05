@@ -51,6 +51,18 @@ JOBS="$(nproc)"
 # 需要时：ENABLE_AVS3=1 ./build-libmpv.sh（并换 NDK r26 或给 uavs3d 打补丁）
 ENABLE_AVS3="${ENABLE_AVS3:-0}"
 
+# ffmpeg 版本。
+#
+# 为什么是 n8.0 而不是 n7.1：
+#   仓库里现有的 libmpv.so 是用 ffmpeg **git 快照 N-126627** 编的，
+#   它引用了 av_dynamic_hdr_smpte2094_app5_alloc / _from_t35 两个符号，
+#   而 n7.1 正式版还没有这两个（是 7.1 之后才加进 libavutil 的）。
+#   用 n7.1 重编会让 libmpv 在 dlopen 时找不到符号，整个内核不可用。
+#
+#   换 n8.0 是为了尽量贴近旧快照的 API 面。是否真的兼容**不靠猜**——
+#   CI 里有 tools/checks/check-av-abi.sh 逐符号比对，不通过就不发布。
+FFMPEG_TAG="${FFMPEG_TAG:-n8.0}"
+
 # 只重编 ffmpeg（复用仓库里已有的 libmpv.so）。
 #
 # 为什么需要这个开关：mpv 0.39 强制依赖 libplacebo，而编 libplacebo 又要
@@ -192,8 +204,8 @@ build_ffmpeg() {
   if [ ! -d "$SRC/ffmpeg" ]; then
     # 用 GitHub 的 tag 归档而不是 ffmpeg.org：后者在国内/代理下经常
     # TLS handshake failure，GitHub 反而稳。
-    fetch_tar "https://github.com/FFmpeg/FFmpeg/archive/refs/tags/n7.1.tar.gz" "$ROOT/dl/ffmpeg.tar.gz" || return 1
-    mkdir -p "$SRC" && tar xzf "$ROOT/dl/ffmpeg.tar.gz" -C "$SRC" && mv "$SRC/FFmpeg-n7.1" "$SRC/ffmpeg"
+    fetch_tar "https://github.com/FFmpeg/FFmpeg/archive/refs/tags/${FFMPEG_TAG}.tar.gz" "$ROOT/dl/ffmpeg-$FFMPEG_TAG.tar.gz" || return 1
+    mkdir -p "$SRC" && tar xzf "$ROOT/dl/ffmpeg-$FFMPEG_TAG.tar.gz" -C "$SRC" && mv "$SRC/FFmpeg-${FFMPEG_TAG#n}" "$SRC/ffmpeg" ||       mv "$SRC/FFmpeg-${FFMPEG_TAG}" "$SRC/ffmpeg"
   fi
 
   local bdir="$SRC/ffmpeg-build-$abi"

@@ -575,9 +575,16 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         Log.i(TAG, "bootstrap 完成: 频道=${allChannels.size} 待播=$pendingChannelId 待自动播放=$autoPlayPending")
         if (autoPlayPending && channels.isNotEmpty()) {
             autoPlayPending = false
-            val idx = channels.indexOfFirst { it.id == pendingChannelId }
+            // 优先用 Intent 指定要播的台（点通知、外部跳转）；
+            // 没有就退回「上次看的台」。
+            //
+            // 之前只看了 pendingChannelId，而从桌面正常启动时它是 0，
+            // indexOfFirst 必然返回 -1，于是永远播第一个台——
+            // 「退出重进不回上次频道」就是这么来的。
+            val wantId = if (pendingChannelId > 0) pendingChannelId else app.prefs.lastChannelId
+            val idx = channels.indexOfFirst { it.id == wantId }
             index = if (idx >= 0) idx else 0
-            Log.i(TAG, "开始自动播放: ${channels[index].name}")
+            Log.i(TAG, "开始自动播放: ${channels[index].name}（想要=$wantId 命中=${idx >= 0}）")
             playChannel(channels[index])
         } else if (pendingRemoteChannelId > 0) {
             // 遥控指令在 bootstrap 完成前就到了：现在补执行。

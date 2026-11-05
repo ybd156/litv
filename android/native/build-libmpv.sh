@@ -161,7 +161,9 @@ build_uavs3d() {
 # APK 里就不用额外带 libssl.so / libcrypto.so。
 build_openssl() {
   local abi="$1" prefix target
-  prefix="$OUT/$abi"
+  # openssl 装在独立目录：ffmpeg 换版本时要能单独删掉重建，
+  # 不能连累 openssl（否则 configure 会报 openssl not found）。
+  prefix="$OUT/$abi-deps"
   [ -f "$prefix/lib/libssl.a" ] && { ok "openssl[$abi] 已编译"; return 0; }
 
   say "编译 openssl [$abi]"
@@ -239,7 +241,7 @@ build_ffmpeg() {
 
   # openssl 装到 $prefix，必须让 pkg-config 找到它的 .pc，
   # 否则 ffmpeg 的 check_pkg_config 找不到 openssl 会直接 die。
-  export PKG_CONFIG_PATH="$prefix/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
+  export PKG_CONFIG_PATH="$OUT/$abi-deps/lib/pkgconfig:$prefix/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
 
   "$SRC/ffmpeg/configure" \
     --prefix="$prefix" \
@@ -251,8 +253,8 @@ build_ffmpeg() {
     --disable-programs --disable-doc \
     --disable-avdevice --disable-postproc \
     "${avs3_flags[@]}" \
-    --extra-cflags="-I$prefix/include -fPIC -O2" \
-    --extra-ldflags="-L$prefix/lib" \
+    --extra-cflags="-I$OUT/$abi-deps/include -fPIC -O2" \
+    --extra-ldflags="-L$OUT/$abi-deps/lib" \
     --enable-jni --enable-mediacodec \
     --enable-decoder=h264,hevc,mpeg2video,avs2,avs3,mp3,aac,ac3,eac3,dca,flac,opus,vorbis \
     --enable-parser=h264,hevc,mpegvideo,avs3,aac,ac3 \

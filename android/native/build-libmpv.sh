@@ -386,7 +386,13 @@ build_libass() {
   if [ "$abi" = "armeabi-v7a" ]; then cc="$TOOLCHAIN/bin/armv7a-linux-androideabi$API-clang"; else cc="$TOOLCHAIN/bin/${triple}$API-clang"; fi
   cxx="${cc}++"
   local bdir="$SRC/libass-build-$abi"; rm -rf "$bdir"; mkdir -p "$bdir"
-  ( cd "$bdir" &&     PKG_CONFIG_PATH="$prefix/lib/pkgconfig"     CC="$cc" CXX="$cxx" AR="$TOOLCHAIN/bin/llvm-ar" RANLIB="$TOOLCHAIN/bin/llvm-ranlib"     "$SRC/libass/configure" --host="$triple" --prefix="$prefix"       --enable-static --disable-shared --disable-fontconfig --disable-harfbuzz       --disable-require-system-font-provider       >configure.log 2>&1 && make -j"$JOBS" >>build.log 2>&1 && make install >>build.log 2>&1 )     || { err "libass 编译失败"; tail -20 "$bdir/configure.log" "$bdir/build.log" 2>/dev/null; return 1; }
+  ( cd "$bdir" &&     PKG_CONFIG_PATH="$prefix/lib/pkgconfig"     CC="$cc" CXX="$cxx" AR="$TOOLCHAIN/bin/llvm-ar" RANLIB="$TOOLCHAIN/bin/llvm-ranlib"     "$SRC/libass/configure" --host="$triple" --build="$(gcc -dumpmachine)" --prefix="$prefix"       --enable-static --disable-shared --disable-fontconfig --disable-harfbuzz       --disable-require-system-font-provider       >configure.log 2>&1 && make -j"$JOBS" >>build.log 2>&1 && make install >>build.log 2>&1 )     || {
+      err "libass 编译失败"
+      [ -f "$bdir/configure.log" ] && { echo "--- configure.log 尾部 ---"; tail -25 "$bdir/configure.log"; }
+      [ -f "$bdir/build.log" ] && { echo "--- build.log 尾部 ---"; tail -25 "$bdir/build.log"; }
+      echo "--- deps 里的 pkgconfig ---"; ls "$prefix/lib/pkgconfig" 2>/dev/null
+      return 1
+    }
   ok "libass[$abi] 完成"
 }
 

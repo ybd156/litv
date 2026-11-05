@@ -82,7 +82,7 @@ jobs:
       - name: 安装构建工具
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq build-essential perl pkg-config nasm yasm >/dev/null
+          sudo apt-get install -y -qq build-essential perl pkg-config nasm yasm libtool autoconf automake >/dev/null
           pip3 install --quiet "cmake==3.31.6" ninja meson
           cmake --version | head -1
           ninja --version

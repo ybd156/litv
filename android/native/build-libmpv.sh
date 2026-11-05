@@ -350,7 +350,7 @@ cpu = '$( [ "$abi" = "arm64-v8a" ] && echo aarch64 || echo armv7a )'
 endian = 'little'
 CROSS
 
-  ( cd "$bdir" && meson setup build "$SRC/fribidi" --cross-file cross.txt       --prefix="$prefix" --buildtype=release --default-library=static       -Ddocs=false -Dbin=false -Dtests=false >meson.log 2>&1 &&     ninja -C build >>meson.log 2>&1 && ninja -C build install >>meson.log 2>&1 )     || { err "fribidi 编译失败"; tail -15 "$bdir/meson.log"; return 1; }
+  ( cd "$bdir" && meson setup build "$SRC/fribidi" --cross-file cross.txt       --prefix="$prefix" --buildtype=release --default-library=static -Db_staticpic=true       -Ddocs=false -Dbin=false -Dtests=false >meson.log 2>&1 &&     ninja -C build >>meson.log 2>&1 && ninja -C build install >>meson.log 2>&1 )     || { err "fribidi 编译失败"; tail -15 "$bdir/meson.log"; return 1; }
   ok "fribidi[$abi] 完成"
 }
 
@@ -368,7 +368,7 @@ build_freetype() {
   # 用 CMake 而不是 autotools：NDK 自带 android.toolchain.cmake，
   # 交叉编译一次就对，不用纠结 --host/--build 和 libtool。
   local bdir="$SRC/freetype-build-$abi"; rm -rf "$bdir"; mkdir -p "$bdir"
-  ( cd "$bdir" && cmake "$SRC/freetype" -G Ninja       -DCMAKE_MAKE_PROGRAM="$(command -v ninja)"       -DCMAKE_TOOLCHAIN_FILE="$NDK/build/cmake/android.toolchain.cmake"       -DANDROID_ABI="$abi" -DANDROID_PLATFORM="android-$API"       -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$prefix"       -DBUILD_SHARED_LIBS=OFF       -DFT_DISABLE_ZLIB=TRUE -DFT_DISABLE_PNG=TRUE -DFT_DISABLE_BZIP2=TRUE       -DFT_DISABLE_HARFBUZZ=TRUE -DFT_DISABLE_BROTLI=TRUE       >cmake.log 2>&1 && ninja -C . >>cmake.log 2>&1 && ninja -C . install >>cmake.log 2>&1 )     || { err "freetype 编译失败"; grep -iE "error|not found" "$bdir/cmake.log" | tail -10; return 1; }
+  ( cd "$bdir" && cmake "$SRC/freetype" -G Ninja       -DCMAKE_MAKE_PROGRAM="$(command -v ninja)"       -DCMAKE_TOOLCHAIN_FILE="$NDK/build/cmake/android.toolchain.cmake"       -DANDROID_ABI="$abi" -DANDROID_PLATFORM="android-$API"       -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$prefix"       -DBUILD_SHARED_LIBS=OFF -DCMAKE_POSITION_INDEPENDENT_CODE=ON       -DFT_DISABLE_ZLIB=TRUE -DFT_DISABLE_PNG=TRUE -DFT_DISABLE_BZIP2=TRUE       -DFT_DISABLE_HARFBUZZ=TRUE -DFT_DISABLE_BROTLI=TRUE       >cmake.log 2>&1 && ninja -C . >>cmake.log 2>&1 && ninja -C . install >>cmake.log 2>&1 )     || { err "freetype 编译失败"; grep -iE "error|not found" "$bdir/cmake.log" | tail -10; return 1; }
   ok "freetype[$abi] 完成"
 }
 
@@ -388,7 +388,7 @@ build_zlib() {
   fi
 
   local bdir="$SRC/zlib-build-$abi"; rm -rf "$bdir"; mkdir -p "$bdir"
-  ( cd "$bdir" && cmake "$SRC/zlib" -G Ninja       -DCMAKE_MAKE_PROGRAM="$(command -v ninja)"       -DCMAKE_TOOLCHAIN_FILE="$NDK/build/cmake/android.toolchain.cmake"       -DANDROID_ABI="$abi" -DANDROID_PLATFORM="android-$API"       -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$prefix"       -DBUILD_SHARED_LIBS=OFF       >cmake.log 2>&1 && ninja -C . >>cmake.log 2>&1 && ninja -C . install >>cmake.log 2>&1 )     || { err "zlib 编译失败"; grep -iE "error|not found" "$bdir/cmake.log" | tail -8; return 1; }
+  ( cd "$bdir" && cmake "$SRC/zlib" -G Ninja       -DCMAKE_MAKE_PROGRAM="$(command -v ninja)"       -DCMAKE_TOOLCHAIN_FILE="$NDK/build/cmake/android.toolchain.cmake"       -DANDROID_ABI="$abi" -DANDROID_PLATFORM="android-$API"       -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$prefix"       -DBUILD_SHARED_LIBS=OFF -DCMAKE_POSITION_INDEPENDENT_CODE=ON       >cmake.log 2>&1 && ninja -C . >>cmake.log 2>&1 && ninja -C . install >>cmake.log 2>&1 )     || { err "zlib 编译失败"; grep -iE "error|not found" "$bdir/cmake.log" | tail -8; return 1; }
 
   # zlib 的 CMake 把 zlib.pc 装到 share/pkgconfig，
   # 而我们的 PKG_CONFIG_PATH 只含 lib/pkgconfig，导致 meson 找不到它、
@@ -429,7 +429,7 @@ cpu = '$( [ "$abi" = "arm64-v8a" ] && echo aarch64 || echo armv7a )'
 endian = 'little'
 CROSS
 
-  ( cd "$bdir" && PKG_CONFIG_PATH="$prefix/lib/pkgconfig"       meson setup build "$SRC/harfbuzz" --cross-file cross.txt       --prefix="$prefix" --buildtype=release --default-library=static       -Dglib=disabled -Dgobject=disabled -Dicu=disabled -Dcairo=disabled       -Dchafa=disabled -Ddocs=disabled -Dtests=disabled -Dintrospection=disabled       -Dfreetype=enabled       >meson.log 2>&1 && ninja -C build >>meson.log 2>&1 && ninja -C build install >>meson.log 2>&1 )     || { err "harfbuzz 编译失败"; grep -iE "error|not found" "$bdir/meson.log" | tail -10; return 1; }
+  ( cd "$bdir" && PKG_CONFIG_PATH="$prefix/lib/pkgconfig"       meson setup build "$SRC/harfbuzz" --cross-file cross.txt       --prefix="$prefix" --buildtype=release --default-library=static -Db_staticpic=true       -Dglib=disabled -Dgobject=disabled -Dicu=disabled -Dcairo=disabled       -Dchafa=disabled -Ddocs=disabled -Dtests=disabled -Dintrospection=disabled       -Dfreetype=enabled       >meson.log 2>&1 && ninja -C build >>meson.log 2>&1 && ninja -C build install >>meson.log 2>&1 )     || { err "harfbuzz 编译失败"; grep -iE "error|not found" "$bdir/meson.log" | tail -10; return 1; }
   ok "harfbuzz[$abi] 完成"
 }
 
@@ -451,7 +451,7 @@ build_libass() {
   if [ "$abi" = "armeabi-v7a" ]; then cc="$TOOLCHAIN/bin/armv7a-linux-androideabi$API-clang"; else cc="$TOOLCHAIN/bin/${triple}$API-clang"; fi
   cxx="${cc}++"
   local bdir="$SRC/libass-build-$abi"; rm -rf "$bdir"; mkdir -p "$bdir"
-  ( cd "$bdir" &&     PKG_CONFIG_PATH="$prefix/lib/pkgconfig"     CC="$cc" CXX="$cxx" AR="$TOOLCHAIN/bin/llvm-ar" RANLIB="$TOOLCHAIN/bin/llvm-ranlib"     "$SRC/libass/configure" --host="$triple" --build="$(gcc -dumpmachine)" --prefix="$prefix"       --enable-static --disable-shared --disable-fontconfig       --disable-require-system-font-provider       >configure.log 2>&1 && make -j"$JOBS" >>build.log 2>&1 && make install >>build.log 2>&1 )     || {
+  ( cd "$bdir" &&     PKG_CONFIG_PATH="$prefix/lib/pkgconfig"     CC="$cc" CXX="$cxx" AR="$TOOLCHAIN/bin/llvm-ar" RANLIB="$TOOLCHAIN/bin/llvm-ranlib"     "$SRC/libass/configure" --host="$triple" --build="$(gcc -dumpmachine)" --prefix="$prefix"       --enable-static --disable-shared --with-pic --disable-fontconfig       --disable-require-system-font-provider       >configure.log 2>&1 && make -j"$JOBS" >>build.log 2>&1 && make install >>build.log 2>&1 )     || {
       err "libass 编译失败"
       [ -f "$bdir/configure.log" ] && { echo "--- configure.log 尾部 ---"; tail -25 "$bdir/configure.log"; }
       [ -f "$bdir/build.log" ] && { echo "--- build.log 尾部 ---"; tail -25 "$bdir/build.log"; }

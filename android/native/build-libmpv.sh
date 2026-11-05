@@ -378,9 +378,13 @@ build_libass() {
   [ -f "$prefix/lib/libass.a" ] && { ok "libass[$abi] 已编译"; return 0; }
   say "编译 libass [$abi]"
 
+  # 用 0.16.0 而不是最新的 0.17.x：
+  # 0.17 把 harfbuzz 变成了硬依赖（configure 里直接 error），
+  # 而 harfbuzz 又要 icu/glib 一串。IPTV 直播根本不需要复杂文本整形，
+  # 0.16 的 --disable-harfbuzz 仍然有效，mpv 0.36 也只要求 libass >= 0.12.2。
   if [ ! -d "$SRC/libass" ]; then
-    fetch_tar "https://github.com/libass/libass/releases/download/0.17.1/libass-0.17.1.tar.gz" "$ROOT/dl/libass.tar.gz" || return 1
-    mkdir -p "$SRC" && tar xzf "$ROOT/dl/libass.tar.gz" -C "$SRC" && mv "$SRC/libass-0.17.1" "$SRC/libass"
+    fetch_tar "https://github.com/libass/libass/releases/download/0.16.0/libass-0.16.0.tar.gz" "$ROOT/dl/libass.tar.gz" || return 1
+    mkdir -p "$SRC" && tar xzf "$ROOT/dl/libass.tar.gz" -C "$SRC" && mv "$SRC/libass-0.16.0" "$SRC/libass"
   fi
 
   if [ "$abi" = "armeabi-v7a" ]; then cc="$TOOLCHAIN/bin/armv7a-linux-androideabi$API-clang"; else cc="$TOOLCHAIN/bin/${triple}$API-clang"; fi

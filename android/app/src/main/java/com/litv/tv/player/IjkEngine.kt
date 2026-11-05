@@ -204,7 +204,10 @@ class IjkEngine : PlayerEngine {
             runCatching { p.setAndroidIOCallback(io) }
                 .onFailure { Log.w(TAG, "设置 ijkio 回调失败", it) }
             Log.i(TAG, "https 源走 ijkio（Java 侧 TLS）")
-            "ijkio:$url"
+            // 必须是 ijkio:androidio: 三段。
+            // ijkio_alloc_url 按前缀分发：cache: / ffio: / httphook: / androidio:，
+            // 其它一律落到 ffmpeg 自带的协议实现（https 那个没 TLS，必失败）。
+            "ijkio:androidio:$url"
         } else {
             androidIo = null
             url

@@ -44,6 +44,12 @@ class IjkAndroidIO(
         private const val TAG = "IjkAndroidIO"
         private const val DEFAULT_UA = "LITV/1.0 (Android)"
 
+        // ijk 的 seek whence 常量（对应 ijkavutil 里的 IJKAVSEEK_SIZE）
+        private const val IJKAVSEEK_SIZE = 0x10000
+        private const val SEEK_SET = 0
+        private const val SEEK_CUR = 1
+        private const val SEEK_END = 2
+
         /** 复用一个 client：连接池和 TLS 会话能复用，换台时省一次握手。 */
         private val client: OkHttpClient by lazy {
             OkHttpClient.Builder()
@@ -58,6 +64,25 @@ class IjkAndroidIO(
 
     private var body: ResponseBody? = null
     private var source: BufferedSource? = null
+
+    // ---- 读缓冲 ----
+    //
+    // ijk 的 HLS 解复用器读完 m3u8 后**会 seek 回 0 再读一遍**。
+    // 之前 seek 直接返回 -1，它就一直卡在那里，最后被看门狗判超时。
+    // 所以把读过的数据缓存下来，seek 在缓冲范围内直接定位。
+    //
+    // 每个分片是独立的 open()，缓冲随之重置，不会无限增长。
+    private var buf = ByteArray(1 shl 16)
+    private var bufLen = 0
+    private var pos = 0
+    private var eof = false
+
+    private fun ensureCap(need: Int) {
+        if (need <= buf.size) return
+        var cap = buf.size
+        while (cap < need) cap = cap shl 1
+        buf = buf.copyOf(cap)
+    }
 
     override fun open(url: String): Int {
         close()
@@ -88,25 +113,61 @@ class IjkAndroidIO(
     }
 
     override fun read(buffer: ByteArray, size: Int): Int {
+        // 缓冲区里还有没消费的就先给出去
+        if (pos < bufLen) {
+            val n = minOf(bufLen - pos, size)
+            System.arraycopy(buf, pos, buffer, 0, n)
+            pos += n
+            return n
+        }
+        if (eof) return 0
+
         val src = source ?: return -1
         return try {
             val n = src.read(buffer, 0, size)
-            // okio 读到结尾返回 -1，ijk 约定 0 是 EOF
-            if (n < 0) 0 else n
+            if (n < 0) {
+                eof = true
+                0
+            } else {
+                ensureCap(bufLen + n)
+                System.arraycopy(buffer, 0, buf, bufLen, n)
+                bufLen += n
+                pos += n
+                n
+            }
         } catch (t: Throwable) {
             Log.w(TAG, "read 异常: ${t.message}")
             -1
         }
     }
 
-    /** 直播不支持回退。返回 -1 让 ijk 按不可 seek 处理。 */
-    override fun seek(offset: Long, whence: Int): Long = -1L
+    /**
+     * 在已缓冲的范围内支持 seek。
+     *
+     * ijk 的 HLS 解复用器会 seek 回 0 重读 m3u8，不支持就卡住。
+     * 超出缓冲范围（还没读到的位置）返回 -1——直播没法往前跳。
+     */
+    override fun seek(offset: Long, whence: Int): Long {
+        val newPos = when (whence) {
+            SEEK_SET -> offset
+            SEEK_CUR -> pos + offset
+            SEEK_END -> return -1L
+            IJKAVSEEK_SIZE -> return bufLen.toLong()
+            else -> return -1L
+        }
+        if (newPos < 0 || newPos > bufLen) return -1L
+        pos = newPos.toInt()
+        return newPos
+    }
 
     override fun close(): Int {
         runCatching { source?.close() }
         runCatching { body?.close() }
         source = null
         body = null
+        bufLen = 0
+        pos = 0
+        eof = false
         return 0
     }
 }

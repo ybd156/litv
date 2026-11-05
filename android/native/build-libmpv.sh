@@ -389,6 +389,15 @@ build_zlib() {
 
   local bdir="$SRC/zlib-build-$abi"; rm -rf "$bdir"; mkdir -p "$bdir"
   ( cd "$bdir" && cmake "$SRC/zlib" -G Ninja       -DCMAKE_MAKE_PROGRAM="$(command -v ninja)"       -DCMAKE_TOOLCHAIN_FILE="$NDK/build/cmake/android.toolchain.cmake"       -DANDROID_ABI="$abi" -DANDROID_PLATFORM="android-$API"       -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$prefix"       -DBUILD_SHARED_LIBS=OFF       >cmake.log 2>&1 && ninja -C . >>cmake.log 2>&1 && ninja -C . install >>cmake.log 2>&1 )     || { err "zlib 编译失败"; grep -iE "error|not found" "$bdir/cmake.log" | tail -8; return 1; }
+
+  # zlib 的 CMake 把 zlib.pc 装到 share/pkgconfig，
+  # 而我们的 PKG_CONFIG_PATH 只含 lib/pkgconfig，导致 meson 找不到它、
+  # 回退去用宿主的 zlib（报 incompatible with aarch64linux）。
+  # 复制一份到 lib/pkgconfig，统一位置。
+  if [ -f "$prefix/share/pkgconfig/zlib.pc" ] && [ ! -f "$prefix/lib/pkgconfig/zlib.pc" ]; then
+    mkdir -p "$prefix/lib/pkgconfig"
+    cp -f "$prefix/share/pkgconfig/zlib.pc" "$prefix/lib/pkgconfig/zlib.pc"
+  fi
   ok "zlib[$abi] 完成"
 }
 
@@ -514,7 +523,7 @@ CROSS
   # 兜底：mpv 0.36 有些地方还在用非 const 的函数指针，新版 ffmpeg 改了签名。
   # 这些差异是纯 const 正确性、行为等价，降级成警告即可，
   # 免得每碰到一处就要打一个补丁、多跑一轮 CI。
-  PKG_CONFIG_PATH="$(DEPS_PREFIX "$abi")/lib/pkgconfig:$prefix/lib/pkgconfig" meson setup build "$SRC/mpv" \
+  PKG_CONFIG_PATH="$(DEPS_PREFIX "$abi")/lib/pkgconfig:$(DEPS_PREFIX "$abi")/share/pkgconfig:$prefix/lib/pkgconfig" meson setup build "$SRC/mpv" \
     --cross-file "$bdir/cross.txt" \
     --prefix="$prefix" \
     --buildtype=release \

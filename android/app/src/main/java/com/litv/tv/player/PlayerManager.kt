@@ -98,6 +98,80 @@ class PlayerManager(
      * 出不了画面时音频照常在放、Exo 照样报告 playing——超时永远不会触发，
      * 屏幕一直黑着。所以另开一个只看"有没有真的渲染出第一帧"的检查。
      */
+    // ---------------------------------------------------------------- 卡顿看门狗
+    //
+    // 直播流会**静默卡住**：网络抖一下、服务端不再推数据、或者解码器停住，
+    // ExoPlayer 都不会回调 onError，isPlaying() 依然是 true，画面却不动了。
+    // 之前没有任何机制处理这种情况，用户看到的就是「卡住了不恢复，只能手动换台」。
+    //
+    // 唯一可靠的判断依据是播放位置：每隔几秒读一次，位置不前进就认为卡住了。
+    private var stallTicks = 0
+    private var lastPosMs = -1L
+    private var stallRecovered = 0
+    private var userPaused = false
+
+    private val stallWatchdog = Runnable {
+        val eng = current
+        if (eng == null || !prepared) {
+            main.postDelayed(stallWatchdog, STALL_CHECK_MS)
+            return@Runnable
+        }
+        if (userPaused) {
+            main.postDelayed(stallWatchdog, STALL_CHECK_MS)
+            return@Runnable
+        }
+        val pos = runCatching { eng.stats().positionMs }.getOrDefault(-1L)
+
+        // 这里**不能**用 isPlaying() 做前置条件。
+        // 流真卡住时 ExoPlayer 会进入 BUFFERING，isPlaying() 返回 false，
+        // 那样就永远检测不到了——这正是「卡住不恢复」的根因。
+        // 判断依据只留「位置有没有前进」。
+        if (pos >= 0) {
+            if (lastPosMs >= 0 && pos <= lastPosMs) {
+                stallTicks++
+                Log.w(TAG, "播放位置没有前进（${lastPosMs}ms -> ${pos}ms），第 $stallTicks 次")
+            } else {
+                if (stallTicks > 0) Log.i(TAG, "播放已自行恢复，位置 $pos ms")
+                stallTicks = 0
+            }
+            lastPosMs = pos
+        }
+
+        if (stallTicks >= STALL_TICKS_TO_RECOVER) {
+            stallTicks = 0
+            lastPosMs = -1L
+            stallRecovered++
+            if (stallRecovered > MAX_STALL_RECOVER) {
+                // 反复卡死说明不是偶发抖动，重启也没用，别再无限循环
+                Log.e(TAG, "已自动恢复 $MAX_STALL_RECOVER 次仍然卡死，停止重试")
+                stopStallWatchdog()
+                callback?.onError("播放反复卡死，请换台或检查网络")
+                return@Runnable
+            }
+            Log.w(TAG, "判定卡死，第 $stallRecovered 次自动恢复")
+            if (stallRecovered >= 2 && !forceRelayOnce) {
+                // 同一个台连续卡两次，多半是这条直连线路有问题，改走中转
+                forceRelayOnce = true
+                Log.w(TAG, "连续卡死，这次改走服务端中转")
+            }
+            startCurrent()
+        }
+        main.postDelayed(stallWatchdog, STALL_CHECK_MS)
+    }
+
+    private fun startStallWatchdog() {
+        main.removeCallbacks(stallWatchdog)
+        stallTicks = 0
+        lastPosMs = -1L
+        main.postDelayed(stallWatchdog, STALL_CHECK_MS)
+    }
+
+    private fun stopStallWatchdog() {
+        main.removeCallbacks(stallWatchdog)
+        stallTicks = 0
+        lastPosMs = -1L
+    }
+
     private val frameWatchdog = Runnable {
         if (currentKind == EngineKind.EXO && !exoFirstFrameRendered && !exoForceSoftwareDecode) {
             Log.w(TAG, "exo 已起播但没有渲染出画面，改用软解")
@@ -166,6 +240,7 @@ class PlayerManager(
             lastChannelForSoftFlag = channelId
         }
         prepared = false
+        stallRecovered = 0
         startCurrent()
     }
 
@@ -228,6 +303,7 @@ class PlayerManager(
             return
         }
         engine.attach(context, surface, container)
+        stopStallWatchdog()
         main.removeCallbacks(frameWatchdog)
         if (kind == EngineKind.EXO) {
             main.postDelayed(frameWatchdog, 5000)
@@ -251,6 +327,7 @@ class PlayerManager(
                 main.post {
                     prepared = true
                     main.removeCallbacks(startTimeout)
+                    startStallWatchdog()
                     callback?.onPlaying()
                 }
             }
@@ -338,8 +415,19 @@ class PlayerManager(
         EngineKind.AVS3 -> MpvEngine(avs3Mode = true)
     }
 
-    fun pause() = current?.pause()
-    fun resume() = current?.play()
+    fun pause() {
+        // 用户切走（Activity onPause）时暂停，这时位置当然不前进——
+        // 看门狗必须停掉，否则会误判成卡死并自动重启播放。
+        userPaused = true
+        stopStallWatchdog()
+        current?.pause()
+    }
+
+    fun resume() {
+        userPaused = false
+        current?.play()
+        if (prepared) startStallWatchdog()
+    }
     fun setVolume(v: Float) = current?.setVolume(v)
     fun stats(): EngineStats = current?.stats() ?: EngineStats()
     fun engineLabel(): String = currentKind?.label ?: ""
@@ -348,12 +436,14 @@ class PlayerManager(
     /** 换台前抓一帧，盖住黑屏（TVBox 的做法，成本极低效果好）。 */
     fun stop() {
         main.removeCallbacks(startTimeout)
+        stopStallWatchdog()
         current?.stop()
     }
 
     fun release() {
         main.removeCallbacks(frameWatchdog)
         main.removeCallbacks(startTimeout)
+        stopStallWatchdog()
         disposeEngine(current)
         current = null
         currentKind = null
@@ -386,5 +476,19 @@ class PlayerManager(
         const val TAG = "PlayerManager"
         // 起不来的内核不该拖 6 秒——3 秒足够判断，超时就换下一个
         const val START_TIMEOUT_MS = 5000L
+
+        /** 卡顿检测间隔。8 秒读一次播放位置，对 CPU 几乎没有开销。 */
+        const val STALL_CHECK_MS = 8000L
+
+        /**
+         * 连续几次「位置没前进」才判定卡死。
+         *
+         * 2 次 = 大约 16 秒。留这个余量是因为网络抖动时位置可能短暂停住
+         * 一两秒又继续，太快判定会导致好好的直播被反复重启。
+         */
+        const val STALL_TICKS_TO_RECOVER = 2
+
+        /** 自动恢复的次数上限。超过就不再重启，直接报错。 */
+        const val MAX_STALL_RECOVER = 3
     }
 }

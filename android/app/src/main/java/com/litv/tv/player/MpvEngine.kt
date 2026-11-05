@@ -199,6 +199,8 @@ class MpvEngine(private val avs3Mode: Boolean = false) : PlayerEngine, MPVLib.Li
     override fun stats(): EngineStats {
         if (!MPVLib.available) return EngineStats()
         return EngineStats(
+            positionMs = runCatching { (MPVLib.getPropertyDouble("time-pos") * 1000).toLong() }
+                .getOrDefault(-1L),
             videoCodec = runCatching { MPVLib.getPropertyString("video-codec") }.getOrNull() ?: "",
             audioCodec = runCatching { MPVLib.getPropertyString("audio-codec-name") }.getOrNull() ?: "",
             width = videoW,

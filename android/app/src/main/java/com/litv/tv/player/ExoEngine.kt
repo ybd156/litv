@@ -428,6 +428,7 @@ class ExoEngine : PlayerEngine {
         val p = player ?: return EngineStats()
         val vf = p.videoFormat
         return EngineStats(
+            positionMs = runCatching { p.currentPosition }.getOrDefault(-1L),
             videoCodec = vf?.codecs ?: "",
             audioCodec = p.audioFormat?.codecs ?: "",
             width = videoW,

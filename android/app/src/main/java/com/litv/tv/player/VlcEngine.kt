@@ -221,7 +221,11 @@ class VlcEngine : PlayerEngine {
 
     override fun isPlaying(): Boolean = player?.isPlaying == true
 
-    override fun stats(): EngineStats = EngineStats(width = videoW, height = videoH)
+    override fun stats(): EngineStats = EngineStats(
+        positionMs = runCatching { player?.time ?: -1L }.getOrDefault(-1L),
+        width = videoW,
+        height = videoH,
+    )
 
     private companion object {
         const val TAG = "VlcEngine"

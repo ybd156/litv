@@ -91,6 +91,13 @@ interface PlayerEngine {
 
 /** 播放统计，给 OSD 和"卡顿上报"用。 */
 data class EngineStats(
+    /**
+     * 当前播放位置（毫秒）。-1 表示这个内核拿不到。
+     *
+     * 用途：卡顿看门狗。直播流静默卡住时不会有任何 error 回调，
+     * 只能靠「位置不再前进」来判断。
+     */
+    val positionMs: Long = -1,
     val videoCodec: String = "",
     val audioCodec: String = "",
     val width: Int = 0,

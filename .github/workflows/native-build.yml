@@ -141,6 +141,18 @@ jobs:
           echo "$abi TLS 符号存在"
           ls -lh "android/app/src/main/jniLibs/$abi/"
 
+      # 构建日志被 GitHub 截断过（只留 381 行，mpv 那段直接没了），
+      # 失败时把关键日志作为 artifact 传上来，方便排查。
+      - name: 上传构建日志（失败时）
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-logs-${{ matrix.abi }}
+          path: |
+            .native-build/src/mpv-build-*/meson.log
+            .native-build/src/*-build-*/*.log
+          if-no-files-found: ignore
+
       - name: 上传 ${{ matrix.abi }} 产物
         uses: actions/upload-artifact@v4
         with:

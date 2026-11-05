@@ -494,6 +494,9 @@ CROSS
     echo "===MESONLOG_START==="
     cat "$bdir/meson.log" 2>&1 | tail -40
     echo "===MESONLOG_END==="
+    # 同时用 ::error:: 注解发一遍——GitHub 会截断超长日志，
+    # 但注解会单独保留，这是唯一可靠拿到错误内容的方式。
+    tail -12 "$bdir/meson.log" 2>/dev/null | while IFS= read -r l; do echo "::error::MPV $l"; done
     echo "pwd=$(pwd)  bdir=$bdir"
     ls -la "$bdir" 2>&1 | head -5
     return 1

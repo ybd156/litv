@@ -1,0 +1,60 @@
+name: Device APK
+
+# 出一个 arm 正式包，作为 artifact 下载，用来装到真机上验证。
+#
+# 和 Release 的区别：**不创建任何 GitHub Release、不打 tag**。
+# 只是把 assembleTvRelease / assemblePhoneRelease 的产物传上来，
+# 方便在真机上测一个还没发版的改动。
+#
+# 为什么需要它：build-check 只传 x86 调试包（模拟器用），
+# 而真机是 arm、且调试包是另一个包名（com.litv.tv.debug），
+# 装上去等于另一个 App，还得重新绑定设备。
+#
+# 触发：手动 workflow_dispatch。
+
+on:
+  workflow_dispatch:
+    inputs:
+      flavor:
+        description: "要编哪个：tv / phone / both"
+        required: false
+        default: "tv"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: 准备 JDK 17
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: 安装 Gradle
+        uses: gradle/actions/setup-gradle@v6
+        with:
+          gradle-version: "8.14.6"
+
+      - name: 编译正式包
+        working-directory: android
+        run: |
+          case "${{ inputs.flavor }}" in
+            phone) gradle --no-daemon assemblePhoneRelease ;;
+            both)  gradle --no-daemon assembleTvRelease assemblePhoneRelease ;;
+            *)     gradle --no-daemon assembleTvRelease ;;
+          esac
+
+      - name: 列出产物
+        run: find android/app/build/outputs/apk -name "*-release.apk" | sort
+
+      - name: 上传产物
+        uses: actions/upload-artifact@v7
+        with:
+          name: device-apk-${{ inputs.flavor }}
+          path: android/app/build/outputs/apk/*/release/*.apk
+          if-no-files-found: error

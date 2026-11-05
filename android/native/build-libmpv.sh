@@ -489,7 +489,15 @@ CROSS
     -Dcaca=disabled -Djpeg=disabled -Dlcms2=disabled -Dlibarchive=disabled \
     -Dlibbluray=disabled -Dlua=disabled -Duchardet=disabled -Dzimg=disabled \
     -Ddvbin=disabled -Ddvdnav=disabled -Dcdda=disabled \
-    >"$bdir/meson.log" 2>&1 || { err "mpv meson 配置失败，见 $bdir/meson.log"; tail -20 "$bdir/meson.log"; return 1; }
+    >"$bdir/meson.log" 2>&1 || {
+    err "mpv meson 配置失败"
+    echo "===MESONLOG_START==="
+    cat "$bdir/meson.log" 2>&1 | tail -40
+    echo "===MESONLOG_END==="
+    echo "pwd=$(pwd)  bdir=$bdir"
+    ls -la "$bdir" 2>&1 | head -5
+    return 1
+  }
 
   ninja -C build -j"$JOBS" >>"$bdir/meson.log" 2>&1 || { err "mpv 编译失败，见 $bdir/meson.log"; return 1; }
   ninja -C build install >>"$bdir/meson.log" 2>&1

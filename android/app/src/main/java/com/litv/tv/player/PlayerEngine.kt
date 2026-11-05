@@ -104,17 +104,20 @@ data class EngineStats(
 /**
  * @param ffmpegNoTls 这个内核的 ffmpeg 有没有编 TLS 后端。
  *
- * true 表示播不了 https://。目前的两个 ffmpeg 内核都是 true：
- *  - ijkplayer 0.8.8 官方 AAR：.so 里没有任何 OpenSSL/GnuTLS/mbedTLS 符号
- *  - 我们自己编的 libmpv：build-libmpv.sh 只写了 --enable-protocol=https
- *    但没启用 --enable-openssl，tls 协议是空壳
- * 所以 https 源只能走 Exo / VLC（它们用 Android 系统 TLS）。
+ * true 表示播不了 https://，组链时会跳过它。
+ * 目前两个 ffmpeg 内核都是 false：
+ *  - mpv：换成自编的 ffmpeg（--enable-openssl），TLS 已确认链进去
+ *  - ijk：本身没 TLS，但 https 源走 ijkio 协议回调到 Java 侧取流
+ * 保留这个标记是为了以后万一又引入无 TLS 的内核时能自动挡住。
  */
 enum class EngineKind(val key: String, val label: String, val ffmpegNoTls: Boolean = false) {
     EXO("exo", "系统硬解 (Media3)"),
     /** ffmpeg 内核，直播起播最快。酷9/DIYP 用的就是它。 */
-    IJK("ijk", "ijkplayer (ffmpeg)", ffmpegNoTls = true),
-    MPV("mpv", "libmpv 软解", ffmpegNoTls = true),
+    // ijk 的 ffmpeg 本身没编 TLS，但 https 源会走 ijkio 协议把 IO
+    // 回调给 Java（IjkAndroidIO，用 OkHttp + 系统 TLS），所以不需要拦。
+    IJK("ijk", "ijkplayer (ffmpeg)"),
+    // mpv 用的是我们自己编的 ffmpeg（--enable-openssl），TLS 是好的。
+    MPV("mpv", "libmpv 软解"),
     VLC("vlc", "libVLC"),
     // 注意：这个内核只是 mpv 强制软解，并没有单独集成 libuavs3d。
     // 之前标签写 "AVS3 专用 (libuavs3d)" 是错的，会让人以为 AVS3 视频能解。

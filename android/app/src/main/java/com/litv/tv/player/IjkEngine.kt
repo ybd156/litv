@@ -43,6 +43,9 @@ class IjkEngine : PlayerEngine {
     private var prepared = false
     private var firstFrameReported = false
 
+    /** https 源走 Java 侧 IO 时持有的适配器，release 时要关掉。 */
+    private var androidIo: IjkAndroidIO? = null
+
     companion object {
         private const val TAG = "IjkEngine"
 
@@ -188,8 +191,27 @@ class IjkEngine : PlayerEngine {
 
         videoSurface?.let { runCatching { p.setSurface(it) } }
 
+        // https 源走 Java 侧 IO。
+        //
+        // ijk 官方 AAR 的 ffmpeg 没编 TLS，直接给 https URL 会在 120ms 内
+        // 报 what=-10000。而 ijkplayer 支持 `ijkio:` 协议，把
+        // open/read/seek/close 全部回调给 Java——于是网络请求由 OkHttp 做
+        // （走 Android 系统 TLS），ijk 只负责解封装和解码，不用重编 native。
+        val needJavaIo = url.startsWith("https://", ignoreCase = true)
+        val dataSource = if (needJavaIo) {
+            val io = IjkAndroidIO(headers)
+            androidIo = io
+            runCatching { p.setAndroidIOCallback(io) }
+                .onFailure { Log.w(TAG, "设置 ijkio 回调失败", it) }
+            Log.i(TAG, "https 源走 ijkio（Java 侧 TLS）")
+            "ijkio:$url"
+        } else {
+            androidIo = null
+            url
+        }
+
         runCatching {
-            p.setDataSource(url)
+            p.setDataSource(dataSource)
             p.prepareAsync()
         }.onFailure {
             Log.w(TAG, "ijk prepare 失败", it)
@@ -223,6 +245,8 @@ class IjkEngine : PlayerEngine {
     }
 
     private fun releaseInternal() {
+        androidIo?.let { runCatching { it.close() } }
+        androidIo = null
         val p = player ?: return
         player = null
         prepared = false

@@ -468,14 +468,14 @@ CROSS
   #   - 没有 android 开关；Android 支持由 egl-android + android-media-ndk 组成
   #   - 没有 macos-10-15-feature（改叫 macos-10-15-4-features）
   # 给错选项 meson 会直接 "Unknown option" 退出，所以这里只列真实存在的。
+  # 0.37+ 把 libplacebo 变成硬依赖，0.36 还能关。
+  # 编 libplacebo 要 vulkan/glslang/shaderc 一整串，对 IPTV 没用（我们只用 vo=gpu）。
   PKG_CONFIG_PATH="$(DEPS_PREFIX "$abi")/lib/pkgconfig:$prefix/lib/pkgconfig" \
   meson setup build "$SRC/mpv" \
     --cross-file "$bdir/cross.txt" \
     --prefix="$prefix" \
     --buildtype=release \
     -Dlibmpv=true \
-    # 0.37+ 把 libplacebo 变成硬依赖，0.36 还能关。
-    # 编 libplacebo 要 vulkan/glslang/shaderc 一整串，对 IPTV 没用（我们只用 vo=gpu）。
     -Dlibplacebo=disabled \
     -Dcplayer=false \
     -Dbuild-date=false \

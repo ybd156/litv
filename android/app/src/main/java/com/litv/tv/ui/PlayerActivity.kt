@@ -656,7 +656,9 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
             snapshotView.visibility = View.VISIBLE
         }
 
-        loading.visibility = View.VISIBLE
+        // 加载圈延迟出现，避免快换台时闪一下
+        main.removeCallbacks(showLoadingRunnable)
+        main.postDelayed(showLoadingRunnable, 220)
         switchTip.visibility = View.VISIBLE
         osdName.text = ch.name
 
@@ -695,7 +697,7 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
                 val nowSec = System.currentTimeMillis() / 1000
                 if (info.expires in 1 until nowSec) {
                     val skewMin = (nowSec - info.expires) / 60
-                    loading.visibility = View.GONE
+                    hideLoading()
                     switchTip.text = "设备时间比服务器快约 ${skewMin} 分钟，播放地址已过期，请校准时间"
                     switchTip.visibility = View.VISIBLE
                     toastTip("请在系统设置里开启自动校准时间")
@@ -715,7 +717,7 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
                 app.api.heartbeat(ch.id, "playing")
             },
             onErr = { msg ->
-                loading.visibility = View.GONE
+                hideLoading()
                 switchTip.text = "无法播放：$msg"
                 main.postDelayed({ switchTip.visibility = View.GONE }, 3000)
             })
@@ -848,6 +850,36 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(ts * 1000))
 
     // ---------------------------------------------------------------- OSD / 面板
+
+    // ---------------------------------------------------------------- 换台过渡
+    //
+    // 换台时的观感问题：
+    //   - 加载圈瞬间出现、瞬间消失，很突兀
+    //   - 换台本来就快的时候，圈只闪一下，反而显得卡
+    //
+    // 做法：
+    //   1. 加载圈延迟 220ms 才淡入——快换台根本不会出现
+    //   2. 淡入淡出各 150~180ms，不是硬切
+    //   3. 旧画面快照一直盖着，等第一帧真的画出来再淡出
+
+    private val showLoadingRunnable = Runnable {
+        if (!::loading.isInitialized) return@Runnable
+        if (loading.visibility == View.VISIBLE) return@Runnable
+        loading.alpha = 0f
+        loading.visibility = View.VISIBLE
+        loading.animate().alpha(1f).setDuration(180).start()
+    }
+
+    /** 起播成功/失败时调用：把加载圈淡出，而不是直接 GONE。 */
+    private fun hideLoading() {
+        if (!::loading.isInitialized) return
+        main.removeCallbacks(showLoadingRunnable)
+        if (loading.visibility != View.VISIBLE) return
+        loading.animate().alpha(0f).setDuration(150).withEndAction {
+            loading.visibility = View.GONE
+            loading.alpha = 1f
+        }.start()
+    }
 
     private fun showOsd() {
         osdVisible = true
@@ -1154,12 +1186,12 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
     override fun onPrepared(width: Int, height: Int) = Unit
 
     override fun onFirstFrame() {
-        // 第一帧已经画出来了，把换台快照淡出（120ms）。
+        // 第一帧已经画出来了，把换台快照淡出（200ms）。
         // 直接 GONE 会看到一次硬切，淡出看着是"渐显"，不突兀。
         if (!::snapshotView.isInitialized || snapshotView.visibility != View.VISIBLE) return
         snapshotView.animate()
             .alpha(0f)
-            .setDuration(120)
+            .setDuration(200)
             .withEndAction {
                 snapshotView.visibility = View.GONE
                 snapshotView.alpha = 1f
@@ -1168,7 +1200,7 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
     }
 
     override fun onPlaying() {
-        loading.visibility = View.GONE
+        hideLoading()
         switchTip.visibility = View.GONE
         // 快照不在这里撤——onPlaying 时画面往往还是黑的。
         // 等 onFirstFrame 真正画出第一帧再淡出，避免「遮罩没了→黑一下→画面出现」。
@@ -1185,7 +1217,7 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
     }
 
     override fun onError(message: String) {
-        loading.visibility = View.GONE
+        hideLoading()
 
         // 直连失败 → 改走服务端中转再试。
         //

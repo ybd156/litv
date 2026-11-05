@@ -456,6 +456,15 @@ build_mpv() {
     say "已给 ad_spdif.c 打 const 补丁"
   fi
 
+  # ffmpeg 7.1 起把 AV_OPT_TYPE_CHANNEL_LAYOUT 改名成 AV_OPT_TYPE_CHLAYOUT，
+  # mpv 0.36 还在用旧名，编译直接报 undeclared identifier。
+  # 只改这一处符号引用，语义完全一致。
+  local lavfi="$SRC/mpv/filters/f_lavfi.c"
+  if [ -f "$lavfi" ] && grep -q "AV_OPT_TYPE_CHANNEL_LAYOUT" "$lavfi"; then
+    sed -i 's/AV_OPT_TYPE_CHANNEL_LAYOUT/AV_OPT_TYPE_CHLAYOUT/g' "$lavfi"
+    say "已给 f_lavfi.c 打 AV_OPT_TYPE_CHLAYOUT 改名补丁"
+  fi
+
   # mpv 用 waf/meson 构建；v0.39 已切到 meson
   local bdir="$SRC/mpv-build-$abi"
   rm -rf "$bdir" && mkdir -p "$bdir" && cd "$bdir" || return 1

@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  底部 OSD 卡片底。
+
+  之前用的是 bg_osd_gradient：整条通到底、从全透明渐变到 80% 黑。
+  真机上的问题是——直播画面自己底部就有字幕条，
+  两层叠在一起谁也看不清，而且全宽的渐变条看着像"画面被切了一刀"。
+
+  改成有边距的圆角卡片：和参考实现（群晖电视 / DIYP）一致，
+  卡片边界清楚，底下的画面还能看见。
+-->
+<shape xmlns:android="http://schemas.android.com/apk/res/android">
+    <solid android:color="#F2101318" />
+    <corners android:radius="14dp" />
+</shape>

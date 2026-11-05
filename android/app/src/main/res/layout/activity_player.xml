@@ -81,11 +81,13 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_gravity="bottom"
-        android:background="@drawable/bg_osd_gradient"
+        android:layout_marginHorizontal="28dp"
+        android:layout_marginBottom="24dp"
+        android:background="@drawable/bg_osd_card"
         android:orientation="vertical"
-        android:paddingHorizontal="40dp"
-        android:paddingTop="48dp"
-        android:paddingBottom="24dp"
+        android:paddingHorizontal="24dp"
+        android:paddingTop="16dp"
+        android:paddingBottom="16dp"
         android:visibility="gone">
 
         <LinearLayout
@@ -298,11 +300,16 @@
         </LinearLayout>
 
         <!-- 下：底部信息条（台标 / 台号名称 / 正在播 / 下一档 / 线路 / 进度 / 时间） -->
+        <!-- 频道页不放底部信息条：参考实现的频道页就是纯三列，
+             当前频道在列表里高亮、节目进度在节目单列里，不需要再来一条。
+             之前这里有一条，看着就像 OSD 没关掉。视图保留（代码还在 setText），
+             只是不显示。 -->
         <LinearLayout
             android:id="@+id/infoBar"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:background="#F20B0E11"
+            android:visibility="gone"
             android:gravity="center_vertical"
             android:orientation="horizontal"
             android:paddingHorizontal="16dp"

@@ -482,15 +482,14 @@ CROSS
   # 给错选项 meson 会直接 "Unknown option" 退出，所以这里只列真实存在的。
   # 0.37+ 把 libplacebo 变成硬依赖，0.36 还能关。
   # 编 libplacebo 要 vulkan/glslang/shaderc 一整串，对 IPTV 没用（我们只用 vo=gpu）。
-  PKG_CONFIG_PATH="$(DEPS_PREFIX "$abi")/lib/pkgconfig:$prefix/lib/pkgconfig" \
-  meson setup build "$SRC/mpv" \
+  # 兜底：mpv 0.36 有些地方还在用非 const 的函数指针，新版 ffmpeg 改了签名。
+  # 这些差异是纯 const 正确性、行为等价，降级成警告即可，
+  # 免得每碰到一处就要打一个补丁、多跑一轮 CI。
+  PKG_CONFIG_PATH="$(DEPS_PREFIX "$abi")/lib/pkgconfig:$prefix/lib/pkgconfig" meson setup build "$SRC/mpv" \
     --cross-file "$bdir/cross.txt" \
     --prefix="$prefix" \
     --buildtype=release \
     -Dlibmpv=true \
-    # 兜底：mpv 0.36 有些地方还在用非 const 的函数指针，新版 ffmpeg 改了签名。
-    # 这些差异是纯 const 正确性、行为等价，降级成警告即可，
-    # 免得每碰到一处就要打一个补丁、多跑一轮 CI。
     -Dc_args=-Wno-incompatible-function-pointer-types \
     -Dlibplacebo=disabled \
     -Dcplayer=false \

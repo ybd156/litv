@@ -106,6 +106,11 @@ jobs:
           cp -f android/app/src/main/jniLibs/${{ matrix.abi }}/*.so /tmp/old-libs/ 2>/dev/null || true
           ls /tmp/old-libs | head -20
 
+      # 这个坑踩了三次：注释插进反斜杠续行的命令中间，续行被注释截断，
+      # 后半截变成独立命令（报 command not found 或静默丢参数）。
+      - name: 检查脚本里注释有没有插进续行命令
+        run: python3 tools/checks/check-continuation.py android/native/build-libmpv.sh
+
       - name: 编译 ${{ matrix.abi }}
         working-directory: android
         env:

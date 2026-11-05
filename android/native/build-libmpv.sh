@@ -372,6 +372,38 @@ build_freetype() {
   ok "freetype[$abi] 完成"
 }
 
+build_harfbuzz() {
+  local abi="$1" triple prefix
+  triple="$(triple_for "$abi")"; prefix="$(DEPS_PREFIX "$abi")"
+  [ -f "$prefix/lib/libharfbuzz.a" ] && { ok "harfbuzz[$abi] 已编译"; return 0; }
+  say "编译 harfbuzz [$abi]"
+
+  # libass 0.16/0.17 都要求 harfbuzz >= 1.2.3，绕不过去，只能编。
+  # harfbuzz 是 meson 项目，glib/icu/cairo 都能关掉，编出来很小。
+  if [ ! -d "$SRC/harfbuzz" ]; then
+    fetch_tar "https://github.com/harfbuzz/harfbuzz/releases/download/8.3.0/harfbuzz-8.3.0.tar.xz" "$ROOT/dl/harfbuzz.tar.xz" || return 1
+    mkdir -p "$SRC" && tar xf "$ROOT/dl/harfbuzz.tar.xz" -C "$SRC" && mv "$SRC/harfbuzz-8.3.0" "$SRC/harfbuzz"
+  fi
+
+  local bdir="$SRC/harfbuzz-build-$abi"; rm -rf "$bdir"; mkdir -p "$bdir"
+  cat > "$bdir/cross.txt" <<CROSS
+[binaries]
+c = '$TOOLCHAIN/bin/$( [ "$abi" = "armeabi-v7a" ] && echo armv7a-linux-androideabi || echo "$triple" )$API-clang'
+cpp = c
+ar = '$TOOLCHAIN/bin/llvm-ar'
+strip = '$TOOLCHAIN/bin/llvm-strip'
+pkg-config = 'pkg-config'
+[host_machine]
+system = 'android'
+cpu_family = '$( [ "$abi" = "arm64-v8a" ] && echo aarch64 || echo arm )'
+cpu = '$( [ "$abi" = "arm64-v8a" ] && echo aarch64 || echo armv7a )'
+endian = 'little'
+CROSS
+
+  ( cd "$bdir" && PKG_CONFIG_PATH="$prefix/lib/pkgconfig"       meson setup build "$SRC/harfbuzz" --cross-file cross.txt       --prefix="$prefix" --buildtype=release --default-library=static       -Dglib=disabled -Dgobject=disabled -Dicu=disabled -Dcairo=disabled       -Dchafa=disabled -Ddocs=disabled -Dtests=disabled -Dintrospection=disabled       -Dfreetype=enabled       >meson.log 2>&1 && ninja -C build >>meson.log 2>&1 && ninja -C build install >>meson.log 2>&1 )     || { err "harfbuzz 编译失败"; grep -iE "error|not found" "$bdir/meson.log" | tail -10; return 1; }
+  ok "harfbuzz[$abi] 完成"
+}
+
 build_libass() {
   local abi="$1" triple prefix cc cxx
   triple="$(triple_for "$abi")"; prefix="$(DEPS_PREFIX "$abi")"
@@ -390,7 +422,7 @@ build_libass() {
   if [ "$abi" = "armeabi-v7a" ]; then cc="$TOOLCHAIN/bin/armv7a-linux-androideabi$API-clang"; else cc="$TOOLCHAIN/bin/${triple}$API-clang"; fi
   cxx="${cc}++"
   local bdir="$SRC/libass-build-$abi"; rm -rf "$bdir"; mkdir -p "$bdir"
-  ( cd "$bdir" &&     PKG_CONFIG_PATH="$prefix/lib/pkgconfig"     CC="$cc" CXX="$cxx" AR="$TOOLCHAIN/bin/llvm-ar" RANLIB="$TOOLCHAIN/bin/llvm-ranlib"     "$SRC/libass/configure" --host="$triple" --build="$(gcc -dumpmachine)" --prefix="$prefix"       --enable-static --disable-shared --disable-fontconfig --disable-harfbuzz       --disable-require-system-font-provider       >configure.log 2>&1 && make -j"$JOBS" >>build.log 2>&1 && make install >>build.log 2>&1 )     || {
+  ( cd "$bdir" &&     PKG_CONFIG_PATH="$prefix/lib/pkgconfig"     CC="$cc" CXX="$cxx" AR="$TOOLCHAIN/bin/llvm-ar" RANLIB="$TOOLCHAIN/bin/llvm-ranlib"     "$SRC/libass/configure" --host="$triple" --build="$(gcc -dumpmachine)" --prefix="$prefix"       --enable-static --disable-shared --disable-fontconfig       --disable-require-system-font-provider       >configure.log 2>&1 && make -j"$JOBS" >>build.log 2>&1 && make install >>build.log 2>&1 )     || {
       err "libass 编译失败"
       [ -f "$bdir/configure.log" ] && { echo "--- configure.log 尾部 ---"; tail -25 "$bdir/configure.log"; }
       [ -f "$bdir/build.log" ] && { echo "--- build.log 尾部 ---"; tail -25 "$bdir/build.log"; }
@@ -505,6 +537,7 @@ for abi in $ABIS; do
   if [ "$SKIP_MPV" != "1" ]; then
     build_fribidi  "$abi" || { err "fribidi[$abi] 失败，跳过该 ABI"; continue; }
     build_freetype "$abi" || { err "freetype[$abi] 失败，跳过该 ABI"; continue; }
+    build_harfbuzz "$abi" || { err "harfbuzz[$abi] 失败，跳过该 ABI"; continue; }
     build_libass   "$abi" || { err "libass[$abi] 失败，跳过该 ABI"; continue; }
   fi
 

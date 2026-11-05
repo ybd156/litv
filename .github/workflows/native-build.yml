@@ -93,6 +93,15 @@ jobs:
           restore-keys: |
             native-${{ matrix.abi }}-
 
+      # 备份仓库里已有的 .so。编完要拿新库和它们做 ABI 对比——
+      # 仓库里的 libmpv.so 是用某个特定版本的 ffmpeg 编的，
+      # 换 ffmpeg 版本很容易让它的符号找不到，运行时 dlopen 才炸。
+      - name: 备份仓库里的旧库
+        run: |
+          mkdir -p /tmp/old-libs
+          cp -f android/app/src/main/jniLibs/${{ matrix.abi }}/*.so /tmp/old-libs/ 2>/dev/null || true
+          ls /tmp/old-libs | head -20
+
       - name: 编译 ${{ matrix.abi }}
         working-directory: android
         env:
@@ -106,6 +115,11 @@ jobs:
         run: |
           chmod +x native/build-libmpv.sh
           ./native/build-libmpv.sh
+
+      - name: ABI 兼容性检查（新库能不能配旧 libmpv）
+        run: |
+          chmod +x tools/checks/check-av-abi.sh
+          OLD_DIR=/tmp/old-libs ./tools/checks/check-av-abi.sh             android/app/src/main/jniLibs/${{ matrix.abi }}             /tmp/old-libs/libmpv.so
 
       - name: 校验 TLS 真的编进去了
         run: |

@@ -110,7 +110,7 @@ class PlayerManager(
     private var stallRecovered = 0
     private var userPaused = false
 
-    private val stallWatchdog = Runnable {
+    private val stallWatchdog: Runnable = Runnable {
         val eng = current
         if (eng == null || !prepared) {
             main.postDelayed(stallWatchdog, STALL_CHECK_MS)
@@ -149,10 +149,13 @@ class PlayerManager(
                 return@Runnable
             }
             Log.w(TAG, "判定卡死，第 $stallRecovered 次自动恢复")
-            if (stallRecovered >= 2 && !forceRelayOnce) {
-                // 同一个台连续卡两次，多半是这条直连线路有问题，改走中转
-                forceRelayOnce = true
-                Log.w(TAG, "连续卡死，这次改走服务端中转")
+            if (stallRecovered >= 2 && directMode) {
+                // 同一个台连续卡两次，多半是这条直连线路有问题。
+                // 交给上层改走服务端中转（和「直连首个内核失败」走同一条路）。
+                Log.w(TAG, "连续卡死，改走服务端中转")
+                directMode = false
+                onDirectFailed?.invoke("反复卡死")
+                return@Runnable
             }
             startCurrent()
         }

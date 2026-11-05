@@ -75,3 +75,7 @@ ios/Payload/
 ios/Pods/
 ios/LITV.xcworkspace/
 ios/Podfile.lock
+
+# Python 编译缓存
+__pycache__/
+*.pyc

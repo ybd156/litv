@@ -6,6 +6,7 @@ import android.view.KeyEvent
 import android.view.LayoutInflater
 import android.view.View
 import android.view.Window
+import android.view.WindowManager
 import android.widget.LinearLayout
 import android.widget.TextView
 import com.litv.tv.LitvApp
@@ -56,10 +57,12 @@ class SettingsDialog(context: Context) : Dialog(context, R.style.LitvDialog) {
     override fun onStart() {
         super.onStart()
         val dm = context.resources.displayMetrics
-        // 88% 宽、最高 84% 高，留出边距，别顶满
+        // 宽度定死 88%（不定的话 Dialog 按默认最小宽度渲染，只有屏宽 36%）；
+        // 高度用 WRAP_CONTENT 贴合内容——之前写死 84%，内容少的时候
+        // 下面一大片空白很难看。
         window?.setLayout(
             (dm.widthPixels * 0.88f).toInt(),
-            (dm.heightPixels * 0.84f).toInt(),
+            WindowManager.LayoutParams.WRAP_CONTENT,
         )
     }
 

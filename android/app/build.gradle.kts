@@ -157,21 +157,6 @@ dependencies {
     // 没有 Maven 坐标，靠 jniLibs 目录里的 libmpv.so + MPVLib.kt 的 JNI 绑定。
     // 未提供 .so 时 MpvEngine 会自报不可用，播放器自动降级，不影响运行。
 
-    // ---- 播放内核：ijkplayer —— 直播起播最快（ffmpeg 内核）----
-    //
-    // 为什么加它：拆了三个参考 APK（mediaplayer / 酷9 / DIYP），
-    // 酷9 和 DIYP 都用 ijkplayer，mediaplayer 用 mpv——**都是 ffmpeg 内核**。
-    // 共同点是把 ffmpeg 起播前的流分析压到 0.1 秒：
-    //   analyzeduration=100000  probesize=409600  packet-buffering=0
-    // ExoPlayer 的 HLS 管线必须等一整个分片下载完才能起播，这是结构差距。
-    //
-    // 依赖原本在 jcenter（已关停），阿里云 public 镜像仍有缓存，
-    // 所以不用自己交叉编译。x86 也带上，方便在模拟器上验证。
-    implementation("tv.danmaku.ijk.media:ijkplayer-java:0.8.8")
-    implementation("tv.danmaku.ijk.media:ijkplayer-armv7a:0.8.8")
-    implementation("tv.danmaku.ijk.media:ijkplayer-arm64:0.8.8")
-    implementation("tv.danmaku.ijk.media:ijkplayer-x86:0.8.8")
-
     // ---- 播放内核 4/4：AVS3 —— 由带 libuavs3d 的 libmpv 承担，不额外引依赖 ----
 
     implementation("com.squareup.okhttp3:okhttp:4.12.0")

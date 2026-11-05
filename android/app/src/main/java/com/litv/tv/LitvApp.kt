@@ -41,7 +41,6 @@ class LitvApp : Application() {
         Log.i(
             TAG,
             "LITV 启动 | 渲染档=${tier.name} | libmpv=${if (MPVLib.available) "可用" else "不可用(该 ABI 无 .so)"} " +
-                "| ijk=${if (com.litv.tv.player.IjkEngine.probe()) "可用" else "不可用"} " +
                 "| Android ${android.os.Build.VERSION.SDK_INT} | ${android.os.Build.MODEL}"
         )
 

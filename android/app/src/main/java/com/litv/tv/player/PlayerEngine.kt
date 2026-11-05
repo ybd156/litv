@@ -101,22 +101,9 @@ data class EngineStats(
 )
 
 /** 内核类型。 */
-/**
- * @param ffmpegNoTls 这个内核的 ffmpeg 有没有编 TLS 后端。
- *
- * true 表示播不了 https://，组链时会跳过它。
- * 目前两个 ffmpeg 内核都是 false：
- *  - mpv：换成自编的 ffmpeg（--enable-openssl），TLS 已确认链进去
- *  - ijk：本身没 TLS，但 https 源走 ijkio 协议回调到 Java 侧取流
- * 保留这个标记是为了以后万一又引入无 TLS 的内核时能自动挡住。
- */
-enum class EngineKind(val key: String, val label: String, val ffmpegNoTls: Boolean = false) {
+enum class EngineKind(val key: String, val label: String) {
     EXO("exo", "系统硬解 (Media3)"),
-    /** ffmpeg 内核，直播起播最快。酷9/DIYP 用的就是它。 */
-    // ijk 的 ffmpeg 本身没编 TLS，但 https 源会走 ijkio 协议把 IO
-    // 回调给 Java（IjkAndroidIO，用 OkHttp + 系统 TLS），所以不需要拦。
-    IJK("ijk", "ijkplayer (ffmpeg)"),
-    // mpv 用的是我们自己编的 ffmpeg（--enable-openssl），TLS 是好的。
+    /** ffmpeg 内核。用的是我们自己编的 ffmpeg（--enable-openssl），支持 https。 */
     MPV("mpv", "libmpv 软解"),
     VLC("vlc", "libVLC"),
     // 注意：这个内核只是 mpv 强制软解，并没有单独集成 libuavs3d。
@@ -151,7 +138,7 @@ object EngineChain {
      * 仍然保留 Exo 在链上：ijk 遇到畸形流或解码失败时能立刻降级，
      * 而 Exo 的硬解在部分 Amlogic 盒子上画质更好。
      */
-    val DEFAULT = listOf(EngineKind.IJK, EngineKind.EXO, EngineKind.VLC, EngineKind.MPV)
+    val DEFAULT = listOf(EngineKind.EXO, EngineKind.VLC, EngineKind.MPV)
 
     /** 用户强制指定内核时，仍然允许它失败后回退到通用链。 */
     fun chainFor(preferred: String?, remembered: String?): List<EngineKind> {

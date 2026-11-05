@@ -181,8 +181,8 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
     // 所以补一套和遥控器等价的手势：
     //
     //   单击画面        呼出 / 收起 OSD
-    //   左滑            打开频道面板（分类 + 频道 + 节目单）
-    //   右滑            打开设置菜单
+    //   从左往右滑      打开频道面板（分类 + 频道 + 节目单）
+    //   从右往左滑      打开设置菜单
     //   上滑 / 下滑     下一个台 / 上一个台
     //   左侧边缘上下拖  调亮度（和换台区分开，否则垂直方向会打架）
     private var gestureDetector: android.view.GestureDetector? = null
@@ -256,7 +256,10 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
                 val dy = ev.y - downY
                 when {
                     Math.abs(dx) > slop && Math.abs(dx) > Math.abs(dy) * 1.5f -> {
-                        if (dx < 0) openPanel() else toggleSettingsMenu()
+                        // 方向按「从哪边滑出来」算，不是「往哪边滑」：
+                        //   从左往右滑（dx > 0） -> 频道面板从左边出来
+                        //   从右往左滑（dx < 0） -> 设置菜单从右边出来
+                        if (dx > 0) openPanel() else toggleSettingsMenu()
                     }
                     Math.abs(dy) > slop && Math.abs(dy) > Math.abs(dx) * 1.5f -> {
                         // 上滑 = 下一个台，下滑 = 上一个台

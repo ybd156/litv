@@ -60,14 +60,19 @@ for lib in $LIBS; do
   comm -23 "$tmp_o" "$tmp_n" > "$tmp_o.gone"
   # 其中 libmpv 确实引用的，才是致命的
   comm -12 "$tmp_o.gone" "$tmp_undef" > "$tmp_o.fatal"
+  # 调试：确认关键的 HDR 符号确实被检查到了
+  if grep -q "av_dynamic_hdr_smpte2094_app5" "$tmp_o.gone" 2>/dev/null; then
+    echo "       （检测到 av_dynamic_hdr_smpte2094_app5_* 差异）"
+  fi
   n="$(grep -c . "$tmp_o.fatal" || true)"
 
+  gone_n="$(grep -c . "$tmp_o.gone" || true)"
   if [ "${n:-0}" -gt 0 ]; then
-    echo "  [致命] $lib 少了 $n 个 libmpv 需要的符号："
+    echo "  [致命] $lib 少了 $n 个 libmpv 需要的符号（该库共少 ${gone_n:-0} 个）："
     head -10 "$tmp_o.fatal" | sed 's/^/           /'
     missing_total=$((missing_total + n))
   else
-    echo "  [ok] $lib 兼容"
+    echo "  [ok] $lib 兼容（旧有新无的符号 ${gone_n:-0} 个，但 libmpv 都不引用）"
   fi
   rm -f "$tmp_o" "$tmp_n" "$tmp_o.gone" "$tmp_o.fatal"
 done

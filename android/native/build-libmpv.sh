@@ -198,7 +198,7 @@ build_ffmpeg() {
   local abi="$1" triple prefix
   triple="$(triple_for "$abi")"
   prefix="$OUT/$abi"
-  [ -f "$prefix/lib/libavcodec.so" ] && { ok "ffmpeg[$abi] 已编译"; return 0; }
+
 
   say "编译 ffmpeg [$abi]"
   if [ ! -d "$SRC/ffmpeg" ]; then
@@ -206,6 +206,18 @@ build_ffmpeg() {
     # TLS handshake failure，GitHub 反而稳。
     fetch_tar "https://github.com/FFmpeg/FFmpeg/archive/refs/tags/${FFMPEG_TAG}.tar.gz" "$ROOT/dl/ffmpeg-$FFMPEG_TAG.tar.gz" || return 1
     mkdir -p "$SRC" && tar xzf "$ROOT/dl/ffmpeg-$FFMPEG_TAG.tar.gz" -C "$SRC" && mv "$SRC/FFmpeg-${FFMPEG_TAG#n}" "$SRC/ffmpeg" ||       mv "$SRC/FFmpeg-${FFMPEG_TAG}" "$SRC/ffmpeg"
+  fi
+
+  # 版本校验：CI 缓存会按前缀还原旧的构建产物，光看"文件存在"就跳过
+  # 会导致换版本后仍然用旧库（踩过：改 n8.0 后日志还是"已编译"，
+  # 结果发布出去的还是 n7.1 的库）。
+  local marker="$prefix/.ffmpeg-tag"
+  if [ -f "$prefix/lib/libavcodec.so" ]; then
+    if [ "$(cat "$marker" 2>/dev/null)" = "$FFMPEG_TAG" ]; then
+      ok "ffmpeg[$abi] 已编译（$FFMPEG_TAG）"; return 0
+    fi
+    say "缓存的 ffmpeg 版本是 $(cat "$marker" 2>/dev/null || echo 未知)，要的是 $FFMPEG_TAG，重建"
+    rm -rf "$prefix"
   fi
 
   local bdir="$SRC/ffmpeg-build-$abi"
@@ -273,7 +285,8 @@ build_ffmpeg() {
   # 传 STRIP=true 跳过 stripping。
   make install STRIP=true >>"$bdir/build.log" 2>&1 || { err "ffmpeg install 失败，见 $bdir/build.log"; return 1; }
   [ -f "$prefix/lib/pkgconfig/libavcodec.pc" ] || { err "ffmpeg 未安装完整（缺 libavcodec.pc）"; return 1; }
-  ok "ffmpeg[$abi] 完成"
+  echo "$FFMPEG_TAG" > "$prefix/.ffmpeg-tag"
+  ok "ffmpeg[$abi] 完成（$FFMPEG_TAG）"
 }
 
 # ---------------------------------------------------------------- 3. mpv

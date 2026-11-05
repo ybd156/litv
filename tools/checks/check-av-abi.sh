@@ -28,12 +28,15 @@ MPV="${2:?用法: check-av-abi.sh <新库目录> <libmpv.so>}"
 
 [ -d "$NEW_DIR" ] || { echo "目录不存在: $NEW_DIR"; exit 1; }
 [ -f "$MPV" ]     || { echo "找不到 libmpv.so: $MPV"; exit 1; }
-command -v nm >/dev/null || { echo "缺少 nm（binutils）"; exit 1; }
+command -v objdump >/dev/null || { echo "缺少 objdump（binutils）"; exit 1; }
 
 LIBS="libavformat.so libavcodec.so libavutil.so libswscale.so libswresample.so"
 
 tmp_undef="$(mktemp)"
-nm -D --undefined-only "$MPV" 2>/dev/null | awk '{print $NF}' | sort -u > "$tmp_undef"
+# 用 objdump -T 而不是 nm：实测 nm 在 NDK 编出来并 strip 过的 .so 上
+# 会返回空（门禁因此静默失效过一次，给出了假的"兼容"结论）。
+# objdump -T 的输出格式稳定：第 4 列是 *UND* 表示未定义。
+objdump -T "$MPV" 2>/dev/null | awk '$4=="*UND*" && $NF!="" {print $NF}' | sort -u > "$tmp_undef"
 echo "libmpv.so 引用外部符号 $(wc -l < "$tmp_undef") 个"
 
 OLD_DIR="${OLD_DIR:-}"
@@ -53,8 +56,19 @@ for lib in $LIBS; do
   [ -f "$new_lib" ] || { echo "  [缺失] 新库没有 $lib"; missing_total=$((missing_total+1)); continue; }
 
   tmp_o="$(mktemp)"; tmp_n="$(mktemp)"
-  nm -D --defined-only "$old_lib" 2>/dev/null | awk '{print $NF}' | sort -u > "$tmp_o"
-  nm -D --defined-only "$new_lib" 2>/dev/null | awk '{print $NF}' | sort -u > "$tmp_n"
+  objdump -T "$old_lib" 2>/dev/null | awk '$4!="*UND*" && $NF!="" {print $NF}' | sort -u > "$tmp_o"
+  objdump -T "$new_lib" 2>/dev/null | awk '$4!="*UND*" && $NF!="" {print $NF}' | sort -u > "$tmp_n"
+
+  # 防呆：符号表读不出来时绝不能当成"兼容"。
+  # 之前用 nm 遇到过输出为空 -> comm 把旧库全部符号当成"新库没有"
+  # -> 又因为 libmpv 引用的子集判断写错，最后得出"兼容"的假结论。
+  o_cnt="$(grep -c . "$tmp_o" || true)"; n_cnt="$(grep -c . "$tmp_n" || true)"
+  if [ "${o_cnt:-0}" -lt 10 ] || [ "${n_cnt:-0}" -lt 10 ]; then
+    echo "  [错误] $lib 符号表读不出来（旧 ${o_cnt:-0} 个 / 新 ${n_cnt:-0} 个），无法判断，按不兼容处理"
+    missing_total=$((missing_total + 1))
+    rm -f "$tmp_o" "$tmp_n" "$tmp_o.gone" "$tmp_o.fatal"
+    continue
+  fi
 
   # 旧库导出、新库没有的符号
   comm -23 "$tmp_o" "$tmp_n" > "$tmp_o.gone"

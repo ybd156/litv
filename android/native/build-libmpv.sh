@@ -59,9 +59,12 @@ ENABLE_AVS3="${ENABLE_AVS3:-0}"
 #   而 n7.1 正式版还没有这两个（是 7.1 之后才加进 libavutil 的）。
 #   用 n7.1 重编会让 libmpv 在 dlopen 时找不到符号，整个内核不可用。
 #
-#   换 n8.0 是为了尽量贴近旧快照的 API 面。是否真的兼容**不靠猜**——
-#   CI 里有 tools/checks/check-av-abi.sh 逐符号比对，不通过就不发布。
-FFMPEG_TAG="${FFMPEG_TAG:-n8.0}"
+#   实测 n7.1 和 n8.0 都没有这两个符号（8.0 的 libavutil 只导出 600 个，
+#   旧快照 630 个），说明它们是 8.0 之后才进主线的。所以只能用 master。
+#
+#   是否真的兼容**不靠猜**——CI 里有 tools/checks/check-av-abi.sh
+#   逐符号比对，不通过就不发布。
+FFMPEG_TAG="${FFMPEG_TAG:-master}"
 
 # 只重编 ffmpeg（复用仓库里已有的 libmpv.so）。
 #
@@ -206,8 +209,16 @@ build_ffmpeg() {
   if [ ! -d "$SRC/ffmpeg" ]; then
     # 用 GitHub 的 tag 归档而不是 ffmpeg.org：后者在国内/代理下经常
     # TLS handshake failure，GitHub 反而稳。
-    fetch_tar "https://github.com/FFmpeg/FFmpeg/archive/refs/tags/${FFMPEG_TAG}.tar.gz" "$ROOT/dl/ffmpeg-$FFMPEG_TAG.tar.gz" || return 1
-    mkdir -p "$SRC" && tar xzf "$ROOT/dl/ffmpeg-$FFMPEG_TAG.tar.gz" -C "$SRC" && mv "$SRC/FFmpeg-${FFMPEG_TAG#n}" "$SRC/ffmpeg" ||       mv "$SRC/FFmpeg-${FFMPEG_TAG}" "$SRC/ffmpeg"
+    local url dirname
+    if [ "$FFMPEG_TAG" = "master" ]; then
+      url="https://github.com/FFmpeg/FFmpeg/archive/refs/heads/master.tar.gz"
+      dirname="FFmpeg-master"
+    else
+      url="https://github.com/FFmpeg/FFmpeg/archive/refs/tags/${FFMPEG_TAG}.tar.gz"
+      dirname="FFmpeg-${FFMPEG_TAG#n}"
+    fi
+    fetch_tar "$url" "$ROOT/dl/ffmpeg-$FFMPEG_TAG.tar.gz" || return 1
+    mkdir -p "$SRC" && tar xzf "$ROOT/dl/ffmpeg-$FFMPEG_TAG.tar.gz" -C "$SRC" && mv "$SRC/$dirname" "$SRC/ffmpeg"
   fi
 
   # 版本校验：CI 缓存会按前缀还原旧的构建产物，光看"文件存在"就跳过

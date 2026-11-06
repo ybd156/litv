@@ -105,8 +105,19 @@ class PlayerManager(
     // 之前没有任何机制处理这种情况，用户看到的就是「卡住了不恢复，只能手动换台」。
     //
     // 唯一可靠的判断依据是播放位置：每隔几秒读一次，位置不前进就认为卡住了。
-    private var stallTicks = 0
     private var lastPosMs = -1L
+    /**
+     * 最后一次「播放位置发生变化」的时刻（SystemClock.elapsedRealtime）。
+     *
+     * 为什么不用「连续 N 次没前进」的计数：真机实测发现 HLS 直播的位置
+     * 会**周期性回落**（2760 -> 1761、11765 -> 2767），因为播放器重新
+     * 加载播放列表并按分片边界重算时间轴。用 `pos <= lastPosMs` 判断
+     * 会把这种正常回落误判成卡顿，日志里一堆「没有前进第 1 次」。
+     *
+     * 改成看时间戳：位置只要**变化**（前进或回落都算）就刷新时间戳，
+     * 超过阈值完全不变才判定卡死。这样既不误判，也能抓住真卡死。
+     */
+    private var lastPosChangeAt = 0L
     private var stallRecovered = 0
     private var userPaused = false
 
@@ -125,21 +136,29 @@ class PlayerManager(
         // 这里**不能**用 isPlaying() 做前置条件。
         // 流真卡住时 ExoPlayer 会进入 BUFFERING，isPlaying() 返回 false，
         // 那样就永远检测不到了——这正是「卡住不恢复」的根因。
-        // 判断依据只留「位置有没有前进」。
         if (pos >= 0) {
-            if (lastPosMs >= 0 && pos <= lastPosMs) {
-                stallTicks++
-                Log.w(TAG, "播放位置没有前进（${lastPosMs}ms -> ${pos}ms），第 $stallTicks 次")
-            } else {
-                if (stallTicks > 0) Log.i(TAG, "播放已自行恢复，位置 $pos ms")
-                stallTicks = 0
+            val now = android.os.SystemClock.elapsedRealtime()
+            // 位置只要变了（前进或回落都算变化）就刷新时间戳
+            if (pos != lastPosMs) {
+                if (lastPosMs >= 0 && pos < lastPosMs) {
+                    Log.i(TAG, "位置回落 ${lastPosMs}ms -> ${pos}ms（HLS 重载，正常）")
+                }
+                lastPosMs = pos
+                lastPosChangeAt = now
             }
-            lastPosMs = pos
         }
 
-        if (stallTicks >= STALL_TICKS_TO_RECOVER) {
-            stallTicks = 0
-            lastPosMs = -1L
+        // 完全没变化超过阈值才算卡死。
+        //
+        // pos < 0 表示这个内核压根拿不到播放位置，这种时候没法判断，
+        // 直接跳过——不然时间戳一直不刷新，16 秒后必然误判。
+        if (pos < 0) {
+            main.postDelayed(stallWatchdog, STALL_CHECK_MS)
+            return@Runnable
+        }
+        val frozenMs = android.os.SystemClock.elapsedRealtime() - lastPosChangeAt
+        if (lastPosChangeAt > 0 && frozenMs >= STALL_FROZEN_MS) {
+            lastPosChangeAt = android.os.SystemClock.elapsedRealtime()
             stallRecovered++
             if (stallRecovered > MAX_STALL_RECOVER) {
                 // 反复卡死说明不是偶发抖动，重启也没用，别再无限循环
@@ -164,15 +183,15 @@ class PlayerManager(
 
     private fun startStallWatchdog() {
         main.removeCallbacks(stallWatchdog)
-        stallTicks = 0
         lastPosMs = -1L
+        lastPosChangeAt = android.os.SystemClock.elapsedRealtime()
         main.postDelayed(stallWatchdog, STALL_CHECK_MS)
     }
 
     private fun stopStallWatchdog() {
         main.removeCallbacks(stallWatchdog)
-        stallTicks = 0
         lastPosMs = -1L
+        lastPosChangeAt = 0L
     }
 
     private val frameWatchdog = Runnable {
@@ -480,16 +499,16 @@ class PlayerManager(
         // 起不来的内核不该拖 6 秒——3 秒足够判断，超时就换下一个
         const val START_TIMEOUT_MS = 5000L
 
-        /** 卡顿检测间隔。8 秒读一次播放位置，对 CPU 几乎没有开销。 */
-        const val STALL_CHECK_MS = 8000L
+        /** 卡顿检测间隔。4 秒读一次播放位置，对 CPU 几乎没有开销。 */
+        const val STALL_CHECK_MS = 4000L
 
         /**
-         * 连续几次「位置没前进」才判定卡死。
+         * 播放位置完全不变多久算卡死。
          *
-         * 2 次 = 大约 16 秒。留这个余量是因为网络抖动时位置可能短暂停住
-         * 一两秒又继续，太快判定会导致好好的直播被反复重启。
+         * 16 秒：网络抖动时位置可能短暂停几秒又继续，太快判定会把
+         * 好好的直播反复重启；太慢用户又会觉得「卡了半天没反应」。
          */
-        const val STALL_TICKS_TO_RECOVER = 2
+        const val STALL_FROZEN_MS = 16000L
 
         /** 自动恢复的次数上限。超过就不再重启，直接报错。 */
         const val MAX_STALL_RECOVER = 3

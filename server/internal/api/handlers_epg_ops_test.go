@@ -8,24 +8,49 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/litv/litv/server/internal/store"
 )
 
-const sampleXMLTV = `<?xml version="1.0" encoding="UTF-8"?>
+// sampleXMLTV 生成以「当前时间」为基准的 XMLTV。
+//
+// 这里原来是硬编码的 `20261103080000`。到了 2026-11-06，
+// TestEPGCleanupRemovesOldPrograms 就必然失败：
+// 它调 cleanup(keep_days=3)，而 11-03 的节目正好超过 3 天被判过期，
+// 于是断言「新闻联播剩 1 条」拿到 0。
+//
+// 硬编码日期等于给自己埋了个定时炸弹——到点就红，和代码改动无关。
+// 改成按当前时间生成，永远测的是「未过期」这个语义。
+func sampleXMLTV(now time.Time) string {
+	// 节目从「今天 00:00（+0800）」开始排，确保落在 keep_days 窗口内
+	// 注意不能用 now.Truncate(24h)：它是按 UTC 边界截断的，
+	// 在 +0800 会得到当地 08:00 而不是 00:00。必须显式取当地日期。
+	loc := time.FixedZone("CST", 8*3600)
+	year, month, day := now.In(loc).Date()
+	base := time.Date(year, month, day, 0, 0, 0, 0, loc)
+	fmtStr := func(offset time.Duration) string {
+		return base.Add(offset).Format("20060102150405") + " +0800"
+	}
+	return fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
 <tv>
   <channel id="cctv1"><display-name>CCTV-1</display-name></channel>
   <channel id="cctv2"><display-name>CCTV-2</display-name></channel>
-  <programme start="20261103080000 +0800" stop="20261103090000 +0800" channel="cctv1">
+  <programme start="%s" stop="%s" channel="cctv1">
     <title>新闻联播</title><desc>晚间新闻</desc><category>新闻</category>
   </programme>
-  <programme start="20261103090000 +0800" stop="20261103100000 +0800" channel="cctv1">
+  <programme start="%s" stop="%s" channel="cctv1">
     <title>焦点访谈</title><category>新闻</category>
   </programme>
-  <programme start="20261103080000 +0800" stop="20261103093000 +0800" channel="cctv2">
+  <programme start="%s" stop="%s" channel="cctv2">
     <title>经济半小时</title><category>财经</category>
   </programme>
-</tv>`
+</tv>`,
+		fmtStr(8*time.Hour), fmtStr(9*time.Hour),
+		fmtStr(9*time.Hour), fmtStr(10*time.Hour),
+		fmtStr(8*time.Hour), fmtStr(9*time.Hour),
+	)
+}
 
 // newFileEPGSource 造一个 kind=file 的 EPG 源，内容来自 sampleXMLTV。
 //
@@ -35,7 +60,7 @@ func newFileEPGSource(t *testing.T, a *API) int64 {
 	t.Helper()
 	dir := t.TempDir()
 	p := filepath.Join(dir, "test.xml")
-	if err := os.WriteFile(p, []byte(sampleXMLTV), 0o644); err != nil {
+	if err := os.WriteFile(p, []byte(sampleXMLTV(time.Now())), 0o644); err != nil {
 		t.Fatalf("写测试 XMLTV 失败: %v", err)
 	}
 	id, err := a.st.CreateEPGSourceEx(context.Background(), store.EPGSource{

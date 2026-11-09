@@ -223,14 +223,19 @@
 
 ### 已在 CI 验证（分支最新提交）
 
-`https://github.com/ybd156/litv/actions/runs/42589658481` 全部通过：
+`Build Check`（`https://github.com/ybd156/litv/actions/runs/42717227761`）全部通过：
 
 - 一致性检查（五处版本号）
 - Go 服务端：`gofmt` / `go build` / `go vet` / `go test -race`
 - 管理台：`npm ci` / `typecheck` / `build`
 - Android：`assembleTvDebug` + `assemblePhoneDebug` / `testTvDebugUnitTest`
 
-`Edge Deploy` 的 `check` 通过（`npm test` 现在会同时跑 selftest 与 workertest）。
+`Edge Deploy`（`https://github.com/ybd156/litv/actions/runs/42717227431`）：
+`check` 通过，里面跑的是 `npm run typecheck` + `npm test`，而 `npm test`
+现在同时执行 `selftest.mjs`（57 项，抓取/生成）和 `workertest.mjs`
+（35 项，直接执行 Worker 本体）。这说明 `node:sqlite` 顶替 D1 的方案在
+干净环境（`npm ci` 之后）同样成立，不是只在本机能跑。
+
 `deploy` 在这轮 PR 上是 skipped，原因是工作流里
 `if: github.event_name != 'pull_request'`——**PR 绝不部署**，不是缺 Secrets。
 仓库的 Secrets 是配好的：`main` 上每小时的定时部署一直在成功执行

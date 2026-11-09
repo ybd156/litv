@@ -196,19 +196,30 @@
 
 ## 8. 验证状态
 
-### 已在本机验证
+### 已在本机验证（go1.23.12 / Windows，临时工具链，不作为标准路径）
 
 - `python tools/checks/check-versions.py`：五处版本号一致（0.1.13）。
 - `edge/`：`npm ci`、`npm run typecheck`、`npm test`（57 项全过）。
-- 手工核对新增/修改的 SQL 占位符数量、测试辅助函数签名、路由路径。
-- **没有**运行 Go 编译、`gofmt`、`go test -race`：本机没有 Go 工具链。
+- Go：`gofmt -l .` 无输出、`go build ./...`、`go vet ./...` 均通过。
+- Go：`go test ./...`（**没跑 `-race`**，Windows 无 cgo）除两条基线用例外的包全部通过。
+  失败的两条是 `TestConfigSaveIsAtomicAndPrivate`、`TestSaveKeepsSecretPermissionTight`，
+  它们断言配置文件权限为 0600，而 Windows 上 `os.Stat` 一律返回 0666，属平台差异，
+  Linux CI 上通过。
 
-### 未验证（以 CI 为准）
+### 已在 CI 验证（Build Check，提交 `be95cf6`）
 
+`https://github.com/ybd156/litv/actions/runs/42589658481` 全部通过：
+
+- 一致性检查（五处版本号）
 - Go 服务端：`gofmt` / `go build` / `go vet` / `go test -race`
 - 管理台：`npm ci` / `typecheck` / `build`
-- Android：`assembleDebug`（两个 flavor）/ `testDebugUnitTest` / `assembleRelease`
-- iOS：`.github/workflows/ios-check.yml`
-- edge 的 `wrangler deploy --dry-run`（本地只跑了 typecheck 与单测）
+- Android：`assembleTvDebug` + `assemblePhoneDebug` / `testTvDebugUnitTest`
 
-新增的回归测试（`_test.go`）也只有在 CI 上跑过才算数。
+`Edge Deploy` 的 `check` 通过，`deploy` 按预期跳过（四个 Secrets 未配置）。
+
+### 未验证
+
+- iOS：本轮没有改 `ios/**`，`ios-check.yml` 未触发。
+- Android `assembleRelease` / R8：`build-check.yml` 只编 debug，Release 走 `release.yml`。
+- edge 的 `wrangler deploy --dry-run`：本地只跑了 typecheck 与单测，真实部署未执行。
+

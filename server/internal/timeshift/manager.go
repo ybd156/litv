@@ -2,16 +2,21 @@ package timeshift
 
 import (
 	"log/slog"
+	"os"
 	"path/filepath"
+	"regexp"
 	"sync"
+	"time"
 )
 
 // Manager 管理所有频道的时移缓冲。
 //
 // 生命周期：频道第一次被观看时创建 Ring，之后一直保留（环形覆盖最旧的段）。
-// 不做主动回收——录制文件本身有上限（MaxSegments × SegmentBytes），
-// 一个频道最多占几百 MB，家庭 NAS 完全承受得起；主动回收反而会让
-// "刚切走的台回来看时没有缓冲"，体验更差。
+//
+// 空闲回收是必须的：Ring 会一直持有打开的文件句柄（当前段），
+// 频道越多占用的 fd 越多；用户把几百个台点一遍就可能在 NAS 上耗尽 fd。
+// 所以「超过 idleReapAfter 没有任何读写」的 Ring 会被关掉并删除文件。
+// 重新观看时按需重建即可，用户最多失去这个台的旧回看。
 type Manager struct {
 	dir     string
 	opt     Options
@@ -19,15 +24,63 @@ type Manager struct {
 
 	mu    sync.Mutex
 	rings map[int64]*Ring
+
+	stopOnce sync.Once
+	stop     chan struct{}
 }
 
 // NewManager 创建。dir 为空或 enabled=false 时整个功能降级为 no-op。
 func NewManager(dir string, enabled bool, opt Options) *Manager {
-	return &Manager{
+	m := &Manager{
 		dir:     dir,
 		opt:     opt,
 		enabled: enabled,
 		rings:   make(map[int64]*Ring),
+		stop:    make(chan struct{}),
+	}
+	if m.Enabled() {
+		// Ring 的段索引只在内存里，重启后旧文件永远不会再被引用。
+		// 不在这里清掉的话，每次重启都会给 NAS 多留一整份"幽灵"录制。
+		cleanStaleSegments(dir)
+		go m.reapLoop()
+	}
+	return m
+}
+
+// idleReapAfter 是时移缓冲的空闲回收阈值。
+//
+// 30 分钟：足够覆盖「换台看了一会儿再回来」，又不会让几百个频道
+// 的打开文件句柄一直挂着。
+const idleReapAfter = 30 * time.Minute
+
+func (m *Manager) reapLoop() {
+	t := time.NewTicker(time.Minute)
+	defer t.Stop()
+	for {
+		select {
+		case <-m.stop:
+			return
+		case <-t.C:
+			m.reap(time.Now())
+		}
+	}
+}
+
+// reap 关掉并删除空闲超过 idleReapAfter 的 Ring。
+func (m *Manager) reap(now time.Time) {
+	m.mu.Lock()
+	var dead []*Ring
+	for id, r := range m.rings {
+		if now.Sub(r.LastUsed()) > idleReapAfter {
+			delete(m.rings, id)
+			dead = append(dead, r)
+		}
+	}
+	m.mu.Unlock()
+
+	for _, r := range dead {
+		slog.Info("时移缓冲空闲回收", "channel", r.channelID)
+		r.Cleanup()
 	}
 }
 
@@ -108,6 +161,7 @@ func (m *Manager) Close() {
 	if m == nil {
 		return
 	}
+	m.stopOnce.Do(func() { close(m.stop) })
 	m.mu.Lock()
 	rings := make([]*Ring, 0, len(m.rings))
 	for _, r := range m.rings {
@@ -117,6 +171,41 @@ func (m *Manager) Close() {
 	m.mu.Unlock()
 	for _, r := range rings {
 		r.Close()
+	}
+}
+
+// cleanStaleSegments 删除上次运行留下的时移文件。
+//
+// 只删我们自己命名的 <chN>/chN-<nano>.ts，其它文件一律不碰：
+// timeshift.dir 是可配置的，用户可能把它指到已有目录里。
+func cleanStaleSegments(root string) {
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return // 首次启动还没有目录，正常
+	}
+	dirRe := regexp.MustCompile(`^ch\d+$`)
+	fileRe := regexp.MustCompile(`^ch\d+-\d+\.ts$`)
+	removed := 0
+	for _, e := range entries {
+		if !e.IsDir() || !dirRe.MatchString(e.Name()) {
+			continue
+		}
+		dir := filepath.Join(root, e.Name())
+		files, err := os.ReadDir(dir)
+		if err != nil {
+			continue
+		}
+		for _, f := range files {
+			if f.IsDir() || !fileRe.MatchString(f.Name()) {
+				continue
+			}
+			if err := os.Remove(filepath.Join(dir, f.Name())); err == nil {
+				removed++
+			}
+		}
+	}
+	if removed > 0 {
+		slog.Info("清理上次运行遗留的时移文件", "count", removed)
 	}
 }
 

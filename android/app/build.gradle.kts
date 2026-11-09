@@ -7,16 +7,45 @@ plugins {
     id("org.jetbrains.kotlin.android")
 }
 
-// 签名口令从 local.properties 读（本地覆盖用）；没配置就用仓库内的自签 keystore。
+// 签名配置来源，优先级从高到低：
+//   1. 环境变量 LITV_KEYSTORE_FILE / LITV_KEYSTORE_PASSWORD / LITV_KEY_ALIAS /
+//      LITV_KEY_PASSWORD  —— CI 用 secrets 解码出来的私钥走这条
+//   2. local.properties 里的同名项 —— 本地发布者自用
+//   3. 仓库内的 legacy 自签 keystore
 //
-// ⚠️ 这个 keystore 是随仓库分发的（CI 要用它出包），口令是公开的。
-// 它的作用只是"让包能装、且后续版本能覆盖升级"，**不构成任何安全边界**。
-// 真要发布到商店请换成自己的 keystore 且不要提交。
+// ⚠️ legacy keystore 是随仓库一起公开的，口令也是公开的，
+// **不构成任何安全边界**：它的唯一作用是让包能装、且已安装的旧版本
+// 能覆盖升级（Android 会拒绝签名不同的覆盖安装）。真要发布请换成
+// 自己的密钥并只放在 CI secrets 里，不要提交进仓库。
 val localProps = Properties().apply {
     val f = rootProject.file("local.properties")
     if (f.exists()) f.inputStream().use { load(it) }
 }
-fun prop(key: String, def: String): String = localProps.getProperty(key) ?: def
+
+// 环境变量优先于 local.properties（CI 里没有后者）。
+fun prop(key: String, def: String = ""): String =
+    System.getenv(key)?.takeIf { it.isNotBlank() }
+        ?: localProps.getProperty(key)?.takeIf { it.isNotBlank() }
+        ?: def
+
+// propCompat 兼容旧名字。LITV_STORE_FILE / LITV_STORE_PASSWORD 是上一版
+// 已经在用的键；直接改名会让按旧文档配置过的本地发布机突然用回 legacy 密钥
+// （口令对不上直接构建失败），所以新名字优先、旧名字仍然认。
+fun propCompat(primary: String, legacy: String, def: String): String {
+    val v = prop(primary, "")
+    return if (v.isNotEmpty()) v else prop(legacy, def)
+}
+
+val LEGACY_KEYSTORE = "keystore/litv-release.jks"
+val LEGACY_PASSWORD = "LITV156980"
+val keystorePath = propCompat("LITV_KEYSTORE_FILE", "LITV_STORE_FILE", LEGACY_KEYSTORE)
+val usingLegacyKeystore = keystorePath == LEGACY_KEYSTORE
+if (usingLegacyKeystore) {
+    logger.warn(
+        "⚠️ 使用仓库内公开的 legacy 签名密钥。它能保证覆盖升级，" +
+            "但不能证明包是我们发的；正式发布请配置 LITV_KEYSTORE_FILE 等环境变量。",
+    )
+}
 
 android {
     namespace = "com.litv.tv"
@@ -24,10 +53,14 @@ android {
 
     signingConfigs {
         create("litv") {
-            storeFile = rootProject.file(prop("LITV_STORE_FILE", "keystore/litv-release.jks"))
-            storePassword = prop("LITV_STORE_PASSWORD", "LITV156980")
+            storeFile = rootProject.file(keystorePath)
+            storePassword = propCompat(
+                "LITV_KEYSTORE_PASSWORD",
+                "LITV_STORE_PASSWORD",
+                if (usingLegacyKeystore) LEGACY_PASSWORD else "",
+            )
             keyAlias = prop("LITV_KEY_ALIAS", "litv")
-            keyPassword = prop("LITV_KEY_PASSWORD", "LITV156980")
+            keyPassword = prop("LITV_KEY_PASSWORD", if (usingLegacyKeystore) LEGACY_PASSWORD else "")
 
             // 三种签名方案全开：
             //   v1 (JAR signing) —— Android 6 及以下必须，老盒子靠它

@@ -8,6 +8,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/litv/litv/server/internal/fetch"
 )
 
 // TestTimeshiftTeeSkippedWhenNoSubscribers 确认没人看时不再写时移盘。
@@ -17,6 +19,10 @@ import (
 // 持续写盘——NAS 上几个台叠加就是持续的磁盘 IO，反过来拖慢正在看的那个台
 // （用户表现为「换几个台之后卡一下」）。
 func TestTimeshiftTeeSkippedWhenNoSubscribers(t *testing.T) {
+	// 上游是 httptest（127.0.0.1），SSRF 防护默认会拒绝；这里只放行回环。
+	fetch.SetAllowLoopback(true)
+	t.Cleanup(func() { fetch.SetAllowLoopback(false) })
+
 	var teeCalls atomic.Int64
 
 	opts := testOptions()

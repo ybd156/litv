@@ -11,6 +11,7 @@ import (
 
 	"github.com/litv/litv/server/internal/auth"
 	"github.com/litv/litv/server/internal/config"
+	"github.com/litv/litv/server/internal/fetch"
 	"github.com/litv/litv/server/internal/store"
 	"github.com/litv/litv/server/internal/stream"
 )
@@ -43,6 +44,9 @@ func newTestAPI(t *testing.T) (*API, string) {
 
 	hub := stream.NewHub(stream.Options{})
 	t.Cleanup(hub.Close)
+
+	// 集成测试用 httptest（127.0.0.1）当上游；生产路径默认禁止回环。
+	fetch.SetAllowLoopback(true)
 
 	a := New(cfg, st, hub, "test")
 	a.SetConfigPath(cfgPath)

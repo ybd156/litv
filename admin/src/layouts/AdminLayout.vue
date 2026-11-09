@@ -1,17 +1,24 @@
 <script setup lang="ts">
 import { computed, h, onMounted, ref } from 'vue'
-import { NButton, NIcon, NMenu, NTag, type MenuOption } from 'naive-ui'
+import { NButton, NIcon, NMenu, NTag, useMessage, type MenuOption } from 'naive-ui'
 import { useRoute, useRouter } from 'vue-router'
 import Icon from '@/components/Icon.vue'
 import type { IconName } from '@/components/icons'
 import { mockEnabled } from '@/api/mock'
+import { adminToken, setAdminToken } from '@/api/http'
+import { logoutAdmin } from '@/api/modules/system'
 import { session } from '@/session'
 
 const route = useRoute()
 const router = useRouter()
+const message = useMessage()
 
 const collapsed = ref(false)
 const isMock = mockEnabled()
+// 只有「密码/应急登录」才有可注销的服务端会话。
+// 从飞牛桌面进来的身份由网关注入，本应用既拿不到也注销不了它。
+const hasPasswordSession = ref(!!adminToken())
+const loggingOut = ref(false)
 
 interface NavItem {
   key: string
@@ -42,6 +49,32 @@ const currentTitle = computed(() => (route.meta.title as string | undefined) ?? 
 
 function onSelect(key: string): void {
   void router.push({ name: key })
+}
+
+/**
+ * 退出应急登录。
+ *
+ * 必须先让服务端吊销会话，再清本地 token——顺序反了的话，
+ * 请求还没发出去 token 就已经没了，服务端那行只能等 TTL 过期。
+ * 服务端不可达时仍然退出本地，但如实提示会话可能还没撤销。
+ */
+async function logout(): Promise<void> {
+  if (loggingOut.value) return
+  loggingOut.value = true
+  let revoked = true
+  try {
+    await logoutAdmin()
+  } catch {
+    revoked = false
+  }
+  setAdminToken('')
+  hasPasswordSession.value = false
+  session.me = null
+  session.state = 'unauthenticated'
+  loggingOut.value = false
+  void router.replace({ name: 'login' })
+  if (revoked) message.success('已退出登录')
+  else message.warning('本地已退出；服务端会话可能仍然有效，请检查网络后再退出一次')
 }
 
 onMounted(() => {
@@ -87,6 +120,15 @@ onMounted(() => {
             <span class="name">{{ session.me?.username ?? '未登录' }}</span>
             <NTag v-if="session.me?.is_admin" size="tiny" :bordered="false" type="success">管理员</NTag>
           </span>
+          <NButton
+            v-if="hasPasswordSession"
+            quaternary
+            size="tiny"
+            :loading="loggingOut"
+            @click="logout"
+          >
+            退出登录
+          </NButton>
         </div>
       </header>
 

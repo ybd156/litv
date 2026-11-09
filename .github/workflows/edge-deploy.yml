@@ -1,11 +1,19 @@
 # 边缘降级部署（edge/）。
 #
-# 注意：这是**可选的**部署工作流，需要在本仓库配好四个 Secrets 才会成功：
-#   SOURCE_URLS / BIND_CODE / CLOUDFLARE_API_TOKEN / CLOUDFLARE_ACCOUNT_ID
-# 没配的话 deploy 会失败，但不影响 check 任务，也不影响其它工作流。
+# 注意：这是**可选的**部署工作流。deploy 任务需要三个 Secrets：
+#   BIND_CODE / CLOUDFLARE_API_TOKEN / CLOUDFLARE_ACCOUNT_ID
+# 缺任何一个就整体跳过部署（只跑 check），不会让 main 变红。
+# 另有两个可选项：
+#   ADMIN_PASSWORD      —— 管理台口令；不配则退回 BIND_CODE（弱口令）
+#   GITHUB_DISPATCH_TOKEN —— 管理台的「立即重建」按钮
 #
 # 只改 edge/ 才会触发，避免普通提交白白重建一遍。
 name: Edge Deploy
+
+# 只需要读仓库。默认权限是 read-write，这里显式收紧：
+# 少一个写权限就少一条「改 workflow 去读 Secrets」的路径。
+permissions:
+  contents: read
 
 on:
   push:
@@ -48,7 +56,7 @@ jobs:
           node-version: "24"
 
       - name: 安装依赖
-        run: npm install --no-audit --no-fund
+        run: npm ci --no-audit --no-fund
 
       - name: 类型检查
         run: npm run typecheck
@@ -57,7 +65,7 @@ jobs:
         run: npm test
 
       - name: 打包检查（不部署）
-        run: npx --yes wrangler@4 deploy --dry-run --outdir=.wrangler/dry
+        run: npx --yes wrangler@4.158.0 deploy --dry-run --outdir=.wrangler/dry
 
   deploy:
     needs: check
@@ -71,6 +79,7 @@ jobs:
       CONFIGURED: ${{ secrets.BIND_CODE != '' && secrets.CLOUDFLARE_API_TOKEN != '' && secrets.CLOUDFLARE_ACCOUNT_ID != '' }}
       GH_TOKEN: ${{ secrets.GITHUB_DISPATCH_TOKEN }}
       SOURCE_URLS_FALLBACK: ${{ secrets.SOURCE_URLS }}
+      ADMIN_PASSWORD: ${{ secrets.ADMIN_PASSWORD }}
     steps:
       - name: 未配置 Secrets，跳过部署
         if: env.CONFIGURED != 'true'
@@ -90,7 +99,7 @@ jobs:
 
       - name: 安装依赖
         if: env.CONFIGURED == 'true'
-        run: npm install --no-audit --no-fund
+        run: npm ci --no-audit --no-fund
 
       # 先建表：sources / kv 表要先存在，下一步才能读源清单。
       - name: 建表（幂等）
@@ -98,7 +107,7 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-        run: npx --yes wrangler@4 d1 execute DB --remote --file=schema.sql
+        run: npx --yes wrangler@4.158.0 d1 execute DB --remote --file=schema.sql
 
       # 源清单是管理台维护的，CI 只读。读失败就让这一步红掉——
       # 以前吞掉错误会表现为"重建成功但一个频道都没有"，极难排查。
@@ -108,13 +117,15 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: |
-          npx --yes wrangler@4 d1 execute DB --remote --json \
+          npx --yes wrangler@4.158.0 d1 execute DB --remote --json \
             --command "SELECT id, name, url, ua, referer FROM sources WHERE enabled = 1 ORDER BY sort, id" \
             > sources.json
-          echo "源清单前 300 字节："
-          head -c 300 sources.json; echo
+          # sources.json 里的 url 通常带账号密码。这个仓库是 public，
+          # 一旦 echo/head 出来就是永久泄露——所以这里绝对不能打印它。
+          # 只数一下条数，既能看到"读到了几条"，又不泄露任何地址。
+          echo "源清单条数：$(grep -o '"url"' sources.json | wc -l)"
           # 节目单至少隔 6 小时才刷：D1 免费版每天只给 10 万行写入
-          npx --yes wrangler@4 d1 execute DB --remote --json \
+          npx --yes wrangler@4.158.0 d1 execute DB --remote --json \
             --command "SELECT v FROM kv WHERE k = 'last_epg_at'" \
             > epg-state.json
 
@@ -133,14 +144,14 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-        run: npx --yes wrangler@4 d1 execute DB --remote --file=sql/seed.sql
+        run: npx --yes wrangler@4.158.0 d1 execute DB --remote --file=sql/seed.sql
 
       - name: 灌节目单
         if: env.CONFIGURED == 'true'
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-        run: npx --yes wrangler@4 d1 execute DB --remote --file=sql/epg.sql
+        run: npx --yes wrangler@4.158.0 d1 execute DB --remote --file=sql/epg.sql
 
       - name: 回写源状态与重建信息
         if: env.CONFIGURED == 'true'
@@ -148,8 +159,8 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: |
-          npx --yes wrangler@4 d1 execute DB --remote --file=sql/source-status.sql
-          npx --yes wrangler@4 d1 execute DB --remote --file=sql/meta.sql
+          npx --yes wrangler@4.158.0 d1 execute DB --remote --file=sql/source-status.sql
+          npx --yes wrangler@4.158.0 d1 execute DB --remote --file=sql/meta.sql
 
       # 用 LITV2 自带的管理台（admin/ 的 Vue），不是另写一套。
       # base 改成 /：边缘这边它挂在根路径，这样它内部的相对 api/v1 正好落到
@@ -158,7 +169,7 @@ jobs:
         if: env.CONFIGURED == 'true'
         working-directory: admin
         run: |
-          npm install --no-audit --no-fund
+          npm ci --no-audit --no-fund
           npm run build -- --base=/
 
       - name: 把管理台放进静态资源
@@ -174,8 +185,8 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-        # 首次运行会创建 Worker。正式用之前把版本钉死，例如 wrangler@4.42.0
-        run: npx --yes wrangler@4 deploy
+        # 首次运行会创建 Worker。正式用之前把版本钉死，例如 wrangler@4.158.0
+        run: npx --yes wrangler@4.158.0 deploy
 
       # 放在 deploy 之后：Worker 不存在时 secret put 会失败。
       # 每次覆盖写入，改 Secret 就生效，不需要额外操作。
@@ -185,7 +196,16 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           BIND_CODE: ${{ secrets.BIND_CODE }}
-        run: echo "$BIND_CODE" | npx --yes wrangler@4 secret put BIND_CODE
+        run: echo "$BIND_CODE" | npx --yes wrangler@4.158.0 secret put BIND_CODE
+
+      # 可选但强烈建议：管理台口令与 6 位绑定码分开。
+      # 不配时 Worker 会退回用 BIND_CODE 登录管理台，那是弱口令。
+      - name: 写入管理台口令（可选）
+        if: env.CONFIGURED == 'true' && env.ADMIN_PASSWORD != ''
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: echo "$ADMIN_PASSWORD" | npx --yes wrangler@4.158.0 secret put ADMIN_PASSWORD
 
       # 可选：配了它，管理台才有「立即重建」按钮。
       - name: 写入 GitHub 触发令牌（可选）
@@ -193,4 +213,4 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-        run: echo "$GH_TOKEN" | npx --yes wrangler@4 secret put GITHUB_DISPATCH_TOKEN
+        run: echo "$GH_TOKEN" | npx --yes wrangler@4.158.0 secret put GITHUB_DISPATCH_TOKEN

@@ -205,8 +205,10 @@
   失败的两条是 `TestConfigSaveIsAtomicAndPrivate`、`TestSaveKeepsSecretPermissionTight`，
   它们断言配置文件权限为 0600，而 Windows 上 `os.Stat` 一律返回 0666，属平台差异，
   Linux CI 上通过。
+- edge：`npx wrangler deploy --dry-run` 通过，产物 52.67 KiB / gzip 12.25 KiB，
+  `DB` / `ASSETS` / `SERVER_NAME` 三个绑定都能解析（**只打包，没部署**）。
 
-### 已在 CI 验证（Build Check，提交 `be95cf6`）
+### 已在 CI 验证（提交 `be95cf6`、`b8d92b6`）
 
 `https://github.com/ybd156/litv/actions/runs/42589658481` 全部通过：
 
@@ -217,9 +219,14 @@
 
 `Edge Deploy` 的 `check` 通过，`deploy` 按预期跳过（四个 Secrets 未配置）。
 
+iOS 单独手动触发（`workflow_dispatch`，分支 `hardening-2026-11`）：
+`https://github.com/ybd156/litv/actions/runs/42591460058` 的 `build-ios` 通过
+（xcodegen + `pod install` + `xcodebuild`，不签名）。本轮没有改 `ios/**`，
+这次只是把「这个提交的 iOS 也能编」补成实测结论。
+
 ### 未验证
 
-- iOS：本轮没有改 `ios/**`，`ios-check.yml` 未触发。
 - Android `assembleRelease` / R8：`build-check.yml` 只编 debug，Release 走 `release.yml`。
-- edge 的 `wrangler deploy --dry-run`：本地只跑了 typecheck 与单测，真实部署未执行。
+- edge 的真实部署（`wrangler deploy`，需要四个 Secrets）与线上行为。
+
 

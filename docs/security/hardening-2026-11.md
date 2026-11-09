@@ -109,15 +109,24 @@
 - `bumpAttempt()` 改为单条 UPSERT + `RETURNING fails`（解释器不支持时兜底 SELECT），
   并发请求不会一起读到同一个旧计数。
 - 设备注册、管理台登录按 IP 限速；`/playlist.m3u` 用**独立的桶**限速，
-  避免猜 playlist 把设备绑定一起锁死。
+  避免猜 playlist 把设备绑定一起锁死。playlist 的窗口单独设为 1 分钟
+  （20 次 / 1 分钟，绑定码仍是 10 次 / 10 分钟）：旧客户端拿着作废的
+  `BIND_CODE` 反复重试时，只影响同一出口 IP 一分钟，而不是十分钟。
 - `adminLogout` 真正删除 `admin_sessions` 行；无 token 时幂等返回成功。
 - 新增可选 `ADMIN_PASSWORD`：配了以后 `BIND_CODE` 只用于设备绑定。
   未配置时回落到 `BIND_CODE`（兼容老部署，但属于弱口令）。
-- `platform` 统一小写/字符集校验，保留值 `admin` 直接拒绝。
+- `platform` 口径与 Go 端对齐：trim + 小写 + 截断，只拒绝保留值 `admin`，
+  不再做字符集白名单（否则 `Android TV` 在 NAS 上能注册、在边缘版被拒）。
+  冲突比较忽略大小写，历史混合大小写的行会在下次注册时就地迁移。
+- 新增 `edge/scripts/workertest.mjs`：直接 import Worker，D1 用 `node:sqlite`
+  实现（SQL 真执行），覆盖限速阈值与窗口、成功清零、平台冲突、
+  `ADMIN_PASSWORD` 优先级、注销即失效、playlist 鉴权与限速。
 
 ### 剩余局限
 
 - 计数存在 D1，按 IP 计数；换 IP 可以绕过。免费额度下不引入更重的方案。
+- playlist 超限期间同一出口 IP 的正确请求也会 404（最长 1 分钟）；
+  这是「先占名额再校验」换来的防并发绕过，属于有意的取舍。
 - 设备 token 仍然没有有效期，换 `BIND_CODE` 只影响新注册。
 
 ## 6. Android 签名密钥
@@ -199,16 +208,20 @@
 ### 已在本机验证（go1.23.12 / Windows，临时工具链，不作为标准路径）
 
 - `python tools/checks/check-versions.py`：五处版本号一致（0.1.13）。
-- `edge/`：`npm ci`、`npm run typecheck`、`npm test`（57 项全过）。
+- `edge/`：`npm ci`、`npm run typecheck`、`npm test`（selftest 57 项 + 新增
+  workertest 35 项，全部通过）。workertest 直接执行 Worker 本体，D1 由
+  `node:sqlite` 承担，因此限速用的 UPSERT/RETURNING 也是在真 SQLite 上跑过的。
 - Go：`gofmt -l .` 无输出、`go build ./...`、`go vet ./...` 均通过。
 - Go：`go test ./...`（**没跑 `-race`**，Windows 无 cgo）除两条基线用例外的包全部通过。
   失败的两条是 `TestConfigSaveIsAtomicAndPrivate`、`TestSaveKeepsSecretPermissionTight`，
   它们断言配置文件权限为 0600，而 Windows 上 `os.Stat` 一律返回 0666，属平台差异，
   Linux CI 上通过。
+- edge：另外用 `wrangler dev --local` + 本地 D1 手工打了一遍接口（绑定限速、
+  平台冲突、保留值、口令优先级、注销、playlist 正误各路径），结果与 workertest 一致。
 - edge：`npx wrangler deploy --dry-run` 通过，产物 52.67 KiB / gzip 12.25 KiB，
   `DB` / `ASSETS` / `SERVER_NAME` 三个绑定都能解析（**只打包，没部署**）。
 
-### 已在 CI 验证（提交 `be95cf6`、`b8d92b6`）
+### 已在 CI 验证（分支最新提交）
 
 `https://github.com/ybd156/litv/actions/runs/42589658481` 全部通过：
 
@@ -217,7 +230,8 @@
 - 管理台：`npm ci` / `typecheck` / `build`
 - Android：`assembleTvDebug` + `assemblePhoneDebug` / `testTvDebugUnitTest`
 
-`Edge Deploy` 的 `check` 通过。`deploy` 在这轮 PR 上是 skipped，原因是工作流里
+`Edge Deploy` 的 `check` 通过（`npm test` 现在会同时跑 selftest 与 workertest）。
+`deploy` 在这轮 PR 上是 skipped，原因是工作流里
 `if: github.event_name != 'pull_request'`——**PR 绝不部署**，不是缺 Secrets。
 仓库的 Secrets 是配好的：`main` 上每小时的定时部署一直在成功执行
 （最近一次 `2026-11-09T08:04Z` 的 `deploy` 为 success，17 个 step）。

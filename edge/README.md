@@ -247,7 +247,9 @@ D1 单行/响应体也有大小限制。**几百到两千个频道是舒适区**
 **4. 没有扇出。** 每台设备各自连上游。上游限制并发时会互踢，这个无解。
 
 **5. 绑定码是 6 位数字，空间只有 100 万。** 设备注册和管理台登录都按 IP 做了
-失败限速（10 次 / 10 分钟），但仍然不要把 workers.dev 地址到处发。
+失败限速（10 次 / 10 分钟），`playlist.m3u` 用独立的桶（20 次 / 1 分钟，
+窗口更短，避免旧客户端拿着作废的绑定码把同一出口 IP 的用户锁太久）。
+即便如此，也不要把 workers.dev 地址到处发。
 
 **6. `*.workers.dev` 在国内不稳定。** 建议绑自己的域名，并在目标网络实测。
 
@@ -257,9 +259,13 @@ D1 单行/响应体也有大小限制。**几百到两千个频道是舒适区**
 
 - 设备 token 服务端只存 SHA-256 哈希，不存明文
 - 管理台会话也是哈希存储，带 7 天过期
-- 同一个 `device_key` 换平台注册会被拒绝（对齐真服务端的 `ErrDeviceKeyConflict`）
+- 同一个 `device_key` 换平台注册会被拒绝（对齐真服务端的 `ErrDeviceKeyConflict`；
+  比较时忽略大小写，兼容早期写进库的混合大小写值）
+- `platform` 只用于展示与冲突检测，统一 trim/小写/截断，保留值 `admin` 拒绝，
+  **不参与鉴权**
 - 绑定码错误按 IP 限速，防暴力枚举
-- `playlist.m3u` 里有上游地址，和接口同等级保护（`?t=` 校验），错了一律 404
+- `playlist.m3u` 里有上游地址，和接口同等级保护（`?t=` 校验），错了一律 404；
+  按 IP 限速 20 次 / 1 分钟，超限期间即使 `t` 正确也先 404
 - 管理台把频道名当不可信输入转义后再渲染（名字来自上游 m3u）
 - **没做的**：设备 token 没有有效期。换 `BIND_CODE` 只影响新注册，
   已发出的 token 仍然可用；要吊销得在管理台逐台删设备
@@ -274,6 +280,10 @@ D1 单行/响应体也有大小限制。**几百到两千个频道是舒适区**
 ```
 npm ci --no-audit --no-fund
 npm run typecheck                      # tsc --noEmit
-npm test                               # scripts/selftest.mjs
+npm test                               # selftest.mjs（抓取/生成）+ workertest.mjs（Worker 本体）
 wrangler deploy --dry-run --outdir=.wrangler/dry
 ```
+
+`scripts/selftest.mjs` 只覆盖抓取与生成逻辑；`scripts/workertest.mjs` 直接
+import `src/index.ts`，用 `node:sqlite` 顶替 D1，所以限速 SQL、平台校验、
+口令优先级、注销、playlist 鉴权这些**会真的执行**。改 Worker 行为时两边都要看。

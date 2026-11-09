@@ -38,9 +38,12 @@ interface Env {
 const ADMIN_SESSION_SEC = 7 * 24 * 3600;
 const RATE_WINDOW_SEC = 600;
 const RATE_MAX_FAILS = 10;
-// playlist 是客户端启动时自动拉的，正常用户可能同时开几台设备；
-// 给它一个更宽的上限，避免合法用户被自己锁住。
+// playlist 是客户端启动时自动拉的，正常用户可能同时开几台设备。
+// 给它更宽的次数上限，同时用**更短的窗口**（1 分钟）：
+// 旧客户端拿着已作废的 BIND_CODE 高频重试时，只会让同一出口 IP 的
+// playlist 短暂 404，而不是像绑定码那样一锁 10 分钟。
 const PLAYLIST_MAX_FAILS = 20;
+const PLAYLIST_WINDOW_SEC = 60;
 
 // ---------------------------------------------------------------- 基础设施
 
@@ -104,7 +107,7 @@ function bearer(req: Request): string {
  * 计数是原子的，并发下最多只有 RATE_MAX_FAILS 次校验会真正执行。
  * 成功时 clearFailures 把计数清零，所以合法用户不会累积。
  */
-async function bumpAttempt(env: Env, ip: string): Promise<number> {
+async function bumpAttempt(env: Env, key: string, windowSec = RATE_WINDOW_SEC): Promise<number> {
   const now = nowSec();
   const row = await env.DB.prepare(
     `INSERT INTO bind_attempts (ip, fails, window_start) VALUES (?, 1, ?)
@@ -115,20 +118,20 @@ async function bumpAttempt(env: Env, ip: string): Promise<number> {
                            THEN ? ELSE bind_attempts.window_start END
      RETURNING fails`,
   )
-    .bind(ip, now, now, RATE_WINDOW_SEC, now, RATE_WINDOW_SEC, now)
+    .bind(key, now, now, windowSec, now, windowSec, now)
     .first<{ fails: number }>();
   if (!row) {
     // 解释器不支持 RETURNING 时的兜底：读一次当前值（限速会略宽，但不会失效）
     const cur = await env.DB.prepare("SELECT fails FROM bind_attempts WHERE ip = ?")
-      .bind(ip)
+      .bind(key)
       .first<{ fails: number }>();
     return cur ? Number(cur.fails) : 0;
   }
   return Number(row.fails);
 }
 
-async function clearFailures(env: Env, ip: string): Promise<void> {
-  await env.DB.prepare("DELETE FROM bind_attempts WHERE ip = ?").bind(ip).run();
+async function clearFailures(env: Env, key: string): Promise<void> {
+  await env.DB.prepare("DELETE FROM bind_attempts WHERE ip = ?").bind(key).run();
 }
 
 function clientIp(req: Request): string {
@@ -180,13 +183,18 @@ async function health(env: Env): Promise<Response> {
 
 /**
  * 客户端自报的 platform 只用于展示与冲突检测，绝不能当权限用。
- * 但保留值必须挡住：服务端曾经有过 `platform == "admin"` 就提权的实现，
- * 留着这个口子等于把提权路径留在数据里。
+ *
+ * 口径要与 Go 服务端保持一致：trim + 小写 + 截断，只挡保留值。
+ * 这里以前还加了字符集白名单，结果 "Android TV" 这类值在 NAS 上能注册、
+ * 在边缘版却被拒——平台名本来就不参与鉴权，没必要多一套规则。
+ * 控制字符会污染日志与管理台展示，直接剔掉。
  */
 function normalizePlatform(raw: unknown): string {
-  const p = String(raw ?? "").trim().toLowerCase().slice(0, 32);
-  if (!p) return "android";
-  return /^[a-z0-9_-]+$/.test(p) ? p : "invalid";
+  return String(raw ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/[\u0000-\u001f\u007f]/g, "")
+    .slice(0, 32);
 }
 
 async function deviceRegister(req: Request, env: Env): Promise<Response> {
@@ -214,8 +222,10 @@ async function deviceRegister(req: Request, env: Env): Promise<Response> {
   const deviceKey = String(body.device_key ?? "").slice(0, 128);
   if (!deviceKey) return fail(2001, "缺少 device_key");
 
-  const platform = normalizePlatform(body.platform);
-  if (platform === "invalid") return fail(2001, "非法的 platform");
+  // 保留值必须挡住：服务端曾经有过 `platform == "admin"` 就提权的实现，
+  // 留着这个口子等于把提权路径留在数据里。
+  let platform = normalizePlatform(body.platform);
+  if (!platform) platform = "android";
   if (platform === "admin") return fail(2002, "platform 为保留值");
   const name = String(body.name ?? "").slice(0, 64);
   const ts = nowSec();
@@ -225,13 +235,15 @@ async function deviceRegister(req: Request, env: Env): Promise<Response> {
   //
   // 历史数据里 platform 可能是空串（早期客户端没上报），那种行按
   // 「平台未知」处理、允许补写；只要已有值就必须完全一致。
+  // 早期写法没转小写，旧行里可能是 "iOS" 这种混合大小写，这里按小写比较，
+  // 命中后顺手把新值写回去，等于就地迁移。
   const existing = await env.DB.prepare(
     "SELECT id, platform FROM devices WHERE device_key = ?",
   )
     .bind(deviceKey)
     .first<{ id: number; platform: string }>();
 
-  if (existing && existing.platform && existing.platform !== platform) {
+  if (existing && existing.platform && existing.platform.trim().toLowerCase() !== platform) {
     return fail(2002, "该设备已用其他平台注册");
   }
 
@@ -1670,7 +1682,7 @@ export default {
       // 这里以前完全不限速：6 位口令可以随便猜，猜中就能拿到全部上游地址。
       // 用独立的桶，避免猜 playlist 把设备绑定/管理台登录一起锁掉。
       const bucket = `playlist:${clientIp(req)}`;
-      const attempt = await bumpAttempt(env, bucket);
+      const attempt = await bumpAttempt(env, bucket, PLAYLIST_WINDOW_SEC);
       if (attempt > PLAYLIST_MAX_FAILS) return new Response("Not Found", { status: 404 });
 
       const provided = url.searchParams.get("t") ?? "";

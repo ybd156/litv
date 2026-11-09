@@ -50,7 +50,7 @@ func TestLogoutAllRevokesEverySession(t *testing.T) {
 	a, _ := newTestAPI(t)
 	ctx := context.Background()
 
-	plain, hash, err := auth.NewToken()
+	_, hash, err := auth.NewToken()
 	if err != nil {
 		t.Fatalf("生成 token 失败: %v", err)
 	}

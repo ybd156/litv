@@ -426,7 +426,7 @@ func (u *Upstream) readOnce(ctx context.Context) error {
 		tr.ResponseHeaderTimeout = u.opts.Timeout
 	}
 	client := &http.Client{
-		Timeout: 0, // 直播流不设总超时，靠 ctx 控制
+		Timeout:   0, // 直播流不设总超时，靠 ctx 控制
 		Transport: tr,
 	}
 	resp, err := client.Do(req)

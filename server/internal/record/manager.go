@@ -193,7 +193,7 @@ func (m *Manager) start(j store.Recording) {
 // 单独抽出来是为了可测：这里最容易出的错不是"参数拼错导致录不了"，
 // 而是"忘了带 Referer/UA，某个源站直接 403"——那种错误只有断言参数
 // 才能稳定复现，不需要真的起 ffmpeg。
-func (m *Manager) args(stream *store.Stream, duration int, path string) []string {
+func (m *Manager) args(stream *store.Stream, duration int64, path string) []string {
 	out := []string{
 		"-hide_banner", "-loglevel", "warning",
 		"-y",

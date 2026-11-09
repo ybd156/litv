@@ -121,6 +121,10 @@
 - 新增 `edge/scripts/workertest.mjs`：直接 import Worker，D1 用 `node:sqlite`
   实现（SQL 真执行），覆盖限速阈值与窗口、成功清零、平台冲突、
   `ADMIN_PASSWORD` 优先级、注销即失效、playlist 鉴权与限速。
+- 管理台（`admin/`）按部署形态区分文案：edge 上没有飞牛网关，登录页不再
+  提示「回飞牛桌面」，也不显示无意义的「用户名」；错误原因一律以服务端
+  `msg` 为准（`2001` 不再被套成「未认证」）。形态用编译期常量
+  `import.meta.env.BASE_URL` 判断（edge 构建 `--base=/`），不额外发探针请求。
 
 ### 剩余局限
 
@@ -238,8 +242,15 @@
 
 `deploy` 在这轮 PR 上是 skipped，原因是工作流里
 `if: github.event_name != 'pull_request'`——**PR 绝不部署**，不是缺 Secrets。
-仓库的 Secrets 是配好的：`main` 上每小时的定时部署一直在成功执行
-（最近一次 `2026-11-09T08:04Z` 的 `deploy` 为 success，17 个 step）。
+合并到 `main` 后（`f773b6a`）的 `Edge Deploy #42718434315` 里 `deploy` 真的跑了
+并 success，说明 `BIND_CODE` / `CLOUDFLARE_API_TOKEN` / `CLOUDFLARE_ACCOUNT_ID`
+三个必需 Secrets 都在。
+
+但**可选的 `ADMIN_PASSWORD` 没有配置**：同一个 job 里「写入管理台口令（可选）」
+这一步是 `skipped`（条件是 `secrets.ADMIN_PASSWORD != ''`）。因此线上 Worker
+没有 `ADMIN_PASSWORD`，`adminPasscode()` 回落到 `BIND_CODE`——管理台口令
+仍然等于那个 6 位绑定码。要么补这个 Secret（补完下次部署会自动写入），
+要么接受这个弱口令。
 
 iOS 单独手动触发（`workflow_dispatch`，分支 `hardening-2026-11`）：
 `https://github.com/ybd156/litv/actions/runs/42591460058` 的 `build-ios` 通过

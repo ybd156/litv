@@ -2,6 +2,7 @@
 import { NButton } from 'naive-ui'
 import { loadSession } from '@/session'
 import { mockEnabled } from '@/api/mock'
+import { EDGE_DEPLOY } from '@/deploy'
 
 function reload(): void {
   location.reload()
@@ -12,22 +13,32 @@ function reload(): void {
   <div class="unauth">
     <div class="card">
       <div class="mark">LITV</div>
-      <h1>请从飞牛桌面打开本应用</h1>
-      <p class="lead">
-        管理台不设登录页——身份由飞牛网关自动注入。直接访问地址（或收藏夹里的链接）拿不到身份信息，
-        所以这里需要你从飞牛桌面重新进来一次。
-      </p>
+      <template v-if="EDGE_DEPLOY">
+        <h1>登录已失效</h1>
+        <p class="lead">
+          这是 Cloudflare 边缘部署，没有飞牛网关，身份只能来自登录口令。
+          重新登录一次即可；如果刚改过 <code>ADMIN_PASSWORD</code>，用新口令登录。
+        </p>
+      </template>
+      <template v-else>
+        <h1>请从飞牛桌面打开本应用</h1>
+        <p class="lead">
+          管理台不设登录页——身份由飞牛网关自动注入。直接访问地址（或收藏夹里的链接）拿不到身份信息，
+          所以这里需要你从飞牛桌面重新进来一次。
+        </p>
 
-      <ol class="steps">
-        <li><span class="idx">1</span>打开飞牛 NAS 的桌面 / 应用中心</li>
-        <li><span class="idx">2</span>点 LITV 图标进入（网关会自动带上当前账号）</li>
-        <li><span class="idx">3</span>如果还是这一页，确认你的账号是管理员，然后刷新</li>
-      </ol>
+        <ol class="steps">
+          <li><span class="idx">1</span>打开飞牛 NAS 的桌面 / 应用中心</li>
+          <li><span class="idx">2</span>点 LITV 图标进入（网关会自动带上当前账号）</li>
+          <li><span class="idx">3</span>如果还是这一页，确认你的账号是管理员，然后刷新</li>
+        </ol>
+      </template>
 
       <div class="actions">
-        <NButton type="primary" @click="loadSession">我已经从桌面进来了，重试</NButton>
+        <NButton v-if="EDGE_DEPLOY" type="primary" tag="a" href="#/login">去登录</NButton>
+        <NButton v-else type="primary" @click="loadSession">我已经从桌面进来了，重试</NButton>
         <NButton quaternary @click="reload">刷新页面</NButton>
-        <NButton quaternary tag="a" href="#/login">用密码登录（应急）</NButton>
+        <NButton v-if="!EDGE_DEPLOY" quaternary tag="a" href="#/login">用密码登录（应急）</NButton>
       </div>
 
       <p v-if="mockEnabled()" class="mock-tip">

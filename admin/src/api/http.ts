@@ -51,7 +51,7 @@ export function setApiErrorNotifier(fn: ((msg: string) => void) | null): void {
   errorNotifier = fn
 }
 
-/** 收到 2001 时通知上层切到「请从飞牛桌面打开」说明页 */
+/** 收到 2001 时通知上层切到「未授权」说明页（文案按部署形态区分） */
 export function setUnauthorizedHandler(fn: (() => void) | null): void {
   unauthorizedHandler = fn
 }
@@ -149,7 +149,7 @@ export async function request<T>(path: string, opts: RequestOptions = {}): Promi
   }
 
   if (!res.ok) {
-    const hint = res.status === 401 || res.status === 403 ? '没权限或登录态过期，请从飞牛桌面重新打开' : `HTTP ${res.status}`
+    const hint = res.status === 401 || res.status === 403 ? '没权限或登录状态已失效，请重新登录' : `HTTP ${res.status}`
     throw fail(new ApiError(res.status === 401 ? 2001 : 0, hint, res.status, text.slice(0, 300)), opts.silent)
   }
 

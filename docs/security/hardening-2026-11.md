@@ -246,11 +246,18 @@
 并 success，说明 `BIND_CODE` / `CLOUDFLARE_API_TOKEN` / `CLOUDFLARE_ACCOUNT_ID`
 三个必需 Secrets 都在。
 
-但**可选的 `ADMIN_PASSWORD` 没有配置**：同一个 job 里「写入管理台口令（可选）」
-这一步是 `skipped`（条件是 `secrets.ADMIN_PASSWORD != ''`）。因此线上 Worker
-没有 `ADMIN_PASSWORD`，`adminPasscode()` 回落到 `BIND_CODE`——管理台口令
-仍然等于那个 6 位绑定码。要么补这个 Secret（补完下次部署会自动写入），
-要么接受这个弱口令。
+但 `ADMIN_PASSWORD` 这一条值得单独记，因为它演示了一个很容易踩的坑：
+这个 Secret 是在**那次运行创建之后 23 秒**才加上的（`updated_at 23:12:05Z`，
+而运行创建于 `23:11:42Z`）。GitHub 在 job 启动时就把
+`secrets.ADMIN_PASSWORD` 求值成空串了，所以「写入管理台口令（可选）」
+那一步仍然是 `skipped`——**配置 Secret 不会追溯修改已经跑完的部署**。
+此时线上 Worker 没有 `ADMIN_PASSWORD`，`adminPasscode()` 回落到
+`BIND_CODE`，管理台口令仍然等于那个 6 位绑定码。
+
+手动跑一次 `Edge Deploy`（run `42720792394`）后，同一步骤变成 `success`，
+`ADMIN_PASSWORD` 才真正写进 Worker，口令与绑定码从这时起分开。
+仓库现有 4 个 Secret：`ADMIN_PASSWORD` / `BIND_CODE` /
+`CLOUDFLARE_ACCOUNT_ID` / `CLOUDFLARE_API_TOKEN`，没有 Variables。
 
 iOS 单独手动触发（`workflow_dispatch`，分支 `hardening-2026-11`）：
 `https://github.com/ybd156/litv/actions/runs/42591460058` 的 `build-ios` 通过

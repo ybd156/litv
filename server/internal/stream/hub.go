@@ -16,6 +16,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/litv/litv/server/internal/fetch"
 )
 
 // ErrTooManyStreams 并发流数超限。
@@ -111,7 +113,7 @@ type Upstream struct {
 	opts Options
 
 	mu      sync.RWMutex
-	ring    []byte
+	ring    ringBuffer
 	subs    map[*Subscriber]struct{}
 	closed  bool
 	lastErr string
@@ -172,6 +174,7 @@ func (h *Hub) Subscribe(ctx context.Context, channelID int64, url string, header
 			URL:       url,
 			Headers:   headers,
 			opts:      h.opts,
+			ring:      newRingBuffer(h.opts.RingSize),
 			subs:      make(map[*Subscriber]struct{}),
 			started:   time.Now(),
 			cancel:    cancel,
@@ -273,12 +276,11 @@ func (u *Upstream) subscribe(ctx context.Context) (*Subscriber, error) {
 		ch: make(chan []byte, 256),
 		up: u,
 	}
-	// 关键：把缓冲区里已有的数据先灌进去，让新客户端立刻有画面
-	if len(u.ring) > 0 {
-		snapshot := make([]byte, len(u.ring))
-		copy(snapshot, u.ring)
+	// 关键：把缓冲区里已有的数据先灌进去，让新客户端立刻有画面。
+	// snapshot 已经是一份独立副本，并且从 PAT/包边界开始。
+	if snap := u.ring.snapshot(); len(snap) > 0 {
 		select {
-		case s.ch <- snapshot:
+		case s.ch <- snap:
 		default:
 		}
 	}
@@ -392,6 +394,12 @@ func (u *Upstream) run(ctx context.Context) {
 }
 
 func (u *Upstream) readOnce(ctx context.Context) error {
+	// 出站连接的 SSRF 校验。订阅源是不可信输入：一条指向 127.0.0.1
+	// 或云元数据地址的线路，不应该让服务端替它去连。
+	// 真正的拦截在 fetch 的 DialContext 里按解析结果再做一次（防 DNS rebinding）。
+	if err := fetch.ValidateURL(u.URL); err != nil {
+		return err
+	}
 	reqCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
@@ -411,13 +419,15 @@ func (u *Upstream) readOnce(ctx context.Context) error {
 		req.Header.Set(k, v)
 	}
 
+	tr := fetch.NewTransport()
+	tr.DisableCompression = true
+	tr.MaxIdleConnsPerHost = 4
+	if u.opts.Timeout > 0 {
+		tr.ResponseHeaderTimeout = u.opts.Timeout
+	}
 	client := &http.Client{
 		Timeout: 0, // 直播流不设总超时，靠 ctx 控制
-		Transport: &http.Transport{
-			ResponseHeaderTimeout: u.opts.Timeout,
-			DisableCompression:    true,
-			MaxIdleConnsPerHost:   4,
-		},
+		Transport: tr,
 	}
 	resp, err := client.Do(req)
 	if err != nil {
@@ -460,22 +470,10 @@ func (u *Upstream) readOnce(ctx context.Context) error {
 	}
 }
 
-// appendRing 维护环形缓冲。丢弃旧数据时对齐到 188 字节（MPEG-TS 包长），
-// 这样新订阅者拿到的第一块大概率从包边界开始，减少花屏。
+// appendRing 把新数据放进分块环形缓冲。
+// 调用方是唯一的上游读取 goroutine；这里上锁是因为 subscribe 会并发读。
 func (u *Upstream) appendRing(chunk []byte) {
 	u.mu.Lock()
-	defer u.mu.Unlock()
-	u.ring = append(u.ring, chunk...)
-	if len(u.ring) <= u.opts.RingSize {
-		return
-	}
-	drop := len(u.ring) - u.opts.RingSize
-	const tsPacket = 188
-	drop = (drop / tsPacket) * tsPacket
-	if drop <= 0 {
-		return
-	}
-	rest := make([]byte, len(u.ring)-drop)
-	copy(rest, u.ring[drop:])
-	u.ring = rest
+	u.ring.push(chunk)
+	u.mu.Unlock()
 }

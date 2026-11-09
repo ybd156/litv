@@ -115,10 +115,14 @@ func (a *API) tvBootstrap(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
 	groups, _ := a.st.ListGroups(ctx)
-	chans, _, _ := a.st.ListChannels(ctx, store.ChannelQuery{Limit: 500, Enabled: boolPtr(true)})
+	// 不再写死 500：ChannelQuery 的管理台分页上限会把第 501 个之后的台
+	// 从电视端首页里悄悄丢掉。
+	chans, _ := a.st.ListAllEnabledChannels(ctx)
 	favs, _ := a.st.ListFavorites(ctx, dev.ID)
 
-	// 当前节目：批量取，避免 TV 端首页 N 次请求
+	// 当前节目：一次批量取，避免 TV 端首页 N 次请求。
+	// 以前是「每个频道查一次 ProgramsByXmltvID」，上千个频道就是上千次 SQL，
+	// 首屏要等好几秒。
 	type nowItem struct {
 		ChannelID int64  `json:"channel_id"`
 		Title     string `json:"title"`
@@ -127,15 +131,21 @@ func (a *API) tvBootstrap(w http.ResponseWriter, r *http.Request) {
 	}
 	nowList := make([]nowItem, 0, len(chans))
 	now := time.Now().Unix()
+	epgIDs := make([]string, 0, len(chans))
+	seen := make(map[string]bool, len(chans))
+	for _, c := range chans {
+		if c.EpgID == "" || seen[c.EpgID] {
+			continue
+		}
+		seen[c.EpgID] = true
+		epgIDs = append(epgIDs, c.EpgID)
+	}
+	byEpg, _ := a.st.ProgramsForEpgIDs(ctx, epgIDs, now-3600, now+3600)
 	for _, c := range chans {
 		if c.EpgID == "" {
 			continue
 		}
-		progs, err := a.st.ProgramsByXmltvID(ctx, c.EpgID, now-3600, now+3600)
-		if err != nil || len(progs) == 0 {
-			continue
-		}
-		for _, p := range progs {
+		for _, p := range byEpg[c.EpgID] {
 			if p.StartAt <= now && p.EndAt > now {
 				nowList = append(nowList, nowItem{ChannelID: c.ID, Title: p.Title, Start: p.StartAt, End: p.EndAt})
 				break
@@ -360,7 +370,9 @@ func (a *API) tvPlay(w http.ResponseWriter, r *http.Request) {
 	exp := time.Now().Add(12 * time.Hour).Unix()
 	// R13：把选中的线路绑进签名，relay 各入口据此使用同一条线路，
 	// 不再各自 BestStream。streamID 为 0 时退化为普通签名。
-	sig := a.signer.SignStream(id, st.ID, exp, dev.DeviceKey)
+	// dk 用派生值：device_key 等价于设备凭据，不能出现在地址里。
+	dk := a.signer.DeriveDeviceKey(dev.DeviceKey)
+	sig := a.signer.SignStream(id, st.ID, exp, dk)
 	path := fmt.Sprintf("%s/live/%d/stream.ts", a.cfg.Server.Prefix, id)
 	switch kind {
 	case "hls":
@@ -371,7 +383,7 @@ func (a *API) tvPlay(w http.ResponseWriter, r *http.Request) {
 	q := url.Values{}
 	q.Set("sig", sig)
 	q.Set("exp", strconv.FormatInt(exp, 10))
-	q.Set("dk", dev.DeviceKey)
+	q.Set("dk", dk)
 	// stream_id 与签名一起出现：verifyStreamFull 会校验它们是否匹配。
 	q.Set("stream_id", strconv.FormatInt(st.ID, 10))
 
@@ -503,11 +515,12 @@ func (a *API) tvTimeshift(w http.ResponseWriter, r *http.Request) {
 	}
 	span := a.ts.SpanSeconds(id)
 	exp := time.Now().Add(6 * time.Hour).Unix()
-	sig := a.signer.Sign(id, exp, dev.DeviceKey)
+	dk := a.signer.DeriveDeviceKey(dev.DeviceKey)
+	sig := a.signer.Sign(id, exp, dk)
 	q := url.Values{}
 	q.Set("sig", sig)
 	q.Set("exp", strconv.FormatInt(exp, 10))
-	q.Set("dk", dev.DeviceKey)
+	q.Set("dk", dk)
 	ok(w, map[string]any{
 		"enabled":           true,
 		"available_seconds": span,
@@ -592,7 +605,7 @@ func (a *API) liveRemuxPlaylist(w http.ResponseWriter, r *http.Request) {
 
 	// R09：转封装也必须用同一份线路头。源站校验覆盖整条链路，
 	// ffmpeg 用自己的默认 UA 会被 403，表现为"iOS 播不了但电视能播"。
-	data, err := a.rx.PlaylistWithHeaders(id, st.URL, segPrefix, a.streamHeaders(id, st))
+	data, err := a.rx.PlaylistContext(r.Context(), id, st.URL, segPrefix, a.streamHeaders(id, st))
 	if err != nil {
 		fail(w, http.StatusBadGateway, 4001, err.Error())
 		return
@@ -620,15 +633,19 @@ func (a *API) liveRemuxSegment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	seg := chi.URLParam(r, "seg")
-	data, err := a.rx.Segment(id, seg)
+	f, modTime, err := a.rx.OpenSegment(id, seg)
 	if err != nil {
 		fail(w, http.StatusNotFound, 3001, err.Error())
 		return
 	}
+	defer f.Close()
+	// 用 ServeContent 而不是把整个切片读进内存再 Write：
+	// 它能正确处理 Range（播放器 seek/断点续传会发 Range，以前一律回 200
+	// 全量，等于每次 seek 都重传整片），并自动带 Content-Length/Last-Modified。
 	w.Header().Set("Content-Type", "video/mp2t")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Access-Control-Allow-Origin", "*")
-	_, _ = w.Write(data)
+	http.ServeContent(w, r, seg, modTime, f)
 }
 
 // appendQueryToSegments 给播放列表里的每个切片 URI 补上签名查询串。
@@ -817,7 +834,7 @@ func (a *API) livePlay(w http.ResponseWriter, r *http.Request) {
 
 // liveTS 是核心：把上游 TS 字节流转给终端，多终端共用一路上游。
 func (a *API) liveTS(w http.ResponseWriter, r *http.Request) {
-	id, dk, sid, ok2 := a.verifyStreamFull(r)
+	id, _, sid, ok2 := a.verifyStreamFull(r)
 	if !ok2 {
 		fail(w, http.StatusForbidden, 2002, "播放地址无效或已过期")
 		return
@@ -847,7 +864,6 @@ func (a *API) liveTS(w http.ResponseWriter, r *http.Request) {
 		fail(w, http.StatusBadGateway, 4001, "订阅上游失败: "+subErr.Error())
 		return
 	}
-	_ = dk
 
 	flusher, canFlush := w.(http.Flusher)
 	w.Header().Set("Content-Type", "video/mp2t")
@@ -1012,6 +1028,20 @@ func (a *API) liveManifest(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// 同一频道的并发请求合并成一次上游抓取。
+	// 多台设备同时看同一个台时，以前每个客户端每 2–6 秒各抓一次清单，
+	// 既压上游，也把 UpdateStreamHealth 变成高频写库。
+	slot := a.manifestSlotFor(id)
+	slot.mu.Lock()
+	defer slot.mu.Unlock()
+	// 命中条件里带上 sid：用户手动切了线路时不能用别的线路的缓存，
+	// 否则「切了等于没切」——清单里的分片地址还是旧线路的。
+	// sid=0（没指定）时按频道复用，这才是多设备同时看的主路径。
+	if slot.fresh(time.Now()) && (sid == 0 || slot.streamID == sid) {
+		a.writeManifest(w, manifestSnapshot{body: slot.body, base: slot.base, streamID: slot.streamID}, id, dk)
+		return
+	}
+
 	var (
 		res     *fetch.Result
 		st      *store.Stream
@@ -1058,31 +1088,11 @@ func (a *API) liveManifest(w http.ResponseWriter, r *http.Request) {
 	}
 	slog.Info("manifest 成功", "channel", id, "stream", st.ID, "size", len(res.Body))
 	base, _ := url.Parse(res.FinalURL)
-	lines := strings.Split(string(res.Body), "\n")
-	out := make([]string, 0, len(lines))
-	for _, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if trimmed == "" {
-			out = append(out, line)
-			continue
-		}
-		if strings.HasPrefix(trimmed, "#") {
-			// 处理 #EXT-X-KEY / #EXT-X-MAP 里的 URI
-			out = append(out, rewriteURIAttr(trimmed, base, a, id, dk))
-			continue
-		}
-		// 分片或子清单
-		u, err := base.Parse(trimmed)
-		if err != nil {
-			out = append(out, line)
-			continue
-		}
-		out = append(out, a.segmentURL(u.String(), id, dk))
-	}
-	w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Access-Control-Allow-Origin", "*")
-	_, _ = io.WriteString(w, strings.Join(out, "\n"))
+	slot.body = res.Body
+	slot.base = base
+	slot.streamID = st.ID
+	slot.at = time.Now()
+	a.writeManifest(w, manifestSnapshot{body: res.Body, base: base, streamID: st.ID}, id, dk)
 }
 
 // liveSegment 代理 HLS 分片（含子清单）。
@@ -1117,10 +1127,9 @@ func (a *API) liveSegment(w http.ResponseWriter, r *http.Request) {
 		fail(w, http.StatusForbidden, 2002, "分片地址无效或已过期")
 		return
 	}
-	// 分片签名不携带线路选择，取最佳线路即可（分片本身已由签名锁定目标）。
-	var sid int64
-	_ = sid
-
+	// 分片签名不携带线路信息（签名格式不能为此改），
+	// 所以优先用「刚给这台设备发清单时选中的线路」。
+	// 缓存过期再回落到最佳线路。
 	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, target, nil)
 	if err != nil {
 		fail(w, http.StatusBadGateway, 4001, err.Error())
@@ -1129,9 +1138,13 @@ func (a *API) liveSegment(w http.ResponseWriter, r *http.Request) {
 	// R09：分片也要带整条线路的头。源站校验是覆盖整条链路的，
 	// 不只是清单请求；只带 UA 时，要求 Referer 的源会在分片这一步 403，
 	// 表现是清单能取到、画面却一片黑。
-	// R13：用签名绑定的线路取头，保证与清单请求是同一条线路的配置。
+	// R13：用清单选中的线路取头，保证与清单请求是同一条线路的配置。
 	var boundStream *store.Stream
-	if st, serr := a.streamForPlay(r.Context(), id, sid); serr == nil {
+	if cachedSID, okc := a.cachedManifestStream(id); okc {
+		if st, serr := a.streamForPlay(r.Context(), id, cachedSID); serr == nil {
+			boundStream = st
+		}
+	} else if st, serr := a.streamForPlay(r.Context(), id, 0); serr == nil {
 		boundStream = st
 	}
 	for k, v := range a.streamHeaders(id, boundStream) {
@@ -1139,7 +1152,12 @@ func (a *API) liveSegment(w http.ResponseWriter, r *http.Request) {
 	}
 	req.Header.Set("Accept", "*/*")
 	req.Header.Set("Cache-Control", "no-cache")
-	resp, err := http.DefaultClient.Do(req)
+	client := a.streamClient
+	if client == nil {
+		// New() 一定会赋值；这里只防手搓 API 的测试。
+		client = http.DefaultClient
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		fail(w, http.StatusBadGateway, 4001, err.Error())
 		return

@@ -14,6 +14,7 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -22,6 +23,9 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/litv/litv/server/internal/fetch"
+	"github.com/litv/litv/server/internal/ffmpeg"
 )
 
 // Options 转封装参数。
@@ -156,6 +160,15 @@ func (m *Manager) Playlist(channelID int64, upstream string, segPrefix string) (
 // "iOS 播不了、但电视能播"——因为电视走的是另一条链路。
 // 这里把与 relay/分片完全相同的一份头喂给 ffmpeg。
 func (m *Manager) PlaylistWithHeaders(channelID int64, upstream string, segPrefix string, headers map[string]string) ([]byte, error) {
+	return m.PlaylistContext(context.Background(), channelID, upstream, segPrefix, headers)
+}
+
+// PlaylistContext 带 ctx 的版本。
+//
+// 为什么要 ctx：等 ffmpeg 出第一个播放列表最多要 10 秒，客户端在这期间
+// 关掉页面/切台时请求就没了，但原来的实现还会把 goroutine 挂满 10 秒。
+// 用 ctx 可以在客户端离开时立刻放弃。
+func (m *Manager) PlaylistContext(ctx context.Context, channelID int64, upstream string, segPrefix string, headers map[string]string) ([]byte, error) {
 	if !m.Available() {
 		return nil, fmt.Errorf("服务端未配置 ffmpeg，无法转封装（可在 config.yaml 的 transcode.ffmpeg 指定路径）")
 	}
@@ -168,6 +181,8 @@ func (m *Manager) PlaylistWithHeaders(channelID int64, upstream string, segPrefi
 	path := filepath.Join(j.dir, "index.m3u8")
 	// 等 ffmpeg 吐出第一个播放列表（最多 10 秒）
 	deadline := time.Now().Add(10 * time.Second)
+	timer := time.NewTimer(200 * time.Millisecond)
+	defer timer.Stop()
 	for {
 		if data, err := os.ReadFile(path); err == nil && len(data) > 0 {
 			return rewritePlaylist(data, segPrefix), nil
@@ -175,25 +190,56 @@ func (m *Manager) PlaylistWithHeaders(channelID int64, upstream string, segPrefi
 		if time.Now().After(deadline) {
 			return nil, fmt.Errorf("转封装启动超时（上游可能连不上，或编码不受支持）")
 		}
-		time.Sleep(200 * time.Millisecond)
+		timer.Reset(200 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-timer.C:
+		}
 	}
 }
 
 // Segment 返回一个切片文件的内容。
 func (m *Manager) Segment(channelID int64, name string) ([]byte, error) {
+	f, _, err := m.OpenSegment(channelID, name)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	return io.ReadAll(f)
+}
+
+// OpenSegment 打开一个切片文件，交给 http.ServeContent 直接回给客户端。
+//
+// 为什么不在 handler 里先 ReadFile 再 Write：
+//   - 切片是完整文件，ServeContent 能直接处理 Range（播放器 seek/断点续传
+//     会发 Range；以前一律回 200 全量，等于每次 seek 都重传整片）；
+//   - 能带上 Last-Modified/Content-Length，播放器可以自己判断是否需要重取；
+//   - 大切片不必整个读进内存再拷贝一次。
+func (m *Manager) OpenSegment(channelID int64, name string) (*os.File, time.Time, error) {
 	m.mu.Lock()
 	j, ok := m.jobs[channelID]
 	m.mu.Unlock()
 	if !ok {
-		return nil, fmt.Errorf("转封装未启动")
+		return nil, time.Time{}, fmt.Errorf("转封装未启动")
 	}
 	j.touch()
 
 	// 防路径穿越：只允许纯文件名
 	if strings.ContainsAny(name, "/\\") || strings.Contains(name, "..") {
-		return nil, fmt.Errorf("非法切片名")
+		return nil, time.Time{}, fmt.Errorf("非法切片名")
 	}
-	return os.ReadFile(filepath.Join(j.dir, name))
+	path := filepath.Join(j.dir, name)
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, time.Time{}, err
+	}
+	st, err := f.Stat()
+	if err != nil {
+		_ = f.Close()
+		return nil, time.Time{}, err
+	}
+	return f, st.ModTime(), nil
 }
 
 // Stop 停掉某频道。
@@ -244,44 +290,37 @@ func (m *Manager) Stats() []map[string]any {
 
 // buildFFmpegHeaders 把 map 拼成 ffmpeg 的 -headers 参数值。
 //
-// ffmpeg 要求的格式是每条 "Key: value\r\n"，整体作为一个参数字符串。
-// 键必须稳定排序，否则同样的头每次拼出不同顺序，会让 ffmpeg 的缓存
-// 和日志出现无意义的抖动。
-//
-// 含 CRLF 的值直接丢弃：用户导入的源文件是不可信输入，
-// 放行就等于允许往 ffmpeg 的请求里注入额外头。
+// 具体格式与 CRLF 过滤见 internal/ffmpeg.HeadersArg——录制也用同一份，
+// 避免两处安全逻辑各写一遍后慢慢漂移。
 func buildFFmpegHeaders(headers map[string]string) string {
-	if len(headers) == 0 {
-		return ""
-	}
-	keys := make([]string, 0, len(headers))
-	for k, v := range headers {
-		if k == "" || strings.ContainsAny(k, ":\r\n") || strings.ContainsAny(v, "\r\n\x00") {
-			continue
-		}
-		keys = append(keys, k)
-	}
-	if len(keys) == 0 {
-		return ""
-	}
-	sort.Strings(keys)
-	var b strings.Builder
-	for _, k := range keys {
-		b.WriteString(k)
-		b.WriteString(": ")
-		b.WriteString(headers[k])
-		b.WriteString("\r\n")
-	}
-	return b.String()
+	return ffmpeg.HeadersArg(headers)
 }
 
 func (m *Manager) ensure(channelID int64, upstream string, headers map[string]string) (*Job, error) {
+	// 整个「检查 → 建目录 → 清残留 → 启动 → 登记」必须在一把锁里完成。
+	//
+	// 修复前这里先 Unlock、再 MkdirAll/cleanDir/cmd.Start、最后重新加锁。
+	// 两台设备同时换到同一个台时，两路请求都会看到「没有任务」，于是各自
+	// 起一个 ffmpeg 写同一个目录：cleanDir 会删掉另一个刚写出的切片，
+	// 两个进程还会互相覆盖 index.m3u8，表现为画面反复中断、花屏。
+	// 许可证/进程数也是双倍。
 	m.mu.Lock()
-	if j, ok := m.jobs[channelID]; ok && !j.exited {
-		m.mu.Unlock()
-		return j, nil
+	defer m.mu.Unlock()
+
+	// 出站 SSRF 校验：上游地址来自导入的订阅源。ffmpeg 自己不会挡本机地址，
+	// 所以必须在交给它之前拦一次（私网/代理仍然放行）。
+	if err := fetch.ValidateURL(upstream); err != nil {
+		return nil, fmt.Errorf("上游地址不被允许: %w", err)
 	}
-	m.mu.Unlock()
+
+	if j, ok := m.jobs[channelID]; ok {
+		if !j.isExited() {
+			return j, nil
+		}
+		// 进程已经退出（上游断开、编码不支持……），旧任务没有价值了，
+		// 清掉后重建一个。
+		delete(m.jobs, channelID)
+	}
 
 	dir := filepath.Join(m.opt.Dir, fmt.Sprintf("ch%d", channelID))
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -325,15 +364,7 @@ func (m *Manager) ensure(channelID int64, upstream string, headers map[string]st
 		cancel:    cancel,
 		lastUsed:  time.Now(),
 	}
-
-	m.mu.Lock()
-	if old, ok := m.jobs[channelID]; ok {
-		m.mu.Unlock()
-		old.kill()
-		m.mu.Lock()
-	}
 	m.jobs[channelID] = j
-	m.mu.Unlock()
 
 	// 等 ffmpeg 退出，标记状态
 	go func() {
@@ -385,6 +416,14 @@ func (j *Job) touch() {
 	j.mu.Lock()
 	j.lastUsed = time.Now()
 	j.mu.Unlock()
+}
+
+// isExited 判断进程是否已退出。
+// exited 由 cmd.Wait 的收尾协程写、由 ensure/reaper 读，必须走 j.mu。
+func (j *Job) isExited() bool {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	return j.exited
 }
 
 func (j *Job) kill() {

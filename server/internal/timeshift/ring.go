@@ -34,11 +34,12 @@ type Ring struct {
 	segBytes  int64 // 单段最大字节数
 	maxSegs   int   // 最多保留几段
 
-	mu     sync.RWMutex
-	segs   []*Segment
-	cur    *os.File
-	curSeg *Segment
-	closed bool
+	mu       sync.RWMutex
+	segs     []*Segment
+	cur      *os.File
+	curSeg   *Segment
+	closed   bool
+	lastUsed time.Time
 }
 
 // Options 是 Ring 的参数。
@@ -65,7 +66,15 @@ func NewRing(channelID int64, dir string, opt Options) (*Ring, error) {
 		dir:       dir,
 		segBytes:  opt.SegmentBytes,
 		maxSegs:   opt.MaxSegments,
+		lastUsed:  time.Now(),
 	}, nil
+}
+
+// LastUsed 返回最后一次读写的时间（空闲回收据此判断）。
+func (r *Ring) LastUsed() time.Time {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.lastUsed
 }
 
 // Write 追加一段 TS 数据。并发安全。
@@ -75,6 +84,7 @@ func (r *Ring) Write(p []byte) (int, error) {
 	if r.closed {
 		return 0, fmt.Errorf("录制已关闭")
 	}
+	r.lastUsed = time.Now()
 
 	if r.cur == nil {
 		if err := r.rotateLocked(); err != nil {
@@ -134,6 +144,13 @@ func (r *Ring) SpanSeconds() int {
 // Open 从「距今 backSeconds 秒」的位置开始读。
 // 返回的 ReadCloser 会按顺序跨段落读到最新。
 func (r *Ring) Open(backSeconds int) (*Reader, error) {
+	// 先单独刷新一次活跃时间：Open 内部持的是读锁，
+	// 不能在里面写 lastUsed（会数据竞争），而且 alignToKeyframe 要读文件，
+	// 也不适合全程占写锁阻塞正在进行的录制写入。
+	r.mu.Lock()
+	r.lastUsed = time.Now()
+	r.mu.Unlock()
+
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 

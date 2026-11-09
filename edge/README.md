@@ -122,12 +122,17 @@ LITV2 的边缘降级部署：NAS 挂了之后，用 Cloudflare 免费额度顶�
 
 | Secret | 必需 | 说明 |
 |---|---|---|
-| `BIND_CODE` | ✅ | **必须是 6 位数字**（客户端输入框限死了）。设备绑定码 + 管理台登录口令 |
+| `BIND_CODE` | ✅ | **必须是 6 位数字**（客户端输入框限死了）。设备绑定码；未配置 `ADMIN_PASSWORD` 时也兼作管理台登录口令 |
+| `ADMIN_PASSWORD` | 可选（强烈建议） | 管理台登录口令。配了它以后 `BIND_CODE` **只**用于设备绑定，不能再登录管理台 |
 | `CLOUDFLARE_API_TOKEN` | ✅ | Cloudflare → API Tokens。模板用 "Edit Cloudflare Workers"，**再手动加 Account → D1 → Edit** |
 | `CLOUDFLARE_ACCOUNT_ID` | ✅ | 控制台右侧栏的 Account ID |
 | `GITHUB_DISPATCH_TOKEN` | 可选 | 配了管理台才有「立即重建」按钮。fine-grained PAT，只给本仓库的 **Actions: write** |
 | `SOURCE_URLS` | 回退 | 一行一个地址。**推荐在管理台的「源」页里配**，这里只是没有 UI 时的兜底 |
 | `SOURCE_UA` | 回退 | 全局默认拉取 UA。每个源自己的 UA 在「源」页里配 |
+
+> **为什么建议单独配 `ADMIN_PASSWORD`**：`BIND_CODE` 只有 6 位数字（100 万种可能），
+> 而且会显示在用户眼前、被反复输入。拿它当管理台口令等于把管理权限压在一个
+> 短数字上。两个值用途本来就不同，配了 `ADMIN_PASSWORD` 就不会再混用。
 
 > **源不放这里。** 订阅源是日常要改的东西，放在管理台的「源」页（存在 D1），
 > 每个源可以带自己的 UA / Referer。`SOURCE_URLS` 只在 D1 里一个源都没有时才用。
@@ -163,7 +168,8 @@ CI 会把它构建出来（`--base=/`）塞进静态资源，访问根路径就�
 https://litv-edge.<你的子域>.workers.dev/
 ```
 
-登录页和 NAS 上那个一模一样：品牌方块 + 主机名 + 口令。口令就是 `BIND_CODE`。
+登录页和 NAS 上那个一模一样：品牌方块 + 主机名 + 口令。口令是 `ADMIN_PASSWORD`；
+没配这个 secret 时才回落到 `BIND_CODE`（不推荐，见上面的说明）。
 
 **能用的**：源（增删改、每源自己的 UA/Referer、测试连通）、频道（搜索/分组/改名/
 启用停用/批量/拖拽排序/线路增删）、设备（查看、吊销）、概览、立即重建。
@@ -266,7 +272,7 @@ D1 单行/响应体也有大小限制。**几百到两千个频道是舒适区**
 `check` 里依次执行：
 
 ```
-npm install --no-audit --no-fund
+npm ci --no-audit --no-fund
 npm run typecheck                      # tsc --noEmit
 npm test                               # scripts/selftest.mjs
 wrangler deploy --dry-run --outdir=.wrangler/dry

@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"strings"
 )
 
 // ---------- EPG sources ----------
@@ -284,6 +285,62 @@ func (s *Store) ProgramsByXmltvID(ctx context.Context, xmltvID string, from, to 
 		out = append(out, p)
 	}
 	return out, rows.Err()
+}
+
+// ProgramsForEpgIDs 一次取多个 xmltv_id 在时间窗内的节目。
+//
+// 返回 map[xmltv_id][]EPGProgram。tvBootstrap 以前按频道逐个查询，
+// 频道上千时就是上千次 SQL；这里用一条 IN 查询拿完。
+// 占位符按数量生成，值仍然全部走参数绑定，不拼不可信内容。
+//
+// 分批是必须的：SQLite 的变量上限默认 999，上千个频道一次 IN 会直接报
+// "too many SQL variables"，而 tvBootstrap 又把错误丢掉了——表现就是
+// 电视端首页「当前节目」整片空白。
+func (s *Store) ProgramsForEpgIDs(ctx context.Context, xmltvIDs []string, from, to int64) (map[string][]EPGProgram, error) {
+	out := make(map[string][]EPGProgram, len(xmltvIDs))
+	// 留出 from/to 两个参数的位置，单批不超过 500 个 id。
+	const batch = 500
+	for start := 0; start < len(xmltvIDs); start += batch {
+		end := start + batch
+		if end > len(xmltvIDs) {
+			end = len(xmltvIDs)
+		}
+		if err := s.programsForEpgIDsBatch(ctx, xmltvIDs[start:end], from, to, out); err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
+}
+
+func (s *Store) programsForEpgIDsBatch(ctx context.Context, ids []string, from, to int64, out map[string][]EPGProgram) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	ph := make([]string, len(ids))
+	args := make([]any, 0, len(ids)+2)
+	for i, id := range ids {
+		ph[i] = "?"
+		args = append(args, id)
+	}
+	args = append(args, from, to)
+
+	rows, err := s.db.QueryContext(ctx, `SELECT c.xmltv_id,p.id,p.epg_channel_id,p.start_at,p.end_at,p.title,p.description,p.category
+		FROM epg_programs p JOIN epg_channels c ON c.id = p.epg_channel_id
+		WHERE c.xmltv_id IN (`+strings.Join(ph, ",")+`) AND p.end_at >= ? AND p.start_at <= ?
+		ORDER BY c.xmltv_id, p.start_at`, args...)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var xmltvID string
+		var p EPGProgram
+		if err := rows.Scan(&xmltvID, &p.ID, &p.EpgChannelID, &p.StartAt, &p.EndAt, &p.Title, &p.Description, &p.Category); err != nil {
+			return err
+		}
+		out[xmltvID] = append(out[xmltvID], p)
+	}
+	return rows.Err()
 }
 
 // PurgeOldPrograms 清理过期节目单。

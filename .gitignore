@@ -40,6 +40,12 @@ local.properties
 android/local.properties
 *.jks
 *.keystore
+# 例外：android/keystore/litv-release.jks 是历史遗留的**公开**自签密钥，
+# 已经随所有发布过的 APK 一起分发。删掉它会让老用户无法覆盖升级
+# （Android 拒绝用不同签名覆盖安装），所以保留。
+# 但这只是"能升级"，不是"能证明来源"：自己的发布密钥请走 CI secrets
+# （ANDROID_KEYSTORE_BASE64 等），**不要**再往仓库里提交新的 .jks。
+!android/keystore/litv-release.jks
 
 # IDE and operating system
 .idea/

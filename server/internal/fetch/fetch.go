@@ -16,7 +16,9 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -45,13 +47,99 @@ func DefaultOptions() Options {
 	}
 }
 
-var client = &http.Client{
-	Transport: &http.Transport{
+var client = NewClient(0)
+
+// allowLoopback 只给测试用（httptest 起在 127.0.0.1）。
+// 生产路径必须保持关闭，否则服务端就成了访问本机管理面的跳板。
+var allowLoopback atomic.Bool
+
+// SetAllowLoopback 打开/关闭对回环地址的访问。只应在测试初始化时调用。
+func SetAllowLoopback(v bool) { allowLoopback.Store(v) }
+
+// checkIP 拒绝「本机 / 链路本地 / 未指定 / 组播」地址。
+//
+// 私网（RFC1918、ULA）默认放行：很多用户的自建源就在局域网里，
+// 一刀切会让「源在 NAS 同网段」这种最常见的部署直接不可用。
+// 这里挡住的是 SSRF 最危险的那一档——本机服务与云元数据地址。
+func checkIP(ip net.IP) error {
+	if ip == nil {
+		return fmt.Errorf("地址不合法")
+	}
+	if allowLoopback.Load() {
+		return nil
+	}
+	if ip.IsLoopback() || ip.IsUnspecified() || ip.IsMulticast() ||
+		ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() {
+		return fmt.Errorf("禁止访问本机或链路本地地址")
+	}
+	return nil
+}
+
+// ValidateURL 是出站抓取的入口校验：只允许 http/https，并拒绝字面量形式的
+// 回环/链路本地地址。
+//
+// 光靠这一步不够——域名可以在两次解析之间换 IP（DNS rebinding），
+// 所以真正的拦截在 DialContext 里按**解析结果**再做一次。
+func ValidateURL(raw string) error {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil {
+		return fmt.Errorf("地址不合法: %w", err)
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return fmt.Errorf("只允许 http/https 地址")
+	}
+	host := u.Hostname()
+	if host == "" {
+		return fmt.Errorf("地址缺少主机名")
+	}
+	// localhost 是域名形式的本机地址，必须在入口就挡住：
+	// DialContext 的解析结果校验也能拦，但这里拦得更早、错误信息更清楚。
+	if strings.EqualFold(host, "localhost") || strings.HasSuffix(strings.ToLower(host), ".localhost") {
+		return fmt.Errorf("禁止访问本机或链路本地地址")
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		return checkIP(ip)
+	}
+	return nil
+}
+
+// safeDialer 在真正建连前按解析结果校验每一个 IP。
+func safeDialer(d *net.Dialer) func(ctx context.Context, network, addr string) (net.Conn, error) {
+	return func(ctx context.Context, network, addr string) (net.Conn, error) {
+		host, port, err := net.SplitHostPort(addr)
+		if err != nil {
+			return nil, err
+		}
+		ips, err := net.DefaultResolver.LookupIPAddr(ctx, host)
+		if err != nil {
+			return nil, err
+		}
+		var lastErr error
+		for _, ipa := range ips {
+			if cerr := checkIP(ipa.IP); cerr != nil {
+				lastErr = cerr
+				continue
+			}
+			conn, derr := d.DialContext(ctx, network, net.JoinHostPort(ipa.IP.String(), port))
+			if derr == nil {
+				return conn, nil
+			}
+			lastErr = derr
+		}
+		if lastErr == nil {
+			lastErr = fmt.Errorf("地址解析失败: %s", host)
+		}
+		return nil, lastErr
+	}
+}
+
+func newTransport() *http.Transport {
+	return &http.Transport{
 		Proxy: http.ProxyFromEnvironment,
-		DialContext: (&net.Dialer{
+		DialContext: safeDialer(&net.Dialer{
 			Timeout:   8 * time.Second,
 			KeepAlive: 30 * time.Second,
-		}).DialContext,
+		}),
 		TLSHandshakeTimeout:   8 * time.Second,
 		ResponseHeaderTimeout: 12 * time.Second,
 		MaxIdleConns:          32,
@@ -63,18 +151,39 @@ var client = &http.Client{
 		// 抓清单/分片这种小请求走 h1.1 没有任何损失。
 		ForceAttemptHTTP2: false,
 		TLSNextProto:      map[string]func(string, *tls.Conn) http.RoundTripper{},
-	},
-	// 不自动跟随无限重定向
-	CheckRedirect: func(req *http.Request, via []*http.Request) error {
-		if len(via) >= 8 {
-			return fmt.Errorf("重定向次数过多")
-		}
-		return nil
-	},
+	}
+}
+
+// NewTransport 返回带 SSRF 校验的 Transport。
+//
+// 直播上游（stream.Hub）要自己控制「等响应头的超时」和连接数，
+// 所以单独导出，由调用方在返回的 Transport 上改参数。
+func NewTransport() *http.Transport { return newTransport() }
+
+// NewClient 返回带 SSRF 防护和重定向上限的 HTTP 客户端。
+//
+// timeout <= 0 表示不设总超时，由调用方 ctx 控制（直播/分片这类长连接）。
+// 之所以要导出：分片代理必须用带超时的 client，
+// 以前的 http.DefaultClient 没有超时，一个卡住的源会永久占住一个 goroutine。
+func NewClient(timeout time.Duration) *http.Client {
+	return &http.Client{
+		Transport: newTransport(),
+		Timeout:   timeout,
+		// 不自动跟随无限重定向
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= 8 {
+				return fmt.Errorf("重定向次数过多")
+			}
+			return nil
+		},
+	}
 }
 
 // Get 抓取一个 URL。
 func Get(ctx context.Context, url string, opt Options) (*Result, error) {
+	if err := ValidateURL(url); err != nil {
+		return nil, err
+	}
 	if opt.Timeout <= 0 {
 		opt.Timeout = 20 * time.Second
 	}

@@ -236,7 +236,11 @@ func main() {
 			"提示", "如需固定端口，请在「应用设置」里换一个没被占用的")
 	}
 	// 把实际端口写出来：管理台和命令行都能读到，避免用户猜
-	writePortFile(*cfgPath, actualPort)
+	//
+	// 必须用 resolvedCfgPath：*cfgPath 在「-config 没传、靠自动发现」时是空串，
+	// 而 writePortFile 对空串会直接返回 —— 表现就是端口文件永远不出现，
+	// 管理台只能显示配置里的端口，跟实际监听端口不一致。
+	writePortFile(resolvedCfgPath, actualPort)
 	// 让管理台能显示"真实情况"（实际端口 + 实际用的 ffmpeg）
 	a.SetRuntime(actualPort, rxMgr.FFmpegPath())
 
@@ -349,7 +353,11 @@ func main() {
 		slog.Info("源探测已启用", "interval_min", cfg.Probe.IntervalMin, "concurrency", cfg.Probe.Concurrency)
 	}
 
-	// 2) 过期节目单清理
+	// 2) 过期数据清理：节目单 / 播放事件 / 操作日志
+	//
+	// 这三张表都只增不减：节目单按配置保留，play_events 和 audit_logs
+	// 以前**没有任何清理**，长期运行的 NAS 上会一直长（audit_logs 里
+	// 只有 auth.* 那部分受行数上限保护）。这里统一定期清。
 	go func() {
 		t := time.NewTicker(10 * time.Minute)
 		defer t.Stop()
@@ -358,8 +366,18 @@ func main() {
 			case <-ctx.Done():
 				return
 			case <-t.C:
-				if n, err := st.PurgeOldPrograms(ctx, time.Now().AddDate(0, 0, -cfg.EPG.KeepDays).Unix()); err == nil && n > 0 {
+				// 本地时间换成 Unix 秒（服务端内部一律用秒）
+				now := time.Now()
+				if n, err := st.PurgeOldPrograms(ctx, now.AddDate(0, 0, -cfg.EPG.KeepDays).Unix()); err == nil && n > 0 {
 					slog.Info("清理过期节目单", "rows", n)
+				}
+				// 播放质量事件保留 30 天，够看趋势
+				if n, err := st.PurgePlayEvents(ctx, now.AddDate(0, 0, -30).Unix()); err == nil && n > 0 {
+					slog.Info("清理过期播放事件", "rows", n)
+				}
+				// 操作日志保留 90 天
+				if n, err := st.PurgeOldAuditLogs(ctx, now.AddDate(0, 0, -90).Unix()); err == nil && n > 0 {
+					slog.Info("清理过期操作日志", "rows", n)
 				}
 			}
 		}

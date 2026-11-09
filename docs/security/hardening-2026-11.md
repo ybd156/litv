@@ -217,7 +217,10 @@
 - 管理台：`npm ci` / `typecheck` / `build`
 - Android：`assembleTvDebug` + `assemblePhoneDebug` / `testTvDebugUnitTest`
 
-`Edge Deploy` 的 `check` 通过，`deploy` 按预期跳过（四个 Secrets 未配置）。
+`Edge Deploy` 的 `check` 通过。`deploy` 在这轮 PR 上是 skipped，原因是工作流里
+`if: github.event_name != 'pull_request'`——**PR 绝不部署**，不是缺 Secrets。
+仓库的 Secrets 是配好的：`main` 上每小时的定时部署一直在成功执行
+（最近一次 `2026-11-09T08:04Z` 的 `deploy` 为 success，17 个 step）。
 
 iOS 单独手动触发（`workflow_dispatch`，分支 `hardening-2026-11`）：
 `https://github.com/ybd156/litv/actions/runs/42591460058` 的 `build-ios` 通过
@@ -227,6 +230,9 @@ iOS 单独手动触发（`workflow_dispatch`，分支 `hardening-2026-11`）：
 ### 未验证
 
 - Android `assembleRelease` / R8：`build-check.yml` 只编 debug，Release 走 `release.yml`。
-- edge 的真实部署（`wrangler deploy`，需要四个 Secrets）与线上行为。
+- edge 本分支代码的真实部署：PR 阶段只做打包检查，合并到 `main` 后才会由
+  push（`paths: edge/**`）或下一个整点定时任务发出去。届时需要线上确认
+  新加的管理台口令与限速逻辑（`ADMIN_PASSWORD` 没配时仍退回 `BIND_CODE`）。
+
 
 

@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -87,9 +88,12 @@ func (m *Manager) reap(now time.Time) {
 // Enabled 是否开启。
 func (m *Manager) Enabled() bool { return m != nil && m.enabled && m.dir != "" }
 
-// Write 把扇出层读到的字节顺手写进时移缓冲。
+// Write 把扇出层读到的字节写进时移缓冲。
 //
-// 这是热路径（每个直播块都会走），所以：
+// 调用方是 stream 包里的**每频道 tee 写协程**（见 stream/tee.go），
+// 不在上游读取循环里，所以这里的同步磁盘写不会拖慢播放。
+//
+// 仍然遵守原来的三条：
 //   - 不加全局锁，只在需要创建 Ring 时短暂加锁
 //   - 单频道内部由 Ring 自己的锁保证并发安全
 //   - 写失败只记一次日志，不影响播放（时移是锦上添花，不能拖累主链路）
@@ -101,10 +105,27 @@ func (m *Manager) Write(channelID int64, p []byte) {
 	if r == nil {
 		return
 	}
-	if _, err := r.Write(p); err != nil {
+	start := time.Now()
+	n, err := r.Write(p)
+	// 单次写盘明显变慢：说明磁盘（或 NAS 的共享目录）在拖后腿。
+	// 这条日志是「回看有缺口 / tee 丢块」的根因证据，限频 30 秒一条。
+	if d := time.Since(start); d > slowWriteThreshold {
+		now := time.Now().Unix()
+		if last := slowWriteWarnAt.Load(); now-last >= 30 && slowWriteWarnAt.CompareAndSwap(last, now) {
+			slog.Warn("时移写盘变慢（不影响直播，但回看会有缺口）",
+				"channel", channelID, "ms", d.Milliseconds(), "bytes", n)
+		}
+	}
+	if err != nil {
 		slog.Debug("时移写入失败", "channel", channelID, "err", err)
 	}
 }
+
+// slowWriteThreshold 单次写盘超过这个时长就认为磁盘在拖后腿。
+const slowWriteThreshold = 200 * time.Millisecond
+
+// slowWriteWarnAt 上一次打印「写盘变慢」的 Unix 秒（全局限频，不用 map 计数）。
+var slowWriteWarnAt atomic.Int64
 
 func (m *Manager) ring(channelID int64) *Ring {
 	m.mu.Lock()

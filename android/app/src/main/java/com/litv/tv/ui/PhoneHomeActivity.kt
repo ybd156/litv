@@ -28,6 +28,7 @@ import com.litv.tv.LitvApp
 import com.litv.tv.R
 import com.litv.tv.data.Bootstrap
 import com.litv.tv.data.Channel
+import com.litv.tv.data.LastChannelResolver
 import com.litv.tv.data.EpgProgram
 import com.litv.tv.data.PlayCache
 import com.litv.tv.data.PlayCacheStore
@@ -529,10 +530,17 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
         renderChips()
         render()
 
-        // 首次进来：自动播上次看的台，或第一个
+        // 首次进来：自动播上次看的台，或第一个。
+        // C2：与 TV 端共用 LastChannelResolver（id → tvg_id → name 三级兜底），
+        // 上游刷新重建频道后 id 失效也能找回同一个台，不静默跳回第一个。
         if (currentChannel == null && all.isNotEmpty()) {
-            val last = all.firstOrNull { it.id == app.prefs.lastChannelId } ?: all.first()
-
+            val hit = LastChannelResolver.resolve(
+                all, app.prefs.lastChannelId, app.prefs.lastChannelTvgId, app.prefs.lastChannelName,
+            )
+            val last = hit?.channel
+                ?: LastChannelResolver.pickFirst(all)
+                ?: all.first()
+            android.util.Log.i(TAG, "恢复上次频道：${last.name}（依据=${hit?.via ?: "fallback"}）")
             // 关键：如果服务里的播放器**已经在播这个台**（退后台再回来、
             // 或者 Activity 被重建），只接上就行，不要重新拉流——
             // 否则 Service 保活省下的时间会全部赔回去。
@@ -552,7 +560,9 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
     private fun renderChips() {
         groupChips.removeAllViews()
         addChip("全部") { selectedGroup = null; onlyFav = false; render() }
-        if (favorites.isNotEmpty()) addChip("★ 收藏") { onlyFav = true; render() }
+        // C1：收藏 chip 常显。以前是 if (favorites.isNotEmpty()) —— 新装用户
+        // 连"收藏"这个入口都看不到，自然觉得"没有收藏"。
+        addChip("★ 收藏") { onlyFav = true; render() }
         groups.forEach { g -> addChip(g) { selectedGroup = g; onlyFav = false; render() } }
     }
 
@@ -601,6 +611,9 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
     private fun playChannel(ch: Channel) {
         currentChannel = ch
         app.prefs.lastChannelId = ch.id
+        // C2：id 会随上游重建失效，tvg_id 与名字一起存下来当兜底锚点
+        app.prefs.lastChannelTvgId = ch.tvgId
+        app.prefs.lastChannelName = ch.name
         playName.text = ch.name
         playHint.visibility = View.GONE
         loading.visibility = View.VISIBLE

@@ -38,6 +38,21 @@ class ChannelAdapter(
     private val logoCache = LruCache<String, Bitmap>(32)
     private var favorites: Set<Long> = emptySet()
 
+    /**
+     * 正在播放的频道 id。
+     *
+     * 为什么要单独存：`selBar` 原来只跟**焦点**走，焦点一移开就消失，
+     * 于是"恢复上次频道"之后用户根本看不出自己在看哪个台。
+     * 现在 selBar = 焦点在它 或 它就是正在播的那个台。
+     */
+    private var playingId: Long = 0
+
+    fun setPlayingId(id: Long) {
+        if (id == playingId) return
+        playingId = id
+        notifyDataSetChanged()
+    }
+
     private val executor = Executors.newFixedThreadPool(2)
     private val main = Handler(Looper.getMainLooper())
 
@@ -108,6 +123,8 @@ class ChannelAdapter(
         }
 
         holder.itemView.setOnClickListener { onClick(ch) }
+        // 正在播的台：即使焦点不在它上面也保留竖条，用户一眼能看到自己的台在哪
+        holder.selBar.visibility = if (ch.id == playingId) View.VISIBLE else View.GONE
         holder.itemView.setOnLongClickListener {
             onLongClick?.invoke(ch)
             onLongClick != null
@@ -117,7 +134,8 @@ class ChannelAdapter(
             v.animate().scaleX(if (hasFocus) 1.02f else 1f)
                 .scaleY(if (hasFocus) 1.02f else 1f)
                 .setDuration(120).start()
-            holder.selBar.visibility = if (hasFocus) View.VISIBLE else View.GONE
+            holder.selBar.visibility =
+                if (hasFocus || ch.id == playingId) View.VISIBLE else View.GONE
             // 三列联动：焦点到哪个台，右侧就显示哪个台的节目单
             if (hasFocus) onFocus?.invoke(ch)
         }

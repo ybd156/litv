@@ -118,6 +118,26 @@ type API struct {
 	manMu        sync.Mutex
 	manSlots     map[int64]*manifestSlot
 	streamClient *http.Client
+
+	// ---- 源刷新（A2）：异步 + 单飞 + 全局并发上限 ----
+	refreshMu  sync.Mutex
+	refreshing map[int64]time.Time // sourceID -> 开始时间（只有在跑时存在）
+	// refreshSem 是全局并发闸门，容量 1。
+	//
+	// 为什么必须卡住并发：ImportChannels 是写事务，而 SQLite 的写是串行的。
+	// 两个源同时导入只会互相等锁，把 TV 端那些小写操作（play_events、
+	// watch_progress）一起堵在 busy_timeout 上——"卡死"只是从 HTTP 层
+	// 搬到了 DB 层。宁可让第二个请求收到 429 等几秒。
+	refreshSem chan struct{}
+
+	// importSource 是可注入的「抓取 + 解析 + 对齐 + 落库」实现。
+	//
+	// 抽成字段是为了让测试能替换掉它：单飞、202、以及"刷新期间别的写不被
+	// 卡死"这三件事必须能在不连真实网络的前提下断言，否则等于测不了。
+	importSource sourceImporter
+
+	// statsLimiter 是 /tv/stats 的按设备限流（A3-2）。
+	statsLimiter *statsRateLimiter
 }
 
 // New 创建 API。
@@ -143,9 +163,14 @@ func New(cfg *config.Config, st *store.Store, hub *stream.Hub, version string) *
 		startAt:       time.Now(),
 		version:       version,
 		dialPolicy:    safedial.DefaultPolicy(),
+
+		refreshing:   map[int64]time.Time{},
+		refreshSem:   make(chan struct{}, 1),
+		statsLimiter: newStatsRateLimiter(statsEventsPerMinute, time.Minute),
 		streamClient:  streamClient,
 	}
 	a.segClient = &http.Client{Transport: a.segTransport()}
+	a.importSource = a.defaultImportSource
 	return a
 }
 
@@ -550,6 +575,14 @@ func ok(w http.ResponseWriter, data any) {
 	writeJSON(w, http.StatusOK, resp{Code: 0, Msg: "ok", Data: data})
 }
 
+// okStatus 用非 200 的成功状态码回信封（目前只有 202 Accepted 用）。
+//
+// 信封形状必须保持一致：{code,msg,data}。前端只看 code，不看 HTTP 状态码，
+// 但 curl / 代理 / 日志更认状态码，两者都要对。
+func okStatus(w http.ResponseWriter, status int, data any) {
+	writeJSON(w, status, resp{Code: 0, Msg: "ok", Data: data})
+}
+
 func fail(w http.ResponseWriter, status, code int, msg string) {
 	writeJSON(w, status, resp{Code: code, Msg: msg})
 }
@@ -573,6 +606,29 @@ func decode(r *http.Request, v any) error {
 	dec := json.NewDecoder(bytes.NewReader(body))
 	dec.DisallowUnknownFields()
 	return dec.Decode(v)
+}
+
+// decodeLenient 与 decode 相同，但**不拒绝未知字段**。
+//
+// 只给遥测类端点用（目前只有 POST /tv/stats）。
+//
+// 为什么需要它：decode 全局开了 DisallowUnknownFields，
+// 于是"新 APK + 旧 NAS"这种升级顺序下，客户端多上报一个新字段
+// （stall_ms / path / engine）就会收到 400 —— 整条 QoE 上报链路静默失效。
+// 遥测数据的价值在于"有总比没有好"，不能因为一个不认识的字段就全丢掉。
+//
+// 硬约束：**不要**把它用到任何写业务数据的端点上。
+// 那些地方的未知字段必须报错，否则"前端以为改了、后端没改"会一直藏着。
+func decodeLenient(r *http.Request, v any) error {
+	defer r.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+	if err != nil {
+		return err
+	}
+	if len(bytes.TrimSpace(body)) == 0 {
+		return nil
+	}
+	return json.NewDecoder(bytes.NewReader(body)).Decode(v)
 }
 
 func pathInt64(r *http.Request, name string) int64 {
@@ -599,6 +655,45 @@ func queryBool(r *http.Request, name string) *bool {
 	}
 	b := strings.EqualFold(v, "true") || v == "1"
 	return &b
+}
+
+// clampInt 把 v 收进 [lo,hi]，返回夹住后的值与是否发生了夹取。
+func clampInt(v, lo, hi int) (int, bool) {
+	if v < lo {
+		return lo, true
+	}
+	if v > hi {
+		return hi, true
+	}
+	return v, false
+}
+
+// truncateBytes 按 UTF-8 字符边界把字符串截到不超过 maxBytes 字节。
+//
+// 不能直接 s[:maxBytes]：那会把多字节字符从中间切断，
+// 存进 SQLite 的 TEXT 列会变成非法 UTF-8，读出来再拼 JSON 就炸。
+func truncateBytes(s string, maxBytes int) string {
+	if maxBytes <= 0 || len(s) <= maxBytes {
+		return s
+	}
+	// 从 maxBytes 往回退，直到落在字符起始字节（不是 10xxxxxx 续字节）。
+	i := maxBytes
+	for i > 0 && s[i]&0xC0 == 0x80 {
+		i--
+	}
+	return s[:i]
+}
+
+// queryBoolDefaultTrue 读一个布尔查询参数，缺省为 true。
+//
+// 与 queryBool 的区别只在缺省值：管理台"要看已下线的台"是默认行为，
+// 只有显式传 include_missing=0 才关闭。
+func queryBoolDefaultTrue(r *http.Request, name string) bool {
+	v := r.URL.Query().Get(name)
+	if v == "" {
+		return true
+	}
+	return !(strings.EqualFold(v, "false") || v == "0")
 }
 
 func errMsg(err error) string {

@@ -43,6 +43,12 @@ const daysAgo = (d: number): string => new Date(now - d * 86_400_000).toISOStrin
  * mock 少给一个就等于把这个兜底分支藏起来，改坏了也看不出来。
  *
  * 三种 status 都在样本里：ok / error / never。
+ *
+ * ★ 另外要带上：
+ *   - `refreshing`（刷新中，异步任务的唯一可靠信号）
+ *   - `last_result`（五键：parsed/inserted/updated/missing/unchanged）
+ *   - `parsed_count`（上游给了几条，和 `channel_count`=库内真数 是两回事）
+ * 没有这些，「上次刷新：新增 N · 更新 N · 下线 N」这段 UI 在 mock 下永远空白。
  */
 export const seedSources: Source[] = [
   {
@@ -56,6 +62,9 @@ export const seedSources: Source[] = [
     last_error: null,
     error: null,
     channel_count: 22,
+    parsed_count: 24,
+    refreshing: false,
+    last_result: { parsed: 24, inserted: 0, updated: 3, missing: 2, unchanged: 19 },
   },
   {
     id: 2,
@@ -68,6 +77,9 @@ export const seedSources: Source[] = [
     last_error: null,
     error: null,
     channel_count: 12,
+    parsed_count: 12,
+    refreshing: false,
+    last_result: { parsed: 12, inserted: 1, updated: 0, missing: 0, unchanged: 11 },
   },
   {
     id: 3,
@@ -161,8 +173,24 @@ export const seedChannels: Channel[] = channelSeeds.map(([name, group, tvg], i) 
   stream_count: (i % 3) + 1,
 }))
 
+/**
+ * 造一个「上游已移除」的样本（`missing: true`）。
+ *
+ * 服务端用独立列 `channels.src_missing` 记这个状态（**不复用 enabled=0**，
+ * 否则和「用户手动停用」永久分不清）。没有样本的话，频道列表里那个
+ * 「上游已移除」标签在 mock 模式下永远看不见，改坏了也发现不了。
+ */
+const missingChannel = seedChannels.find((c) => c.tvg_id === 'dongfang')
+if (missingChannel) {
+  missingChannel.enabled = false
+  missingChannel.missing = true
+  missingChannel.stream_count = 0
+}
+
 export const seedStreams: Record<number, ChannelStream[]> = {}
 seedChannels.forEach((c) => {
+  // 上游移除的频道线路已被清空，不要再给它造线路
+  if (c.missing) return
   const n = c.stream_count ?? 1
   const list: ChannelStream[] = []
   for (let k = 0; k < n; k++) {

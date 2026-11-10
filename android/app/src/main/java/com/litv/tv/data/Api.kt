@@ -389,17 +389,34 @@ class Api(private val prefs: Prefs) {
      *
      * 为什么由客户端报：服务端只知道"字节发出去了"，不知道
      * "用户看到第一帧用了多久"、"播放器卡没卡"——这些只有客户端能测准。
+     *
+     * 新增的 [stallMs]/[watchMs]/[path]/[engine] 只在 **event == "stall"** 时才发送：
+     * 服务端 `decode()` 开了 `DisallowUnknownFields`，老版本服务端收到不认识的
+     * 字段会返回 400。把它们限制在 stall 事件里，`start`/`error` 的报文与旧版本
+     * 完全一致，所以「新 APK + 旧 NAS」这种升级顺序下不会多出任何失败请求。
+     * 代价：旧服务端下 stall 事件会被拒（静默丢弃），只影响统计数据，不影响播放。
+     *
+     * @param stallMs 本次卡死的持续时长（毫秒）
+     * @param watchMs 本台累计观看时长（秒），rebuffer ratio 的分母
+     * @param path    播放链路：ts | hls | remux（取 PlayInfo.kind，**不是** direct/relay）
+     * @param engine  内核 key：exo | vlc | mpv | avs3
      */
-    fun reportStats(channelId: Long, event: String, startupMs: Int = 0, detail: String = "") {
-        call("/api/v1/tv/stats", "POST",
-            mapOf(
-                "channel_id" to channelId,
-                "event" to event,
-                "startup_ms" to startupMs,
-                "detail" to detail,
-            ),
-            clazz = Any::class.java,
-            onOk = { }, onErr = { /* 上报失败静默 */ })
+    fun reportStats(
+        channelId: Long,
+        event: String,
+        startupMs: Int = 0,
+        detail: String = "",
+        stallMs: Int = 0,
+        watchMs: Int = 0,
+        path: String = "",
+        engine: String = "",
+    ) {
+        val body = StatsPayload.build(
+            channelId = channelId, event = event, startupMs = startupMs, detail = detail,
+            stallMs = stallMs, watchMs = watchMs, path = path, engine = engine,
+        )
+        call("/api/v1/tv/stats", "POST", body, clazz = Any::class.java,
+            onOk = { }, onErr = { /* 上报失败静默：不能因为埋点打断播放 */ })
     }
 
     /** 跨端续播：上报"我在看哪个台、看到第几秒"。 */

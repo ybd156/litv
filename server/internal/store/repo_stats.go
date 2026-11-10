@@ -14,6 +14,15 @@ type PlayEvent struct {
 	StartupMs int    `json:"startup_ms"`
 	Detail    string `json:"detail"`
 	CreatedAt int64  `json:"created_at"`
+
+	// A3（第二批）：QoE 埋点。
+	//
+	// 老客户端不传这些字段 → 全 0/空串；统计侧一律用 "> 0" 过滤，
+	// 所以不需要回填，也不会把"没数据"算成"0 秒卡顿"。
+	StallMs int    `json:"stall_ms"` // stall 事件：本次卡顿持续多久
+	WatchMs int    `json:"watch_ms"` // stop 事件：本次观看多久（rebuffer 的分母）
+	Path    string `json:"path"`     // ts | hls | remux | direct（自由文本）
+	Engine  string `json:"engine"`   // exo | mpv | vlc | avs3（自由文本）
 }
 
 // AddPlayEvent 记录一条播放事件。
@@ -22,9 +31,10 @@ type PlayEvent struct {
 // 失败也只返回错误让上层决定要不要记日志。
 func (s *Store) AddPlayEvent(ctx context.Context, e PlayEvent) error {
 	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO play_events(device_id,channel_id,event,startup_ms,detail,created_at)
-		 VALUES(?,?,?,?,?,?)`,
-		e.DeviceID, e.ChannelID, e.Event, e.StartupMs, e.Detail, Now())
+		`INSERT INTO play_events(device_id,channel_id,event,startup_ms,detail,created_at,stall_ms,watch_ms,path,engine)
+		 VALUES(?,?,?,?,?,?,?,?,?,?)`,
+		e.DeviceID, e.ChannelID, e.Event, e.StartupMs, e.Detail, Now(),
+		e.StallMs, e.WatchMs, e.Path, e.Engine)
 	return err
 }
 
@@ -38,8 +48,28 @@ type StatsOverview struct {
 	P90StartupMs   int     `json:"p90_startup_ms"`
 	Stalls         int     `json:"stalls"`
 	Errors         int     `json:"errors"`
-	StallRate      float64 `json:"stall_rate"` // 卡顿次数 / 起播次数
-	ErrorRate      float64 `json:"error_rate"`
+	// StallRate 是「卡顿**次数** / 起播次数」，它是事件计数比，**不是**
+	// rebuffer ratio。想知道"看了多久里卡了多久"要看 RebufferRatio。
+	// 保留它是因为管理台已经在用，且两个指标回答的是不同问题。
+	StallRate float64 `json:"stall_rate"`
+	ErrorRate float64 `json:"error_rate"`
+
+	// RebufferRatio = Σstall_ms / Σwatch_ms（"观看时长里有百分之多少在卡"）。
+	//
+	// 分母为 0 时返回 0（而不是 null/Inf），见 StatsOverview 里的短路注释。
+	RebufferRatio float64 `json:"rebuffer_ratio"`
+
+	// 按传输路径 / 播放器分组的起播 p90。
+	// 分不开这两种维度就看不出"是 remux 慢还是 VLC 慢"。
+	ByPath   []StartupGroup `json:"by_path"`
+	ByEngine []StartupGroup `json:"by_engine"`
+}
+
+// StartupGroup 是一个分组（path 或 engine）的起播统计。
+type StartupGroup struct {
+	Key          string `json:"key"`
+	Plays        int    `json:"plays"`
+	P90StartupMs int    `json:"p90_startup_ms"`
 }
 
 // StatsOverview 统计最近 N 天的播放质量。
@@ -90,7 +120,86 @@ func (s *Store) StatsOverview(ctx context.Context, days int) (*StatsOverview, er
 		out.StallRate = float64(out.Stalls) / float64(out.TotalPlays)
 		out.ErrorRate = float64(out.Errors) / float64(out.TotalPlays)
 	}
+
+	// ---- A3：rebuffer ratio ----
+	//
+	// 必须短路：历史行 watch_ms 全是 0（老库/老客户端）。
+	// 只要有一条新上报带 stall_ms>0，Σwatch_ms 就是 0 → 除零 → +Inf，
+	// 而 encoding/json 遇到 +Inf/NaN 会**返回错误**，
+	// 于是 /stats/overview 整体 500 —— 不是数字难看，是整页坏掉。
+	//
+	// 选择返回 0 而不是 null：前端拿 float 直接算百分比，少一个 null 分支；
+	// "分母为 0"这类语义由 TotalPlays/WatchMs 是否存在来表达已经够了。
+	var sumStall, sumWatch int64
+	_ = s.db.QueryRowContext(ctx,
+		`SELECT COALESCE(SUM(stall_ms),0), COALESCE(SUM(watch_ms),0)
+		 FROM play_events WHERE created_at >= ?`, since).Scan(&sumStall, &sumWatch)
+	if sumWatch > 0 {
+		out.RebufferRatio = float64(sumStall) / float64(sumWatch)
+	}
+
+	// ---- A3：按 path / engine 分组的起播 p90 ----
+	out.ByPath = s.startupP90ByGroup(ctx, since, "path")
+	out.ByEngine = s.startupP90ByGroup(ctx, since, "engine")
+
 	return out, nil
+}
+
+// startupP90ByGroup 按某一列分组算起播 p90。
+//
+// column 只接受代码里的字面量（"path" / "engine"），不接受外部输入。
+// 过滤条件与全局 p90 一致：event='start' 且 startup_ms > 0 ——
+// 不排除 0 的话，老客户端那些没上报耗时的行会把每组 p90 拉到 0。
+func (s *Store) startupP90ByGroup(ctx context.Context, since int64, column string) []StartupGroup {
+	switch column {
+	case "path", "engine":
+	default:
+		return nil
+	}
+	out := []StartupGroup{}
+
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT `+column+` AS k, COUNT(*) AS n
+		 FROM play_events
+		 WHERE created_at >= ? AND event='start' AND startup_ms > 0 AND `+column+` <> ''
+		 GROUP BY k ORDER BY n DESC`, since)
+	if err != nil {
+		return out
+	}
+	type grp struct {
+		key string
+		n   int
+	}
+	groups := []grp{}
+	for rows.Next() {
+		var g grp
+		if err := rows.Scan(&g.key, &g.n); err != nil {
+			rows.Close()
+			return out
+		}
+		groups = append(groups, g)
+	}
+	rerr := rows.Err()
+	rows.Close()
+	if rerr != nil {
+		return out
+	}
+
+	for _, g := range groups {
+		offset := int(float64(g.n) * 0.9)
+		if offset >= g.n {
+			offset = g.n - 1
+		}
+		var p90 int
+		if err := s.db.QueryRowContext(ctx,
+			`SELECT startup_ms FROM play_events
+			 WHERE created_at >= ? AND event='start' AND startup_ms > 0 AND `+column+` = ?
+			 ORDER BY startup_ms LIMIT 1 OFFSET ?`, since, g.key, offset).Scan(&p90); err != nil {
+			continue
+		}
+		out = append(out, StartupGroup{Key: g.key, Plays: g.n, P90StartupMs: p90})
+	}
+	return out
 }
 
 // ChannelStat 是单个频道的质量指标。

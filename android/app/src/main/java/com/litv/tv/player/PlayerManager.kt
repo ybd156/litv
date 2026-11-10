@@ -6,6 +6,7 @@ import android.os.Looper
 import android.util.Log
 import android.view.SurfaceView
 import android.view.ViewGroup
+import com.litv.tv.data.PlaybackDefaults
 import com.litv.tv.data.Prefs
 
 /**
@@ -32,6 +33,16 @@ class PlayerManager(
 
         /** 第一帧真正画到屏幕上（换台快照要等这一帧再撤）。 */
         fun onFirstFrame() = Unit
+
+        /**
+         * 检测到"画面完全不动"并即将自动恢复。
+         *
+         * 用于 QoE 上报（`stall` 事件）：只有客户端知道"用户看到的画面停了多久"。
+         * 有默认空实现，避免所有实现类被迫加方法。
+         *
+         * @param frozenMs 画面冻结时长（毫秒）
+         */
+        fun onStall(frozenMs: Int) = Unit
     }
 
     var callback: Callback? = null
@@ -122,6 +133,9 @@ class PlayerManager(
     private var stallRecovered = 0
     private var userPaused = false
 
+    /** 上一次判定卡死的时刻（elapsedRealtime），用于"稳定播放后把恢复计数归零"。 */
+    private var lastStallAt = 0L
+
     private val stallWatchdog: Runnable = Runnable {
         val eng = current
         if (eng == null || !prepared) {
@@ -158,8 +172,21 @@ class PlayerManager(
             return@Runnable
         }
         val frozenMs = android.os.SystemClock.elapsedRealtime() - lastPosChangeAt
+
+        // 稳定播放满 5 分钟就把"已自动恢复次数"归零。
+        //
+        // 为什么必须有：stallRecovered 以前只在 play() 复位，长看同一个台时
+        // 一天里累计 4 次网络抖动就会永久报错「播放反复卡死」——用户只能换台。
+        // 连续稳定 5 分钟说明链路已经恢复，累计计数不该继续记账。
+        val clock = android.os.SystemClock.elapsedRealtime()
+        if (stallRecovered > 0 && lastStallAt > 0 && clock - lastStallAt >= STABLE_PLAY_RESET_MS) {
+            Log.i(TAG, "稳定播放 ${STABLE_PLAY_RESET_MS / 60_000} 分钟，卡顿恢复计数归零")
+            stallRecovered = 0
+        }
+
         if (lastPosChangeAt > 0 && frozenMs >= STALL_FROZEN_MS) {
             lastPosChangeAt = android.os.SystemClock.elapsedRealtime()
+            lastStallAt = clock
             stallRecovered++
             if (stallRecovered > MAX_STALL_RECOVER) {
                 // 反复卡死说明不是偶发抖动，重启也没用，别再无限循环
@@ -169,6 +196,9 @@ class PlayerManager(
                 return@Runnable
             }
             Log.w(TAG, "判定卡死，第 $stallRecovered 次自动恢复")
+            // QoE：把"这次到底冻了多久"报上去。服务端的 StallRate / rebuffer_ratio
+            // 在此之前**恒为 0**（客户端只报过 start），面板会显示"卡顿率 0%"主动误导。
+            callback?.onStall(frozenMs.toInt())
             if (stallRecovered >= 2 && directMode) {
                 // 同一个台连续卡两次，多半是这条直连线路有问题。
                 // 交给上层改走服务端中转（和「直连首个内核失败」走同一条路）。
@@ -195,13 +225,76 @@ class PlayerManager(
         lastPosChangeAt = 0L
     }
 
-    private val frameWatchdog = Runnable {
-        if (currentKind == EngineKind.EXO && !exoFirstFrameRendered && !exoForceSoftwareDecode) {
-            Log.w(TAG, "exo 已起播但没有渲染出画面，改用软解")
+    // ---------------------------------------------------------------- 起播两阶段 + 总预算
+    //
+    // 老机制只有一个 `startTimeout`（prefs.startTimeoutMs，默认 15s）+ 每内核重试，
+    // 3 个内核轮一圈最坏 ≈105s，用户早就换台了——这是"起播很慢"的一半成因
+    // （另一半在服务端 ring，见 B1）。
+    //
+    // 现在拆成三段，互不重叠，所有时长都来自 PlaybackDefaults（不再有裸数字）：
+    //   阶段一 [noDataWatchdog]  4s 还没有字节     → 重试一次，还不行就换内核（快）
+    //   阶段二 [noFrameWatchdog] 有字节 8s 没出帧  → 硬解换软解（Amlogic 黑屏）
+    //   总预算 [budgetWatchdog]  28s               → 无论如何给用户一个结论
+    // START_TIMEOUT_MS 保持 15s 不动：慢盒子那是实测下限，不能为了"看起来快"压它。
+
+    /** 本次整段起播的硬截止（elapsedRealtime）。0 表示当前不在起播流程里。 */
+    private var budgetDeadlineAt = 0L
+
+    /** 本次内核尝试是否已经出过第一帧（渲染成功才算真的起播）。 */
+    private var firstFrame = false
+
+    private val noDataWatchdog = Runnable {
+        if (prepared) return@Runnable
+        if (retried < prefs.retryCount) {
+            retried++
+            Log.w(TAG, "内核 ${currentKind?.key} 4 秒无数据，重试第 $retried 次（上限 ${prefs.retryCount}）")
+            startCurrent()
+            return@Runnable
+        }
+        retried = 0
+        failLog += "${currentKind?.key ?: "?"}: 4 秒无数据"
+        Log.w(TAG, "内核 ${currentKind?.key} 4 秒无数据，换下一个内核")
+        tryNext("4 秒无数据")
+    }
+
+    private val noFrameWatchdog = Runnable {
+        if (!prepared || firstFrame) return@Runnable
+        if (currentKind == EngineKind.EXO && !exoForceSoftwareDecode) {
+            Log.w(TAG, "已起播但 5 秒没有画面，改用软解")
             exoForceSoftwareDecode = true
             retried = 0
             startCurrent()
+            return@Runnable
         }
+        failLog += "${currentKind?.key ?: "?"}: 有数据无画面"
+        Log.w(TAG, "已起播但 5 秒没有画面，换下一个内核")
+        tryNext("有数据无画面")
+    }
+
+    private val budgetWatchdog = Runnable {
+        if (prepared && firstFrame) return@Runnable
+        removeStartTimers()
+        stopStallWatchdog()
+        Log.e(TAG, "起播总预算 ${PlaybackDefaults.START_BUDGET_MS}ms 用尽，放弃")
+        callback?.onError(
+            "起播超时（${PlaybackDefaults.START_BUDGET_MS / 1000} 秒）：" +
+                "源站无响应或线路不可用，请换台或换线路"
+        )
+    }
+
+    /** 起播阶段的三个计时器一起撤（换台/失败/离开页面都要调，否则会互相打架）。 */
+    private fun removeStartTimers() {
+        main.removeCallbacks(startTimeout)
+        main.removeCallbacks(noDataWatchdog)
+        main.removeCallbacks(noFrameWatchdog)
+        main.removeCallbacks(budgetWatchdog)
+        budgetDeadlineAt = 0L
+    }
+
+    /** 用「还能花多少时间」给下一次等待封顶，避免单次等待越过总预算。 */
+    private fun remainingBudgetMs(): Long {
+        if (budgetDeadlineAt <= 0L) return Long.MAX_VALUE
+        return (budgetDeadlineAt - android.os.SystemClock.elapsedRealtime()).coerceAtLeast(0L)
     }
 
     /** 当前内核是否已经起播（用于 Surface 晚就绪时决定要不要补播） */
@@ -269,6 +362,11 @@ class PlayerManager(
         // retried 会以 1 的残值留给下一个台，于是换台后的第一次超时
         // 直接跳过了重试（设置里的"重试 1 次"时有时无）。
         retried = 0
+        // 起播阶段：清掉上一次的所有计时器，重置第一帧标志，并设一个硬预算。
+        removeStartTimers()
+        firstFrame = false
+        budgetDeadlineAt = android.os.SystemClock.elapsedRealtime() + PlaybackDefaults.START_BUDGET_MS
+        main.postDelayed(budgetWatchdog, PlaybackDefaults.START_BUDGET_MS.toLong())
         startCurrent()
     }
 
@@ -332,10 +430,12 @@ class PlayerManager(
         }
         engine.attach(context, surface, container)
         stopStallWatchdog()
-        main.removeCallbacks(frameWatchdog)
-        if (kind == EngineKind.EXO) {
-            main.postDelayed(frameWatchdog, 5000)
-        }
+        // 阶段一：4 秒还没有"字节/READY"就直接重试或换内核。
+        // （原来的 frameWatchdog 只盯 EXO 的首帧，且只在 5 秒后看一次；
+        //  现在由阶段二 noFrameWatchdog 统一覆盖三个内核，这里不再重复排。）
+        main.removeCallbacks(noFrameWatchdog)
+        main.removeCallbacks(noDataWatchdog)
+        main.postDelayed(noDataWatchdog, PlaybackDefaults.START_NOBYTE_MS.toLong())
         // 所有内核回调统一 post 到主线程。
         //
         // mpv 的日志/状态回调是从 native 线程发出来的，以前直接往下走，
@@ -347,6 +447,18 @@ class PlayerManager(
                 main.post {
                     prepared = true
                     main.removeCallbacks(startTimeout)
+                    main.removeCallbacks(noDataWatchdog)
+                    // 已经有字节了：转入阶段二，只看"有没有真的画出第一帧"。
+                    if (!firstFrame) {
+                        main.removeCallbacks(noFrameWatchdog)
+                        main.postDelayed(
+                            noFrameWatchdog,
+                            minOf(
+                                PlaybackDefaults.START_FRAME_MS.toLong(),
+                                remainingBudgetMs(),
+                            ),
+                        )
+                    }
                     prefs.setEngineFor(pendingChannelId, kind.key)
                 }
             }
@@ -355,6 +467,17 @@ class PlayerManager(
                 main.post {
                     prepared = true
                     main.removeCallbacks(startTimeout)
+                    main.removeCallbacks(noDataWatchdog)
+                    if (!firstFrame) {
+                        main.removeCallbacks(noFrameWatchdog)
+                        main.postDelayed(
+                            noFrameWatchdog,
+                            minOf(
+                                PlaybackDefaults.START_FRAME_MS.toLong(),
+                                remainingBudgetMs(),
+                            ),
+                        )
+                    }
                     startStallWatchdog()
                     callback?.onPlaying()
                 }
@@ -367,7 +490,11 @@ class PlayerManager(
             }
 
             override fun onFirstFrame() {
-                main.post { callback?.onFirstFrame() }
+                main.post {
+                    firstFrame = true
+                    main.removeCallbacks(noFrameWatchdog)
+                    callback?.onFirstFrame()
+                }
             }
 
             override fun onSurfaceLost(message: String) {
@@ -414,8 +541,11 @@ class PlayerManager(
         // 让它再试一遍硬解只会多黑屏几秒。
         val decodeMode = if (exoForceSoftwareDecode) "soft" else prefs.decode
         engine.prepare(pendingUrl, pendingHeaders, prefs.bufferMs, decodeMode)
-        // 超时和重试次数都从设置里读，不再写死
-        main.postDelayed(startTimeout, prefs.startTimeoutMs.toLong())
+        // 起播超时（prefs.startTimeoutMs，默认 15s）保留：慢盒子上的"有字节但很慢"
+        // 仍然值得等，不能为了看起来快把它压小。它和 4 秒无字节、25 秒总预算三层互不冲突：
+        // 谁先到谁生效，且都不超过总预算。
+        val wait = minOf(prefs.startTimeoutMs.toLong(), remainingBudgetMs())
+        main.postDelayed(startTimeout, wait)
     }
 
     private fun tryNext(reason: String) {
@@ -461,18 +591,21 @@ class PlayerManager(
     fun setVolume(v: Float) = current?.setVolume(v)
     fun stats(): EngineStats = current?.stats() ?: EngineStats()
     fun engineLabel(): String = currentKind?.label ?: ""
+
+    /** 内核 key（exo | vlc | mpv | avs3），QoE 上报用。 */
+    fun engineKey(): String = currentKind?.key ?: ""
     fun snapshot() = current?.snapshot()
 
     /** 换台前抓一帧，盖住黑屏（TVBox 的做法，成本极低效果好）。 */
     fun stop() {
-        main.removeCallbacks(startTimeout)
+        removeStartTimers()
         stopStallWatchdog()
         current?.stop()
     }
 
     fun release() {
-        main.removeCallbacks(frameWatchdog)
-        main.removeCallbacks(startTimeout)
+        removeStartTimers()
+        main.removeCallbacks(budgetWatchdog)
         stopStallWatchdog()
         disposeEngine(current)
         current = null
@@ -518,5 +651,13 @@ class PlayerManager(
 
         /** 自动恢复的次数上限。超过就不再重启，直接报错。 */
         const val MAX_STALL_RECOVER = 3
+
+        /**
+         * 连续稳定播放这么久之后，把 [MAX_STALL_RECOVER] 的累计计数归零。
+         *
+         * 5 分钟的依据：一次网络抖动/服务端重推通常几十秒内恢复；能连续放满 5 分钟
+         * 说明链路已经正常，再不让计数回落，长看同一个台迟早被"累计 4 次"判死。
+         */
+        const val STABLE_PLAY_RESET_MS = 5 * 60_000L
     }
 }

@@ -22,9 +22,19 @@ type Store struct {
 }
 
 // Open 打开（或创建）数据库并执行建表。
-func Open(path string) (*Store, error) {
+func Open(path string) (*Store, error) { return openWithBusyTimeout(path, 8000) }
+
+// openWithBusyTimeout 与 Open 相同，但可以指定 busy_timeout。
+//
+// 只给测试用。把 busy_timeout 压到 100ms 才能断言"导入期间其它写不会被
+// 长时间卡住"——用默认的 8 秒，一个真的会把写锁独占几秒的实现
+// 也会在超时前成功，那条测试就是假绿。
+func openWithBusyTimeout(path string, busyMS int) (*Store, error) {
+	if busyMS <= 0 {
+		busyMS = 8000
+	}
 	// WAL 提升并发读性能；busy_timeout 避免瞬时锁冲突直接报错。
-	dsn := fmt.Sprintf("file:%s?_pragma=journal_mode(WAL)&_pragma=busy_timeout(8000)&_pragma=foreign_keys(1)&_pragma=synchronous(NORMAL)", path)
+	dsn := fmt.Sprintf("file:%s?_pragma=journal_mode(WAL)&_pragma=busy_timeout(%d)&_pragma=foreign_keys(1)&_pragma=synchronous(NORMAL)", path, busyMS)
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("打开数据库失败: %w", err)
@@ -87,7 +97,16 @@ CREATE TABLE IF NOT EXISTS channels (
   enabled    INTEGER NOT NULL DEFAULT 1,
   sort       INTEGER NOT NULL DEFAULT 0,
   source_id  INTEGER NOT NULL DEFAULT 0,
-  created_at INTEGER NOT NULL
+  created_at INTEGER NOT NULL,
+  -- A1（第二批）：上游已不再提供这个频道。
+  --
+  -- **必须独立于 enabled**：enabled=0 是「用户手动停用」的唯一表达，
+  -- 两个状态共用同一个 0 就永久不可区分——用户手动启用一个已被上游移除的台
+  -- 会把它重新激活，而管理台也没法把"我关掉的"和"上游没的"分开显示。
+  src_missing INTEGER NOT NULL DEFAULT 0,
+  -- 第一次发现上游移除的时间（Unix 秒，0 = 上游仍然有它）。
+  -- 只用于展示"多久前没的"，状态真值以 src_missing 为准。
+  missing_since INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_channels_group ON channels(group_name);
 CREATE INDEX IF NOT EXISTS idx_channels_sort  ON channels(sort);
@@ -208,10 +227,17 @@ CREATE TABLE IF NOT EXISTS play_events (
   event      TEXT NOT NULL,                 -- start | stall | error | stop
   startup_ms INTEGER NOT NULL DEFAULT 0,    -- 起播耗时（仅 start 事件有意义）
   detail     TEXT NOT NULL DEFAULT '',
-  created_at INTEGER NOT NULL
+  created_at INTEGER NOT NULL,
+  -- A3（第二批）：QoE 埋点。没有这些列，"卡顿"就只能靠用户嘴描述，
+  -- 修完了也没法验收。
+  stall_ms   INTEGER NOT NULL DEFAULT 0,    -- 本次卡顿持续时长（stall 事件）
+  watch_ms   INTEGER NOT NULL DEFAULT 0,    -- 本次观看时长（stop 事件），算 rebuffer_ratio 的分母
+  path       TEXT NOT NULL DEFAULT '',      -- ts | hls | remux | direct
+  engine     TEXT NOT NULL DEFAULT ''       -- exo | vlc | mpv | avplayer
 );
 CREATE INDEX IF NOT EXISTS idx_play_events_time ON play_events(created_at);
 CREATE INDEX IF NOT EXISTS idx_play_events_ch ON play_events(channel_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_play_events_path ON play_events(path, created_at);
 
 -- 跨端续播：记住每台设备最后看到哪、看到第几秒。
 -- 家庭场景下这是刚需——客厅看一半去卧室，不该重新找台。
@@ -276,6 +302,32 @@ func (s *Store) migrate(ctx context.Context) error {
 		// handler 里硬编码返回空串，界面上永远显示「—」。
 		`ALTER TABLE devices ADD COLUMN ip TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE devices ADD COLUMN app_version TEXT NOT NULL DEFAULT ''`,
+		// A1（第二批）：源刷新对齐上游。
+		//
+		// src_missing：上游已不再提供这个频道。**必须独立于 enabled**——
+		// enabled=0 是"用户手动停用"的唯一表达，两者共用一个 0 就永久不可区分。
+		// missing_since：第一次发现缺失的时间，只用于展示"多久前没的"。
+		`ALTER TABLE channels ADD COLUMN src_missing INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE channels ADD COLUMN missing_since INTEGER NOT NULL DEFAULT 0`,
+		// K-6：channel_count 与 parsed_count 必须分开。
+		//
+		// 以前只有一个 channel_count，写的是"本次解析条数"，而管理台
+		// 拿它当"删源会连带删掉几个频道"用在破坏性确认文案里。
+		// 对齐语义落地后两者必然分叉（解析 50、库里 40），
+		// 于是确认文案里的数字是错的——破坏性操作说错影响范围，不可接受。
+		//   channel_count = 库里真实存在、会被一并删除的频道数
+		//   parsed_count  = 上一次解析拿到的条目数
+		`ALTER TABLE sources ADD COLUMN parsed_count INTEGER NOT NULL DEFAULT 0`,
+		// K-2：上一次刷新的结果（五键 JSON）。
+		// 放库里而不是只放内存：管理台刷新页面、甚至服务重启之后，
+		// 用户问的"上游到底更新了吗"仍然要有答案。
+		`ALTER TABLE sources ADD COLUMN last_result_json TEXT NOT NULL DEFAULT ''`,
+		// A3（第二批）：QoE 埋点。老库里没有这些列，补上后老数据全是 0/空串，
+		// 统计侧用 "> 0" 过滤即可，不需要回填。
+		`ALTER TABLE play_events ADD COLUMN stall_ms INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE play_events ADD COLUMN watch_ms INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE play_events ADD COLUMN path TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE play_events ADD COLUMN engine TEXT NOT NULL DEFAULT ''`,
 	} {
 		if _, err := s.db.ExecContext(ctx, stmt); err != nil &&
 			!strings.Contains(strings.ToLower(err.Error()), "duplicate column") {

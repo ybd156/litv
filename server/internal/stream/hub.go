@@ -39,8 +39,26 @@ type Options struct {
 	MaxUpstreams int
 
 	// OnData 每读到一块上游数据时回调（用于时移录制）。
-	// 必须快速返回，不要在里面做阻塞 IO——它在扇出热路径上。
+	//
+	// 它**不在**扇出热路径上：Hub 会先把数据丢进每频道的定长队列，
+	// 由单独的写协程调用这个回调（见 tee.go），所以这里做阻塞的磁盘写
+	// 是安全的。要小心的是别在回调里再调回 Hub（会打死锁）。
 	OnData func(channelID int64, data []byte)
+
+	// MaxTeeStreams 是全局同时进行的时移 tee 上限（<=0 用默认 64）。
+	MaxTeeStreams int
+
+	// TeeQueueBlocks 是每频道时移队列的块数（<=0 用默认 16，上限 64）。
+	TeeQueueBlocks int
+
+	// StaleDataTimeout 上游「还连着但 N 秒没数据」判定卡死（<=0 用 15s）。
+	StaleDataTimeout time.Duration
+
+	// StaleStartTimeout 上游「建连后 N 秒一个字节都没收到」判定卡死（<=0 用 20s）。
+	StaleStartTimeout time.Duration
+
+	// tee 是全局名额池，由 NewHub 初始化；nil 表示不 tee（测试构造）。
+	tee *teeBudget
 }
 
 // Hub 管理所有活跃的上游连接。
@@ -53,7 +71,7 @@ type Hub struct {
 // NewHub 创建 Hub。
 func NewHub(opts Options) *Hub {
 	if opts.RingSize <= 0 {
-		opts.RingSize = 2 << 20
+		opts.RingSize = defaultRingSize
 	}
 	if opts.ChunkSize <= 0 {
 		opts.ChunkSize = 32 << 10
@@ -64,7 +82,48 @@ func NewHub(opts Options) *Hub {
 	if opts.IdleTimeout <= 0 {
 		opts.IdleTimeout = 60 * time.Second
 	}
+	// 缓冲小于「一个 GOP」时，新订阅者落进去连一个完整 GOP 都拿不到，
+	// 只能等下一个 IDR——表现就是用户说的「换台转圈很久」。
+	// 4MB 在 8Mbps（约 1MB/s）下是 4 秒，给 2 秒 GOP 留了一倍余量。
+	if opts.RingSize < 4<<20 {
+		smallRingWarned.Do(func() {
+			slog.Warn("环形缓冲偏小，换台可能等下一个关键帧才出画",
+				"ring_size", opts.RingSize,
+				"建议", "至少 4MB；8Mbps 约 1MB/s，6MB 更稳（配置项 ring_size）")
+		})
+	}
+	if opts.MaxTeeStreams <= 0 {
+		opts.MaxTeeStreams = 64
+	}
+	opts.tee = newTeeBudget(opts.MaxTeeStreams)
 	return &Hub{opts: opts, ups: make(map[int64]*Upstream)}
+}
+
+// smallRingWarned 保证「缓冲偏小」只提醒一次，不刷屏。
+var smallRingWarned sync.Once
+
+// staleDataTimeout 上游「连着但不推数据」的判定阈值。
+//
+// 取值依据：要大于「最坏情况下两块数据之间的间隔」。直播 TS 是连续流，
+// 正常间隔几十毫秒级，0.5Mbps 的低码率台一块 32KB 也就 0.5 秒。
+// 15 秒足够吸收上游抖动，又不会让用户对着黑屏等太久；
+// 给太小会把「轮播源在广告/切台时短暂停流 2–5 秒」误判成死连接并重建。
+func (o Options) staleDataTimeout() time.Duration {
+	if o.StaleDataTimeout > 0 {
+		return o.StaleDataTimeout
+	}
+	return 15 * time.Second
+}
+
+// staleStartTimeout 上游「建连后一个字节都没收到」的判定阈值。
+//
+// 冷启动的源站常见 3–8 秒才吐第一个字节，20 秒给足余量；
+// 超过还没有数据说明线路本身不通，重建后由 BestStream 换到下一条。
+func (o Options) staleStartTimeout() time.Duration {
+	if o.StaleStartTimeout > 0 {
+		return o.StaleStartTimeout
+	}
+	return 20 * time.Second
 }
 
 // Subscriber 是一个终端连接。
@@ -137,6 +196,24 @@ type Upstream struct {
 	// 上游 close 时 CloseIdleConnections。
 	client    *http.Client
 	transport *http.Transport
+
+	// teeOn 表示时移写协程已经拉起并占着全局名额。
+	teeOn atomic.Bool
+
+	// teeOnce 保证 teeDone 只关闭一次。
+	teeOnce sync.Once
+
+	// tee 是每频道的定长队列，满了丢块（见 tee.go）。
+	tee chan []byte
+
+	// teeDone 关闭即通知写协程退出。
+	teeDone chan struct{}
+
+	// teeDropped 因队列满而丢掉的块数（磁盘跟不上）。
+	teeDropped atomic.Int64
+
+	// teeSkipped 因全局名额耗尽而放弃 tee 的块数。
+	teeSkipped atomic.Int64
 }
 
 // Subscribe 订阅一个频道。若该频道已有上游则直接复用。
@@ -150,8 +227,8 @@ func (h *Hub) Subscribe(ctx context.Context, channelID int64, url string, header
 	if ok && up != nil && !up.isClosed() {
 		now := time.Now()
 		if last := up.lastData.Load(); last > 0 {
-			stale = now.Sub(time.Unix(0, last)) > 15*time.Second
-		} else if now.Sub(up.started) > 20*time.Second {
+			stale = now.Sub(time.Unix(0, last)) > h.opts.staleDataTimeout()
+		} else if now.Sub(up.started) > h.opts.staleStartTimeout() {
 			// 建了 20 秒一个字节都没收到
 			stale = true
 		}
@@ -191,6 +268,10 @@ func (h *Hub) Subscribe(ctx context.Context, channelID int64, url string, header
 			started:   time.Now(),
 			cancel:    cancel,
 		}
+		// 队列与退出信号先建好：只在真正需要 tee 时才拉起写协程，
+		// 但通道本身要提前存在，免得「建通道」与「上游被关闭」之间出现竞态。
+		up.tee = make(chan []byte, teeQueueBlocks(h.opts))
+		up.teeDone = make(chan struct{})
 		up.transport = newUpstreamTransport(h.opts)
 		up.client = &http.Client{
 			// 直播流不设总超时，靠 ctx 控制。
@@ -219,10 +300,41 @@ func (h *Hub) Stats() []map[string]any {
 			"uptime_s":    int(time.Since(up.started).Seconds()),
 			"bytes_in":    up.bytesIn.Load(),
 			"last_error":  up.lastErr,
+
+			// 以下为诊断「卡顿」新增（additive，既有键一个都不动）：
+			// dropped 是**每个订阅者各自的**丢块计数（下游太慢），这里求和成
+			// 频道维度 —— 非 0 就说明这个频道有人正在卡。
+			"dropped":         sumDropped(up.subs),
+			"tee_dropped":     up.teeDropped.Load(),
+			"tee_skipped":     up.teeSkipped.Load(),
+			"last_data_age_s": lastDataAge(up.lastData.Load()),
+			"ring_bytes":      up.ring.ringBytes(),
+			"ring_max":        up.ring.ringCap(),
 		})
 		up.mu.RUnlock()
 	}
 	return out
+}
+
+// sumDropped 把每个订阅者的丢块计数求和成频道维度。
+//
+// 为什么要求和：dropped 记在 Subscriber 上（谁慢谁丢），
+// 但运维关心的是「这个频道现在有人卡吗」，所以展示频道级总和。
+// 调用方必须持有 u.mu（快照 subs）。
+func sumDropped(subs map[*Subscriber]struct{}) int64 {
+	var n int64
+	for s := range subs {
+		n += s.dropped.Load()
+	}
+	return n
+}
+
+// lastDataAge 返回距上次收到上游数据的秒数；从没收到过返回 -1。
+func lastDataAge(nano int64) int {
+	if nano <= 0 {
+		return -1
+	}
+	return int(time.Since(time.Unix(0, nano)).Seconds())
 }
 
 // Close 关闭全部上游。
@@ -349,6 +461,13 @@ func (u *Upstream) close() {
 		close(s.ch)
 	}
 	u.mu.Unlock()
+	// 先停掉 tee 写协程：它可能正卡在一次磁盘写里，
+	// 关掉 teeDone 后它写完手上的块就退出，不阻塞上游收尾。
+	if d, s := u.teeDropped.Load(), u.teeSkipped.Load(); d > 0 || s > 0 {
+		slog.Info("时移 tee 有丢块（播放不受影响，回看会有缺口）",
+			"channel", u.ChannelID, "dropped", d, "skipped", s)
+	}
+	u.stopTee()
 	if u.cancel != nil {
 		u.cancel()
 	}
@@ -495,17 +614,14 @@ func (u *Upstream) readOnce(ctx context.Context) error {
 			copy(chunk, buf[:n])
 			u.appendRing(chunk)
 			u.broadcast(chunk)
-			// 时移录制：只在**确实有人在看**时才 tee 到磁盘。
+			// 时移录制：只入队，**不在这里写盘**（见 tee.go）。
 			//
 			// 空闲上游（最后一个订阅者已离开、还在等 IdleTimeout 回收）
-			// 会继续从上游读数据。若这时照常写时移盘，等于为没人看的频道
+			// 会继续从上游读数据。若这时照常 tee，等于为没人看的频道
 			// 持续写盘——NAS 上几个台叠加就是持续的磁盘 IO，
 			// 反过来拖慢正在看的那个台（表现为换台后卡一下）。
-			//
 			// 时移的语义本来就是「看过就有回看」，没人看就不必录。
-			if u.opts.OnData != nil && u.subscriberCount() > 0 {
-				u.opts.OnData(u.ChannelID, chunk)
-			}
+			u.teeMaybe(chunk)
 		}
 		if err != nil {
 			if errors.Is(err, io.EOF) {

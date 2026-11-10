@@ -52,7 +52,10 @@ func scanUser(row *sql.Row) (*User, error) {
 
 // ListSources 返回全部源。
 func (s *Store) ListSources(ctx context.Context) ([]Source, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id,name,type,url,enabled,last_fetch_at,last_error,channel_count,created_at,user_agent FROM sources ORDER BY id`)
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT id,name,type,url,enabled,last_fetch_at,last_error,channel_count,created_at,user_agent,
+		        parsed_count,last_result_json
+		 FROM sources ORDER BY id`)
 	if err != nil {
 		return nil, err
 	}
@@ -61,13 +64,37 @@ func (s *Store) ListSources(ctx context.Context) ([]Source, error) {
 	for rows.Next() {
 		var v Source
 		var en int
-		if err := rows.Scan(&v.ID, &v.Name, &v.Type, &v.URL, &en, &v.LastFetchAt, &v.LastError, &v.ChannelCount, &v.CreatedAt, &v.UserAgent); err != nil {
+		if err := rows.Scan(&v.ID, &v.Name, &v.Type, &v.URL, &en, &v.LastFetchAt, &v.LastError,
+			&v.ChannelCount, &v.CreatedAt, &v.UserAgent, &v.ParsedCount, &v.LastResultJSON); err != nil {
 			return nil, err
 		}
 		v.Enabled = en != 0
 		out = append(out, v)
 	}
 	return out, rows.Err()
+}
+
+// GetSource 取单个源。
+//
+// 以前所有需要"一个源"的地方都 ListSources 再线性找，除了浪费一次全表读，
+// 还容易在 handler 里漏判 not found。
+func (s *Store) GetSource(ctx context.Context, id int64) (*Source, error) {
+	var v Source
+	var en int
+	err := s.db.QueryRowContext(ctx,
+		`SELECT id,name,type,url,enabled,last_fetch_at,last_error,channel_count,created_at,user_agent,
+		        parsed_count,last_result_json
+		 FROM sources WHERE id=?`, id).
+		Scan(&v.ID, &v.Name, &v.Type, &v.URL, &en, &v.LastFetchAt, &v.LastError,
+			&v.ChannelCount, &v.CreatedAt, &v.UserAgent, &v.ParsedCount, &v.LastResultJSON)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrNotFound
+		}
+		return nil, err
+	}
+	v.Enabled = en != 0
+	return &v, nil
 }
 
 // CreateSource 新增源。
@@ -134,9 +161,41 @@ func (s *Store) CountChannelsBySource(ctx context.Context, sourceID int64) (int,
 }
 
 // MarkSourceFetched 记录拉取结果。
-func (s *Store) MarkSourceFetched(ctx context.Context, id int64, count int, errMsg string) error {
-	_, err := s.db.ExecContext(ctx, `UPDATE sources SET last_fetch_at=?, channel_count=?, last_error=? WHERE id=?`,
-		Now(), count, errMsg, id)
+func (s *Store) MarkSourceFetched(ctx context.Context, id int64, parsedCount int, errMsg string) error {
+	// channel_count 必须写"库里真实存在、会被一并删除的频道数"，
+	// 而不是本次解析条数——管理台的删源确认文案要拿它报影响范围（AGENTS §6）。
+	//
+	// 以前两者是同一个字段，于是"解析 50 条、库里只有 40 个"时，
+	// 破坏性确认里显示的数字是错的。
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE sources SET last_fetch_at=?, parsed_count=?, last_error=?,
+		        channel_count=(SELECT COUNT(*) FROM channels WHERE source_id=sources.id)
+		 WHERE id=?`,
+		Now(), parsedCount, errMsg, id)
+	return err
+}
+
+// MarkSourceError 记录一次刷新失败的原因。
+//
+// **不动** last_fetch_at / parsed_count / last_result_json：
+// 那几个字段描述的是"上一次成功"，失败不该把它们抹掉。
+// 这与 EPG 侧 MarkEPGAttempt 的教训是同一条——只写一个 last_* 字段，
+// 会让界面在失败后照样显示"刚刷新过"。
+func (s *Store) MarkSourceError(ctx context.Context, id int64, errMsg string) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE sources SET last_error=? WHERE id=?`, errMsg, id)
+	return err
+}
+
+// MarkSourceRefreshed 记录一次刷新的结果（五键 JSON）与成功时间。
+//
+// 与 MarkSourceFetched 分开：那个只管"拉取到了什么"，
+// 这个记"对齐做了什么"，失败路径不该覆盖上一次的成功结果。
+func (s *Store) MarkSourceRefreshed(ctx context.Context, id int64, parsedCount int, resultJSON string) error {
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE sources SET last_fetch_at=?, last_error='', parsed_count=?, last_result_json=?,
+		        channel_count=(SELECT COUNT(*) FROM channels WHERE source_id=sources.id)
+		 WHERE id=?`,
+		Now(), parsedCount, resultJSON, id)
 	return err
 }
 
@@ -149,8 +208,15 @@ type ChannelQuery struct {
 	Enabled *bool
 	// SourceID > 0 时只看这个源导入的频道（管理台「按源分组」用）
 	SourceID int64
-	Offset   int
-	Limit    int
+
+	// IncludeMissing 是否包含「上游已移除」的频道（src_missing=1）。
+	//
+	// 默认 false：终端与电视端绝不能看到已移除的台（点进去必然播不了）。
+	// 管理台要显示"该线路已下线（上游已移除）"这类标记，所以它显式传 true。
+	IncludeMissing bool
+
+	Offset int
+	Limit  int
 }
 
 // ListChannels 分页查询频道。
@@ -173,6 +239,11 @@ func (s *Store) ListChannels(ctx context.Context, q ChannelQuery) ([]Channel, in
 		where = append(where, "source_id = ?")
 		args = append(args, q.SourceID)
 	}
+	// 上游已移除的频道默认不出现在任何列表里。
+	// 它们不是"用户停用"，所以不能靠 enabled 过滤——那是两个独立状态。
+	if !q.IncludeMissing {
+		where = append(where, "src_missing = 0")
+	}
 	clause := ""
 	if len(where) > 0 {
 		clause = " WHERE " + strings.Join(where, " AND ")
@@ -191,7 +262,7 @@ func (s *Store) ListChannels(ctx context.Context, q ChannelQuery) ([]Channel, in
 	if q.Limit > 500 {
 		q.Limit = 500
 	}
-	sqlStr := `SELECT c.id,c.number,c.name,c.group_name,c.logo,c.tvg_id,c.epg_id,c.enabled,c.sort,c.source_id,c.created_at,
+	sqlStr := `SELECT c.id,c.number,c.name,c.group_name,c.logo,c.tvg_id,c.epg_id,c.enabled,c.sort,c.source_id,c.created_at,c.missing_since,
 		(SELECT COUNT(*) FROM streams st WHERE st.channel_id = c.id)
 		FROM channels c` + clause + ` ORDER BY c.sort, c.id LIMIT ? OFFSET ?`
 	rows, err := s.db.QueryContext(ctx, sqlStr, append(args, q.Limit, q.Offset)...)
@@ -204,7 +275,7 @@ func (s *Store) ListChannels(ctx context.Context, q ChannelQuery) ([]Channel, in
 	for rows.Next() {
 		var c Channel
 		var en int
-		if err := rows.Scan(&c.ID, &c.Number, &c.Name, &c.Group, &c.Logo, &c.TvgID, &c.EpgID, &en, &c.Sort, &c.SourceID, &c.CreatedAt, &c.StreamCnt); err != nil {
+		if err := rows.Scan(&c.ID, &c.Number, &c.Name, &c.Group, &c.Logo, &c.TvgID, &c.EpgID, &en, &c.Sort, &c.SourceID, &c.CreatedAt, &c.MissingSince, &c.StreamCnt); err != nil {
 			return nil, 0, err
 		}
 		c.Enabled = en != 0
@@ -218,9 +289,9 @@ func (s *Store) ListChannels(ctx context.Context, q ChannelQuery) ([]Channel, in
 // tvBootstrap 需要完整列表。以前它复用管理台分页接口、写死 Limit=500，
 // 频道超过 500 的部署在电视端只能看到前 500 个，后面的台"凭空消失"。
 func (s *Store) ListAllEnabledChannels(ctx context.Context) ([]Channel, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT c.id,c.number,c.name,c.group_name,c.logo,c.tvg_id,c.epg_id,c.enabled,c.sort,c.source_id,c.created_at,
+	rows, err := s.db.QueryContext(ctx, `SELECT c.id,c.number,c.name,c.group_name,c.logo,c.tvg_id,c.epg_id,c.enabled,c.sort,c.source_id,c.created_at,c.missing_since,
 		(SELECT COUNT(*) FROM streams st WHERE st.channel_id = c.id)
-		FROM channels c WHERE c.enabled = 1 ORDER BY c.sort, c.id`)
+		FROM channels c WHERE c.enabled = 1 AND c.src_missing = 0 ORDER BY c.sort, c.id`)
 	if err != nil {
 		return nil, err
 	}
@@ -230,7 +301,7 @@ func (s *Store) ListAllEnabledChannels(ctx context.Context) ([]Channel, error) {
 	for rows.Next() {
 		var c Channel
 		var en int
-		if err := rows.Scan(&c.ID, &c.Number, &c.Name, &c.Group, &c.Logo, &c.TvgID, &c.EpgID, &en, &c.Sort, &c.SourceID, &c.CreatedAt, &c.StreamCnt); err != nil {
+		if err := rows.Scan(&c.ID, &c.Number, &c.Name, &c.Group, &c.Logo, &c.TvgID, &c.EpgID, &en, &c.Sort, &c.SourceID, &c.CreatedAt, &c.MissingSince, &c.StreamCnt); err != nil {
 			return nil, err
 		}
 		c.Enabled = en != 0
@@ -261,9 +332,11 @@ func (s *Store) ListGroups(ctx context.Context) ([]map[string]any, error) {
 // GetChannel 取单个频道。
 func (s *Store) GetChannel(ctx context.Context, id int64) (*Channel, error) {
 	var c Channel
-	var en int
-	err := s.db.QueryRowContext(ctx, `SELECT id,number,name,group_name,logo,tvg_id,epg_id,enabled,sort,source_id,created_at FROM channels WHERE id=?`, id).
-		Scan(&c.ID, &c.Number, &c.Name, &c.Group, &c.Logo, &c.TvgID, &c.EpgID, &en, &c.Sort, &c.SourceID, &c.CreatedAt)
+	var en, dbm int
+	err := s.db.QueryRowContext(ctx,
+		`SELECT id,number,name,group_name,logo,tvg_id,epg_id,enabled,sort,source_id,created_at,missing_since,disabled_by_missing
+		 FROM channels WHERE id=?`, id).
+		Scan(&c.ID, &c.Number, &c.Name, &c.Group, &c.Logo, &c.TvgID, &c.EpgID, &en, &c.Sort, &c.SourceID, &c.CreatedAt, &c.MissingSince, &dbm)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, ErrNotFound
@@ -271,6 +344,7 @@ func (s *Store) GetChannel(ctx context.Context, id int64) (*Channel, error) {
 		return nil, err
 	}
 	c.Enabled = en != 0
+	c.DisabledByMissing = dbm != 0
 	return &c, nil
 }
 
@@ -605,101 +679,656 @@ func (s *Store) batchDeleteChannels(ctx context.Context, ids []int64) (int64, er
 }
 
 // ImportChannels 批量导入频道（导入时按 name+group 去重，避免重复刷新源导致爆炸）。
-func (s *Store) ImportChannels(ctx context.Context, sourceID int64, items []Channel) (int, error) {
-	tx, err := s.db.BeginTx(ctx, nil)
+// ImportStats 是一次「对齐上游」的结果。
+//
+// 字段名是契约：管理台按这些数字告诉用户"上游更新了什么"。
+// 注意用 `Missing` 而不是 `Disabled`：`enabled` 已专指"用户手动停用"，
+// 同一个词表达两件事，必然在下一个改动里出 bug。
+type ImportStats struct {
+	Parsed    int `json:"parsed"`    // 本次解析条数（已经过条数上限截断）
+	Inserted  int `json:"inserted"`  // 上游新增，本地新建
+	Updated   int `json:"updated"`   // 已有频道，可变字段或线路变了并已更新
+	Missing   int `json:"missing"`   // 上游已移除，本次标记缺失
+	Restored  int `json:"restored"`  // 之前缺失，本次回到上游
+	Unchanged int `json:"unchanged"` // 已有频道，什么都没变
+
+	// AlignmentSkipped 表示这次**没有**执行"标记缺失"这一步。
+	// 触发条件见 ImportOptions.Align（解析条数骤降护栏）。
+	AlignmentSkipped bool `json:"alignment_skipped"`
+	// Capped 表示解析结果被条数上限截断过（上游给了异常多条目）。
+	Capped bool `json:"capped"`
+}
+
+// ImportOptions 控制一次导入的行为。
+type ImportOptions struct {
+	// Align 是否执行「上游已移除 → 标记缺失」。
+	//
+	// 调用方**必须**先做骤降护栏再传 true：上游返回残缺页/防盗链页/半截 gzip 时
+	// Parsed 会很小，此时无脑对齐会把用户整个频道表批量标记缺失——
+	// 那比"没自动更新"劣化一个数量级。
+	// 判据见 api.shouldAlign。
+	Align bool
+
+	// Capped 表示 items 已经被调用方按条数上限截断过。
+	//
+	// 上游内容是外部输入，一个 5 万条的源会让整次刷新无限拉长，
+	// 所以调用方在**开事务之前**截断，并把结果带进来记进统计。
+	Capped bool
+
+	// ChunkSize 每个写事务处理多少条 item。<=0 用默认值。
+	//
+	// 为什么不是一个事务做到底：SQLite 的**写是串行的**。
+	// WAL 让读不被阻塞，但 NAS 上 TV 端的 play_events / watch_progress 写入
+	// 和这次导入抢同一把写锁；一个几千条的大事务会让那些小写操作排队到
+	// busy_timeout（8 秒）——用户感受到的就是"刷新时电视卡死"。
+	// 分块之后，其它写最多等一个块的时间。
+	ChunkSize int
+}
+
+const defaultImportChunk = 200
+
+// importExisting 是「本源已存在频道」在内存里的快照。
+type importExisting struct {
+	id      int64
+	name    string
+	group   string
+	logo    string
+	tvgID   string
+	missing bool
+}
+
+// importStream 是线路的最小快照（判重只需要 id + url）。
+type importStream struct {
+	id   int64
+	url  string
+	chID int64
+}
+
+// importSnapshot 是一次导入开始时读进内存的**全部现状**。
+//
+// 这个类型存在的意义：把它传进 applyImportChunk 之后，函数体里
+// **没有任何 per-item 查询**——签名本身就是"O(n) 化"的编译期证明，
+// 不靠"跑得快"这种在 CI 上没法断言的证据。
+type importSnapshot struct {
+	existing []importExisting
+	streams  map[int64][]importStream
+
+	// 索引（loadImportSnapshot 建好）
+	byID    map[int64]*importExisting
+	byTvg   map[string]int64
+	byName  map[string]int64
+	byURL   map[string][]int64
+	maxSort int
+
+	// crossName 是「别的源（或手工建的）同名同分组频道」的索引。
+	//
+	// 只用于保持旧语义：同一个台被两个源同时提供时，第二份线路追加到
+	// 已存在的那个频道上，而不是新建一个重名频道。
+	// **绝不用于改字段**——那等于允许一个源冒名另一个源的频道。
+	crossName map[string]int64
+
+	// matchedIDs 记录本轮命中过的本源频道（用于"缺失"判定，
+	// 也用于同一个台被两条 item 命中时只改一次字段）。
+	matchedIDs map[int64]bool
+}
+
+// match 按四级优先级找这条 item 应该落到哪个频道。
+//
+// 返回 (频道 id, 是否属于本源)。0 表示本地还没有这个台。
+//
+// 前三级都带 source_id（这是"改字段"的作用域）；第四级是跨源兜底，
+// 只用于追加线路。
+func (snap *importSnapshot) match(c Channel, nu string) (int64, bool) {
+	// 1) 本源 + tvg_id：上游给的稳定标识，改名也跟着它走。
+	if c.TvgID != "" {
+		if id, ok := snap.byTvg[c.TvgID]; ok {
+			return id, true
+		}
+	}
+	// 2) 本源 + urlKey：源站地址是频道的物理身份。
+	//    只在唯一命中时采用——命中多条说明地址被复用，判给谁都是猜。
+	if nu != "" {
+		if ids := snap.byURL[urlKey(nu)]; len(ids) == 1 {
+			return ids[0], true
+		}
+	}
+	// 3) 本源 + name+group：老库兼容兜底（历史数据可能从未写过 tvg_id）。
+	if id, ok := snap.byName[groupKey(c.Name, c.Group)]; ok {
+		return id, true
+	}
+	// 4) 跨源：保持今天的语义——只往那个频道追加线路。
+	if id, ok := snap.crossName[groupKey(c.Name, c.Group)]; ok {
+		return id, false
+	}
+	return 0, false
+}
+
+// matched 报这个本源频道本轮是否被命中过。
+func (snap *importSnapshot) matched(id int64) bool { return snap.matchedIDs[id] }
+
+// markMatched 返回 true 表示这是本轮第一次命中它（字段由这条 item 来改）。
+func (snap *importSnapshot) markMatched(id int64) bool {
+	if snap.matchedIDs[id] {
+		return false
+	}
+	snap.matchedIDs[id] = true
+	return true
+}
+
+// ImportChannels 把一次解析结果「对齐」到库里，返回各类计数。
+//
+// # 为什么必须是对齐而不是只追加
+//
+// 旧实现只做两件事：按 (name, group) 命中已有频道、按 urlKey 更新线路。
+// 于是上游做的这些事在本地完全看不到：
+//   - 改名 → 匹配不上 → 插一条新频道，旧频道留在库里变成死台
+//     （用户原话就是「上游更新，里面没有自动更新」）；
+//   - 下线 → 本地永远不删不隐藏，用户点了播不出来；
+//   - 换台标 → 本地永远用第一次导入的那个。
+//
+// # 匹配优先级，以及为什么每一级都带 source_id
+//
+//  1. `source_id=本源 AND tvg_id`：上游给的稳定标识。
+//  2. `source_id=本源 AND urlKey`（唯一命中）：没有 tvg-id 的源改名只能靠它。
+//  3. `source_id=本源 AND name+group`：老库兜底。
+//  4. 跨源 name+group：**只追加线路**，绝不改它的 name/logo/tvg_id。
+//
+// 第 4 条的安全含义：如果允许跨源改字段，一个恶意/被劫持的源只要写
+// `tvg_id=CCTV1` 就能命中别的源的频道行、把台名台标换成自己想要的，
+// 再把自家线路塞进去——用户看到的是信任的台名+台标，实际播的是攻击者的源。
+// 那是内容冒名，不是功能缺陷。
+//
+// # 绝不触碰的用户数据
+//
+//   - `enabled`：刷新**永远不**改它。用户手动停用的台不会被刷新重新打开
+//     （旧代码在 handler 里给每条 item 硬写 Enabled:true，正是这个 bug 来源）。
+//   - `number` / `sort`：用户的台号与排序。
+//   - `group_name`：用户可能重新组织过分组，上游改分组不跟。
+//   - `epg_id`：EPG 映射只走 SetChannelEpgID。
+//   - 收藏 / 提醒 / 续播：靠频道 id 存活，所以缺失只标记、不删行。
+func (s *Store) ImportChannels(ctx context.Context, sourceID int64, items []Channel, opts ImportOptions) (ImportStats, error) {
+	stats := ImportStats{Parsed: len(items), Capped: opts.Capped}
+
+	// ---------- 1) 预取（只读，不占写锁） ----------
+	snap, err := s.loadImportSnapshot(ctx, sourceID)
 	if err != nil {
-		return 0, err
+		return stats, err
 	}
-	defer tx.Rollback()
 
-	var maxSort int
-	_ = tx.QueryRowContext(ctx, `SELECT COALESCE(MAX(sort),0) FROM channels`).Scan(&maxSort)
-
-	// 这个源专属的 UA，导入时写进每条线路的 headers_json。
-	// 之后服务端代理、客户端直连都从这里取，不用再回头查源。
-	var srcUA string
-	_ = tx.QueryRowContext(ctx, `SELECT COALESCE(user_agent,'') FROM sources WHERE id=?`, sourceID).Scan(&srcUA)
-	headersJSON := "{}"
-	if ua := strings.TrimSpace(srcUA); ua != "" {
-		if b, err := json.Marshal(map[string]string{"User-Agent": ua}); err == nil {
-			headersJSON = string(b)
+	// ---------- 2) 分块写入 ----------
+	chunk := opts.ChunkSize
+	if chunk <= 0 {
+		chunk = defaultImportChunk
+	}
+	for start := 0; start < len(items); start += chunk {
+		stop := start + chunk
+		if stop > len(items) {
+			stop = len(items)
+		}
+		if err := s.applyImportChunk(ctx, sourceID, items[start:stop], snap, &stats); err != nil {
+			return stats, err
 		}
 	}
 
-	inserted := 0
-	for _, c := range items {
-		var existID int64
-		err := tx.QueryRowContext(ctx, `SELECT id FROM channels WHERE name=? AND group_name=? LIMIT 1`, c.Name, c.Group).Scan(&existID)
-		switch {
-		case err == nil:
-			// 已存在：按「主机+路径」判重，命中就原地更新。
-			//
-			// 不能拿完整 URL 判重：源站地址带签名，每次刷新签名都变，
-			// 用完整 URL 比会一直不命中，于是每刷一次就多一条线路，
-			// 旧的那条带着过期签名留在库里变成死线路。
-			nu := c.firstURL()
-			if nu == "" {
-				continue
-			}
-			wantKey := urlKey(nu)
-			var existStreamID int64
-			var existURL string
-			rows, qerr := tx.QueryContext(ctx, `SELECT id,url FROM streams WHERE channel_id=?`, existID)
-			if qerr == nil {
-				for rows.Next() {
-					var sid int64
-					var u string
-					if rows.Scan(&sid, &u) == nil && urlKey(u) == wantKey {
-						existStreamID, existURL = sid, u
-						break
-					}
-				}
-				rows.Close()
-			}
-			if existStreamID > 0 {
-				if existURL != nu {
-					// 签名变了：更新地址，并把健康状态重置为未知等下次探测
-					if _, err := tx.ExecContext(ctx,
-						`UPDATE streams SET url=?, headers_json=?, health=0 WHERE id=?`,
-						nu, headersJSON, existStreamID); err != nil {
-						return inserted, err
-					}
-				}
-			} else {
-				if _, err := tx.ExecContext(ctx, `INSERT INTO streams(channel_id,url,priority,health,headers_json) VALUES(?,?,?,?,?)`,
-					existID, nu, 0, -1, headersJSON); err != nil {
-					return inserted, err
-				}
-			}
-		case errors.Is(err, sql.ErrNoRows):
-			maxSort++
-			res, err := tx.ExecContext(ctx, `INSERT INTO channels(number,name,group_name,logo,tvg_id,enabled,sort,source_id,created_at)
-				VALUES(?,?,?,?,?,?,?,?,?)`,
-				c.Number, c.Name, c.Group, c.Logo, c.TvgID, 1, maxSort, sourceID, Now())
-			if err != nil {
-				return inserted, err
-			}
-			cid, _ := res.LastInsertId()
-			if u := c.firstURL(); u != "" {
-				if _, err := tx.ExecContext(ctx, `INSERT INTO streams(channel_id,url,priority,health,headers_json) VALUES(?,?,?,?,?)`,
-					cid, u, 0, -1, headersJSON); err != nil {
-					return inserted, err
-				}
-			}
-			inserted++
-		default:
-			return inserted, err
+	// ---------- 3) 上游已移除 → 标记缺失（不删行、不动 enabled） ----------
+	var gone []int64
+	for _, e := range snap.existing {
+		if !snap.matched(e.id) && !e.missing {
+			gone = append(gone, e.id)
 		}
 	}
+	if opts.Align {
+		stats.Missing = s.markMissing(ctx, gone)
+	} else if len(gone) > 0 {
+		stats.AlignmentSkipped = true
+	}
 
-	// 清理历史重复：同一频道下「主机+路径」相同的多条线路只保留最新一条。
-	// 老版本用完整 URL 判重，签名一变就多插一条，积了一堆过期线路。
-	if derr := dedupeStreams(ctx, tx); derr != nil {
+	// ---------- 4) 本源的线路去重 ----------
+	//
+	// 同一频道下「主机+路径」相同的多条线路只保留 id 最大（最新）的那条。
+	// 旧实现每次导入都跑一次 `SELECT id,channel_id,url FROM streams`（全表！），
+	// 这里只处理本源自己的频道，数据量从"全库"降到"本源"。
+	if derr := s.dedupeSourceStreams(ctx, snap.streams); derr != nil {
 		// 去重失败不影响导入本身
 		_ = derr
 	}
 
-	return inserted, tx.Commit()
+	return stats, nil
+}
+
+// loadImportSnapshot 一次读回本源现状（频道 + 线路）+ 跨源同名索引。
+func (s *Store) loadImportSnapshot(ctx context.Context, sourceID int64) (*importSnapshot, error) {
+	snap := &importSnapshot{
+		streams:    map[int64][]importStream{},
+		byID:       map[int64]*importExisting{},
+		byTvg:      map[string]int64{},
+		byName:     map[string]int64{},
+		byURL:      map[string][]int64{},
+		crossName:  map[string]int64{},
+		matchedIDs: map[int64]bool{},
+	}
+
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT id,name,group_name,logo,tvg_id,src_missing FROM channels WHERE source_id=?`, sourceID)
+	if err != nil {
+		return nil, err
+	}
+	for rows.Next() {
+		var e importExisting
+		var miss int
+		if err := rows.Scan(&e.id, &e.name, &e.group, &e.logo, &e.tvgID, &miss); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		e.missing = miss != 0
+		snap.existing = append(snap.existing, e)
+	}
+	rerr := rows.Err()
+	rows.Close()
+	if rerr != nil {
+		return nil, rerr
+	}
+
+	// 线路：分批 IN，避免超过 SQLite 的变量个数上限。
+	ids := make([]int64, 0, len(snap.existing))
+	for i := range snap.existing {
+		ids = append(ids, snap.existing[i].id)
+	}
+	for _, part := range chunkIDs(ids, 400) {
+		ph := placeholders(len(part))
+		args := make([]any, 0, len(part))
+		for _, id := range part {
+			args = append(args, id)
+		}
+		srows, qerr := s.db.QueryContext(ctx,
+			`SELECT id,channel_id,url FROM streams WHERE channel_id IN (`+ph+`) ORDER BY id`, args...)
+		if qerr != nil {
+			return nil, qerr
+		}
+		for srows.Next() {
+			var st importStream
+			if serr := srows.Scan(&st.id, &st.chID, &st.url); serr != nil {
+				srows.Close()
+				return nil, serr
+			}
+			snap.streams[st.chID] = append(snap.streams[st.chID], st)
+		}
+		serr := srows.Err()
+		srows.Close()
+		if serr != nil {
+			return nil, serr
+		}
+	}
+
+	// 本源的索引
+	for i := range snap.existing {
+		e := &snap.existing[i]
+		snap.byID[e.id] = e
+		if e.tvgID != "" {
+			if _, dup := snap.byTvg[e.tvgID]; !dup {
+				snap.byTvg[e.tvgID] = e.id
+			}
+		}
+		snap.byName[groupKey(e.name, e.group)] = e.id
+		for _, st := range snap.streams[e.id] {
+			k := urlKey(st.url)
+			snap.byURL[k] = append(snap.byURL[k], e.id)
+		}
+	}
+
+	// 跨源同名索引（一次查询，不是 per-item）。
+	crows, cerr := s.db.QueryContext(ctx,
+		`SELECT id,name,group_name FROM channels WHERE source_id<>?`, sourceID)
+	if cerr != nil {
+		return nil, cerr
+	}
+	for crows.Next() {
+		var id int64
+		var name, group string
+		if serr := crows.Scan(&id, &name, &group); serr != nil {
+			crows.Close()
+			return nil, serr
+		}
+		k := groupKey(name, group)
+		if _, dup := snap.crossName[k]; !dup {
+			snap.crossName[k] = id
+		}
+	}
+	cerr = crows.Err()
+	crows.Close()
+	if cerr != nil {
+		return nil, cerr
+	}
+
+	if err := s.db.QueryRowContext(ctx, `SELECT COALESCE(MAX(sort),0) FROM channels`).Scan(&snap.maxSort); err != nil {
+		return nil, err
+	}
+	return snap, nil
+}
+
+// applyImportChunk 在一个写事务里处理一批 item。
+//
+// 它只读 snap（内存），**不查库**——每个 item 零查询。
+func (s *Store) applyImportChunk(ctx context.Context, sourceID int64, items []Channel, snap *importSnapshot, stats *ImportStats) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	// 这个源专属的 UA，导入时写进每条线路的 headers_json。
+	var srcUA string
+	_ = tx.QueryRowContext(ctx, `SELECT COALESCE(user_agent,'') FROM sources WHERE id=?`, sourceID).Scan(&srcUA)
+	headersJSON := "{}"
+	if ua := strings.TrimSpace(srcUA); ua != "" {
+		if b, jerr := json.Marshal(map[string]string{"User-Agent": ua}); jerr == nil {
+			headersJSON = string(b)
+		}
+	}
+
+	for _, c := range items {
+		nu := c.firstURL()
+		hitID, sameSource := snap.match(c, nu)
+
+		if hitID == 0 {
+			// 本地没有这个台 → 新建。
+			// enabled 固定为 1：新建即启用；之后用户怎么开关，刷新一律不碰。
+			snap.maxSort++
+			res, ierr := tx.ExecContext(ctx,
+				`INSERT INTO channels(number,name,group_name,logo,tvg_id,enabled,sort,source_id,created_at)
+				 VALUES(?,?,?,?,?,?,?,?,?)`,
+				c.Number, c.Name, c.Group, c.Logo, c.TvgID, 1, snap.maxSort, sourceID, Now())
+			if ierr != nil {
+				return ierr
+			}
+			cid, _ := res.LastInsertId()
+			if nu != "" {
+				if _, ierr := tx.ExecContext(ctx,
+					`INSERT INTO streams(channel_id,url,priority,health,headers_json) VALUES(?,?,?,?,?)`,
+					cid, nu, 0, -1, headersJSON); ierr != nil {
+					return ierr
+				}
+				snap.streams[cid] = append(snap.streams[cid], importStream{url: nu, chID: cid})
+			}
+			stats.Inserted++
+			continue
+		}
+
+		if !sameSource {
+			// 跨源共享的台：只追加线路（旧语义），绝不改字段。
+			//
+			// 这里是整条导入路径上**唯一**的 per-item 查询，而且只发生在
+			// "同一个台被两个源同时提供"这种少见情况；为了它去把全库线路
+			// 预取进内存不值得（那正是我们要去掉的全表扫描）。
+			added, aerr := appendStreamToForeignChannel(ctx, tx, hitID, nu, headersJSON)
+			if aerr != nil {
+				return aerr
+			}
+			if added {
+				stats.Updated++
+			} else {
+				stats.Unchanged++
+			}
+			continue
+		}
+
+		e := snap.byID[hitID]
+		if e == nil {
+			continue
+		}
+		first := snap.markMatched(hitID)
+		changed := false
+
+		if first {
+			if e.missing {
+				// 回到上游：清缺失。注意**不动 enabled**——
+				// 用户关掉的台保持关闭。
+				if _, uerr := tx.ExecContext(ctx,
+					`UPDATE channels SET src_missing=0, missing_since=0 WHERE id=?`, e.id); uerr != nil {
+					return uerr
+				}
+				e.missing = false
+				stats.Restored++
+				changed = true
+			}
+			// 名称：上游给了非空名字才更新（空名字多半是解析残缺，别把台名清空）。
+			if c.Name != "" && c.Name != e.name {
+				if _, uerr := tx.ExecContext(ctx, `UPDATE channels SET name=? WHERE id=?`, c.Name, e.id); uerr != nil {
+					return uerr
+				}
+				e.name = c.Name
+				changed = true
+			}
+			// tvg_id：同上，非空才覆盖。
+			if c.TvgID != "" && c.TvgID != e.tvgID {
+				if _, uerr := tx.ExecContext(ctx, `UPDATE channels SET tvg_id=? WHERE id=?`, c.TvgID, e.id); uerr != nil {
+					return uerr
+				}
+				e.tvgID = c.TvgID
+				changed = true
+			}
+			// 台标：见 shouldReplaceLogo（不覆盖用户上传的站内台标）。
+			if shouldReplaceLogo(e.logo, c.Logo) {
+				if _, uerr := tx.ExecContext(ctx, `UPDATE channels SET logo=? WHERE id=?`, c.Logo, e.id); uerr != nil {
+					return uerr
+				}
+				e.logo = c.Logo
+				changed = true
+			}
+		}
+
+		// 线路：按「主机+路径」判重。
+		//
+		// 不能拿完整 URL 判重：源站地址带签名，每次刷新签名都变，
+		// 用完整 URL 比会一直不命中，于是每刷一次就多一条线路，
+		// 旧的那条带着过期签名留在库里变成死线路。
+		streamChanged := false
+		if nu != "" {
+			wantKey := urlKey(nu)
+			var existStreamID int64
+			var existURL string
+			for _, st := range snap.streams[e.id] {
+				if urlKey(st.url) == wantKey {
+					existStreamID, existURL = st.id, st.url
+					break
+				}
+			}
+			if existStreamID > 0 {
+				if existURL != nu {
+					// 签名变了：更新地址，并把健康状态重置为未知等下次探测
+					if _, uerr := tx.ExecContext(ctx,
+						`UPDATE streams SET url=?, headers_json=?, health=0 WHERE id=?`,
+						nu, headersJSON, existStreamID); uerr != nil {
+						return uerr
+					}
+					streamChanged = true
+				}
+			} else {
+				if _, uerr := tx.ExecContext(ctx,
+					`INSERT INTO streams(channel_id,url,priority,health,headers_json) VALUES(?,?,?,?,?)`,
+					e.id, nu, 0, -1, headersJSON); uerr != nil {
+					return uerr
+				}
+				snap.streams[e.id] = append(snap.streams[e.id], importStream{url: nu, chID: e.id})
+				streamChanged = true
+			}
+		}
+
+		if changed || streamChanged {
+			stats.Updated++
+		} else {
+			stats.Unchanged++
+		}
+	}
+
+	return tx.Commit()
+}
+
+// appendStreamToForeignChannel 往「别的源」的频道追加一条线路。
+//
+// 返回是否真的新增/更新了线路。只做线路，不碰频道字段。
+func appendStreamToForeignChannel(ctx context.Context, tx *sql.Tx, channelID int64, rawURL, headersJSON string) (bool, error) {
+	if rawURL == "" {
+		return false, nil
+	}
+	wantKey := urlKey(rawURL)
+	rows, err := tx.QueryContext(ctx, `SELECT id,url FROM streams WHERE channel_id=?`, channelID)
+	if err != nil {
+		return false, err
+	}
+	var existID int64
+	var existURL string
+	for rows.Next() {
+		var id int64
+		var u string
+		if serr := rows.Scan(&id, &u); serr != nil {
+			rows.Close()
+			return false, serr
+		}
+		if urlKey(u) == wantKey {
+			existID, existURL = id, u
+			break
+		}
+	}
+	rerr := rows.Err()
+	rows.Close()
+	if rerr != nil {
+		return false, rerr
+	}
+
+	if existID > 0 {
+		if existURL == rawURL {
+			return false, nil
+		}
+		_, uerr := tx.ExecContext(ctx,
+			`UPDATE streams SET url=?, headers_json=?, health=0 WHERE id=?`, rawURL, headersJSON, existID)
+		return uerr == nil, uerr
+	}
+	_, ierr := tx.ExecContext(ctx,
+		`INSERT INTO streams(channel_id,url,priority,health,headers_json) VALUES(?,?,?,?,?)`,
+		channelID, rawURL, 0, -1, headersJSON)
+	return ierr == nil, ierr
+}
+
+// markMissing 把「上游已移除」的频道标记为缺失，返回本次新标记的条数。
+//
+// 只标记、不删行、**不动 enabled**：
+//   - 不删行：收藏、开播提醒、跨端续播都引用频道 id，删了会留下一堆悬空引用；
+//   - 不动 enabled：那是"用户手动停用"的表达，两者共用 0 就永久不可区分，
+//     而用户手动启用一个已被上游移除的台会把它重新激活。
+//
+// 分批执行，理由同 chunkIDs。
+func (s *Store) markMissing(ctx context.Context, ids []int64) int {
+	n := 0
+	for _, part := range chunkIDs(ids, 400) {
+		tx, err := s.db.BeginTx(ctx, nil)
+		if err != nil {
+			continue
+		}
+		ph := placeholders(len(part))
+		args := make([]any, 0, len(part)+1)
+		args = append(args, Now())
+		for _, id := range part {
+			args = append(args, id)
+		}
+		res, uerr := tx.ExecContext(ctx,
+			`UPDATE channels SET src_missing=1, missing_since=?
+			 WHERE id IN (`+ph+`) AND src_missing=0`, args...)
+		if uerr == nil {
+			if affected, rerr := res.RowsAffected(); rerr == nil {
+				n += int(affected)
+			}
+			_ = tx.Commit()
+			continue
+		}
+		_ = tx.Rollback()
+	}
+	return n
+}
+
+// dedupeSourceStreams 清掉本源频道下「主机+路径」重复的线路，每组只留 id 最大的。
+func (s *Store) dedupeSourceStreams(ctx context.Context, streamsByCh map[int64][]importStream) error {
+	var drop []int64
+	for _, list := range streamsByCh {
+		keep := make(map[string]int64, len(list))
+		for _, st := range list {
+			if st.id == 0 {
+				continue // 本轮刚插进去的（还没拿到 id），不可能重复
+			}
+			k := urlKey(st.url)
+			if prev, ok := keep[k]; ok {
+				if st.id > prev {
+					drop = append(drop, prev)
+					keep[k] = st.id
+				} else {
+					drop = append(drop, st.id)
+				}
+				continue
+			}
+			keep[k] = st.id
+		}
+	}
+	for _, part := range chunkIDs(drop, 400) {
+		ph := placeholders(len(part))
+		args := make([]any, 0, len(part))
+		for _, id := range part {
+			args = append(args, id)
+		}
+		if _, err := s.db.ExecContext(ctx, `DELETE FROM streams WHERE id IN (`+ph+`)`, args...); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// groupKey 是 name+group 的复合键。
+//
+// 用 \x00 分隔：频道名里可以出现空格、斜杠、竖线，用普通分隔符会撞键。
+func groupKey(name, group string) string { return name + "\x00" + group }
+
+// shouldReplaceLogo 判断上游的新台标地址要不要覆盖库里的值。
+//
+// 三条规则，都是为了不破坏用户的东西：
+//  1. 上游没给地址 → 不覆盖。很多源本来就缺 tvg-logo，
+//     拿空串覆盖会把用户上传的台标抹掉。
+//  2. 库里是站内地址（`/logo/{id}`，用户上传或服务端抓下来的）
+//     → 永不覆盖。那是用户明确选过的图。
+//  3. 其余情况（上游给了新外链且与旧值不同）→ 更新。
+func shouldReplaceLogo(cur, next string) bool {
+	if next == "" || next == cur {
+		return false
+	}
+	if strings.HasPrefix(cur, "/logo/") {
+		return false
+	}
+	return true
+}
+
+// placeholders 生成 "?,?,?" 。
+func placeholders(n int) string {
+	if n <= 0 {
+		return ""
+	}
+	return strings.Repeat("?,", n-1) + "?"
+}
+
+// chunkIDs 把 id 列表切成多批。
+//
+// 为什么必须分批：SQLite 的单条语句有变量个数上限，一个上千频道的源
+// 直接拼 IN (...) 会报 "too many SQL variables"，整次刷新失败。
+func chunkIDs(ids []int64, size int) [][]int64 {
+	if size <= 0 {
+		size = 400
+	}
+	var out [][]int64
+	for len(ids) > size {
+		out = append(out, ids[:size])
+		ids = ids[size:]
+	}
+	if len(ids) > 0 {
+		out = append(out, ids)
+	}
+	return out
 }
 
 // firstURL 取导入项的临时 URL 字段（复用 Logo 之外的槽位会混淆，这里单独用 TvgID 之外的约定：
@@ -1228,38 +1857,10 @@ func urlKey(raw string) string {
 	return u.Scheme + "://" + u.Host + u.Path
 }
 
-// dedupeStreams 清理同一频道下「主机+路径」相同的重复线路，只保留 id 最大的那条。
+// 注意：这里曾经有一个 dedupeStreams(ctx, tx)，每次导入都跑一次
+// `SELECT id,channel_id,url FROM streams`（**全表**）来清理历史重复线路。
+// 它是"刷新卡死"的放大器之一：源的频道越多，全表扫描越多。
 //
-// 为什么会有重复：老版本按完整 URL 判重，而源站地址的签名在 query 里、
-// 每次刷新都变，于是每刷一次就多一条，旧的那条带着过期签名变成死线路。
-func dedupeStreams(ctx context.Context, tx *sql.Tx) error {
-	rows, err := tx.QueryContext(ctx, `SELECT id, channel_id, url FROM streams ORDER BY id`)
-	if err != nil {
-		return err
-	}
-	type key struct {
-		ch int64
-		k  string
-	}
-	keep := map[key]int64{}
-	var drop []int64
-	for rows.Next() {
-		var id, ch int64
-		var u string
-		if rows.Scan(&id, &ch, &u) != nil {
-			continue
-		}
-		kk := key{ch, urlKey(u)}
-		if prev, ok := keep[kk]; ok {
-			drop = append(drop, prev)
-		}
-		keep[kk] = id
-	}
-	rows.Close()
-	for _, id := range drop {
-		if _, err := tx.ExecContext(ctx, `DELETE FROM streams WHERE id=?`, id); err != nil {
-			return err
-		}
-	}
-	return nil
-}
+// 现在改成 dedupeSourceStreams：数据已经在 loadImportSnapshot 里按源预取过，
+// 只处理本源自己的频道，不再碰全库。删除它时特意留下这条注释，
+// 避免以后有人"顺手加回来"。

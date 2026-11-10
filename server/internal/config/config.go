@@ -251,7 +251,10 @@ func Default() *Config {
 			CacheDir:        "./data/cache",
 			MaxConcurrent:   100,
 			BufferSize:      32 * 1024,
-			RingSize:        2 * 1024 * 1024,
+			// 6MB ≈ 8Mbps 下 6 秒、25Mbps 下 2 秒。为什么要 6MB 而不是 2MB：
+			// 新订阅者是从缓冲里起播的，缓冲必须至少覆盖一个完整 GOP（2–4 秒），
+			// 否则只能从 GOP 中间开始、等下一个 IDR 才出画 —— 那就是「起播要转很久圈」。
+			RingSize:        6 * 1024 * 1024,
 			UserAgent:       "LITV/1.0 (fnOS)",
 			UpstreamTimeout: 15,
 			DirectEnabled:   true,
@@ -401,7 +404,8 @@ func (c *Config) Validate() error {
 		c.Stream.MaxConcurrent = 100
 	}
 	if c.Stream.RingSize < 64*1024 {
-		c.Stream.RingSize = 2 * 1024 * 1024
+		// 下限兜底与默认值保持一致：2MB 在 8Mbps 下只有 2 秒，撑不住一个 GOP。
+		c.Stream.RingSize = 6 * 1024 * 1024
 	}
 	if secretIsPlaceholder(c.Auth.Secret) {
 		// 占位值（changeme / 过短 / 空）等于没有密钥，必须换掉。

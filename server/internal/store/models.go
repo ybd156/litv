@@ -19,15 +19,29 @@ type User struct {
 
 // Source 是一个订阅源。
 type Source struct {
-	ID           int64  `json:"id"`
-	Name         string `json:"name"`
-	Type         string `json:"type"`
-	URL          string `json:"url"`
-	Enabled      bool   `json:"enabled"`
-	LastFetchAt  int64  `json:"last_fetch_at"`
-	LastError    string `json:"last_error"`
-	ChannelCount int    `json:"channel_count"`
-	CreatedAt    int64  `json:"created_at"`
+	ID          int64  `json:"id"`
+	Name        string `json:"name"`
+	Type        string `json:"type"`
+	URL         string `json:"url"`
+	Enabled     bool   `json:"enabled"`
+	LastFetchAt int64  `json:"last_fetch_at"`
+	LastError   string `json:"last_error"`
+	// ChannelCount 是**库里**属于这个源的频道数（含已缺失的）。
+	//
+	// 它会等于"删源时会一并删掉的频道数"——破坏性操作的确认文案必须用这个数，
+	// 不能用"本次解析条数"（那是 ParsedCount，两者在对齐语义下必然分叉）。
+	ChannelCount int   `json:"channel_count"`
+	CreatedAt    int64 `json:"created_at"`
+
+	// ParsedCount 是上一次解析拿到的条目数（上游说有多个台）。
+	ParsedCount int `json:"parsed_count"`
+
+	// LastResultJSON 是上一次刷新的结果（ImportStats 的 JSON 快照）。
+	//
+	// 放库里而不是只放内存：管理台刷新页面、甚至服务重启之后，
+	// 用户问的"上游到底更新了吗"仍然要有答案。
+	LastResultJSON string `json:"last_result_json"`
+
 	// UserAgent 这个源专属的 UA。
 	//
 	// 很多源站会校验 UA：不带就返回 403 或者给个空列表。
@@ -50,6 +64,18 @@ type Channel struct {
 	SourceID  int64  `json:"source_id"`
 	StreamCnt int    `json:"stream_count"`
 	CreatedAt int64  `json:"created_at"`
+
+	// MissingSince 是「上游已不再提供这个频道」的时间（Unix 秒，0 = 仍然存在）。
+	//
+	// 对外暴露给管理台：频道列表要能标出「上游已移除」，
+	// 否则用户只会看到"台少了"，不知道为什么。
+	MissingSince int64 `json:"missing_since"`
+
+	// DisabledByMissing 表示当前的 enabled=0 是**我们**为了下线而设的，
+	// 不是用户手动关的。只有它为 true 时，频道回到上游才会被自动启用。
+	//
+	// 不对外暴露：终端/管理台判断"是否下线"只需看 MissingSince。
+	DisabledByMissing bool `json:"-"`
 
 	// PendingURL 只在「解析结果 → 入库」之间传递首条线路地址，不对外暴露。
 	PendingURL string `json:"-"`

@@ -18,7 +18,14 @@ export interface Me {
 
 export type SourceType = 'm3u' | 'txt' | 'tvbox' | 'json'
 
-export type SourceStatus = 'ok' | 'error' | 'never' | 'refreshing'
+/**
+ * 源的**拉取结果**状态：封闭三值。
+ *
+ * ★ 不要往里加 `'refreshing'`。曾经有过，结果就是「刷新中」被混进拉取结果里，
+ * 和 `ok/error/never` 永久打架（一个字段表达两件事）。刷新中只由
+ * `Source.refreshing: boolean` 表达，两者互不替代。
+ */
+export type SourceStatus = 'ok' | 'error' | 'never'
 
 export interface Source {
   id: number
@@ -49,6 +56,61 @@ export interface Source {
   user_agent?: string
   /** 创建时间（Unix 秒） */
   created_at?: number
+  /**
+   * 这个源**正在刷新**（服务端异步任务在跑）。
+   *
+   * ★ 刷新状态**只认这个布尔键**，不要去看 `status`：
+   * `status` 的取值域被锁死为 `ok|error|never`（拉取结果），
+   * 把「刷新中」塞进 `status` 会和那三个值永久打架。
+   * 老服务端没有这个键 → `undefined`，当作不在跑。
+   */
+  refreshing?: boolean
+  /**
+   * 上一次「对齐上游」刷新的结果计数。
+   *
+   * 只有任务跑完、`refreshing` 变 false 之后才有值。**202 的响应体里没有它**
+   * （那里面只有 `status:"running"`），所以必须轮询 `GET /sources` 从行上读。
+   */
+  last_result?: SourceRefreshCounts | null
+  /**
+   * 上一轮「上游给了多少条」——和 `channel_count`（这个源在**库内**有多少频道）
+   * 是两个数，别混：上游 3000 条也可能只入库 2800 个（去重/过滤）。
+   */
+  parsed_count?: number
+}
+
+/**
+ * 一次「对齐上游」刷新的结果计数。
+ *
+ * 全部可选：老服务端只回 `parsed` / `inserted`，新服务端多回
+ * `updated`（可变字段变了）/ `missing`（上游已移除，本地标记下线）/
+ * `unchanged`（完全没变）。界面按「有就显示」处理，不假设齐全。
+ *
+ * 注意 `missing` 在频道表里是 `channels.src_missing` 列（见 `Channel.missing`），
+ * 这里的 `missing` 是「这一轮下线了几个台」的计数。
+ */
+export interface SourceRefreshCounts {
+  parsed?: number
+  inserted?: number
+  updated?: number
+  missing?: number
+  unchanged?: number
+}
+
+/**
+ * `POST /sources/{id}/refresh` 的返回。
+ *
+ * 两种形态都要能处理：
+ *   - 异步（新）：HTTP 202 + `{status:"running"}`（可能带 `task_id`），
+ *     真正的计数稍后从 `GET /sources` 的行上读；
+ *   - 同步（老/小源）：直接回 `{parsed, inserted}` 等计数。
+ * `isRefreshRunning()` 负责区分。
+ */
+export interface SourceRefreshResponse extends SourceRefreshCounts {
+  status?: 'running' | 'done' | 'ok' | string
+  refreshing?: boolean
+  task_id?: string | number
+  error?: string | null
 }
 
 export interface SourceInput {
@@ -94,6 +156,17 @@ export interface Channel {
   source_id?: number
   /** 排序值（服务端给，界面不直接编辑，拖拽走 reorder 接口） */
   sort?: number
+  /**
+   * 上游已移除：最近一轮源解析里已经没有这个台了。
+   *
+   * ★ 服务端用独立列 `channels.src_missing` 记，**不复用 `enabled=0`**——
+   * 复用会和「用户手动停用」永久混在一起，界面再也分不清两种状态。
+   * 所以这里是三态而不是两态：
+   *   enabled=false + missing=false → 用户自己停的（别去打扰他）
+   *   missing=true                 → 上游没了（线路被清空，用户要知道为什么少台）
+   * 服务端还没带这个键时是 `undefined`，界面退回原来的两态。
+   */
+  missing?: boolean
 }
 
 /**

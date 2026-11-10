@@ -303,10 +303,13 @@ func (a *API) listSources(w http.ResponseWriter, r *http.Request) {
 	// 与 listEPGSources 同一套做法：**保留旧键**（外部脚本可能在用），
 	// 同时新增视图键。新增键不与旧键重名，所以向后兼容。
 	//
-	// status 的取值域是封闭的三个值，前端可以直接按它上色：
+	// status 的取值域严格是三个值（K-2/J-3）：
 	//   ok    有拉取成功的记录，且当前没有错误
-	//   error last_error 非空（不管上次成功与否，错误优先展示）
+	//   error last_error 非空（错误优先展示）
 	//   never 从未拉取过（last_fetch_at == 0）
+	// 「正在刷新」**不**进 status —— 它是行级 refreshing 布尔，唯一来源。
+	// 两个表示并存会让前端的 statusOf() 命中其中一个，
+	// 界面上就会出现"状态=正常 + 正在刷新"这种自相矛盾的组合。
 	out := make([]map[string]any, 0, len(items))
 	for _, s := range items {
 		status := "ok"
@@ -316,7 +319,7 @@ func (a *API) listSources(w http.ResponseWriter, r *http.Request) {
 		case s.LastFetchAt == 0:
 			status = "never"
 		}
-		out = append(out, map[string]any{
+		row := map[string]any{
 			"id":            s.ID,
 			"name":          s.Name,
 			"type":          s.Type,
@@ -325,14 +328,25 @@ func (a *API) listSources(w http.ResponseWriter, r *http.Request) {
 			"channel_count": s.ChannelCount,
 			"user_agent":    s.UserAgent,
 			"created_at":    s.CreatedAt,
+			// K-6：解析条数与库内真数分开，前端文案取 channel_count。
+			"parsed_count": s.ParsedCount,
 			// 管理台读取的视图键
-			"error":  s.LastError,
-			"status": status,
-			// 兼容旧键。时间口径保持整数秒（Unix 秒），不在这里改成毫秒——
-			// 前端统一用 toDate() 换算，改口径会连带改所有调用方。
+			"error":     s.LastError,
+			"status":    status,
+			"refreshing": a.isRefreshing(s.ID),
+			// 兼容旧键。时间口径保持整数秒（Unix 秒）。
 			"last_fetch_at": s.LastFetchAt,
 			"last_error":    s.LastError,
-		})
+		}
+		// last_result：上一次刷新的结果（五键 + 两个标志）。
+		// 解析失败就只是不带这个键，不编一个空对象骗前端。
+		if s.LastResultJSON != "" {
+			var lr store.ImportStats
+			if jerr := json.Unmarshal([]byte(s.LastResultJSON), &lr); jerr == nil {
+				row["last_result"] = lr
+			}
+		}
+		out = append(out, row)
 	}
 	ok(w, out)
 }
@@ -418,48 +432,45 @@ func (a *API) deleteSource(w http.ResponseWriter, r *http.Request) {
 	ok(w, map[string]any{"deleted": true, "channels_deleted": count})
 }
 
+// refreshSource 触发一次源刷新（A2：异步 + 单飞）。
+//
+// 契约变更（第二批）：
+//   - 旧：同步跑完，200 + {parsed, inserted}；
+//   - 新：立刻 202 + {status:"running"}，结果去 GET /sources 每行的 last_result 看。
+//
+// 为什么必须异步：一次大源的抓取+解析+对齐要几十秒到几分钟。
+// 同步 handler 会让管理台一直转圈，用户自然会连点几次——每次都是
+// 一个完整的写事务，SQLite 的写又是串行的，于是 TV 端的小写操作
+// （play_events / watch_progress）全排到 busy_timeout 上。
+// 用户描述里的"刷新时反而卡死"就是这么来的。
 func (a *API) refreshSource(w http.ResponseWriter, r *http.Request) {
 	id := pathInt64(r, "id")
-	srcs, err := a.st.ListSources(r.Context())
-	if err != nil {
-		fail(w, http.StatusInternalServerError, 5001, err.Error())
+	if id <= 0 {
+		fail(w, http.StatusBadRequest, 1001, "源 id 非法")
 		return
 	}
-	var target *store.Source
-	for i := range srcs {
-		if srcs[i].ID == id {
-			target = &srcs[i]
-			break
-		}
-	}
-	if target == nil {
+	src, err := a.st.GetSource(r.Context(), id)
+	if err != nil {
+		// 404 而不是 500：这个 id 根本不存在
 		fail(w, http.StatusNotFound, 3001, "源不存在")
 		return
 	}
 
-	items, err := a.fetchAndParse(r.Context(), *target)
-	if err != nil {
-		_ = a.st.MarkSourceFetched(r.Context(), id, 0, err.Error())
-		fail(w, http.StatusBadGateway, 4001, "拉取失败: "+err.Error())
+	started, busy := a.startSourceRefresh(r.Context(), *src)
+	if busy {
+		// 全局只有一个写槽：别的源正在刷新时立刻告诉客户端等一会儿，
+		// 而不是让他排队（排队等于把写锁争用拉长）。
+		w.Header().Set("Retry-After", "5")
+		fail(w, http.StatusTooManyRequests, 2005, "已有刷新正在进行，请 5 秒后重试")
 		return
 	}
 
-	channels := make([]store.Channel, 0, len(items))
-	for _, it := range items {
-		channels = append(channels, store.Channel{
-			Name: it.Name, Group: it.Group, Logo: it.Logo, TvgID: it.TvgID,
-			Number: it.Number, Enabled: true, PendingURL: it.URL,
-		})
-	}
-	inserted, err := a.st.ImportChannels(r.Context(), id, channels)
-	if err != nil {
-		_ = a.st.MarkSourceFetched(r.Context(), id, 0, err.Error())
-		fail(w, http.StatusInternalServerError, 5001, err.Error())
-		return
-	}
-	_ = a.st.MarkSourceFetched(r.Context(), id, len(items), "")
-	a.st.Audit(r.Context(), 0, "source.refresh", fmt.Sprint(id), fmt.Sprintf("解析 %d 条，新增 %d 个频道", len(items), inserted), r.RemoteAddr)
-	ok(w, map[string]any{"parsed": len(items), "inserted": inserted})
+	// started=false 且 busy=false：这个源已经在刷（单飞，不排队、不重跑）。
+	// 两种情况对客户端是同一件事——"正在跑，去轮询结果"。
+	// 这里不返回 task_id：没有任何端点按 id 查任务，多一个可猜的 id
+	// 只会给"只读账号读别人源的刷新结果"开一条路（requireAdmin 放行所有 GET）。
+	_ = started
+	okStatus(w, http.StatusAccepted, map[string]any{"status": "running"})
 }
 
 func (a *API) previewSource(w http.ResponseWriter, r *http.Request) {
@@ -554,6 +565,10 @@ func (a *API) listChannels(w http.ResponseWriter, r *http.Request) {
 		Keyword:  r.URL.Query().Get("q"),
 		Enabled:  queryBool(r, "enabled"),
 		SourceID: int64(queryInt(r, "source_id", 0)),
+		// 管理台默认**要**看到「上游已移除」的频道，才能把它标出来
+		// （否则用户只看到"台少了"，不知道为什么）。
+		// 传 include_missing=0 可以只看在线的。
+		IncludeMissing: queryBoolDefaultTrue(r, "include_missing"),
 	}
 	// 分页参数兼容两套命名：管理台传 page/size，老脚本传 offset/limit。
 	//

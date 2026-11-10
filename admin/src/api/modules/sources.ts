@@ -1,6 +1,6 @@
 import { http } from '../http'
 import { asArray } from '../normalize'
-import type { PreviewItem, PreviewResult, Source, SourceInput } from '../types'
+import type { PreviewItem, PreviewResult, Source, SourceInput, SourceRefreshResponse } from '../types'
 
 /**
  * 源列表。
@@ -34,13 +34,17 @@ export function deleteSource(id: number): Promise<unknown> {
 }
 
 /**
- * 立即拉取并解析。
+ * 立即拉取并解析（对齐上游）。
  *
- * ★ 服务端回 `{parsed, inserted}`（解析到几条 / 新入库几个频道），不是 Source。
- * 之前标成 `Promise<Source>` 是类型在说谎。
+ * ★ 契约变更（第二批 A2）：服务端改成异步任务——大源会立刻回
+ * `{status:"running"}`（HTTP 202），真正的结果要过一会儿从
+ * `GET /sources` 的行上读（`refreshing` 变 false 后才有五键计数）。
+ * 小源/老服务端仍然直接回计数。
+ * 判断要不要轮询统一用 `utils/sourceRefresh.ts` 的 `isRefreshRunning()`，
+ * 页面不要自己猜 `status` 的取值。
  */
-export function refreshSource(id: number): Promise<{ parsed: number; inserted: number }> {
-  return http.post<{ parsed: number; inserted: number }>(`sources/${id}/refresh`)
+export function refreshSource(id: number): Promise<SourceRefreshResponse> {
+  return http.post<SourceRefreshResponse>(`sources/${id}/refresh`)
 }
 
 /** 预览：拉取但不入库，只给前 50 条，用来肉眼排查脏数据 */

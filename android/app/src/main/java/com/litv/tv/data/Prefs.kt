@@ -103,6 +103,32 @@ class Prefs(ctx: Context) {
         get() = sp.getLong(K_LAST_CH, 0)
         set(v) = sp.edit().putLong(K_LAST_CH, v).apply()
 
+    /**
+     * 上次看的频道名与 tvg_id。
+     *
+     * 为什么要多存两个：上游刷新会**重建**频道行（改名/改分组都会生成新 id），
+     * 只按 id 恢复必然失效，然后就静默跳到第一个台——这就是用户反馈的
+     * 「退出重进没有到上次看的频道」。恢复优先级见 [LastChannelRestore]。
+     */
+    var lastChannelTvgId: String
+        get() = sp.getString(K_LAST_CH_TVG, "") ?: ""
+        set(v) = sp.edit().putString(K_LAST_CH_TVG, v).apply()
+
+    var lastChannelName: String
+        get() = sp.getString(K_LAST_CH_NAME, "") ?: ""
+        set(v) = sp.edit().putString(K_LAST_CH_NAME, v).apply()
+
+    /**
+     * 上次看的分组**名字**（不是索引）。
+     *
+     * 为什么不能存索引：分组列表会变——收藏行现在常显、上游会加/删分组，
+     * 索引会整体错位，老用户升级后直接落到隔壁分组。
+     * 只在"上次那个台已经彻底不在列表里"时用来兜底恢复分组。
+     */
+    var lastGroup: String
+        get() = sp.getString(K_LAST_GROUP, "") ?: ""
+        set(v) = sp.edit().putString(K_LAST_GROUP, v).apply()
+
     // ---- 本地播放偏好（服务端远程配置会覆盖它） ----
     var engine: String
         get() = sp.getString(K_ENGINE, "auto") ?: "auto"
@@ -222,6 +248,9 @@ class Prefs(ctx: Context) {
         const val K_DEVICE_NAME = "device_name"
         const val K_PLAY_CACHE = "play_cache"
         const val K_LAST_CH = "last_channel"
+        const val K_LAST_CH_TVG = "last_channel_tvg"
+        const val K_LAST_CH_NAME = "last_channel_name"
+        const val K_LAST_GROUP = "last_group"
         const val K_ENGINE = "engine"
         const val K_DECODE = "decode"
         const val K_BUFFER = "buffer_ms"

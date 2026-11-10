@@ -419,13 +419,34 @@ const allColumns = computed<Record<string, DataTableColumns<Channel>[number]>>((
   status: {
     title: '状态',
     key: 'enabled',
-    width: 84,
-    render: (row) =>
-      h(
+    width: 104,
+    render: (row) => {
+      // ★ 三态，不是两态：上游已移除 ≠ 用户手动停用。
+      // 服务端用独立列 `channels.src_missing` 记（不复用 enabled=0），DTO 上是 `missing`。
+      // 这里如果只显示「已停用」，用户会以为是自己关的，永远找不到「为什么少了一个台」。
+      if (row.missing === true) {
+        return h(
+          NTooltip,
+          null,
+          {
+            trigger: () =>
+              h(
+                NTag,
+                { size: 'small', bordered: false, type: 'error' },
+                { default: () => '上游已移除' },
+              ),
+            default: () =>
+              '最近一轮源解析里已经没有这个台了，所以它不再出现在电视端。' +
+              '线路已被清空；源里重新出现后刷新源即可恢复，也可以手动补一条线路。',
+          },
+        )
+      }
+      return h(
         NTag,
         { size: 'small', bordered: false, type: row.enabled ? 'success' : 'default' },
         { default: () => (row.enabled ? '启用中' : '已停用') },
-      ),
+      )
+    },
   },
 }))
 
@@ -438,6 +459,9 @@ const columns = computed<DataTableColumns<Channel>>(() => {
         h(ChannelStreamsPanel, {
           channelId: row.id,
           channelName: row.name,
+          // 上游已移除的频道要在线路面板顶部说明一句，否则用户只看到「还没有线路」，
+          // 以为是自己配错了
+          channelMissing: row.missing === true,
           onChanged: markRowChanged,
         }),
     },

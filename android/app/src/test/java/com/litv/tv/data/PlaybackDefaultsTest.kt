@@ -42,4 +42,45 @@ class PlaybackDefaultsTest {
         val retries = PlaybackDefaults.RETRY_OPTIONS
         assertEquals(retries.distinct().sorted(), retries)
     }
+
+    // ---------------------------------------------------------------- 起播预算（C3）
+
+    @Test
+    fun `总预算不小于显式最坏路径之和`() {
+        // 最坏路径 = 无字节阶段 + 有字节无帧阶段 + 一次完整超时重试
+        //          = 6000 + 8000 + 15000 × 1 = 29000
+        // 预算若小于它，就意味着"某一层窗口还没走完就先被总预算掐掉"——
+        // 那等于其中某个阶段是永远不会生效的死代码。
+        val worstPath =
+            PlaybackDefaults.START_NOBYTE_MS +
+                PlaybackDefaults.START_FRAME_MS +
+                PlaybackDefaults.START_TIMEOUT_MS * PlaybackDefaults.RETRY_COUNT
+        assertTrue(
+            "START_BUDGET_MS=${PlaybackDefaults.START_BUDGET_MS} 小于最坏路径 $worstPath，" +
+                "某个阶段永远不会生效",
+            PlaybackDefaults.START_BUDGET_MS >= worstPath,
+        )
+    }
+
+    @Test
+    fun `总预算必须远小于旧的两分钟`() {
+        // 老代码 3 内核 ×(15s 超时 + 15s 重试) ≈ 105s。这条防止有人把预算又调回去。
+        assertTrue(
+            "START_BUDGET_MS=${PlaybackDefaults.START_BUDGET_MS} 应 < 30000",
+            PlaybackDefaults.START_BUDGET_MS < 30_000,
+        )
+    }
+
+    @Test
+    fun `起播超时不得被调回小值`() {
+        // 15s 是慢盒子（32 位 Amlogic）上实测出来的下限。当初压到 3~5 秒那次事故
+        // 就是"本来能起播的流被判定为不可播"。这条是那道闸。
+        assertTrue(
+            "START_TIMEOUT_MS=${PlaybackDefaults.START_TIMEOUT_MS} 必须 >= 15000",
+            PlaybackDefaults.START_TIMEOUT_MS >= 15_000,
+        )
+        // 两个阶段都必须小于整体超时，否则阶段窗口没有意义
+        assertTrue(PlaybackDefaults.START_NOBYTE_MS < PlaybackDefaults.START_TIMEOUT_MS)
+        assertTrue(PlaybackDefaults.START_FRAME_MS < PlaybackDefaults.START_TIMEOUT_MS)
+    }
 }

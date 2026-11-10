@@ -24,6 +24,7 @@ import com.litv.tv.R
 import com.litv.tv.data.Bootstrap
 import com.litv.tv.data.Channel
 import com.litv.tv.data.EpgProgram
+import com.litv.tv.data.LastChannelResolver
 import com.litv.tv.data.PlayCache
 import com.litv.tv.data.PlayCacheStore
 import com.litv.tv.player.EngineKind
@@ -85,6 +86,17 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
     private lateinit var epgPanel: LinearLayout
     private lateinit var epgTitle: TextView
     private lateinit var epgList: RecyclerView
+
+    /** C1：收藏按钮（面板里可聚焦）与列表空态引导 */
+    private lateinit var favBtn: TextView
+    private lateinit var panelEmpty: TextView
+
+    /** 本台观看起始时刻（毫秒）。QoE 的 watch_ms 与"稳定播放归零"要用。 */
+    private var watchStartAt = 0L
+    /** 服务端下发的封装类型：ts | hls | remux（QoE 的 path，**不是** direct/relay）。 */
+    private var currentPlayKind = ""
+    /** 离开页面时已经报过 stop，避免 onDestroy 重复上报 */
+    private var reportedStop = false
 
     // 底部信息条（对齐 DIYP / 群晖电视的样式）
     private lateinit var infoLogo: ImageView
@@ -430,6 +442,11 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         panel = findViewById(R.id.channelPanel)
         panelTitle = findViewById(R.id.panelTitle)
         panelList = findViewById(R.id.panelList)
+        panelEmpty = findViewById(R.id.panelEmpty)
+        favBtn = findViewById(R.id.favBtn)
+        // C1：收藏必须有**明确动作**。之前 Api.favorite 在本页零调用，
+        // 「收藏」分组又只在非空时出现 —— 新用户既看不到也没法收藏。
+        favBtn.setOnClickListener { toggleFavoriteOnFocused() }
         numberTip = findViewById(R.id.numberTip)
         settingsMenu = findViewById(R.id.settingsMenu)
         // 右侧设置菜单：能就地改的就地改，改不了的转给完整设置弹层
@@ -603,21 +620,54 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         favoriteIds.clear()
         favoriteIds.addAll(b.favorites)
         groups = allChannels.map { it.group }.filter { it.isNotBlank() }.distinct()
+
+        // C2：先从**全量**里定位"上次看的台"，再决定默认分组。
+        //
+        // 顺序不能反：先设 selGroup → applyGroupFilter() 重建 channels →
+        // 再在 channels 里取 index。反过来先算 index 再改分组，index 会指到别的台上。
+        //
+        // 另外：从桌面正常启动时 pendingChannelId 是 0（只有通知/外部跳转才带），
+        // 所以必须回落到 app.prefs.lastChannelId —— 这个坑以前踩过（永远播第一个台）。
+        val wantId = if (pendingChannelId > 0) pendingChannelId else app.prefs.lastChannelId
+        val hit = LastChannelResolver.resolve(
+            allChannels, wantId, app.prefs.lastChannelTvgId, app.prefs.lastChannelName,
+        )
+        val want = hit?.channel
+        if (want != null) {
+            Log.i(TAG, "恢复上次频道：${want.name}（依据=${hit.via} id=${want.id}）")
+        } else {
+            Log.i(TAG, "上次频道找不到（id=$wantId tvg=${app.prefs.lastChannelTvgId} " +
+                "name=${app.prefs.lastChannelName}），回落到第一个台")
+        }
+
+        // 恢复"上次所在分组"。存的是**分组名**，不是索引 —— 索引会随分组数量变化而错位
+        // （C1 让收藏行常显之后，所有索引整体后移一位，老用户升级就会落到隔壁分组）。
+        // 上次那个台还在就按它的分组；彻底不在了才退回 lastGroup。
+        val wantGroup = want?.group?.takeIf { it.isNotBlank() } ?: app.prefs.lastGroup
+        selGroup = if (wantGroup.isNotBlank() && groups.contains(wantGroup)) wantGroup else ""
         applyGroupFilter()
+        // 分组名在上游被改掉时过滤结果可能为空：退回「全部」，否则界面会是一片空白。
+        if (channels.isEmpty() && selGroup.isNotEmpty()) {
+            Log.i(TAG, "分组 $selGroup 已不存在或为空，退回全部频道")
+            selGroup = ""
+            applyGroupFilter()
+        }
+
         Log.i(TAG, "bootstrap 完成: 频道=${allChannels.size} 待播=$pendingChannelId 待自动播放=$autoPlayPending")
         if (autoPlayPending && channels.isNotEmpty()) {
             autoPlayPending = false
-            // 优先用 Intent 指定要播的台（点通知、外部跳转）；
-            // 没有就退回「上次看的台」。
-            //
-            // 之前只看了 pendingChannelId，而从桌面正常启动时它是 0，
-            // indexOfFirst 必然返回 -1，于是永远播第一个台——
-            // 「退出重进不回上次频道」就是这么来的。
-            val wantId = if (pendingChannelId > 0) pendingChannelId else app.prefs.lastChannelId
-            val idx = channels.indexOfFirst { it.id == wantId }
-            index = if (idx >= 0) idx else 0
-            Log.i(TAG, "开始自动播放: ${channels[index].name}（想要=$wantId 命中=${idx >= 0}）")
-            playChannel(channels[index])
+            // 想播的台可能不在当前分组里（比如上次在 A 组、这次恢复到了 B 组）：
+            // 这时在 channels 里找不到就退到确定性排序的第一个台，而不是 channels[0] 的偶然顺序。
+            val idx = channels.indexOfFirst { it.id == (want?.id ?: -1L) }
+            val pos = if (idx >= 0) idx else 0
+            index = pos
+            Log.i(TAG, "开始自动播放: ${channels[pos].name}（想要=${want?.id ?: 0} 命中=${idx >= 0}）")
+            // 让用户一眼看到自己的台在哪：滚动到它 + 打上"正在播"标记
+            if (channels.isNotEmpty()) panelList.scrollToPosition(pos)
+            // 注意：这里可能发生在 panelAdapter 创建之前（有本地缓存的冷启动路径），
+            // 所以必须判 initialized，否则直接 UninitializedPropertyAccessException。
+            if (::panelAdapter.isInitialized) panelAdapter.setPlayingId(channels[pos].id)
+            playChannel(channels[pos])
         } else if (pendingRemoteChannelId > 0) {
             // 遥控指令在 bootstrap 完成前就到了：现在补执行。
             // 不补的话，用户开机瞬间按遥控换台会"按了没反应"。
@@ -633,7 +683,10 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         if (!::grpList.isInitialized) return
         val rows = ArrayList<GroupAdapter.Row>()
         rows.add(GroupAdapter.Row("全部", allChannels.size))
-        if (favoriteIds.isNotEmpty()) rows.add(GroupAdapter.Row("收藏", favoriteIds.size))
+        // C1：收藏行**始终显示**。
+        // 以前是 if (favoriteIds.isNotEmpty()) 才加：全新设备上这一行根本不存在，
+        // 用户既看不到「收藏」这个分类，也不知道有这个功能（反馈原话"没有收藏"）。
+        rows.add(GroupAdapter.Row("收藏", favoriteIds.size))
         allChannels.map { it.group }
             .filter { it.isNotBlank() }
             .distinct()
@@ -653,7 +706,14 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         }
     }
 
-    private val hasFavGroup: Boolean get() = favoriteIds.isNotEmpty()
+    /**
+     * 收藏行是否在分组索引里占位。
+     *
+     * C1 之后它**恒为 true**（收藏行常显）。`groupLabelText()` 与 `switchGroup()`
+     * 里的 `groupIdx - 2 / - 1` 偏移都依赖这个值，所以只能改这一处定义，
+     * 不要在别处硬编码偏移量。
+     */
+    private val hasFavGroup: Boolean get() = true
 
     private fun groupLabelText(): String {
         val name = when {
@@ -684,8 +744,7 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         Log.i(TAG, "playChannel: ${ch.name} streamId=$streamId direct=${app.prefs.directMode}")
         // 取一个换台代际号。下面的回调只有在它仍然是"最后一次换台"时才允许生效。
         val seq = playGate.begin()
-        current = ch
-        // 换到别的台就重置"已试线路"记录
+        current = ch        // 换到别的台就重置"已试线路"记录
         if (triedForChannel != ch.id) {
             triedStreams.clear()
             triedForChannel = ch.id
@@ -695,8 +754,17 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         triedStreams += streamId
         currentStreamId = streamId
         app.prefs.lastChannelId = ch.id
+        // C2：id 会随上游重建失效，把 tvg_id/名字一起存下来当兜底锚点
+        app.prefs.lastChannelTvgId = ch.tvgId
+        app.prefs.lastChannelName = ch.name
+        // 分组按**名字**存（存索引会在分组增减后整体错位）
+        app.prefs.lastGroup = ch.group
         // 起播计时：从按下换台到出第一帧，这是用户唯一能感知的"快不快"
         startAt = System.currentTimeMillis()
+        // QoE：换台即重置本台观看窗口，stop 尚未上报
+        watchStartAt = 0L
+        reportedStop = false
+        if (::panelAdapter.isInitialized) panelAdapter.setPlayingId(ch.id)
 
         // 换台时先抓一帧盖住，避免黑屏闪烁
         player.snapshot()?.let {
@@ -714,7 +782,7 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
             main.postDelayed(showLoadingRunnable, 300)
         }
         switchTip.visibility = View.VISIBLE
-        osdName.text = ch.name
+        osdName.text = osdNameText(ch)
 
         // 直连失败一次后，这次强制走服务端中转
         val wantDirect = app.prefs.directMode != "relay" && !forceRelayOnce
@@ -764,6 +832,9 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
                     return@play
                 }
                 currentPlayMode = info.mode
+                // QoE 的 path 是**封装类型**（ts/hls/remux），和 direct/relay 是两个正交维度，
+                // 不能拿 currentPlayMode 冒充（那是链路，不是封装）。
+                currentPlayKind = info.kind
                 // 刷新缓存，供下次起播/换台直接命中
                 PlayCacheStore.put(app.prefs, PlayCache(
                     ch.id, abs, headers, info.mode, info.ua, info.expires))
@@ -1264,6 +1335,9 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
     override fun onPrepared(width: Int, height: Int) = Unit
 
     override fun onFirstFrame() {
+        // 起播计时与观看窗口都从"真正看到画面"开始算 —— 转圈的那几十秒不算观看时长，
+        // 否则 rebuffer ratio 的分母会被拉大、显得卡顿率更低（自欺欺人）。
+        if (watchStartAt == 0L) watchStartAt = System.currentTimeMillis()
         // 第一帧已经画出来了，把换台快照淡出（200ms）。
         // 直接 GONE 会看到一次硬切，淡出看着是"渐显"，不突兀。
         if (!::snapshotView.isInitialized || snapshotView.visibility != View.VISIBLE) return
@@ -1315,8 +1389,59 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         // 源里同一个台常有多条线路（如 cctv1-MCP / cctv1-AV3A），
         // 其中一条编码不支持，不代表别的也不行。
         if (tryNextStreamLine(message)) return
+        // 走到这里才是真正放弃：上报 error，让服务端能区分"起播失败"与"卡顿"。
+        current?.let {
+            app.api.reportStats(
+                it.id, "error", 0, message,
+                watchMs = watchedSec(), path = currentPlayKind, engine = player.engineKey(),
+            )
+        }
         switchTip.text = "播放出错：$message"
         switchTip.visibility = View.VISIBLE
+    }
+
+    /**
+     * 卡顿上报（QoE）。
+     *
+     * 这是**整个 App 里唯一**的 stall 数据来源：在它之前，客户端只上报过 `start`，
+     * 服务端的 StallRate 与新增的 rebuffer_ratio 分子**恒为 0**——
+     * 管理台会大大方方地显示"卡顿率 0%"，比没有数据更误导。
+     *
+     * @param frozenMs PlayerManager 判定"画面完全没动"的时长
+     */
+    override fun onStall(frozenMs: Int) {
+        val ch = current ?: return
+        app.api.reportStats(
+            ch.id, "stall", 0, "frozen=${frozenMs}ms",
+            stallMs = frozenMs,
+            watchMs = watchedSec(),
+            // path = 封装（ts/hls/remux），engine = 内核 key（exo/vlc/mpv/avs3）
+            path = currentPlayKind,
+            engine = player.engineKey(),
+        )
+    }
+
+    /** 本台已观看的秒数（从第一帧开始算）。未起播过返回 0。 */
+    private fun watchedSec(): Int {
+        if (watchStartAt <= 0L) return 0
+        return ((System.currentTimeMillis() - watchStartAt) / 1000).toInt().coerceAtLeast(0)
+    }
+
+    /**
+     * 离开页面时上报一次 stop（带 watch_ms）。
+     *
+     * 幂等：同一段观看只报一次；没起播过（watchStartAt == 0）不报，
+     * 否则会往统计里灌一堆 0 秒的观看记录，把 rebuffer ratio 的分母拉偏。
+     */
+    private fun reportStopIfWatched() {
+        if (reportedStop) return
+        val ch = current ?: return
+        if (watchStartAt <= 0L) return
+        reportedStop = true
+        app.api.reportStats(
+            ch.id, "stop", 0, "",
+            watchMs = watchedSec(), path = currentPlayKind, engine = player.engineKey(),
+        )
     }
 
     /** 上一次播放实际用的模式（direct / relay），用于直连失败后改走中转 */
@@ -1380,6 +1505,9 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
     }
 
     override fun onDestroy() {
+        // QoE：离开播放页时补一条 stop（带 watch_ms）。必须在清 Handler 之前调，
+        // 因为它会走一次异步网络请求。
+        reportStopIfWatched()
         main.removeCallbacksAndMessages(null)
         // 离开页面后到达的 /tv/play 回调一律作废，别再往已销毁的界面上写。
         playGate.invalidate()
@@ -1405,6 +1533,10 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
             panelList.hasFocus() && dir < 0 -> grpList.requestFocus()
             panelList.hasFocus() && dir > 0 -> epgList.requestFocus()
             epgList.hasFocus() && dir < 0 -> panelList.requestFocus()
+            // C1：收藏按钮是第四站，从节目单列继续往右就到它（它是面板里唯一能改收藏状态
+            // 的控件；MENU 留给设置菜单、长按 OK 留给选线路，都不抢）。
+            epgList.hasFocus() && dir > 0 -> favBtn.requestFocus()
+            favBtn.hasFocus() && dir < 0 -> epgList.requestFocus()
             else -> if (dir > 0) panelList.requestFocus() else grpList.requestFocus()
         }
     }
@@ -1428,6 +1560,68 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
             if (selGroup.isNotEmpty()) append(" · ").append(selGroup)
             append("  ").append(list.size).append(" 个")
         }
+        // C1：空列表不留白 —— 尤其是「收藏」分组，要告诉用户怎么把台加进来。
+        val emptyHint = when {
+            list.isNotEmpty() -> ""
+            selGroup == "收藏" -> "还没有收藏的频道\n选中一个台，按「☆ 收藏」加入"
+            selGroup.isNotEmpty() -> "这个分组里没有频道"
+            else -> "没有可用频道，请先在管理台导入源"
+        }
+        panelEmpty.text = emptyHint
+        panelEmpty.visibility = if (emptyHint.isEmpty()) View.GONE else View.VISIBLE
+        // 收藏按钮的文字跟当前台的收藏状态走（★ / ☆），是 TV 上唯一的状态提示。
+        updateFavButton()
+    }
+
+    /** 收藏按钮只反映"正在播 / 焦点所在"那个台的状态。 */
+    private fun updateFavButton() {
+        if (!::favBtn.isInitialized) return
+        val pos = focusedChannelPosition()
+        val ch = channels.getOrNull(pos) ?: current
+        val fav = ch != null && favoriteIds.contains(ch.id)
+        favBtn.text = if (fav) "★ 已收藏" else "☆ 收藏"
+    }
+
+    /** 焦点所在的频道位置；焦点不在频道列时退回到正在播的台。 */
+    private fun focusedChannelPosition(): Int {
+        val focus = panelList.findFocus()
+        if (focus != null) {
+            val p = panelList.getChildAdapterPosition(focus)
+            if (p != RecyclerView.NO_POSITION) return p
+        }
+        val playing = channels.indexOfFirst { it.id == current?.id }
+        return if (playing >= 0) playing else 0
+    }
+
+    /** 面板里的「☆ 收藏」按钮：对焦点所在（或正在播）的台做收藏/取消。 */
+    private fun toggleFavoriteOnFocused() {
+        val ch = channels.getOrNull(focusedChannelPosition()) ?: current ?: return
+        toggleFavorite(ch)
+    }
+
+    /** OSD 上的台名：收藏过的台带一个 ★，让用户随时知道"这个台我收了没有"。 */
+    private fun osdNameText(ch: Channel): String =
+        if (favoriteIds.contains(ch.id)) "${ch.name}  ★" else ch.name
+
+    /**
+     * 收藏 / 取消收藏。
+     *
+     * 与手机端 PhoneHomeActivity.toggleFavorite 同一形态：
+     * 成功 → 本地立即更新（不等下次 bootstrap）+ 重算分组与列表 + 提示；
+     * 失败 → **必须**有可见反馈，不能静默（用户按了没反应会以为功能坏了）。
+     */
+    private fun toggleFavorite(ch: Channel) {
+        val on = !favoriteIds.contains(ch.id)
+        app.api.favorite(ch.id, on,
+            onOk = {
+                if (on) favoriteIds.add(ch.id) else favoriteIds.remove(ch.id)
+                // 收藏分组的内容、左侧计数、列表星标都要立刻变
+                applyGroupFilter()
+                // 正在播的台还要同步 OSD 上的 ★
+                if (ch.id == current?.id) osdName.text = osdNameText(ch)
+                toastTip(if (on) "已收藏：${ch.name}" else "已取消收藏：${ch.name}")
+            },
+            onErr = { msg -> toastTip("收藏失败：$msg") })
     }
 
     // ---------------------------------------------------------------- 右侧设置菜单

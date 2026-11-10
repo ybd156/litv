@@ -8,7 +8,12 @@ import { confirmAction, toast } from '@/utils/feedback'
 import { canWrite } from '@/session'
 import Icon from './Icon.vue'
 
-const props = defineProps<{ channelId: number; channelName: string }>()
+const props = defineProps<{
+  channelId: number
+  channelName: string
+  /** 频道已被上游移除（线路已被清空），面板顶部要说明 */
+  channelMissing?: boolean
+}>()
 const emit = defineEmits<{ (e: 'changed'): void }>()
 
 const streams = ref<ChannelStream[]>([])
@@ -76,6 +81,11 @@ onMounted(() => void load())
       <span class="title">线路（同一频道可以有多个地址，播放器会挑能用的那条）</span>
       <NTag size="small" :bordered="false">{{ streams.length }} 条</NTag>
     </div>
+
+    <p v-if="channelMissing" class="warn-note">
+      上游源里已经没有这个台了：这一轮刷新把它下线并清空了线路。
+      如果只是源临时抽风，重新刷新源就能恢复；也可以手动补一条线路继续看。
+    </p>
 
     <p v-if="error" class="err">{{ error }} <NButton text type="primary" size="tiny" @click="load">重试</NButton></p>
 
@@ -175,6 +185,17 @@ onMounted(() => void load())
   color: #e4635c;
   font-size: 12.5px;
   margin: 0 0 8px;
+}
+/* 「上游已移除」说明：warning 色，和「加载失败」的红色区分开 */
+.warn-note {
+  color: #e0a94a;
+  font-size: 12.5px;
+  line-height: 1.6;
+  margin: 0 0 10px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: rgba(224, 169, 74, 0.09);
+  border: 1px solid rgba(224, 169, 74, 0.26);
 }
 .small {
   font-size: 12.5px;

@@ -243,14 +243,39 @@
                 android:orientation="vertical"
                 android:paddingHorizontal="8dp">
 
-                <TextView
-                    android:id="@+id/panelTitle"
+                <LinearLayout
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:paddingBottom="6dp"
-                    android:paddingStart="4dp"
-                    android:textColor="@color/accent"
-                    android:textSize="18sp" />
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal">
+
+                    <TextView
+                        android:id="@+id/panelTitle"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:paddingBottom="6dp"
+                        android:paddingStart="4dp"
+                        android:textColor="@color/accent"
+                        android:textSize="18sp" />
+
+                    <!-- C1：收藏入口。
+                         必须是**可聚焦**控件：TV 上一切只能靠遥控器，纯装饰的
+                         文字用户永远选不中（所以之前"没有收藏"）。
+                         键位刻意不复用 MENU（已是设置菜单）与长按 OK（已是选线路）。 -->
+                    <TextView
+                        android:id="@+id/favBtn"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:background="@drawable/bg_focusable"
+                        android:clickable="true"
+                        android:focusable="true"
+                        android:paddingHorizontal="12dp"
+                        android:paddingVertical="6dp"
+                        android:text="☆ 收藏"
+                        android:textColor="@color/accent"
+                        android:textSize="16sp" />
+                </LinearLayout>
 
                 <androidx.recyclerview.widget.RecyclerView
                     android:id="@+id/panelList"
@@ -258,6 +283,19 @@
                     android:layout_height="0dp"
                     android:layout_weight="1"
                     android:scrollbars="none" />
+
+                <!-- 列表为空时的引导文案（C1）：不留学生一块空白。
+                     典型场景就是"收藏"分组里一个台都没有。 -->
+                <TextView
+                    android:id="@+id/panelEmpty"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:gravity="center"
+                    android:paddingHorizontal="8dp"
+                    android:paddingVertical="16dp"
+                    android:textColor="@color/text_secondary"
+                    android:textSize="14sp"
+                    android:visibility="gone" />
             </LinearLayout>
 
             <!-- 3. 节目单：时间 + 节目名 + 回看 -->

@@ -70,6 +70,57 @@ function isoNow(): string {
   return new Date().toISOString()
 }
 
+/**
+ * mock 的「异步刷新任务」。
+ *
+ * 真服务端已经改成：POST 立刻回 `{status:"running"}`，快慢取决于源大小；
+ * 结果（新增/更新/下线/未变）过一会儿出现在 `GET /sources` 那一行的
+ * `last_result` 上。mock 必须复刻这条**两段式**路径，否则页面里新写的
+ * 「轮询 + 行级 refreshing」逻辑在本地一次都不会被执行，等于没测。
+ *
+ * 这里用「开始时间 + 固定 1.2 秒后完成」模拟；每次读列表推进一次状态。
+ */
+const MOCK_REFRESH_MS = 1200
+const mockRefreshStarted = new Map<number, number>()
+
+function settleMockRefresh(): void {
+  const now = Date.now()
+  for (const s of db.sources) {
+    const started = mockRefreshStarted.get(s.id)
+    if (s.refreshing !== true || started === undefined) continue
+    if (now - started < MOCK_REFRESH_MS) continue
+    mockRefreshStarted.delete(s.id)
+    s.refreshing = false
+    s.last_fetch_at = isoNow()
+    if (s.status === 'error') {
+      // 失败时两个键一起更新：界面对 error / last_error 是「谁在就用谁」，
+      // mock 只改一个就会造出真服务端不可能出现的组合。
+      s.last_error = '拉取失败：HTTP 403 Forbidden，源站可能换了地址'
+      s.error = s.last_error
+      s.parsed_count = 0
+      s.last_result = { parsed: 0, inserted: 0, updated: 0, missing: 0, unchanged: 0 }
+    } else {
+      const parsed = 18 + ((s.id * 7) % 40)
+      // 造一组「确实有变化」的计数：用户要看到的就是「这次刷新到底动了什么」
+      const inserted = s.id % 3 === 0 ? 2 : 0
+      const updated = s.id % 3 === 1 ? 5 : 0
+      const missing = s.id % 3 === 2 ? 1 : 0
+      s.status = 'ok'
+      s.last_error = null
+      s.error = null
+      s.parsed_count = parsed
+      s.channel_count = parsed - missing
+      s.last_result = {
+        parsed,
+        inserted,
+        updated,
+        missing,
+        unchanged: parsed - inserted - updated - missing,
+      }
+    }
+  }
+}
+
 interface Route {
   method: HttpMethod
   re: RegExp
@@ -108,7 +159,16 @@ const routes: Route[] = [
   },
 
   // ---- 源 ----
-  { method: 'GET', re: /^sources$/, handle: () => db.sources },
+  {
+    method: 'GET',
+    re: /^sources$/,
+    // 每次读列表前先推进一下「假的刷新任务」：真服务端也是靠轮询这里拿到结果，
+    // mock 必须走同一条路径，否则页面里那段轮询逻辑在 mock 下永远不被执行到。
+    handle: () => {
+      settleMockRefresh()
+      return db.sources
+    },
+  },
   {
     method: 'POST',
     re: /^sources$/,
@@ -162,20 +222,17 @@ const routes: Route[] = [
       const id = Number(m[1])
       const item = db.sources.find((s) => s.id === id)
       if (!item) notFound(`源 ${id}`)
-      item.last_fetch_at = isoNow()
-      if (item.status === 'error') {
-        // 失败时两个键一起更新：界面对 error / last_error 是「谁在就用谁」，
-        // mock 只改一个就会造出真服务端不可能出现的组合。
-        item.last_error = '拉取失败：HTTP 403 Forbidden，源站可能换了地址'
-        item.error = item.last_error
-      } else {
-        item.status = 'ok'
-        item.last_error = null
-        item.error = null
-        item.channel_count = 18 + ((id * 7) % 40)
+      // ★ 真服务端已经改成异步（A2）：立刻回 202 + {status:"running"}，
+      // 计数稍后出现在 GET /sources 那一行的 last_result 上。
+      // mock 原来直接返回整个 Source 对象 —— 与真服务端的差异会让
+      // 「页面在等同步结果」这种 bug 在本地永远暴露不出来（第一轮 /sources 事故同款）。
+      if (item.refreshing === true) {
+        // 单飞：已经在跑就再说一次「在跑」，不重复起任务
+        return { status: 'running' }
       }
-      // 真服务端回 {parsed, inserted}（见 handlers_admin.go 的 refreshSource）
-      return { parsed: item.channel_count ?? 0, inserted: 0 }
+      item.refreshing = true
+      mockRefreshStarted.set(id, Date.now())
+      return { status: 'running' }
     },
   },
   {

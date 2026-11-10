@@ -24,6 +24,8 @@ package remux
 import (
 	"bufio"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"log/slog"
@@ -63,6 +65,15 @@ type Job struct {
 	mu       sync.Mutex
 	lastUsed time.Time
 	exited   bool
+
+	// upstream 是这条任务正在拉的上游地址（只用于诊断，不含请求头）。
+	upstream string
+
+	// fingerprint 是「上游 + 规范化请求头」的指纹，换线时据此判断要不要重建。
+	fingerprint string
+
+	// started 是任务启动时刻，看门狗用它区分「刚启动」与「真的卡住了」。
+	started time.Time
 }
 
 // Manager 管理所有转封装任务。
@@ -190,6 +201,25 @@ func (m *Manager) PlaylistContext(ctx context.Context, channelID int64, upstream
 	j.touch()
 
 	path := filepath.Join(j.dir, "index.m3u8")
+
+	// 看门狗：ffmpeg 进程还活着，但播放列表已经好几秒没更新。
+	//
+	// 这种情况上游多半是「半死」的（TCP 还连着、数据不来了）：ffmpeg 既不退出
+	// 也不产出新切片。不减列表就会一直停在旧片段上——播放器每 2 秒拿到同一份
+	// 列表，去取已经被 delete_segments 删掉的分片，于是 404 循环、画面黑掉。
+	// 处理方式是杀掉重建一次（只一次，避免在这里打转）。
+	if m.playlistStale(j, path) {
+		slog.Warn("转封装播放列表停止更新，重建任务", "channel", channelID,
+			"idle_s", playlistIdleSeconds(path))
+		m.dropJob(channelID, j)
+		j2, err2 := m.ensure(channelID, upstream, headers)
+		if err2 != nil {
+			return nil, err2
+		}
+		j = j2
+		j.touch()
+	}
+
 	// 等 ffmpeg 吐出第一个播放列表（最多 10 秒）
 	deadline := time.Now().Add(10 * time.Second)
 	timer := time.NewTimer(200 * time.Millisecond)
@@ -291,6 +321,11 @@ func (m *Manager) Stats() []map[string]any {
 			"channel_id": id,
 			"dir":        j.dir,
 			"idle_s":     int(time.Since(j.lastUsed).Seconds()),
+
+			// 诊断「换线没反应 / 画面黑掉」：正在拉哪条上游、
+			// 播放列表已经多久没更新（-1 = 还没写出来）。
+			"upstream":       j.upstream,
+			"playlist_age_s": playlistIdleSeconds(filepath.Join(j.dir, "index.m3u8")),
 		})
 		j.mu.Unlock()
 	}
@@ -305,6 +340,26 @@ func (m *Manager) Stats() []map[string]any {
 // 避免两处安全逻辑各写一遍后慢慢漂移。
 func buildFFmpegHeaders(headers map[string]string) string {
 	return ffmpeg.HeadersArg(headers)
+}
+
+// upstreamFingerprint 返回「上游地址 + 规范化请求头」的指纹。
+//
+// 为什么要带请求头：同一台源的不同线路经常只有 Referer / UA 不同，
+// 只比 URL 会漏掉「切到另一条要求不同头的线路」，用户点了线路仍然没反应。
+//
+// 为什么不把头值直接拼进去：指纹会进日志与诊断输出，而头里可能带 Cookie、
+// Referer（可能含 token）。这里只保留 SHA-256 的前 8 字节，够比较、不泄露。
+func upstreamFingerprint(upstream string, headers map[string]string) string {
+	sum := sha256.Sum256([]byte(ffmpeg.HeadersArg(headers)))
+	return upstream + "\x00" + hex.EncodeToString(sum[:8])
+}
+
+// shortFP 只取指纹尾部（= 头摘要），日志里足够区分且不会把整条 URL 打出去。
+func shortFP(fp string) string {
+	if len(fp) <= 16 {
+		return fp
+	}
+	return fp[len(fp)-16:]
 }
 
 func (m *Manager) ensure(channelID int64, upstream string, headers map[string]string) (*Job, error) {
@@ -324,13 +379,27 @@ func (m *Manager) ensure(channelID int64, upstream string, headers map[string]st
 		return nil, fmt.Errorf("上游地址不被允许: %w", err)
 	}
 
+	// 上游指纹：URL + 规范化请求头的摘要。换线/换头都要重建 ffmpeg，
+	// 否则它会继续拉旧地址（用户看到「点了线路没反应」）。
+	fp := upstreamFingerprint(upstream, headers)
+
 	if j, ok := m.jobs[channelID]; ok {
-		if !j.isExited() {
+		switch {
+		case j.isExited():
+			// 进程已经退出（上游断开、编码不支持……），旧任务没有价值了，
+			// 清掉后重建一个。
+			delete(m.jobs, channelID)
+		case j.fingerprint == fp:
 			return j, nil
+		default:
+			// 上游换了一条线路（或请求头变了），而旧进程还在拉**旧线路**。
+			// 直接复用等于「用户切了线路、画面没变」——这就是 iOS 侧
+			// 「换线路没反应」的根因。杀掉重建。
+			slog.Info("转封装上游变化，重建任务", "channel", channelID,
+				"old_fp", shortFP(j.fingerprint), "new_fp", shortFP(fp))
+			delete(m.jobs, channelID)
+			j.kill()
 		}
-		// 进程已经退出（上游断开、编码不支持……），旧任务没有价值了，
-		// 清掉后重建一个。
-		delete(m.jobs, channelID)
 	}
 
 	dir := filepath.Join(m.opt.Dir, fmt.Sprintf("ch%d", channelID))
@@ -375,6 +444,9 @@ func (m *Manager) ensure(channelID int64, upstream string, headers map[string]st
 		cancel:    cancel,
 		lastUsed:  time.Now(),
 	}
+	j.upstream = upstream
+	j.fingerprint = fp
+	j.started = time.Now()
 	m.jobs[channelID] = j
 
 	// 等 ffmpeg 退出，标记状态
@@ -394,6 +466,61 @@ func (m *Manager) ensure(channelID int64, upstream string, headers map[string]st
 	go m.reaper(channelID, j)
 	slog.Info("转封装已启动", "channel", channelID, "dir", dir)
 	return j, nil
+}
+
+// maxPlaylistIdle 返回「播放列表多久不更新就算死」。
+//
+// 取 3 × 分片时长（下限 6 秒）：ffmpeg 每写完一个分片更新一次列表，
+// 2 秒分片就是每 2 秒一次；给 3 倍余量吸收源站抖动和磁盘慢。
+func (m *Manager) maxPlaylistIdle() time.Duration {
+	d := time.Duration(m.opt.SegmentSeconds) * time.Second * 3
+	if d < 6*time.Second {
+		d = 6 * time.Second
+	}
+	return d
+}
+
+// playlistStale 判断「进程活着但播放列表不再更新」。
+func (m *Manager) playlistStale(j *Job, path string) bool {
+	if j.isExited() {
+		return false // 进程已退出由 ensure 处理，这里不重复动手
+	}
+	j.mu.Lock()
+	started := j.started
+	j.mu.Unlock()
+
+	idle := m.maxPlaylistIdle()
+	// 刚启动的任务还在探测上游、等第一个切片，这段不算卡死。
+	if time.Since(started) < idle+5*time.Second {
+		return false
+	}
+	st, err := os.Stat(path)
+	if err != nil {
+		return false
+	}
+	return time.Since(st.ModTime()) > idle
+}
+
+// playlistIdleSeconds 给日志/统计用：播放列表已经多少秒没更新，-1 表示还没写出来。
+func playlistIdleSeconds(path string) int {
+	st, err := os.Stat(path)
+	if err != nil {
+		return -1
+	}
+	return int(time.Since(st.ModTime()).Seconds())
+}
+
+// dropJob 把任务从表里摘掉并杀掉（只有它还是当前任务时才摘）。
+//
+// 摘表必须持 m.mu，杀进程放在放锁之后：kill 只取消 ctx 并置标志，
+// 但它的 Wait 收尾协程要拿 j.mu，别在持锁时把它拖进来。
+func (m *Manager) dropJob(channelID int64, j *Job) {
+	m.mu.Lock()
+	if cur, ok := m.jobs[channelID]; ok && cur == j {
+		delete(m.jobs, channelID)
+	}
+	m.mu.Unlock()
+	j.kill()
 }
 
 // reaper 定期检查空闲时间，超时就杀进程并清理。

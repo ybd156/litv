@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"os"
@@ -292,7 +293,48 @@ func (a *API) listSources(w http.ResponseWriter, r *http.Request) {
 		fail(w, http.StatusInternalServerError, 5001, err.Error())
 		return
 	}
-	ok(w, items)
+	// 补齐管理台实际读取的字段名。
+	//
+	// 以前直接把 store.Source 原样返回：字段叫 last_fetch_at / last_error，
+	// 而 SourcesView 读的是 error / status。于是「失败原因」永远不显示，
+	// 概览页的「失效源」计数也恒为 0——用户看到的是「一切正常」，
+	// 实际上是所有源都拉不到。
+	//
+	// 与 listEPGSources 同一套做法：**保留旧键**（外部脚本可能在用），
+	// 同时新增视图键。新增键不与旧键重名，所以向后兼容。
+	//
+	// status 的取值域是封闭的三个值，前端可以直接按它上色：
+	//   ok    有拉取成功的记录，且当前没有错误
+	//   error last_error 非空（不管上次成功与否，错误优先展示）
+	//   never 从未拉取过（last_fetch_at == 0）
+	out := make([]map[string]any, 0, len(items))
+	for _, s := range items {
+		status := "ok"
+		switch {
+		case s.LastError != "":
+			status = "error"
+		case s.LastFetchAt == 0:
+			status = "never"
+		}
+		out = append(out, map[string]any{
+			"id":            s.ID,
+			"name":          s.Name,
+			"type":          s.Type,
+			"url":           s.URL,
+			"enabled":       s.Enabled,
+			"channel_count": s.ChannelCount,
+			"user_agent":    s.UserAgent,
+			"created_at":    s.CreatedAt,
+			// 管理台读取的视图键
+			"error":  s.LastError,
+			"status": status,
+			// 兼容旧键。时间口径保持整数秒（Unix 秒），不在这里改成毫秒——
+			// 前端统一用 toDate() 换算，改口径会连带改所有调用方。
+			"last_fetch_at": s.LastFetchAt,
+			"last_error":    s.LastError,
+		})
+	}
+	ok(w, out)
 }
 
 func (a *API) createSource(w http.ResponseWriter, r *http.Request) {
@@ -351,12 +393,29 @@ func (a *API) updateSource(w http.ResponseWriter, r *http.Request) {
 
 func (a *API) deleteSource(w http.ResponseWriter, r *http.Request) {
 	id := pathInt64(r, "id")
+	if id <= 0 {
+		fail(w, http.StatusBadRequest, 1001, "源 id 非法")
+		return
+	}
+	// 数一下会被连带删掉多少频道。
+	//
+	// 为什么要数：删除源的确认文案必须说得出"会一并删除 N 个频道"，
+	// 否则用户只能看到一句没有数字的"确定吗"。
+	// 响应里也把它带回去，前端可以核对文案与结果是否一致。
+	//
+	// 注意（已知问题，见 store.DeleteSource 的注释）：这里统计的是
+	// "source_id 指向该源的频道数"，而由于 ImportChannels 的判重键不含
+	// source_id，其中可能包含别的源也在用的频道——那个连带删除的语义
+	// 要等 streams.source_id 迁移后才修得掉。
+	count, _ := a.st.CountChannelsBySource(r.Context(), id)
+
 	if err := a.st.DeleteSource(r.Context(), id); err != nil {
 		fail(w, http.StatusInternalServerError, 5001, err.Error())
 		return
 	}
-	a.st.Audit(r.Context(), 0, "source.delete", fmt.Sprint(id), "", r.RemoteAddr)
-	ok(w, map[string]any{"deleted": true})
+	a.st.Audit(r.Context(), 0, "source.delete", fmt.Sprint(id),
+		fmt.Sprintf("连带删除 %d 个频道", count), peerIPFrom(r.Context()))
+	ok(w, map[string]any{"deleted": true, "channels_deleted": count})
 }
 
 func (a *API) refreshSource(w http.ResponseWriter, r *http.Request) {
@@ -447,6 +506,8 @@ func (a *API) fetchAndParse(ctx context.Context, src store.Source) ([]parse.Item
 	if ua := strings.TrimSpace(src.UserAgent); ua != "" {
 		opt.UserAgent = ua
 	}
+	// 首跳地址与 TVBox 的二次引用走同一套策略（safedial 默认档）：
+	// 放行 LAN，拒本机/链路本地/元数据端点。
 	res, err := fetch.Get(ctx, src.URL, opt)
 	if err != nil {
 		return nil, err
@@ -462,7 +523,8 @@ func (a *API) fetchAndParse(ctx context.Context, src store.Source) ([]parse.Item
 	if err != nil {
 		return nil, err
 	}
-	// TVBox 形态 A 的 lives 指向外部 m3u/txt：这里再抓一层（只跟一层，防循环）
+	// TVBox 形态 A 的 lives 指向外部 m3u/txt：这里再抓一层（只跟一层，防循环）。
+	// 这一跳的地址来自远端内容，同样被 DialContext 层的地址策略覆盖。
 	if typ == "tvbox" && len(items) > 0 && allExternal(items) {
 		sub, err := fetch.Get(ctx, items[0].URL, opt)
 		if err == nil {
@@ -559,23 +621,51 @@ func (a *API) createChannel(w http.ResponseWriter, r *http.Request) {
 
 func (a *API) updateChannel(w http.ResponseWriter, r *http.Request) {
 	id := pathInt64(r, "id")
-	var body struct {
-		Name    string `json:"name"`
-		Group   string `json:"group"`
-		Logo    string `json:"logo"`
-		TvgID   string `json:"tvg_id"`
-		Number  int    `json:"number"`
-		Enabled bool   `json:"enabled"`
+	if id <= 0 {
+		fail(w, http.StatusBadRequest, 1001, "频道 id 非法")
+		return
 	}
+	// 全部用指针：**缺失 = 不改这一列**。
+	//
+	// 以前是非指针字段，缺省即零值，再配上 store.UpdateChannel 的全量覆盖，
+	// 前端只发 {"enabled":false} 会把名称/分组/台标/tvg_id/台号全清空。
+	//
+	// epg_id 刻意不在这个请求体里：EPG 映射只走 PUT /channels/{id}/epg。
+	// 加进来就会让"改个分组"顺手冲掉已经对好的节目单。
+	var body struct {
+		Name    *string `json:"name"`
+		Group   *string `json:"group"`
+		Logo    *string `json:"logo"`
+		TvgID   *string `json:"tvg_id"`
+		Number  *int    `json:"number"`
+		Enabled *bool   `json:"enabled"`
+	}
+	// decode 开了 DisallowUnknownFields：传了未知字段（包括 epg_id）会 400。
+	// 这是故意的——静默忽略未知字段会让"前端以为改了、后端没改"这种 bug
+	// 一直藏着，直到用户发现节目单又没了。
 	if err := decode(r, &body); err != nil {
 		fail(w, http.StatusBadRequest, 1001, "参数错误: "+err.Error())
 		return
 	}
-	err := a.st.UpdateChannel(r.Context(), store.Channel{
-		ID: id, Name: body.Name, Group: body.Group, Logo: body.Logo,
-		TvgID: body.TvgID, Number: body.Number, Enabled: body.Enabled,
+	// 名称不允许被清空：频道名是列表里唯一的可读标识，
+	// 清空后前端只能显示一行空白，用户再也找不到这个台。
+	if body.Name != nil && strings.TrimSpace(*body.Name) == "" {
+		fail(w, http.StatusBadRequest, 1001, "频道名称不能为空")
+		return
+	}
+	err := a.st.PatchChannel(r.Context(), id, store.ChannelPatch{
+		Name:    body.Name,
+		Group:   body.Group,
+		Logo:    body.Logo,
+		TvgID:   body.TvgID,
+		Number:  body.Number,
+		Enabled: body.Enabled,
 	})
 	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			fail(w, http.StatusNotFound, 3001, "频道不存在")
+			return
+		}
 		fail(w, http.StatusInternalServerError, 5001, err.Error())
 		return
 	}
@@ -583,11 +673,39 @@ func (a *API) updateChannel(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) deleteChannel(w http.ResponseWriter, r *http.Request) {
-	if err := a.st.DeleteChannel(r.Context(), pathInt64(r, "id")); err != nil {
+	id := pathInt64(r, "id")
+	if id <= 0 {
+		fail(w, http.StatusBadRequest, 1001, "频道 id 非法")
+		return
+	}
+	// 先停掉这个频道还在跑的录制，再删数据。
+	// 顺序很重要：只改 DB 状态停不掉 ffmpeg 进程，
+	// 它会继续往盘上写一个"没人认识"的文件（store.deleteChannelsTx 已把那行改成 canceled）。
+	a.stopRecordingsForChannels(r.Context(), []int64{id}, []string{"recording"})
+	if err := a.st.DeleteChannel(r.Context(), id); err != nil {
 		fail(w, http.StatusInternalServerError, 5001, err.Error())
 		return
 	}
 	ok(w, map[string]any{"deleted": true})
+}
+
+// stopRecordingsForChannels 停掉这些频道下状态命中的录制进程。
+//
+// 失败只记日志，不阻断删除：停不掉一个进程不该让"删频道"整体不可用，
+// 而且真停不掉时 deleteChannelsTx 仍会把行置 canceled，
+// 调度器不会再去开新的。
+func (a *API) stopRecordingsForChannels(ctx context.Context, channelIDs []int64, statuses []string) {
+	if a.rec == nil {
+		return
+	}
+	ids, err := a.st.RecordingIDsByChannels(ctx, channelIDs, statuses)
+	if err != nil {
+		slog.Warn("查询频道关联录制失败", "err", err)
+		return
+	}
+	for _, id := range ids {
+		a.rec.Stop(id)
+	}
 }
 
 func (a *API) reorderChannels(w http.ResponseWriter, r *http.Request) {
@@ -614,6 +732,10 @@ func (a *API) batchChannels(w http.ResponseWriter, r *http.Request) {
 	if err := decode(r, &body); err != nil {
 		fail(w, http.StatusBadRequest, 1001, "参数错误: "+err.Error())
 		return
+	}
+	// 批量删除：先停掉在跑的录制进程，再走事务删数据。
+	if body.Action == "delete" {
+		a.stopRecordingsForChannels(r.Context(), body.IDs, []string{"recording"})
 	}
 	n, err := a.st.BatchChannels(r.Context(), body.IDs, body.Action, body.Value)
 	if err != nil {
@@ -661,6 +783,10 @@ func (a *API) deleteChannelStream(w http.ResponseWriter, r *http.Request) {
 
 func (a *API) mapChannelEPG(w http.ResponseWriter, r *http.Request) {
 	id := pathInt64(r, "id")
+	if id <= 0 {
+		fail(w, http.StatusBadRequest, 1001, "频道 id 非法")
+		return
+	}
 	var body struct {
 		EpgID string `json:"epg_id"`
 	}
@@ -669,6 +795,11 @@ func (a *API) mapChannelEPG(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := a.st.SetChannelEpgID(r.Context(), id, body.EpgID); err != nil {
+		// 0 行受影响以前回 200 {"mapped":true}，调用方会以为映射成功。
+		if errors.Is(err, store.ErrNotFound) {
+			fail(w, http.StatusNotFound, 3001, "频道不存在")
+			return
+		}
 		fail(w, http.StatusInternalServerError, 5001, err.Error())
 		return
 	}
@@ -1130,6 +1261,10 @@ func (a *API) createRecording(w http.ResponseWriter, r *http.Request) {
 
 func (a *API) deleteRecording(w http.ResponseWriter, r *http.Request) {
 	id := pathInt64(r, "id")
+	if id <= 0 {
+		fail(w, http.StatusBadRequest, 1001, "录制 id 非法")
+		return
+	}
 	rec, err := a.st.GetRecording(r.Context(), id)
 	if err != nil {
 		fail(w, http.StatusNotFound, 3001, "录制不存在")
@@ -1138,9 +1273,40 @@ func (a *API) deleteRecording(w http.ResponseWriter, r *http.Request) {
 	if a.rec != nil {
 		a.rec.Stop(id)
 	}
-	// 只删我们自己的录制文件，不碰目录里的其它东西
-	if rec.Path != "" && strings.HasPrefix(filepath.Clean(rec.Path), filepath.Clean(a.cfg.Record.Dir)) {
-		_ = os.Remove(rec.Path)
+
+	// 只删我们自己的录制文件，且必须**证明**这个路径属于录制目录。
+	//
+	// 修复前这里是：
+	//   strings.HasPrefix(Clean(rec.Path), Clean(a.cfg.Record.Dir))
+	// 两个叠加的问题：
+	//   1. cfg.Record.Dir 在默认配置下是空的（main 把兜底目录放进局部变量，
+	//      从不回写 cfg），Clean("") == "."，前缀判断恒为假 →
+	//      文件永久残留，而 DB 行被删掉了，用户再也找不到它；
+	//   2. 即使目录不为空，字符串前缀也不是目录包含关系：
+	//      dir=/data/litv/record 时 /data/litv/record-old/x.ts 同样满足前缀。
+	//
+	// 现在改为 filepath.Rel（见 recordPathInside），并且失败时**不删数据库行**：
+	// 删了行就只剩一个查不到的孤儿文件，用户既看不到占用也删不掉。
+	if rec.Path != "" {
+		if !a.recordPathInside(rec.Path) {
+			slog.Warn("录制文件不在录制目录内，拒绝删除",
+				"recording", id, "file", filepath.Base(rec.Path))
+			fail(w, http.StatusConflict, 3003, "录制文件不在录制目录内，已保留记录")
+			return
+		}
+		// 符号链接一律不跟随：宁可留一个文件，也不要删到它指向的地方去。
+		if fi, lerr := os.Lstat(rec.Path); lerr == nil && fi.Mode()&os.ModeSymlink != 0 {
+			slog.Warn("录制文件是符号链接，拒绝删除",
+				"recording", id, "file", filepath.Base(rec.Path))
+			fail(w, http.StatusConflict, 3003, "录制文件是符号链接，已保留记录")
+			return
+		}
+		if rerr := os.Remove(rec.Path); rerr != nil && !os.IsNotExist(rerr) {
+			slog.Warn("删除录制文件失败",
+				"recording", id, "file", filepath.Base(rec.Path), "err", rerr)
+			fail(w, http.StatusInternalServerError, 5001, "删除录制文件失败")
+			return
+		}
 	}
 	if err := a.st.DeleteRecording(r.Context(), id); err != nil {
 		fail(w, http.StatusInternalServerError, 5001, err.Error())
@@ -1157,6 +1323,44 @@ func (a *API) stopRecording(w http.ResponseWriter, r *http.Request) {
 	}
 	a.rec.Stop(id)
 	ok(w, map[string]any{"stopped": true})
+}
+
+// recordPathInside 判断 path 是否确实位于录制目录之内。
+//
+// 用 filepath.Rel 而不是 strings.HasPrefix：前缀是**字符串**关系，不是目录关系。
+// dir=/data/litv/record 时，/data/litv/record-old/x.ts 也满足字符串前缀，
+// 但它根本不在录制目录里。
+//
+// 根目录为空时一律返回 false（fail closed）：拿不到根目录就无从证明归属，
+// 宁可保留文件并报错，也不要凭猜测删东西。
+//
+// 同时拒绝 rel == "."（path 就是根目录本身，是个目录不是文件）
+// 与任何以 ".." 开头的相对路径（在根目录之外）。
+func (a *API) recordPathInside(path string) bool {
+	root := strings.TrimSpace(a.recordDir)
+	if root == "" {
+		return false
+	}
+	rootAbs, err := filepath.Abs(filepath.Clean(root))
+	if err != nil {
+		return false
+	}
+	pAbs, err := filepath.Abs(filepath.Clean(path))
+	if err != nil {
+		return false
+	}
+	rel, err := filepath.Rel(rootAbs, pAbs)
+	if err != nil {
+		return false
+	}
+	if filepath.IsAbs(rel) {
+		// Windows 上跨盘符时 Rel 会返回绝对路径。
+		return false
+	}
+	if rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
+		return false
+	}
+	return true
 }
 
 // recordingFile 把录制文件吐给客户端。

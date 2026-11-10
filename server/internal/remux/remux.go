@@ -8,6 +8,17 @@
 //
 // 实现方式：每个频道按需拉起一个 ffmpeg 子进程写 HLS 切片，
 // 空闲一段时间后自动回收。
+//
+// # 出站地址策略（safedial）管不到这里
+//
+// 上游 URL 是直接交给 ffmpeg 的，由它自己建连、自己跟随重定向，
+// 我们既没有 DialContext 也没有 Control 可以挂钩。
+// 所以转封装这条路径**不经过** safedial 的判段；能拦住"打 NAS 自己"
+// 与云元数据端点的只有其它入口（播放代理 /seg、fetch、probe、logo）。
+//
+// 真要收口，得给 ffmpeg 传 `-protocol_whitelist` / 走本地代理转发，
+// 那属于播放链路的行为变更（会影响 4K 高码率源的 CPU 与延迟），
+// 需要和播放域一起评估，本轮刻意不动。
 package remux
 
 import (

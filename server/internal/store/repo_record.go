@@ -97,6 +97,47 @@ func (s *Store) DeleteRecording(ctx context.Context, id int64) error {
 	return err
 }
 
+// RecordingIDsByChannels 列出这些频道下、状态在给定集合里的录制 id。
+//
+// 用途：删频道**之前**先把还在跑的录制进程停掉。
+// 只改 DB 里的 status 是停不掉 ffmpeg 的——进程会继续往盘上写，
+// 而 deleteChannelsTx 已经把那一行改成 canceled 了，
+// 结果是一个没人认识、也没人负责收尾的写盘任务。
+func (s *Store) RecordingIDsByChannels(ctx context.Context, channelIDs []int64, statuses []string) ([]int64, error) {
+	if len(channelIDs) == 0 || len(statuses) == 0 {
+		return nil, nil
+	}
+	chPH := strings.Repeat("?,", len(channelIDs))
+	chPH = chPH[:len(chPH)-1]
+	stPH := strings.Repeat("?,", len(statuses))
+	stPH = stPH[:len(stPH)-1]
+
+	args := make([]any, 0, len(channelIDs)+len(statuses))
+	for _, id := range channelIDs {
+		args = append(args, id)
+	}
+	for _, st := range statuses {
+		args = append(args, st)
+	}
+
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT id FROM recordings WHERE channel_id IN (`+chPH+`) AND status IN (`+stPH+`)`,
+		args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []int64{}
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out = append(out, id)
+	}
+	return out, rows.Err()
+}
+
 // RecordingsByStatus 给调度器用：取某状态、按开始时间升序的一批。
 func (s *Store) RecordingsByStatus(ctx context.Context, status string, limit int) ([]Recording, error) {
 	if limit <= 0 {

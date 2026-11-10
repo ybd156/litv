@@ -1,9 +1,15 @@
-import { http, request } from '../http'
+import { http } from '../http'
 import { asArray } from '../normalize'
 import type { BindCode, Device, DeviceConfig } from '../types'
 
+/**
+ * 设备列表。
+ *
+ * silent：设备页自己有 `StateBlock` 错误块（带重试），概览页用 `Promise.allSettled`
+ * 自己兜底（拉不到就显示 0/—），都不需要再叠一条全局红条。
+ */
 export async function listDevices(): Promise<Device[]> {
-  const raw = await http.get<unknown>('devices')
+  const raw = await http.get<unknown>('devices', undefined, { silent: true })
   return asArray<Device>(raw)
 }
 
@@ -17,7 +23,7 @@ export async function listDevices(): Promise<Device[]> {
  * silent：这是可选请求（页面自己有兜底），失败不该糊用户一脸红条。
  */
 export async function listPendingDevices(): Promise<Device[]> {
-  const raw = await request<unknown>('devices', { query: { status: 'pending' }, silent: true })
+  const raw = await http.get<unknown>('devices', { status: 'pending' }, { silent: true })
   return asArray<Device>(raw)
 }
 

@@ -12,6 +12,7 @@ import type { Device } from '@/api/types'
 import { toErrorMessage } from '@/api/errors'
 import { confirmAction, toast } from '@/utils/feedback'
 import { fmtDateTime, timeAgo } from '@/utils/format'
+import { canWrite } from '@/session'
 
 interface DevicesData {
   devices: Device[]
@@ -20,6 +21,9 @@ interface DevicesData {
 
 const { data, loading, error, run } = useAsyncData<DevicesData>(async () => {
   const [d, p] = await Promise.allSettled([devicesApi.listDevices(), devicesApi.listPendingDevices()])
+  // 两个都失败才算「拉取失败」：现在这两个请求都是 silent（页面自己有错误块），
+  // 要是这里也把失败吞掉，后端挂了页面会显示成「一台设备都没有」——比报错更误导人。
+  if (d.status === 'rejected' && p.status === 'rejected') throw d.reason
   const devices = d.status === 'fulfilled' ? d.value : []
   let pending = p.status === 'fulfilled' ? p.value : []
   if (pending.length === 0) pending = devices.filter((x) => x.status === 'pending')
@@ -178,12 +182,24 @@ const columns: DataTableColumns<Device> = [
         default: () => [
           h(
             NButton,
-            { size: 'tiny', quaternary: true, type: 'primary', onClick: () => openConfig(row) },
+            {
+              size: 'tiny',
+              quaternary: true,
+              type: 'primary',
+              disabled: !canWrite.value,
+              onClick: () => openConfig(row),
+            },
             { default: () => '配置' },
           ),
           h(
             NButton,
-            { size: 'tiny', quaternary: true, type: 'error', onClick: () => revoke(row) },
+            {
+              size: 'tiny',
+              quaternary: true,
+              type: 'error',
+              disabled: !canWrite.value,
+              onClick: () => revoke(row),
+            },
             { default: () => '吊销' },
           ),
         ],
@@ -205,7 +221,7 @@ onMounted(() => void run())
           <template #icon><Icon name="refresh" :size="15" /></template>
           刷新
         </NButton>
-        <NButton size="small" type="primary" @click="bindShow = true">
+        <NButton size="small" type="primary" :disabled="!canWrite" @click="bindShow = true">
           <template #icon><Icon name="key" :size="15" /></template>
           生成绑定码
         </NButton>
@@ -223,8 +239,8 @@ onMounted(() => void run())
           <span class="sub">{{ d.platform }}{{ d.model ? ` · ${d.model}` : '' }}{{ d.ip ? ` · ${d.ip}` : '' }}</span>
         </div>
         <NSpace :size="6">
-          <NButton size="tiny" type="primary" :loading="busyId === d.id" @click="approve(d)">批准</NButton>
-          <NButton size="tiny" quaternary @click="reject(d)">拒绝</NButton>
+          <NButton size="tiny" type="primary" :disabled="!canWrite" :loading="busyId === d.id" @click="approve(d)">批准</NButton>
+          <NButton size="tiny" quaternary :disabled="!canWrite" @click="reject(d)">拒绝</NButton>
         </NSpace>
       </div>
     </div>
@@ -243,7 +259,7 @@ onMounted(() => void run())
         @retry="run()"
       >
         <template #empty-action>
-          <NButton size="small" type="primary" @click="bindShow = true">
+          <NButton size="small" type="primary" :disabled="!canWrite" @click="bindShow = true">
             <template #icon><Icon name="key" :size="14" /></template>
             生成绑定码去绑一台
           </NButton>

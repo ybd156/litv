@@ -28,6 +28,9 @@ interface SettingsData {
 
 const { data, loading, error, run } = useAsyncData<SettingsData>(async () => {
   const [c, i] = await Promise.allSettled([systemApi.fetchSystemConfig(), systemApi.fetchSystemInfo()])
+  // 两个都失败才报错：这两个请求都是 silent（页面有错误块），如果这里也吞掉，
+  // 后端挂掉时设置页会显示一堆「默认值」并让人以为配置就是那样——比报错危险。
+  if (c.status === 'rejected' && i.status === 'rejected') throw c.reason
   return {
     config: c.status === 'fulfilled' ? c.value : null,
     info: i.status === 'fulfilled' ? i.value : null,

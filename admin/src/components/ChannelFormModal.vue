@@ -30,15 +30,25 @@ const emit = defineEmits<{
 const saving = ref(false)
 const errors = reactive<{ name: string }>({ name: '' })
 
+/** 频道本身的可编辑字段（不含 epg_id，见下面 epgId 的注释） */
 const form = reactive<ChannelInput>({
   name: '',
   group: '',
   number: undefined,
   logo: '',
   tvg_id: '',
-  epg_id: null,
   enabled: true,
 })
+
+/**
+ * EPG 映射是**独立的写操作**，不跟着频道请求体走。
+ *
+ * 原因：`POST /channels` 与 `PUT /channels/{id}` 的请求体里都没有 `epg_id` 字段，
+ * 而服务端 `decode()` 开了 `DisallowUnknownFields` —— 把它塞进 payload 就是
+ * 400 `参数错误: json: unknown field "epg_id"`，整个「保存」直接失败。
+ * 映射只能走 `PUT /channels/{id}/epg`（`channelsApi.setChannelEpg`）。
+ */
+const epgId = ref('')
 
 const isEdit = computed(() => Boolean(props.channel?.id))
 
@@ -57,8 +67,8 @@ watch(
     form.number = c?.number
     form.logo = c?.logo ?? ''
     form.tvg_id = c?.tvg_id ?? ''
-    form.epg_id = c?.epg_id ?? null
     form.enabled = c?.enabled ?? true
+    epgId.value = c?.epg_id ?? ''
   },
 )
 
@@ -73,15 +83,55 @@ async function submit(): Promise<void> {
       number: typeof form.number === 'number' ? form.number : undefined,
       logo: (form.logo ?? '').trim(),
       tvg_id: (form.tvg_id ?? '').trim(),
-      epg_id: form.epg_id ? String(form.epg_id) : null,
       enabled: form.enabled,
     }
+    const wantedEpg = (epgId.value || '').trim()
+    /**
+     * 半步失败要能看见。
+     *
+     * 「保存频道」其实是两次 HTTP：先写频道字段，再单独写 EPG 映射（不是事务，
+     * 服务端也没有跨这两个请求的事务能力）。如果第二次失败，频道字段**已经生效**，
+     * 这时绝不能报「保存失败」——用户会以为没存上、反复重试，甚至重复新建。
+     * 所以单独记一条提示，最后用 warning 说清「哪一步成了、哪一步没成」。
+     */
+    let epgWarning = ''
     if (props.channel?.id) {
-      await channelsApi.updateChannel(props.channel.id, payload)
-      toast.success('已保存')
+      const id = props.channel.id
+      // 先保存频道字段（部分更新，不会碰 epg_id）
+      await channelsApi.patchChannel(id, payload)
+      const before = (props.channel.epg_id ?? '').trim()
+      /**
+       * 什么时候要补打一次 EPG 接口：不只是「用户改了映射」，还包括「本来就有映射」。
+       *
+       * 原因：老服务端的 `PUT /channels/{id}` 是**全量覆盖**且 SET 里带 `epg_id=''`，
+       * 也就是说只要保存一次频道字段，映射就会被清掉。如果这里只在「有变化」时补写，
+       * 连上没升级的 NAS 时改个名字就会静默丢掉节目单。所以：只要这台频道**原本**
+       * 有映射，就无条件重写一遍（等值写入，幂等、无害）。服务端修好之后这一次
+       * 就是纯粹的冗余请求，可以按 A1 落地情况再收紧。
+       */
+      if (wantedEpg !== before || before !== '') {
+        try {
+          await channelsApi.setChannelEpg(id, wantedEpg || null)
+        } catch (e) {
+          epgWarning = `频道信息已保存，但 EPG 关联没写进去：${toErrorMessage(e)}。可到「EPG 管理 → 频道 ↔ EPG 映射」页重试。`
+        }
+      }
     } else {
-      await channelsApi.createChannel(payload)
-      toast.success('频道已添加')
+      const created = await channelsApi.createChannel(payload)
+      // 新建时服务端不接 epg_id，只能建完之后单独映射一次。
+      // 注意：这里**不能**失败后留在弹窗里让用户再点一次「添加」——那会建出重复频道。
+      if (wantedEpg && created?.id) {
+        try {
+          await channelsApi.setChannelEpg(created.id, wantedEpg)
+        } catch (e) {
+          epgWarning = `频道已建好，但 EPG 未关联：${toErrorMessage(e)}。可到「EPG 管理 → 频道 ↔ EPG 映射」页补上。`
+        }
+      }
+    }
+    if (epgWarning) {
+      toast.warning(epgWarning)
+    } else {
+      toast.success(props.channel?.id ? '已保存' : '频道已添加')
     }
     emit('update:show', false)
     emit('saved')
@@ -137,7 +187,7 @@ async function submit(): Promise<void> {
           <NInput v-model:value="form.tvg_id" placeholder="例如 cctv1" />
         </NFormItem>
         <NFormItem label="EPG 频道 ID（用于节目单）">
-          <NInput v-model:value="form.epg_id" placeholder="留空表示还没匹配" />
+          <NInput v-model:value="epgId" placeholder="留空表示还没匹配" />
         </NFormItem>
       </div>
 

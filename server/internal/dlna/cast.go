@@ -11,6 +11,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/litv/litv/server/internal/safedial"
 )
 
 // Renderer 是局域网里一个可被投屏的 DLNA 设备。
@@ -95,11 +97,15 @@ func DiscoverRenderers(ctx context.Context, timeout time.Duration) ([]Renderer, 
 	}
 
 	// 并发拉设备描述，避免设备多时串行等待
+	//
+	// cli 也接 safedial 默认策略：location 来自**局域网里别人的 SSDP 应答**，
+	// 是最典型的"不可信输入指向一个 URL"。默认档放行 RFC1918（投屏设备必然在 LAN），
+	// 但拒绝本机/链路本地/元数据端点。
 	var (
 		mu   sync.Mutex
 		wg   sync.WaitGroup
 		out  []Renderer
-		cli  = &http.Client{Timeout: 3 * time.Second}
+		cli  = &http.Client{Timeout: 3 * time.Second, Transport: safedial.DefaultPolicy().Transport()}
 		seen = map[string]bool{}
 	)
 	for loc := range locations {
@@ -240,16 +246,26 @@ func soapCall(ctx context.Context, controlURL, action, inner string) error {
 	req.Header.Set("Content-Type", `text/xml; charset="utf-8"`)
 	req.Header.Set("SOAPACTION", `"`+avTransportType+`#`+action+`"`)
 
-	cli := &http.Client{Timeout: 8 * time.Second}
+	// 出站也接 safedial 的默认策略：投屏目标一定是 LAN 设备（RFC1918 放行），
+	// 但绝不该是本机/链路本地/元数据端点。白名单（api.rendererTrusted）
+	// 是第一道闸，这里是第二道——两道都不能少。
+	cli := &http.Client{
+		Timeout:   8 * time.Second,
+		Transport: safedial.DefaultPolicy().Transport(),
+	}
 	resp, err := cli.Do(req)
 	if err != nil {
 		return err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 300 {
-		// 设备常在响应体里带 UPnPError，读一小段便于排查
-		b, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return fmt.Errorf("设备返回 %s: %s", resp.Status, strings.TrimSpace(string(b)))
+		// 只回状态码，**不回显对端响应体**。
+		//
+		// 以前这里把响应体前 512 字节拼进错误串，而错误串会一路
+		// 经 handlers → API 响应回给客户端。投屏目标是局域网里的第三方设备，
+		// 它的响应内容不受我们控制，不该被搬进我们的 API 输出里。
+		// 排查需要细节就看设备自己；我们这边的日志记状态码已经够定位。
+		return fmt.Errorf("设备返回 %s", resp.Status)
 	}
 	return nil
 }

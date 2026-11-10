@@ -33,7 +33,20 @@ bad() { printf '\033[31m[FAIL]\033[0m %s\n' "$*"; fail=1; }
 
 # ---------------------------------------------------------------- 1. YAML
 say "检查工作流 YAML"
-if [ -n "$PY" ]; then
+if [ -z "$PY" ]; then
+  echo "  （没有 python，跳过 YAML 检查）"
+elif ! "$PY" -c "import yaml" >/dev/null 2>&1; then
+  # 「有 python 但没装 PyYAML」必须和「YAML 真写坏了」区分开。
+  # 以前这里不区分：缺依赖时每个工作流都报「解析失败」，
+  # 于是「装个包就好」和「门禁文件真的坏了」在日志里长得一模一样。
+  # CI 里由 LITV_STRICT_YAML=1 强制为失败（build-check 会先装 PyYAML），
+  # 本地则只提示，不让人为了跑一次预检先装一堆东西。
+  if [ "${LITV_STRICT_YAML:-0}" = "1" ]; then
+    bad "缺少 PyYAML，无法解析工作流 YAML（CI 里必须装：python3 -m pip install pyyaml==6.0.2）"
+  else
+    echo "  （缺少 PyYAML，跳过工作流 YAML 检查；CI 会强制检查。本地装：pip install pyyaml）"
+  fi
+else
   for f in .github/workflows/*.yml; do
     [ -f "$f" ] || continue
     if "$PY" -c "import yaml,sys; yaml.safe_load(open(sys.argv[1],encoding='utf-8'))" "$f" 2>/dev/null; then
@@ -43,8 +56,6 @@ if [ -n "$PY" ]; then
       "$PY" -c "import yaml,sys; yaml.safe_load(open(sys.argv[1],encoding='utf-8'))" "$f" 2>&1 | tail -3
     fi
   done
-else
-  echo "  （没有 python，跳过 YAML 检查）"
 fi
 
 # ---------------------------------------------------------------- 2. bash -n

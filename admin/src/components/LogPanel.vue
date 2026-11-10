@@ -10,17 +10,34 @@ import { toast } from '@/utils/feedback'
 const lines = ref<string[]>([])
 const loading = ref(false)
 const error = ref('')
+/** 服务端给的说明（现在它才是空日志时唯一有用的信息） */
+const hint = ref('')
 const autoRefresh = ref(false)
 const boxRef = ref<HTMLElement | null>(null)
 let timer: number | undefined
 
 const lineCount = computed(() => lines.value.length)
 
+/**
+ * 空态提示。
+ *
+ * ★ 不要替服务端编原因：`GET /system/logs` 目前返回 `{hint, lines: []}`，
+ * 也就是说服务端还没做日志环形缓冲，空是**预期**的。以前这里写死
+ * 「服务刚起来，或者日志级别设太高了」，把人往两个错误方向引——
+ * 用户会去翻日志级别，而真正的原因是接口没接上。
+ * 现在优先显示服务端那句 hint（日志文件到底在哪），实在没有才给中性文案。
+ */
+const emptyHint = computed(
+  () => hint.value || '服务端暂未提供日志内容。服务端日志由 fnOS 写入数据目录，可在 NAS 上直接查看。',
+)
+
 async function load(silent = false): Promise<void> {
   loading.value = true
   if (!silent) error.value = ''
   try {
-    lines.value = await systemApi.fetchLogs(200)
+    const view = await systemApi.fetchLogView(200)
+    lines.value = view.lines
+    hint.value = view.hint
     await nextTick()
     if (boxRef.value) boxRef.value.scrollTop = boxRef.value.scrollHeight
   } catch (e) {
@@ -77,7 +94,12 @@ onBeforeUnmount(() => {
     </div>
 
     <StateBlock :loading="loading && lines.length === 0" :error="error" :min-height="260" @retry="load()">
-      <StateBlock :empty="lines.length === 0" empty-title="日志是空的" empty-hint="服务刚起来，或者日志级别设太高了" :min-height="260">
+      <StateBlock
+        :empty="lines.length === 0"
+        empty-title="服务端没有返回日志内容"
+        :empty-hint="emptyHint"
+        :min-height="260"
+      >
         <div ref="boxRef" class="log-box">
           <div v-for="(l, i) in lines" :key="i" class="log-line" :class="levelOf(l)">
             <span class="no">{{ i + 1 }}</span>

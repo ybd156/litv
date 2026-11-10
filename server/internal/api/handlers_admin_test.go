@@ -11,6 +11,7 @@ import (
 
 	"github.com/litv/litv/server/internal/auth"
 	"github.com/litv/litv/server/internal/config"
+	"github.com/litv/litv/server/internal/safedial"
 	"github.com/litv/litv/server/internal/store"
 	"github.com/litv/litv/server/internal/stream"
 )
@@ -46,6 +47,13 @@ func newTestAPI(t *testing.T) (*API, string) {
 
 	a := New(cfg, st, hub, "test")
 	a.SetConfigPath(cfgPath)
+	// 显式放行回环地址，**只在这里**。
+	//
+	// httptest 服务器都监听 127.0.0.1，而生产默认策略必须拒绝回环
+	// （那正是"让 NAS 打自己管理口"的入口）。测试需要正向路径能通，
+	// 所以走 Policy 注入，而不是放宽 safedial.DefaultPolicy——
+	// 后者会让所有部署一起失去这条防线。
+	a.dialPolicy = safedial.Policy{AllowLoopback: true}
 	return a, cfgPath
 }
 

@@ -12,7 +12,8 @@ import com.litv.tv.data.Prefs
  * 多内核调度器：负责"选哪个内核、失败了换哪个、成功了记住它"。
  *
  * 这是整个播放链路里最容易写烂的部分。要点：
- *  1. 起播超时（默认 6s）就当失败——直播不能无限等，用户早就换台了；
+ *  1. 起播超时（读 `prefs.startTimeoutMs`，默认 15s）就当失败——直播不能无限等，
+ *     用户早就换台了。注意别把这个默认值当成"常量"：设置页可改（3000~15000）；
  *  2. 成功后把"这个频道用哪个内核"记到本地，下次直接命中，不再试错；
  *  3. 换台时不重建内核实例（Exo 复用 player、mpv 复用实例），省 200~400ms。
  */
@@ -263,6 +264,11 @@ class PlayerManager(
         }
         prepared = false
         stallRecovered = 0
+        // 重试额度也必须按次重置。
+        // 以前只重置上面两个：如果上一个台是"重试过一次才成功"的，
+        // retried 会以 1 的残值留给下一个台，于是换台后的第一次超时
+        // 直接跳过了重试（设置里的"重试 1 次"时有时无）。
+        retried = 0
         startCurrent()
     }
 
@@ -496,8 +502,6 @@ class PlayerManager(
 
     private companion object {
         const val TAG = "PlayerManager"
-        // 起不来的内核不该拖 6 秒——3 秒足够判断，超时就换下一个
-        const val START_TIMEOUT_MS = 5000L
 
         /** 卡顿检测间隔。4 秒读一次播放位置，对 CPU 几乎没有开销。 */
         const val STALL_CHECK_MS = 4000L

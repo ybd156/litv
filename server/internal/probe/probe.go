@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/litv/litv/server/internal/safedial"
 	"github.com/litv/litv/server/internal/store"
 )
 
@@ -46,6 +47,9 @@ func New(st *store.Store, timeout time.Duration, concurrency int, userAgent stri
 		client: &http.Client{
 			Timeout: timeout,
 			Transport: &http.Transport{
+				// 探测的是用户导入的线路 URL（外部输入），必须过出站地址策略。
+				// 默认档：放行 LAN（LAN 源要能探测），拒本机/链路本地/元数据。
+				DialContext:         safedial.DefaultPolicy().DialContext,
 				MaxIdleConns:        32,
 				MaxIdleConnsPerHost: 4,
 				IdleConnTimeout:     30 * time.Second,

@@ -4,8 +4,25 @@
 """
 import os
 import re
+import sys
 
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# Windows 的控制台默认编码是 GBK，打印 ✅ / ❌ 会抛 UnicodeEncodeError，
+# 于是「全部对得上」也变成非零退出——本地跑的人会误判成接口对不上。
+# 显式切到 UTF-8：让退出码只反映接口是否真的对得上，而不是控制台能不能画勾。
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except (AttributeError, ValueError):
+        pass
+
+# 仓库根 = 本文件往上三级（tools/checks/<this>.py）。
+#
+# 这里曾经只往上两级，于是 ROOT 落在 tools/ 上，去拼
+# tools/server/internal/api/api.go —— 文件不存在，直接 AttributeError/FileNotFoundError。
+# 换句话说：这个检查器从放进 tools/checks/ 的那天起就跑不起来，
+# 而它没接线进 CI，所以「跑不起来」这件事没有任何人会发现。
+# 门禁脚本的路径推导必须自己先被验证一次，否则它守护的一切都是幻觉。
+ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # ---- 1. 服务端路由 ----
 api_go = os.path.join(ROOT, "server/internal/api/api.go")
@@ -59,8 +76,6 @@ else:
 # 以前这里到此为止，脚本永远 exit 0 —— 即使打印了 ❌，
 # 挂进 CI 也是绿的，等于没有门禁。
 # 一个"只打印不失败"的检查脚本比没有更糟：它给人一种已被守护的错觉。
-import sys
-
 if bad:
     sys.exit(1)
 sys.exit(0)

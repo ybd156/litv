@@ -26,15 +26,29 @@ export interface Source {
   type: SourceType
   url: string
   enabled: boolean
-  /** ok=最近一次拉取成功；error=失败；never=还没拉过 */
+  /**
+   * ok=最近一次拉取成功；error=失败；never=还没拉过。
+   *
+   * ★ 服务端 `GET /sources` 现在给这个字段（视图层推导），但**老服务端没有**。
+   * 界面不能只认它：`SourcesView` 里用 `last_error` / `last_fetch_at` 兜底推导，
+   * 否则一次服务端降级就会让「拉取失败」重新变成「正常」。
+   */
   status?: SourceStatus | string
-  last_fetch_at?: string | null
-  /** 最近一次失败原因（给用户看的人话） */
+  /** 服务端是 Unix **秒**（Go int64）；这里兼容历史字符串形态 */
+  last_fetch_at?: string | number | null
+  /**
+   * 服务端 store.Source 的原始字段名（永远存在）。
+   * `error` 是视图层给的同义键——两者都读，谁在就用谁。
+   */
+  last_error?: string | null
+  /** 与 last_error 同义（新视图两者都给）。最近一次失败原因，给用户看的人话 */
   error?: string | null
   /** 这条源解析出多少频道（可选字段，服务端有就展示） */
   channel_count?: number
   /** 这个源专属的 User-Agent（空 = 用全局默认） */
   user_agent?: string
+  /** 创建时间（Unix 秒） */
+  created_at?: number
 }
 
 export interface SourceInput {
@@ -76,17 +90,42 @@ export interface Channel {
   epg_id?: string | null
   enabled: boolean
   stream_count?: number
+  /** 来源源 id（0 = 手工建的）。服务端一直有这个字段，之前类型里漏了，页面只能强转 */
+  source_id?: number
+  /** 排序值（服务端给，界面不直接编辑，拖拽走 reorder 接口） */
+  sort?: number
 }
 
+/**
+ * 创建频道。
+ *
+ * ★ **不含 `epg_id`**：服务端 `POST /channels` 的请求体里没有这个字段，而 `decode()`
+ * 开了 `DisallowUnknownFields`，多传一个 `epg_id` 就是 400「参数错误: json: unknown field」。
+ * EPG 映射统一走 `PUT /channels/{id}/epg`（见 `channels.ts` 的 `setChannelEpg`）。
+ */
 export interface ChannelInput {
   name: string
   group: string
   number?: number
   logo?: string
   tvg_id?: string
-  epg_id?: string | null
   enabled: boolean
 }
+
+/**
+ * 更新频道（部分更新）。
+ *
+ * 服务端按「给了哪个字段就改哪个」处理，所以这里全部可选；
+ * 同样**不含 `epg_id`**（那是 `setChannelEpg` 的活）。
+ */
+export type ChannelPatch = Partial<{
+  name: string
+  group: string
+  number: number
+  logo: string
+  tvg_id: string
+  enabled: boolean
+}>
 
 export interface ChannelPage {
   total: number
@@ -97,11 +136,19 @@ export interface ChannelStream {
   id: number
   url: string
   source_id?: number
+  /**
+   * ⚠️ 只有 mock 会填这个字段；真服务端 `GET /channels/{id}/streams` 返回的是
+   * store.Stream（id/url/quality/priority/headers_json/health/latency_ms），没有来源名。
+   * 所以面板必须用 `source_id` 兜底，不能只靠它。
+   */
   source_name?: string
   /** 例如 1080P / 4Mbps，服务端探测有就展示 */
   quality?: string
   enabled?: boolean
   latency_ms?: number
+  /** 1 健康 / 0 失效 / -1 未探测 */
+  health?: number
+  priority?: number
 }
 
 export interface StreamInput {

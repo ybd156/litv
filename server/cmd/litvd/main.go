@@ -280,12 +280,21 @@ func main() {
 		}
 	}
 
+	// 录制目录：先算出来，**无条件**注入 API。
+	//
+	// 为什么无条件：api.deleteRecording 要用它证明"这个文件属于录制目录"
+	// 才肯删文件。以前这里只在 cfg.Record.Enabled 时算进一个局部变量，
+	// 从不回写 cfg，于是默认配置（cfg.Record.Dir 为空）下那条校验
+	// 拿到的根目录是空串，判断恒假 —— DB 行被删、文件永久残留。
+	// 关掉录制之后用户仍然需要删掉历史文件，所以这里也必须有值。
+	recDir := cfg.Record.Dir
+	if recDir == "" {
+		recDir = filepath.Join(cfg.Stream.CacheDir, "recordings")
+	}
+	a.SetRecordDir(recDir)
+
 	// 录制中心
 	if cfg.Record.Enabled {
-		recDir := cfg.Record.Dir
-		if recDir == "" {
-			recDir = filepath.Join(cfg.Stream.CacheDir, "recordings")
-		}
 		recMgr := record.NewManager(st, record.Options{
 			FFmpeg:    cfg.FFmpegPath(),
 			Dir:       recDir,

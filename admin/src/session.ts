@@ -1,4 +1,4 @@
-import { reactive } from 'vue'
+import { computed, reactive } from 'vue'
 import { isApiError, toErrorMessage } from '@/api/errors'
 import { fetchMe } from '@/api/modules/system'
 import type { Me } from '@/api/types'
@@ -10,6 +10,17 @@ export const session = reactive({
   me: null as Me | null,
   error: '',
 })
+
+/**
+ * 当前账号能不能做写操作。
+ *
+ * ★ 服务端语义（`api.go` requireAdmin）：非管理员**可以 GET 全部管理接口**，
+ * 只有非 GET 才 403/2002。也就是说只读账号能把每个页面都看一遍，
+ * 但所有「保存/删除/停用」按钮点下去才报错——这对用户是纯浪费。
+ * 这里只做**提示与禁用按钮**，不动路由也不做权限拦截：
+ * 权限判定的唯一权威是服务端，前端拦下来只是省一次 403。
+ */
+export const canWrite = computed(() => session.me?.is_admin === true)
 
 /**
  * 管理台不设登录页：身份来自飞牛网关注入的 X-Trim-* 头，

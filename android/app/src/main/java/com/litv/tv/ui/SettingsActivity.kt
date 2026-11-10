@@ -9,6 +9,7 @@ import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import com.litv.tv.LitvApp
 import com.litv.tv.R
+import com.litv.tv.data.PlaybackDefaults
 import com.litv.tv.player.EngineKind
 
 /**
@@ -103,17 +104,22 @@ class SettingsActivity : AppCompatActivity() {
             app.prefs.numberJumpTimeoutMs = v.toInt(); labelNumTimeout(v.toInt())
         }
 
-        // 起播超时：慢设备/走代理时 3 秒会误判成"起不来"，这里可调
+        // 起播超时：慢设备/走代理时 3 秒会误判成"起不来"，这里可调。
+        // 候选与默认值都来自 PlaybackDefaults（单一来源）；
+        // wrap = false：这是唯一一条"越界代价很大"的行——15 秒上的用户
+        // 再点一下不应该直接掉到 3 秒（那等于把起播判死）。
         bindCycle(R.id.rowStartTimeout, valueStartTimeout,
-            listOf("3000", "5000", "8000", "12000"), app.prefs.startTimeoutMs.toString()) { v ->
-            app.prefs.startTimeoutMs = v.toIntOrNull() ?: 5000
+            PlaybackDefaults.START_TIMEOUT_OPTIONS_MS.map { it.toString() },
+            app.prefs.startTimeoutMs.toString(), wrap = false) { v ->
+            app.prefs.startTimeoutMs = v.toIntOrNull() ?: PlaybackDefaults.START_TIMEOUT_MS
             labelStartTimeout(app.prefs.startTimeoutMs)
         }
 
         // 超时重试次数：网络抖动时多试几次比直接换内核好
         bindCycle(R.id.rowRetry, valueRetry,
-            listOf("0", "1", "2", "3"), app.prefs.retryCount.toString()) { v ->
-            app.prefs.retryCount = v.toIntOrNull() ?: 1
+            PlaybackDefaults.RETRY_OPTIONS.map { it.toString() },
+            app.prefs.retryCount.toString()) { v ->
+            app.prefs.retryCount = v.toIntOrNull() ?: PlaybackDefaults.RETRY_COUNT
             labelRetry(app.prefs.retryCount)
         }
 
@@ -143,26 +149,36 @@ class SettingsActivity : AppCompatActivity() {
     /**
      * 把一行做成「左右键循环切换」。
      * 注意：这里不用 SeekBar / Spinner —— TV 上它们很难用遥控器操作。
+     *
+     * @param wrap 到头之后是否回绕。大多数行回绕更顺手；但"起播超时"这种
+     *             越界代价很大的行要关掉——15 秒上再点一下变成 3 秒，
+     *             等于把本来能起播的流判死。
      */
     private fun bindCycle(
         rowId: Int,
         valueView: TextView,
         options: List<String>,
         current: String,
+        wrap: Boolean = true,
         onPick: (String) -> Unit,
     ) {
         val row = findViewById<View>(rowId)
-        var idx = options.indexOf(current).let { if (it < 0) 0 else it }
+        // 当前值可能不在候选里（历史值 / 手工改过偏好）。以前是 indexOf 找不到就
+        // 静默回落到 0：界面显示"3 秒"，用户一按右键就真被改成 5 秒——
+        // 看到的值和实际在用的值根本不是一回事。这里把当前值并进候选，
+        // 保证"显示的就是在用的"。
+        val list = mergeCandidate(options, current)
+        var idx = list.indexOf(current).let { if (it < 0) 0 else it }
 
         fun apply() {
-            val v = options[idx]
+            val v = list[idx]
             onPick(v)
             valueView.text = v
             status.text = ""
         }
 
         row.setOnClickListener {
-            idx = (idx + 1) % options.size
+            idx = stepIndex(idx, list.size, +1, wrap)
             apply()
         }
         // 左右键也能改，符合"看到高亮就能改"的直觉
@@ -170,14 +186,37 @@ class SettingsActivity : AppCompatActivity() {
             if (event.action != android.view.KeyEvent.ACTION_DOWN) return@setOnKeyListener false
             when (keyCode) {
                 android.view.KeyEvent.KEYCODE_DPAD_RIGHT -> {
-                    idx = (idx + 1) % options.size; apply(); true
+                    idx = stepIndex(idx, list.size, +1, wrap); apply(); true
                 }
                 android.view.KeyEvent.KEYCODE_DPAD_LEFT -> {
-                    idx = (idx - 1 + options.size) % options.size; apply(); true
+                    idx = stepIndex(idx, list.size, -1, wrap); apply(); true
                 }
                 else -> false
             }
         }
+    }
+
+    /**
+     * 把「当前值」并进候选列表。
+     *
+     * 全是数字的候选按数值升序重排（保证循环方向符合直觉）；
+     * 遇到非数字候选（auto/exo/tv…）就原样追加到末尾，不动原有顺序。
+     */
+    private fun mergeCandidate(options: List<String>, current: String): List<String> {
+        if (options.contains(current)) return options
+        val asNumber = current.toIntOrNull() ?: return options + current
+        val numbers = ArrayList<Int>(options.size + 1)
+        options.forEach { v -> v.toIntOrNull()?.let { numbers.add(it) } }
+        numbers.add(asNumber)
+        return numbers.distinct().sorted().map { it.toString() }
+    }
+
+    /** 循环切换的下标推进。[wrap] = false 时空转（停在边界上）。 */
+    private fun stepIndex(idx: Int, size: Int, delta: Int, wrap: Boolean): Int {
+        if (size <= 0) return 0
+        val next = idx + delta
+        if (wrap) return ((next % size) + size) % size
+        return next.coerceIn(0, size - 1)
     }
 
     private fun refreshAllLabels() {

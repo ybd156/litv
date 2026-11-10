@@ -88,6 +88,26 @@ func (s *Store) UpdateSource(ctx context.Context, v Source) error {
 }
 
 // DeleteSource 删除源，并清理其导入的频道。
+//
+// **已知问题（本轮未修，不要以为这里是安全的）**：
+// ImportChannels 的判重键是 (name, group_name)，**不含 source_id**，
+// 而 channels.source_id 只记"首个导入者"。所以当两个源都含同名同分组频道时，
+// 删 A 源会把 B 源正在用的那条频道一起删掉（B 的线路挂在 A 的频道上，
+// 级联一起没了），B 下次刷新会重新建一条新频道——
+// 收藏、跨端续播、开播提醒全部指向已经不存在的 id。
+//
+// 为什么本轮不修：正确的语义是「删本源的 streams，然后只删已无残留线路的频道」，
+// 但 streams 表**没有 source_id** 列（建表语句、store.Stream 结构体、
+// ListStreams 的 SELECT 三处互证），当前 schema 无法表达"这条线路属于哪个源"。
+// 先删后判等于没改，先判后删则一个都不删——硬做只会得到一段
+// 能编译但永远不生效的 SQL，比不修更危险。
+//
+// 后续方案（expand-and-contract）：
+//  1. additive 迁移：`ALTER TABLE streams ADD COLUMN source_id INTEGER NOT NULL DEFAULT 0`
+//     （db.go 里已有同形态的增量列迁移先例）；
+//  2. ImportChannels 写入来源；历史行按 channel.source_id 回填；
+//  3. DeleteSource 改成「删本源的 streams → 只删已无残留线路的频道」；
+//  4. 双写观察一个版本后再切换到新语义。
 func (s *Store) DeleteSource(ctx context.Context, id int64) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -101,6 +121,16 @@ func (s *Store) DeleteSource(ctx context.Context, id int64) error {
 		return err
 	}
 	return tx.Commit()
+}
+
+// CountChannelsBySource 数一个源名下有多少频道。
+//
+// 给管理台的"删除源"确认文案用：文案必须说得出"会一并删除 N 个频道"，
+// 否则用户只能看到一个不带数字的"确定吗"。
+func (s *Store) CountChannelsBySource(ctx context.Context, sourceID int64) (int, error) {
+	var n int
+	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM channels WHERE source_id=?`, sourceID).Scan(&n)
+	return n, err
 }
 
 // MarkSourceFetched 记录拉取结果。
@@ -229,16 +259,163 @@ func (s *Store) CreateChannel(ctx context.Context, c Channel) (int64, error) {
 	return res.LastInsertId()
 }
 
-// UpdateChannel 更新频道。
+// UpdateChannel 更新频道的**可编辑字段**（全量覆盖这 6 列）。
+//
+// 硬约束：这条 SQL **不含 epg_id**。
+//
+// 以前 SET 里有 epg_id=?，而所有调用方都没设过 Channel.EpgID
+// （handler 的请求体里根本没这个字段），于是每次「成功保存频道」
+// 都会把 EPG 映射写成空串——节目单跟着消失，用户在另一个页面
+// 辛苦对好的映射每次编辑都被清掉一次，且没有任何提示。
+//
+// EPG 映射只能走 SetChannelEpgID（PUT /channels/{id}/epg）。
+// 不要为了「少一个接口」把它加回来。
 func (s *Store) UpdateChannel(ctx context.Context, c Channel) error {
-	_, err := s.db.ExecContext(ctx, `UPDATE channels SET number=?,name=?,group_name=?,logo=?,tvg_id=?,epg_id=?,enabled=? WHERE id=?`,
-		c.Number, c.Name, c.Group, c.Logo, c.TvgID, c.EpgID, boolInt(c.Enabled), c.ID)
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE channels SET number=?,name=?,group_name=?,logo=?,tvg_id=?,enabled=? WHERE id=?`,
+		c.Number, c.Name, c.Group, c.Logo, c.TvgID, boolInt(c.Enabled), c.ID)
 	return err
 }
 
-// DeleteChannel 删除频道。
+// ChannelPatch 是频道的**部分**更新参数：nil 表示「这一列不动」。
+//
+// 为什么需要它：UpdateChannel 是全量覆盖，而 HTTP 请求体曾经是非指针字段，
+// 于是 PUT /channels/{id} 只发 {"enabled":false} 时，其余列全部被写成零值——
+// 名称、分组、台标、tvg_id、台号被静默清空。
+// 用户在频道列表里点一下「停用」，台名就没了，而且没有任何提示。
+//
+// 三个必须保住的行为（都容易在实现时被"顺手防呆"掉）：
+//   - 显式清空必须生效：Group 传 "" 就是要清空分组，
+//     不能写成 NULLIF(?,'') 让用户永远清不空；
+//   - 数值 0 是合法输入：Number 传 0 就是要把台号设成 0，
+//     不能加 `> 0` 的判断把它当"没传"；
+//   - 用指针区分「没传」和「传了零值」，不要用非指针中间结构，
+//     否则 false/0/"" 会退化成"保持不变"，那是反向 bug。
+//
+// 硬约束：不含 epg_id。EPG 映射只走 SetChannelEpgID。
+type ChannelPatch struct {
+	Number  *int
+	Name    *string
+	Group   *string
+	Logo    *string
+	TvgID   *string
+	Enabled *bool
+}
+
+// PatchChannel 只写传入的列。
+//
+// 没有任何字段时只做存在性检查（返回 ErrNotFound 或 nil），
+// 保证 PUT /channels/999 不会静默成功。
+func (s *Store) PatchChannel(ctx context.Context, id int64, p ChannelPatch) error {
+	// 先判存在：SQLite 的 changes() 在「值没实际变化」时是否计数，
+	// 不同驱动/版本上语义不够直观，而频道更新是低频的管理操作，
+	// 多一条 SELECT 换确定的 404 语义是划算的。
+	var exists int
+	if err := s.db.QueryRowContext(ctx, `SELECT 1 FROM channels WHERE id=?`, id).Scan(&exists); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrNotFound
+		}
+		return err
+	}
+
+	// 列名是代码里的字面量，值全部走占位符——不存在拼接不可信值。
+	var sets []string
+	var args []any
+	add := func(col string, v any) {
+		sets = append(sets, col+"=?")
+		args = append(args, v)
+	}
+	if p.Number != nil {
+		add("number", *p.Number)
+	}
+	if p.Name != nil {
+		add("name", *p.Name)
+	}
+	if p.Group != nil {
+		add("group_name", *p.Group)
+	}
+	if p.Logo != nil {
+		add("logo", *p.Logo)
+	}
+	if p.TvgID != nil {
+		add("tvg_id", *p.TvgID)
+	}
+	if p.Enabled != nil {
+		add("enabled", boolInt(*p.Enabled))
+	}
+	if len(sets) == 0 {
+		return nil
+	}
+
+	args = append(args, id)
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE channels SET `+strings.Join(sets, ",")+` WHERE id=?`, args...)
+	return err
+}
+
+// DeleteChannel 删除一个频道及其依赖数据（事务）。
 func (s *Store) DeleteChannel(ctx context.Context, id int64) error {
-	_, err := s.db.ExecContext(ctx, `DELETE FROM channels WHERE id=?`, id)
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if err := deleteChannelsTx(ctx, tx, []int64{id}); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// deleteChannelsTx 在一个事务里删除频道及其所有引用数据。调用方提供事务。
+//
+// 为什么必须收拾干净：favorites / watch_progress / epg_reminders / play_events /
+// recordings 的 channel_id **都没有外键**（建表时故意没加，避免历史库迁移失败），
+// 所以删频道不会级联。留下的孤儿行不会报错，只会安静地坏掉：
+// TV 端「我的收藏」里点一个已删的台永远播不了，跨端续播提示一个不存在的频道，
+// 播放质量统计把事件记到一个没人认识的 channel_id 上。
+//
+// 参考 DeleteDevice（本文件下面）——它早就把这套做对了，这里只是补齐同款。
+//
+// recordings 刻意**不删行**：它是用户数据，不是派生状态。
+//   - finished：行在 → 文件可达，用户能在录制中心看到并自己删；
+//     盲删行会把 .mp4 永久留在磁盘上，而且再没有任何入口能发现它。
+//   - scheduled / recording：置 canceled。不能留 scheduled——
+//     调度器（record.Manager.tick）每 5 秒扫一次 status='scheduled'，
+//     频道已经不存在，那行会无限失败重试刷日志。
+//   - 绝不在事务里 os.Remove 文件：文件删除必须走 deleteRecording
+//     那套「规范化路径属于录制目录」的校验（见 api.deleteRecording）。
+func deleteChannelsTx(ctx context.Context, tx *sql.Tx, ids []int64) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	ph := strings.Repeat("?,", len(ids))
+	ph = ph[:len(ph)-1]
+	args := make([]any, 0, len(ids))
+	for _, id := range ids {
+		args = append(args, id)
+	}
+
+	// 顺序：先把"引用方"清掉，再删主表。
+	for _, stmt := range []string{
+		`DELETE FROM favorites      WHERE channel_id IN (` + ph + `)`,
+		`DELETE FROM watch_progress WHERE channel_id IN (` + ph + `)`,
+		`DELETE FROM epg_reminders  WHERE channel_id IN (` + ph + `)`,
+		`DELETE FROM play_events    WHERE channel_id IN (` + ph + `)`,
+	} {
+		if _, err := tx.ExecContext(ctx, stmt, args...); err != nil {
+			return err
+		}
+	}
+
+	// recordings：见上面注释，只取消未完成的，保留已完成的行。
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE recordings SET status='canceled'
+		 WHERE channel_id IN (`+ph+`) AND status IN ('scheduled','recording')`,
+		args...); err != nil {
+		return err
+	}
+
+	_, err := tx.ExecContext(ctx, `DELETE FROM channels WHERE id IN (`+ph+`)`, args...)
 	return err
 }
 
@@ -350,11 +527,14 @@ func (s *Store) BatchChannels(ctx context.Context, ids []int64, action, value st
 		sqlStr = `UPDATE channels SET enabled=1 WHERE id IN (` + ph + `)`
 	case "disable":
 		sqlStr = `UPDATE channels SET enabled=0 WHERE id IN (` + ph + `)`
-	case "delete":
-		sqlStr = `DELETE FROM channels WHERE id IN (` + ph + `)`
 	case "set_group":
 		sqlStr = `UPDATE channels SET group_name=? WHERE id IN (` + ph + `)`
 		args = append(args, value)
+	case "delete":
+		// 批量删除是多记录破坏性操作，必须走事务，并且要收拾引用表——
+		// 见 deleteChannelsTx 的注释（favorites / watch_progress / epg_reminders /
+		// play_events / recordings 的 channel_id 都没有外键，不会自动级联）。
+		return s.batchDeleteChannels(ctx, ids)
 	default:
 		return 0, fmt.Errorf("不支持的批量操作: %s", action)
 	}
@@ -366,6 +546,36 @@ func (s *Store) BatchChannels(ctx context.Context, ids []int64, action, value st
 		return 0, err
 	}
 	return res.RowsAffected()
+}
+
+// batchDeleteChannels 在事务里批量删除频道及其依赖数据，返回实际删掉的频道数。
+func (s *Store) batchDeleteChannels(ctx context.Context, ids []int64) (int64, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+
+	if err := deleteChannelsTx(ctx, tx, ids); err != nil {
+		return 0, err
+	}
+	// 先数再提交：tx 关闭后 RowsAffected 就取不到了。
+	// 用 COUNT 而不是拿 DELETE 的 RowsAffected：deleteChannelsTx 是共用的，
+	// 不该为了这一处把返回值搞复杂。
+	var n int64
+	ph := strings.Repeat("?,", len(ids))
+	ph = ph[:len(ph)-1]
+	args := make([]any, 0, len(ids))
+	for _, id := range ids {
+		args = append(args, id)
+	}
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM channels WHERE id IN (`+ph+`)`, args...).Scan(&n); err != nil {
+		return 0, err
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return n, nil
 }
 
 // ImportChannels 批量导入频道（导入时按 name+group 去重，避免重复刷新源导致爆炸）。
@@ -822,9 +1032,17 @@ func (s *Store) RegisterWithBindCode(ctx context.Context, key, tokenHash, name, 
 		`SELECT id,status,platform FROM devices WHERE device_key=?`, key).
 		Scan(&existID, &existStatus, &existPlatform)
 	if err == nil {
-		// 已 bound 但平台对不上：只凭一个 device_key 不足以换发可用 token，
-		// 否则知道 key 的人就能顶掉这台设备。直接拒绝，让客户端换新 key 重新走审批。
-		if existStatus == "bound" && existPlatform != platform {
+		// 平台不一致时**任何状态**都必须拒绝（bound / pending / revoked 一视同仁）。
+		//
+		// 以前只在 existStatus == "bound" 时拒绝，于是 pending/revoked 的行会被
+		// 直接覆盖 token_hash 并返回成功——知道一台待批准设备的 device_key，
+		// 就能把它顶掉，再让管理员"批准"那台其实是攻击者的设备。
+		// device_key 不是秘密（ANDROID_ID 派生，日志与截图里都可能出现），
+		// 它只能当"寻址"用，不能当"凭据"用。
+		//
+		// 平台一致时只更新 token 与最后在线时间，**保持原状态**：
+		// pending 的仍然 pending，不会因为"重复注册"就被批准。
+		if existPlatform != platform {
 			return 0, "", ErrDeviceKeyConflict
 		}
 		// 注意不要动 session_expires_at：置 0 会被 GetDeviceByToken 判成"已过期"，

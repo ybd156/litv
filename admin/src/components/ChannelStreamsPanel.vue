@@ -5,6 +5,7 @@ import * as channelsApi from '@/api/modules/channels'
 import type { ChannelStream } from '@/api/types'
 import { toErrorMessage } from '@/api/errors'
 import { confirmAction, toast } from '@/utils/feedback'
+import { canWrite } from '@/session'
 import Icon from './Icon.vue'
 
 const props = defineProps<{ channelId: number; channelName: string }>()
@@ -92,8 +93,10 @@ onMounted(() => void load())
         <NTag v-if="typeof s.latency_ms === 'number'" size="tiny" :bordered="false" type="info">
           {{ s.latency_ms }}ms
         </NTag>
-        <span class="src">{{ s.source_name || '手动添加' }}</span>
-        <NButton size="tiny" quaternary type="error" @click="remove(s)">
+        <span class="src">
+          {{ s.source_name || (s.source_id ? `源 #${s.source_id}` : '手动添加') }}
+        </span>
+        <NButton size="tiny" quaternary type="error" :disabled="!canWrite" @click="remove(s)">
           <template #icon><Icon name="trash" :size="13" /></template>
         </NButton>
       </li>
@@ -103,10 +106,11 @@ onMounted(() => void load())
       <NInput
         v-model:value="newUrl"
         size="small"
+        :disabled="!canWrite"
         placeholder="粘贴一条线路地址，例如 http://live.example.com/cctv1.m3u8"
         @keyup.enter="add"
       />
-      <NButton size="small" type="primary" secondary :loading="adding" @click="add">
+      <NButton size="small" type="primary" secondary :loading="adding" :disabled="!canWrite" @click="add">
         <template #icon><Icon name="plus" :size="14" /></template>
         加线路
       </NButton>

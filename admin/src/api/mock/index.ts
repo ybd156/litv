@@ -121,13 +121,17 @@ const routes: Route[] = [
         type: body.type ?? 'm3u',
         url: body.url,
         enabled: body.enabled ?? true,
+        // 三件套齐全：status / last_error / error（与真服务端视图对齐）
         status: 'never',
         last_fetch_at: null,
+        last_error: null,
         error: null,
         channel_count: 0,
       }
       db.sources.unshift(item)
-      return item
+      // ★ 真服务端只回 {id}（createSource → ok(w, {"id": id})）。
+      // mock 跟着回同样的形状，否则前端一旦去读 .name 就会在真机上 undefined。
+      return { id: item.id }
     },
   },
   {
@@ -160,13 +164,18 @@ const routes: Route[] = [
       if (!item) notFound(`源 ${id}`)
       item.last_fetch_at = isoNow()
       if (item.status === 'error') {
-        item.error = '拉取失败：HTTP 403 Forbidden，源站可能换了地址'
+        // 失败时两个键一起更新：界面对 error / last_error 是「谁在就用谁」，
+        // mock 只改一个就会造出真服务端不可能出现的组合。
+        item.last_error = '拉取失败：HTTP 403 Forbidden，源站可能换了地址'
+        item.error = item.last_error
       } else {
         item.status = 'ok'
+        item.last_error = null
         item.error = null
         item.channel_count = 18 + ((id * 7) % 40)
       }
-      return item
+      // 真服务端回 {parsed, inserted}（见 handlers_admin.go 的 refreshSource）
+      return { parsed: item.channel_count ?? 0, inserted: 0 }
     },
   },
   {
@@ -221,13 +230,16 @@ const routes: Route[] = [
         group: body.group || '未分组',
         logo: body.logo ?? '',
         tvg_id: body.tvg_id ?? '',
-        epg_id: body.epg_id ?? null,
+        // 创建时没有 EPG 映射：服务端 `POST /channels` 的请求体里没有 epg_id，
+        // 传了会被 DisallowUnknownFields 拒掉。映射只能之后走 /channels/{id}/epg。
+        epg_id: null,
         enabled: body.enabled ?? true,
         stream_count: 0,
       }
       db.channels.push(item)
       db.streams[item.id] = []
-      return item
+      // 真服务端只回 {id}
+      return { id: item.id }
     },
   },
   {
@@ -235,8 +247,27 @@ const routes: Route[] = [
     re: /^channels\/(\d+)$/,
     handle: (m, opts) => {
       const item = findChannel(Number(m[1]))
-      Object.assign(item, (opts.body ?? {}) as Partial<Channel>)
-      return item
+      // 部分更新：只覆盖请求里真的出现的键（与修好后的服务端语义一致）。
+      const patch = { ...((opts.body ?? {}) as Record<string, unknown>) }
+      // ★ epg_id 明确不经本接口：服务端请求体里没有这个字段，
+      // 塞进来会 400。这里也拒绝，避免 mock 下「能改」而真机不能改。
+      if ('epg_id' in patch) bad('EPG 映射请用 PUT /channels/{id}/epg', 1001)
+      for (const [k, v] of Object.entries(patch)) {
+        if (v === undefined) continue
+        ;(item as unknown as Record<string, unknown>)[k] = v
+      }
+      return { updated: true }
+    },
+  },
+  {
+    method: 'PUT',
+    re: /^channels\/(\d+)\/epg$/,
+    handle: (m, opts) => {
+      const item = findChannel(Number(m[1]))
+      const body = (opts.body ?? {}) as { epg_id?: string }
+      // 空串 = 解除映射（服务端 SetChannelEpgID(id, "")）
+      item.epg_id = body.epg_id ? body.epg_id : null
+      return { mapped: true }
     },
   },
   {

@@ -52,6 +52,18 @@ struct PlayerView: View {
     /// 转圈超时兜底任务（见 start() 里的说明）
     @State private var loadingWatchdog: Task<Void, Never>?
 
+    /// AVPlayer 失败观察（item.status KVO + 播放到尾失败通知）。
+    ///
+    /// 没有它的时候：HLS 403 / 断网 → AVPlayer 什么都不说，界面黑屏、转圈还已经收起来了，
+    /// 而 errorText 仍是 nil → 连「重试」按钮都不会出现。用户只能杀进程。
+    @State private var avWatcher: AVPlayerWatcher?
+
+    /// 本次起播有没有收到过播放器**任何**状态回调。
+    ///
+    /// 只用来区分"彻底没反应"（VLCKit 连 .error 都不发）和"还在慢慢起播"
+    /// （收到过 .buffering）。后者报错就是误伤。
+    @State private var sawPlaybackState = false
+
     /// 控件浮层是否可见。和 Android 手机端一致：
     /// 点画面呼出、4 秒自动收起，不常驻遮挡画面。
     @State private var controlsVisible = true
@@ -128,6 +140,9 @@ struct PlayerView: View {
         .onDisappear {
             player?.pause()
             player = nil
+            // KVO / 通知必须成对摘掉，否则 item 释放后再回调就是崩。
+            avWatcher?.stop()
+            avWatcher = nil
             loadingWatchdog?.cancel()
             loadingWatchdog = nil
             controlsHideTask?.cancel()
@@ -219,12 +234,18 @@ struct PlayerView: View {
                 // VLCKit 的状态通知是在它自己的线程上发出的，直接改 @State
                 // 属于跨线程写 UI 状态；统一切回主线程再处理。
                 Task { @MainActor in
+                    sawPlaybackState = true
                     switch st {
                     case .playing:
                         loading = false
+                        // 起播成功必须撤掉超时兜底，否则 8 秒后它会判定"还没起播"
+                        // 并弹出一个假超时（正常起播被它盖住）。
+                        loadingWatchdog?.cancel()
                     case .buffering:
                         loading = true
                     case .failed:
+                        // 交给 AVPlayer 兜底，转圈改由那条路径控制
+                        loadingWatchdog?.cancel()
                         // R08：VLC 起不来就退回 AVPlayer，别让用户卡死。
                         // 这里只置位，真正的取地址在 onChange 里跑。
                         fallbackRequested = true
@@ -503,6 +524,8 @@ struct PlayerView: View {
         let n = ((i + delta) % list.count + list.count) % list.count
         player?.pause()
         player = nil
+        avWatcher?.stop()
+        avWatcher = nil
         // 复用同一个页面：改 switched 后由 onChange 重新起播
         switched = list[n]
     }
@@ -650,6 +673,10 @@ struct PlayerView: View {
         fallbackInFlight = false
         // 换台/重试时清掉上一次的降级请求，否则新旧两个标志会互相打架
         fallbackRequested = false
+        // 换台就重新计"有没有收到过状态回调"，并摘掉上一个 item 的观察
+        sawPlaybackState = false
+        avWatcher?.stop()
+        avWatcher = nil
         // 节目单先拉：它和播放是两件独立的事。
         // 之前放在播放成功之后，一旦取流失败（或 VLC 卡住不回调），
         // 节目单就永远是空的——用户看到的就是"视频里没有节目单"。
@@ -658,10 +685,20 @@ struct PlayerView: View {
 
         // 转圈兜底：VLC 的 .playing 回调在个别源/机型上可能一直不来，
         // 那样中间的圈会永远转下去。这里加一个超时，到点无论如何都收起。
+        //
+        // 注意判据（改过一次的地方）：只有"**收到过状态回调**"或"已经起播"才允许静默收圈；
+        // 彻底没有回调说明播放器根本没反应，这时候必须给出原因 + 重试入口，
+        // 否则用户看到的就是永远黑屏、连按钮都没有。
         loadingWatchdog?.cancel()
         loadingWatchdog = Task { @MainActor in
             try? await Task.sleep(nanoseconds: 8_000_000_000)
-            if !Task.isCancelled { loading = false }
+            guard !Task.isCancelled else { return }
+            guard loading else { return }   // 已经起播（.playing 会 cancel，这里再兜一层）
+            loading = false
+            if errorText == nil && !sawPlaybackState && player == nil {
+                errorText = "起播超时：8 秒内播放器没有任何响应。\n"
+                    + "可能是源站不可达、线路已失效，或服务端未启用转封装。"
+            }
         }
 
         do {
@@ -769,6 +806,17 @@ struct PlayerView: View {
             item = AVPlayerItem(asset: asset)
         }
         let p = AVPlayer(playerItem: item)
+        // 失败必须能被看到：item.status 变 .failed（403/404、HLS 解析失败）和
+        // failedToPlayToEndTime（中途断开）两条路都要接住，否则就是"黑屏且无提示"。
+        let watcher = AVPlayerWatcher()
+        watcher.watch(p) { reason in
+            errorText = reason
+            // 报错时一定要把转圈收掉：errorOverlay 的「重试」按钮条件是 if !loading，
+            // 忘了这一步等于报错但没有任何出口。
+            loading = false
+            loadingWatchdog?.cancel()
+        }
+        avWatcher = watcher
         p.play()
         player = p
         loading = false
@@ -783,4 +831,52 @@ struct PlayerView: View {
         }
         await start()
     }
+}
+
+/// AVPlayer 的失败观察器。
+///
+/// 为什么要单独一个引用类型：SwiftUI 的 View 是 struct，KVO token 与
+/// NotificationCenter 的观察必须**成对**摘掉，放在 @State 里的临时值很容易漏。
+/// 这里由引用对象持有，stop() 与 deinit 都会摘干净（重复调用是安全的）。
+///
+/// 覆盖两种真实故障：
+///   1. item.status == .failed —— 源站 403/404、HLS 播放列表解析失败；
+///   2. AVPlayerItemFailedToPlayToEndTime —— 直播中途连接断开。
+final class AVPlayerWatcher {
+
+    private var statusObs: NSKeyValueObservation?
+    private var endObs: NSObjectProtocol?
+
+    /// 开始观察。onFail 一律在主队列回调。
+    func watch(_ player: AVPlayer, onFail: @escaping (String) -> Void) {
+        stop()
+        guard let item = player.currentItem else { return }
+
+        statusObs = item.observe(\.status, options: [.new, .initial]) { observed, _ in
+            guard observed.status == .failed else { return }
+            let why = observed.error?.localizedDescription ?? "未知错误"
+            DispatchQueue.main.async { onFail("播放失败：\(why)") }
+        }
+
+        endObs = NotificationCenter.default.addObserver(
+            forName: .AVPlayerItemFailedToPlayToEndTime,
+            object: item,
+            queue: .main
+        ) { note in
+            let err = note.userInfo?[AVPlayerItemFailedToPlayToEndTimeErrorKey] as? Error
+            onFail("播放中断：\(err?.localizedDescription ?? "连接已断开")")
+        }
+    }
+
+    /// 摘掉所有观察（幂等）。必须成对调用，否则 item 释放后再回调会崩。
+    func stop() {
+        statusObs?.invalidate()
+        statusObs = nil
+        if let obs = endObs {
+            NotificationCenter.default.removeObserver(obs)
+            endObs = nil
+        }
+    }
+
+    deinit { stop() }
 }

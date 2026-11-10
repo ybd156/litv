@@ -1,14 +1,27 @@
 <script setup lang="ts">
-withDefaults(defineProps<{ title: string; subtitle?: string }>(), { subtitle: '' })
+/**
+ * 页面头（标题 + 说明 + 右侧操作区）。
+ *
+ * ★ `desc` 和 `#extra` 是必须有的：
+ * 直播预览页（`views/LiveView.vue`）一直用 `desc="…"` 和 `#extra` 插槽放搜索框，
+ * 但这个组件只认 `subtitle` 和 `#actions`。Vue 不会报错，它会**静默丢掉**
+ * 没有对应出口的插槽内容——所以那个页面的搜索框从来没渲染出来过，
+ * 用户只能在几百个台的列表里硬翻。别把这两个出口删掉。
+ */
+withDefaults(defineProps<{ title: string; subtitle?: string; desc?: string }>(), {
+  subtitle: '',
+  desc: '',
+})
 </script>
 
 <template>
   <div class="page-header">
     <div class="text">
       <h1>{{ title }}</h1>
-      <p v-if="subtitle">{{ subtitle }}</p>
+      <p v-if="subtitle || desc">{{ subtitle || desc }}</p>
     </div>
     <div class="actions">
+      <slot name="extra" />
       <slot name="actions" />
     </div>
   </div>

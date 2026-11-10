@@ -27,6 +27,7 @@ import com.litv.tv.data.EpgProgram
 import com.litv.tv.data.PlayCache
 import com.litv.tv.data.PlayCacheStore
 import com.litv.tv.player.EngineKind
+import com.litv.tv.player.PlayRequestGate
 import com.litv.tv.player.PlayerManager
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -119,6 +120,15 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
     private var epgVisible = false
     /** 起播计时起点（毫秒），0 表示已上报过 */
     private var startAt = 0L
+
+    /**
+     * 换台请求的代际闸门。
+     *
+     * 连续换台时 /tv/play 的响应**不保证按序返回**：晚到的旧响应会把播放器
+     * 切回它自己的频道，表现为"台名是 C、画面在放 A"；旧请求的失败提示
+     * 也会盖掉新台的信息。详见 PlayRequestGate 的注释。
+     */
+    private val playGate = PlayRequestGate()
 
     // 长按判定：800ms（逆向实测值，不是 320ms）
     private val longPressRunnable = Runnable { onLongPressOk() }
@@ -672,6 +682,8 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
 
     private fun playChannel(ch: Channel, streamId: Long = 0) {
         Log.i(TAG, "playChannel: ${ch.name} streamId=$streamId direct=${app.prefs.directMode}")
+        // 取一个换台代际号。下面的回调只有在它仍然是"最后一次换台"时才允许生效。
+        val seq = playGate.begin()
         current = ch
         // 换到别的台就重置"已试线路"记录
         if (triedForChannel != ch.id) {
@@ -724,6 +736,12 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         app.api.play(ch.id, streamId,
             direct = wantDirect,
             onOk = { info ->
+                // 过期回调整段丢弃：连按换台时旧响应可能晚到，
+                // 让它继续往下走就会把播放器切回旧台（"台名 C、画面 A"）。
+                if (!playGate.isCurrent(seq)) {
+                    Log.i(TAG, "换台回调已过期(#$seq)，忽略：${ch.name}")
+                    return@play
+                }
                 // R09：用服务端下发的整份线路头（已清洗），不再只带 UA。
                 // 要求 Referer / Origin 校验的源，只带 UA 会直接 403。
                 // 默认 UA 必须和手机端完全一致（LITV/1.0 (Android)）。
@@ -751,7 +769,12 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
                     ch.id, abs, headers, info.mode, info.ua, info.expires))
                 // 播放 URL 可能含签名、设备标识或上游凭据，Release 日志不得记录。
                 Log.i(TAG, "play 返回: mode=${info.mode} kind=${info.kind} 请求头=${headers.keys}")
-                player.play(ch.id, abs, headers, app.prefs.engine)
+                // 缓存已经起播过就不要再来一次：重复 prepare 会打断刚出的画面
+                // （表现为"换台先亮一下又黑一下"）。手机首页早就这么做了
+                // （PhoneHomeActivity 的 if (!cacheUsable)），电视端漏了。
+                if (!cacheUsable) {
+                    player.play(ch.id, abs, headers, app.prefs.engine)
+                }
                 refreshEpg(ch.id)
                 // 底部信息条：线路 x/y 与延迟
                 refreshLineInfo(ch.id, info.streamId)
@@ -759,6 +782,8 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
                 app.api.heartbeat(ch.id, "playing")
             },
             onErr = { msg ->
+                // 过期请求的失败提示同样要丢：它会把新台的信息盖成旧台的错误。
+                if (!playGate.isCurrent(seq)) return@play
                 hideLoading()
                 switchTip.text = "无法播放：$msg"
                 main.postDelayed({ switchTip.visibility = View.GONE }, 3000)
@@ -1356,6 +1381,8 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
 
     override fun onDestroy() {
         main.removeCallbacksAndMessages(null)
+        // 离开页面后到达的 /tv/play 回调一律作废，别再往已销毁的界面上写。
+        playGate.invalidate()
         player.release()
         super.onDestroy()
     }

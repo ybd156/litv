@@ -296,9 +296,21 @@ func (s *Store) PurgeOldPrograms(ctx context.Context, before int64) (int64, erro
 }
 
 // SetChannelEpgID 手动建立频道 → EPG 频道的映射。
+//
+// 这是**唯一**能改 channels.epg_id 的入口（UpdateChannel/PatchChannel 都不碰它）。
+//
+// 0 行受影响必须报 ErrNotFound：以前直接返回 nil，
+// 于是 PUT /channels/999999/epg 会回 200 {"mapped":true}——
+// 调用方（管理台、脚本）会以为映射成功了，实际什么都没写。
 func (s *Store) SetChannelEpgID(ctx context.Context, channelID int64, epgID string) error {
-	_, err := s.db.ExecContext(ctx, `UPDATE channels SET epg_id=? WHERE id=?`, epgID, channelID)
-	return err
+	res, err := s.db.ExecContext(ctx, `UPDATE channels SET epg_id=? WHERE id=?`, epgID, channelID)
+	if err != nil {
+		return err
+	}
+	if n, rerr := res.RowsAffected(); rerr == nil && n == 0 {
+		return ErrNotFound
+	}
+	return nil
 }
 
 // ErrNoRows 暴露给上层判断。

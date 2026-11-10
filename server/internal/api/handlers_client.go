@@ -9,7 +9,9 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"strconv"
 	"strings"
@@ -22,6 +24,7 @@ import (
 	"github.com/litv/litv/server/internal/auth"
 	"github.com/litv/litv/server/internal/fetch"
 	"github.com/litv/litv/server/internal/remote"
+	"github.com/litv/litv/server/internal/safedial"
 	"github.com/litv/litv/server/internal/store"
 	"github.com/litv/litv/server/internal/stream"
 )
@@ -30,7 +33,39 @@ import (
 
 // deviceRegister 终端首次注册：客户端带设备唯一标识来换 token，此时状态是 pending，
 // 需要在管理台批准后才能使用。这就是「绑定码」流程的服务端一半。
+// 设备注册的结果分类，只用于限流记账。
+const (
+	registerOK    = iota // 成功：清零失败streak
+	registerBad          // 凭据/参数被拒：计入失败
+	registerInfra        // 服务端内部错误：两个标志都不置（不能把宕库算成攻击）
+)
+
 func (a *API) deviceRegister(w http.ResponseWriter, r *http.Request) {
+	// 注册端点也有暴力面：device_key 可以猜，通用邀请码只有 6 位。
+	//
+	// 限流放在**解码之前**：解析请求体同样要花 CPU，畸形请求本身就是攻击流量。
+	//
+	// 用独立的 deviceLimiter，不与 loginLimiter 共用桶——共用等于让攻击者
+	// 用注册请求把全局额度吃光，顺带把"网关挂掉时唯一的后路"（应急密码登录）
+	// 一起饿死。
+	peer := peerIPFrom(r.Context())
+	att, retry, _ := a.deviceLimiter.Begin(peer, a.now())
+	if att == nil {
+		secs := int(retry.Seconds())
+		if secs < 1 {
+			secs = 1
+		}
+		// Retry-After 让客户端知道该等多久，而不是自己瞎重试把窗口越刷越长。
+		w.Header().Set("Retry-After", strconv.Itoa(secs))
+		fail(w, http.StatusTooManyRequests, 2005, "注册请求过于频繁，请稍后再试")
+		return
+	}
+	outcome := registerInfra
+	defer func() {
+		// Finish 是幂等的，放在 defer 里保证每条返回路径都会记账。
+		a.deviceLimiter.Finish(att, outcome == registerOK, outcome == registerBad, a.now())
+	}()
+
 	var body struct {
 		DeviceKey string `json:"device_key"`
 		Name      string `json:"name"`
@@ -41,20 +76,33 @@ func (a *API) deviceRegister(w http.ResponseWriter, r *http.Request) {
 		AppVersion string `json:"app_version"`
 	}
 	if err := decode(r, &body); err != nil {
+		outcome = registerBad
 		fail(w, http.StatusBadRequest, 1001, "参数错误: "+err.Error())
 		return
 	}
 	if body.DeviceKey == "" {
+		outcome = registerBad
 		fail(w, http.StatusBadRequest, 1001, "device_key 不能为空")
 		return
 	}
 	body.Platform = strings.ToLower(strings.TrimSpace(body.Platform))
 	if store.IsReservedDevicePlatform(body.Platform) {
+		outcome = registerBad
 		fail(w, http.StatusBadRequest, 1001, "platform 为保留值")
 		return
 	}
 	if body.Platform == "" {
 		body.Platform = "android"
+	}
+
+	// 审计用的指纹：device_key 的 sha256 前 12 位十六进制。
+	//
+	// 绝不写明文：device_key 是 ANDROID_ID 之类的稳定标识派生出来的，
+	// 写进 audit_logs 就等于把"设备的持久身份"存进一张会展示、会导出的表。
+	// 12 位（48 bit）足够在家庭规模下区分设备，又不构成可复用的标识符。
+	fp := auth.HashToken(body.DeviceKey)[:12]
+	audit := func(action, detail string) {
+		a.st.Audit(r.Context(), 0, action, fp, detail, peerIPFrom(r.Context()))
 	}
 
 	plain, hash, err := auth.NewToken()
@@ -71,16 +119,30 @@ func (a *API) deviceRegister(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		switch {
 		case errors.Is(err, store.ErrReservedDevicePlatform):
+			outcome = registerBad
+			audit("device.register.reject", "platform 为保留值")
 			fail(w, http.StatusBadRequest, 1001, "platform 为保留值")
 		case errors.Is(err, store.ErrDeviceKeyConflict):
+			// 这条必须留痕：它正是"有人拿着别人的 device_key 来顶设备"的信号。
+			outcome = registerBad
+			audit("device.register.conflict", "device_key 已属于其它平台")
 			fail(w, http.StatusConflict, 1002, "该设备标识已被其他平台占用，请重新安装或联系管理员清理旧设备")
 		case errors.Is(err, store.ErrBindCodeNotFound):
+			// 绑定码错误同样计入失败：否则 6 位通用邀请码的暴力面一点没变。
+			outcome = registerBad
+			audit("device.register.badcode", "绑定码不存在")
 			fail(w, http.StatusBadRequest, 2004, "绑定码不存在")
 		case errors.Is(err, store.ErrBindCodeUsed):
+			outcome = registerBad
+			audit("device.register.badcode", "绑定码已被使用")
 			fail(w, http.StatusBadRequest, 2004, "绑定码已被使用")
 		case errors.Is(err, store.ErrBindCodeExpired):
+			outcome = registerBad
+			audit("device.register.badcode", "绑定码已过期")
 			fail(w, http.StatusBadRequest, 2004, "绑定码已过期")
 		case errors.Is(err, store.ErrBindCodeMismatch):
+			outcome = registerBad
+			audit("device.register.badcode", "绑定码不属于这台设备")
 			fail(w, http.StatusBadRequest, 2004, "绑定码不属于这台设备")
 		default:
 			// 已存在同一 device_key（UNIQUE 冲突）：说明是重装/重启。
@@ -89,6 +151,8 @@ func (a *API) deviceRegister(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
+	outcome = registerOK
+	audit("device.register.ok", "status="+status)
 
 	// 记录来源 IP 与版本号（只用于展示，不参与鉴权）。
 	_ = a.st.UpdateDeviceClientInfo(r.Context(), id, clientIP(r, a.cfg), body.AppVersion)
@@ -1118,8 +1182,19 @@ func (a *API) liveSegment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// 分片签名不携带线路选择，取最佳线路即可（分片本身已由签名锁定目标）。
-	var sid int64
-	_ = sid
+	//
+	// 这里刻意传字面量 0：把线路 id 绑进分片签名是下一轮的事
+	// （要改 auth.Signer 的载荷并兼容存量清单），本轮 auth 包零改动。
+	var boundStream *store.Stream
+	if st, serr := a.streamForPlay(r.Context(), id, 0); serr == nil {
+		boundStream = st
+	}
+
+	// 这单请求是要打到 LAN 的话，留一条审计痕迹（按频道 + 时间窗去重）。
+	// 解析失败不是错误：审计是附加信息，不能因为它让播放失败。
+	if addr, ok := resolveTargetAddr(r.Context(), target); ok {
+		a.notePrivateSegmentTarget(r.Context(), id, addr)
+	}
 
 	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, target, nil)
 	if err != nil {
@@ -1130,17 +1205,24 @@ func (a *API) liveSegment(w http.ResponseWriter, r *http.Request) {
 	// 不只是清单请求；只带 UA 时，要求 Referer 的源会在分片这一步 403，
 	// 表现是清单能取到、画面却一片黑。
 	// R13：用签名绑定的线路取头，保证与清单请求是同一条线路的配置。
-	var boundStream *store.Stream
-	if st, serr := a.streamForPlay(r.Context(), id, sid); serr == nil {
-		boundStream = st
-	}
 	for k, v := range a.streamHeaders(id, boundStream) {
 		req.Header.Set(k, v)
 	}
 	req.Header.Set("Accept", "*/*")
 	req.Header.Set("Cache-Control", "no-cache")
-	resp, err := http.DefaultClient.Do(req)
+
+	// 用 a.segClient 而不是 http.DefaultClient：
+	//   - 它接了 safedial，拒绝"让 NAS 打自己"与云元数据端点；
+	//   - 它没有总超时（分片是流式传输，见 api.segTransport 的注释）；
+	//   - 它透传 r.Context()，客户端断开时上游读取立刻取消。
+	resp, err := a.segClient.Do(req)
 	if err != nil {
+		if safedial.IsBlockedError(err) {
+			// 地址被策略拒绝是内容/配置问题，不是上游挂了：
+			// 返回 403 而不是 502，免得被当成"这个台临时故障"去重试。
+			fail(w, http.StatusForbidden, 2002, "分片目标地址不被允许")
+			return
+		}
 		fail(w, http.StatusBadGateway, 4001, err.Error())
 		return
 	}
@@ -1197,10 +1279,80 @@ func (a *API) liveSegment(w http.ResponseWriter, r *http.Request) {
 	if ct == "" {
 		ct = "video/mp2t"
 	}
+
+	// 体积护栏必须在**写响应头之前**判完。
+	//
+	// 反例（就是不能用 io.Copy + io.LimitReader 到上限的原因）：
+	// 被 LimitReader 截断时 Copy 返回的是 nil（被限流不算错误），
+	// 而 200 状态行早就发出去了 —— 播放器收到一个"状态码 200 的残片"，
+	// 表现为花屏且**不会**触发换线重试，比一个明确的 502 难查得多。
+	if resp.ContentLength > segMaxBytes {
+		fail(w, http.StatusBadGateway, 4001,
+			fmt.Sprintf("分片体积超出上限（%d 字节）", segMaxBytes))
+		return
+	}
 	w.Header().Set("Content-Type", ct)
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.WriteHeader(resp.StatusCode)
-	_, _ = io.Copy(w, br)
+	// 上游没给 Content-Length 时只能边走边数：超过上限就中断连接
+	// （abortAfterWriter 里 panic(http.ErrAbortHandler)），
+	// 绝不以"200 + 短体"收尾。
+	if _, cerr := io.Copy(&abortAfterWriter{w: w, limit: segMaxBytes}, br); cerr != nil {
+		// 只有下游断开才会走到这里（写失败）。客户端已经不在了，正常返回。
+		return
+	}
+}
+
+// segMaxBytes 是单个分片的体积上限。
+//
+// 32MB 远超正常的 HLS 分片（1080p 一片通常 2~6MB，4K 也就 10MB 上下），
+// 取这么宽松是为了不误杀高码率源；它的作用是拦住"目标根本不是一个分片"
+// 那种情况（比如被指到某个大文件或管理页的一大坨 HTML）。
+const segMaxBytes = 32 << 20
+
+// abortAfterWriter 在累计写出超过 limit 时中断连接。
+//
+// 为什么用 panic(http.ErrAbortHandler)：此刻响应头已经发出（状态码 200），
+// 没有任何办法再改成 502。net/http 把 ErrAbortHandler 当成"放弃这个响应"，
+// 直接关掉底层连接，客户端看到的是一段残缺的响应体，会按 HLS 规则
+// 重试或换线 —— 这正是想要的失败方式。
+// 相反，如果这里安静返回 nil，播放器收到的是一个"成功的短分片"：
+// 花屏、不重试、日志里什么都没有。
+type abortAfterWriter struct {
+	w     io.Writer
+	limit int64
+	n     int64
+}
+
+func (a *abortAfterWriter) Write(p []byte) (int, error) {
+	a.n += int64(len(p))
+	if a.n > a.limit {
+		panic(http.ErrAbortHandler)
+	}
+	return a.w.Write(p)
+}
+
+// resolveTargetAddr 解析目标主机，返回一个地址（仅用于审计标记）。
+//
+// 解析失败返回 ok=false：审计是附加信息，不能因为它让播放失败。
+func resolveTargetAddr(ctx context.Context, rawURL string) (netip.Addr, bool) {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return netip.Addr{}, false
+	}
+	host := u.Hostname()
+	if host == "" {
+		return netip.Addr{}, false
+	}
+	// 字面量 IP 直接判，不用查 DNS。
+	if ip, perr := netip.ParseAddr(host); perr == nil {
+		return ip, true
+	}
+	ips, lerr := net.DefaultResolver.LookupNetIP(ctx, "ip", host)
+	if lerr != nil || len(ips) == 0 {
+		return netip.Addr{}, false
+	}
+	return ips[0], true
 }
 
 // segmentURL 为分片/子清单/密钥地址签一个**绑定目标**的代理地址。

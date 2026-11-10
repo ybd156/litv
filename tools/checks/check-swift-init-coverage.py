@@ -1,6 +1,24 @@
+import os
 import re
+import sys
 
-src = open('ios/LITVApp/Sources/Models.swift', encoding='utf-8').read()
+# 仓库根 = 本文件往上三级（tools/checks/<this>.py）。
+# 以前这里是相对 CWD 的裸路径：从别的目录跑会直接抛 FileNotFoundError，
+# 而「崩掉」和「有问题」在 CI 日志里都不像「通过」，但都不该靠运气。
+ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+# 同上：非 UTF-8 控制台下打印中文/符号会崩，把有用的报错变成噪音。
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding='utf-8', errors='replace')
+    except (AttributeError, ValueError):
+        pass
+
+MODELS = os.path.join(ROOT, 'ios/LITVApp/Sources/Models.swift')
+if not os.path.isfile(MODELS):
+    print(f"❌ 找不到 {MODELS}")
+    sys.exit(1)
+src = open(MODELS, encoding='utf-8').read()
 
 # 按顶层 struct 切块（只处理顶层，嵌套的 PlayChannel 单独算）
 blocks = re.split(r'\n(?=(?:struct|enum|extension) )', src)
@@ -51,3 +69,9 @@ for name, props in structs.items():
 
 print()
 print("需要修的问题:", problems if problems else "无")
+
+# 和 check-swift-balance.py 同样的道理：发现缺字段必须非零退出，
+# 否则这个脚本永远不会拦住任何东西。
+if problems:
+    sys.exit(1)
+sys.exit(0)

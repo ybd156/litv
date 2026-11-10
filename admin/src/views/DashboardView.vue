@@ -12,7 +12,8 @@ import * as sourcesApi from '@/api/modules/sources'
 import * as devicesApi from '@/api/modules/devices'
 import * as channelsApi from '@/api/modules/channels'
 import type { Device, Source, SystemInfo } from '@/api/types'
-import { fmtCount, fmtDuration, timeAgo } from '@/utils/format'
+import { fmtCount, fmtDuration, timeAgo, toMillis } from '@/utils/format'
+import { derivedSourceStatus, sourceError } from '@/utils/sourceStatus'
 
 const router = useRouter()
 
@@ -47,14 +48,20 @@ const onlineDevices = computed(() =>
 )
 const channelTotal = computed(() => info.value?.channels_total ?? data.value?.channelTotal ?? 0)
 const playsToday = computed(() => info.value?.plays_today)
+/**
+ * 失效源计数：`info.sources_failed` 优先（服务端聚合），
+ * 没有就按与源管理页**同一套**推导（`utils/sourceStatus.ts`）从列表里数。
+ * 只认 `status === 'error'` 的话，连上没升级的 NAS 时这里会恒为 0。
+ */
 const failedSources = computed(
-  () => info.value?.sources_failed ?? sources.value.filter((s) => s.status === 'error').length,
+  () => info.value?.sources_failed ?? sources.value.filter((s) => derivedSourceStatus(s) === 'error').length,
 )
 const pendingDevices = computed(() => devices.value.filter((d) => d.status === 'pending').length)
 
 interface Activity {
   key: string
-  time: string
+  /** 服务端是 Unix 秒；mock 是 ISO 字符串。排序统一走 toMillis() */
+  time?: string | number | null
   title: string
   desc: string
   tone: 'primary' | 'success' | 'warning' | 'danger' | 'neutral'
@@ -66,15 +73,13 @@ const activities = computed<Activity[]>(() => {
   const list: Activity[] = []
   for (const s of sources.value) {
     if (!s.last_fetch_at) continue
+    const st = derivedSourceStatus(s)
     list.push({
       key: `src-${s.id}`,
       time: s.last_fetch_at,
       title: `源「${s.name}」拉取完成`,
-      desc:
-        s.status === 'error'
-          ? s.error || '拉取失败，详见源管理页'
-          : `解析出 ${s.channel_count ?? 0} 个频道`,
-      tone: s.status === 'error' ? 'danger' : 'success',
+      desc: st === 'error' ? sourceError(s) || '拉取失败，详见源管理页' : `解析出 ${s.channel_count ?? 0} 个频道`,
+      tone: st === 'error' ? 'danger' : 'success',
       icon: 'sources',
     })
   }
@@ -89,9 +94,7 @@ const activities = computed<Activity[]>(() => {
       icon: 'devices',
     })
   }
-  return list
-    .sort((a, b) => new Date(b.time).getTime() - new Date(a.time).getTime())
-    .slice(0, 8)
+  return list.sort((a, b) => toMillis(b.time) - toMillis(a.time)).slice(0, 8)
 })
 
 onMounted(() => void run())

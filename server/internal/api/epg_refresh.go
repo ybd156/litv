@@ -12,6 +12,7 @@ import (
 	"github.com/litv/litv/server/internal/epg"
 	"github.com/litv/litv/server/internal/fetch"
 	"github.com/litv/litv/server/internal/parse"
+	"github.com/litv/litv/server/internal/safedial"
 	"github.com/litv/litv/server/internal/store"
 )
 
@@ -162,6 +163,11 @@ func (a *API) fetchEPGBody(ctx context.Context, src store.EPGSource) ([]byte, er
 			return res.Body, nil
 		}
 		lastErr = err
+		// 被出站策略拒绝的地址不值得重试：三次重试只会让管理台多等 1.5 秒，
+		// 最后还是同一个结论，而且会把 fail_streak 推高触发误告警。
+		if safedial.IsBlockedError(err) {
+			break
+		}
 		if i == attempts-1 {
 			break
 		}

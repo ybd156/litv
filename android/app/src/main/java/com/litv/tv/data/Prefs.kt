@@ -113,25 +113,27 @@ class Prefs(ctx: Context) {
         set(v) = sp.edit().putString(K_DECODE, v).apply()
 
     var bufferMs: Int
-        get() = sp.getInt(K_BUFFER, 3000)
+        get() = sp.getInt(K_BUFFER, PlaybackDefaults.BUFFER_MS)
         set(v) = sp.edit().putInt(K_BUFFER, v).apply()
 
     /**
      * 起播超时（毫秒）。超过这个时间还没 READY 就换下一个内核。
      *
-     * 默认从 5 秒提到 15 秒：电视盒子（尤其 32 位 Amlogic）上，
-     * HLS 要经历 TCP+TLS 握手、下载 m3u8、拉分片、初始化解码器，
-     * 5 秒经常不够——表现为"Exo 起播超时"直接跳到 VLC，
-     * 而 VLC 又可能因为别的原因失败，最后报"所有内核都无法播放"。
+     * 默认值与可选项都在 [PlaybackDefaults] 里，**不要在别处再写字面量**——
+     * 之前 Prefs 写 15000、设置页选项却没有 15000，用户点一下那行就掉到 5 秒。
+     *
+     * 为什么是 15 秒：电视盒子（尤其 32 位 Amlogic）上，HLS 要经历 TCP+TLS 握手、
+     * 下载 m3u8、拉分片、初始化解码器，5 秒经常不够——表现为"Exo 起播超时"
+     * 直接跳到 VLC，而 VLC 又可能因为别的原因失败，最后报"所有内核都无法播放"。
      * 手机（arm64）够快所以看不出问题。
      */
     var startTimeoutMs: Int
-        get() = sp.getInt(K_START_TIMEOUT, 15000)
+        get() = sp.getInt(K_START_TIMEOUT, PlaybackDefaults.START_TIMEOUT_MS)
         set(v) = sp.edit().putInt(K_START_TIMEOUT, v).apply()
 
     /** 超时后重试几次再换内核。网络抖动时多试几次比直接降级好。 */
     var retryCount: Int
-        get() = sp.getInt(K_RETRY, 1)
+        get() = sp.getInt(K_RETRY, PlaybackDefaults.RETRY_COUNT)
         set(v) = sp.edit().putInt(K_RETRY, v).apply()
 
     /** 渲染方式：auto | texture | surface。auto = 优先 TextureView */

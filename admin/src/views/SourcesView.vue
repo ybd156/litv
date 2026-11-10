@@ -19,6 +19,8 @@ import type { Source } from '@/api/types'
 import { toErrorMessage } from '@/api/errors'
 import { confirmAction, toast } from '@/utils/feedback'
 import { fmtDateTime, timeAgo } from '@/utils/format'
+import { derivedSourceStatus, sourceError } from '@/utils/sourceStatus'
+import { canWrite } from '@/session'
 
 const { data, loading, error, run } = useAsyncData<Source[]>(sourcesApi.listSources)
 const sources = computed(() => data.value ?? [])
@@ -30,7 +32,15 @@ const previewTarget = ref<Source | null>(null)
 const refreshing = ref<number[]>([])
 
 const enabledCount = computed(() => sources.value.filter((s) => s.enabled).length)
-const failedCount = computed(() => sources.value.filter((s) => s.status === 'error').length)
+
+/**
+ * 状态推导只在 `utils/sourceStatus.ts` 里写一次（顺序与服务端一致：
+ * `last_error` → `never` → `ok`），概览页也用同一份。
+ * 两处各写一遍迟早出现「源管理说失败、概览说正常」。
+ */
+const failedCount = computed(
+  () => sources.value.filter((s) => derivedSourceStatus(s) === 'error').length,
+)
 
 const TYPE_LABEL: Record<string, string> = {
   m3u: 'M3U',
@@ -41,8 +51,9 @@ const TYPE_LABEL: Record<string, string> = {
 
 function statusOf(row: Source): { text: string; type: 'success' | 'error' | 'warning' | 'default' } {
   if (!row.enabled) return { text: '已停用', type: 'default' }
-  if (row.status === 'error') return { text: '拉取失败', type: 'error' }
-  if (row.status === 'never' || !row.last_fetch_at) return { text: '还没拉过', type: 'warning' }
+  const st = derivedSourceStatus(row)
+  if (st === 'error') return { text: '拉取失败', type: 'error' }
+  if (st === 'never') return { text: '还没拉过', type: 'warning' }
   return { text: '正常', type: 'success' }
 }
 
@@ -75,9 +86,15 @@ async function refreshOne(row: Source): Promise<void> {
 }
 
 function remove(row: Source): void {
+  // 文案必须说真话：服务端 DeleteSource 是级联删除（`DELETE FROM channels WHERE source_id=?`），
+  // 而且 ImportChannels 的判重键是 (name, group) **不含 source_id**，
+  // 所以别的源里同名的频道也可能一起被删掉。这句之前写的是「不会自动消失」，正好说反了。
+  const n = row.channel_count ?? 0
   confirmAction({
     title: '删除这个源？',
-    content: `「${row.name}」删掉后，从它导入的频道不会自动消失，但以后不会再有更新了。`,
+    content:
+      `「${row.name}」会从源列表里移除，并一并删除它导入的 ${n} 个频道和这些频道的线路，不可撤销。` +
+      `另外，其它源里同名的频道也可能被一并删除。电视上这些台会立刻消失。`,
     positiveText: '删除',
     onConfirm: async () => {
       await sourcesApi.deleteSource(row.id)
@@ -136,10 +153,14 @@ const columns: DataTableColumns<Source> = [
     key: 'error',
     minWidth: 200,
     ellipsis: { tooltip: true },
-    render: (row) =>
-      row.error
-        ? h('span', { style: 'color:#e4635c' }, row.error)
-        : h('span', { class: 'muted' }, '—'),
+    render: (row) => {
+      // 新服务端给 error（= last_error），老服务端只有 last_error —— 两个都读，
+      // 否则这个列在真实环境里永远是「—」，用户看不到源站为什么失败。
+      const msg = sourceError(row)
+      return msg
+        ? h('span', { style: 'color:#e4635c' }, msg)
+        : h('span', { class: 'muted' }, '—')
+    },
   },
   {
     title: '操作',
@@ -159,6 +180,8 @@ const columns: DataTableColumns<Source> = [
             {
               size: 'tiny',
               quaternary: true,
+              // 刷新会写库（导入频道），非管理员会被服务端 403；按钮先禁掉
+              disabled: !canWrite.value,
               loading: refreshing.value.includes(row.id),
               onClick: () => void refreshOne(row),
             },
@@ -166,12 +189,23 @@ const columns: DataTableColumns<Source> = [
           ),
           h(
             NButton,
-            { size: 'tiny', quaternary: true, onClick: () => openEdit(row) },
+            {
+              size: 'tiny',
+              quaternary: true,
+              disabled: !canWrite.value,
+              onClick: () => openEdit(row),
+            },
             { default: () => '编辑' },
           ),
           h(
             NButton,
-            { size: 'tiny', quaternary: true, type: 'error', onClick: () => remove(row) },
+            {
+              size: 'tiny',
+              quaternary: true,
+              type: 'error',
+              disabled: !canWrite.value,
+              onClick: () => remove(row),
+            },
             { default: () => '删除' },
           ),
         ],
@@ -193,7 +227,7 @@ onMounted(() => void run())
           <template #icon><Icon name="refresh" :size="15" /></template>
           刷新列表
         </NButton>
-        <NButton size="small" type="primary" @click="openCreate">
+        <NButton size="small" type="primary" :disabled="!canWrite" @click="openCreate">
           <template #icon><Icon name="plus" :size="15" /></template>
           添加源
         </NButton>
@@ -217,7 +251,7 @@ onMounted(() => void run())
         @retry="run()"
       >
         <template #empty-action>
-          <NButton type="primary" size="small" @click="openCreate">
+          <NButton type="primary" size="small" :disabled="!canWrite" @click="openCreate">
             <template #icon><Icon name="plus" :size="14" /></template>
             导入第一条 M3U
           </NButton>

@@ -19,6 +19,7 @@ import type { EpgProgramHit, EpgSource, EpgStats } from '@/api/types'
 import { toErrorMessage } from '@/api/errors'
 import { confirmAction, toast } from '@/utils/feedback'
 import { fmtCount, fmtDateTime, timeAgo } from '@/utils/format'
+import { canWrite } from '@/session'
 
 const { data, loading, error, run } = useAsyncData<EpgSource[]>(epgApi.listEpgSources)
 const sources = computed(() => data.value ?? [])
@@ -288,6 +289,7 @@ const columns: DataTableColumns<EpgSource> = [
             {
               size: 'tiny',
               quaternary: true,
+              disabled: !canWrite.value,
               loading: refreshingId.value === row.id,
               onClick: () => void refreshRow(row),
             },
@@ -295,12 +297,23 @@ const columns: DataTableColumns<EpgSource> = [
           ),
           h(
             NButton,
-            { size: 'tiny', quaternary: true, onClick: () => openEdit(row) },
+            {
+              size: 'tiny',
+              quaternary: true,
+              disabled: !canWrite.value,
+              onClick: () => openEdit(row),
+            },
             { default: () => '编辑' },
           ),
           h(
             NButton,
-            { size: 'tiny', quaternary: true, type: 'error', onClick: () => remove(row) },
+            {
+              size: 'tiny',
+              quaternary: true,
+              type: 'error',
+              disabled: !canWrite.value,
+              onClick: () => remove(row),
+            },
             { default: () => '删除' },
           ),
         ],
@@ -317,16 +330,16 @@ onMounted(() => {
 <template>
   <div>
     <div class="toolbar">
-      <NButton size="small" :loading="refreshing" type="primary" @click="refreshAll">
+      <NButton size="small" :loading="refreshing" type="primary" :disabled="!canWrite" @click="refreshAll">
         <template #icon><Icon name="refresh" :size="15" /></template>
         立即刷新全部 EPG
       </NButton>
-      <NButton size="small" secondary @click="openAdd">
+      <NButton size="small" secondary :disabled="!canWrite" @click="openAdd">
         <template #icon><Icon name="plus" :size="15" /></template>
         添加 EPG 源
       </NButton>
       <!-- A8：导入本地 XMLTV（不上网，直接上传文件） -->
-      <NButton size="small" secondary :loading="importing" @click="importInput?.click()">
+      <NButton size="small" secondary :loading="importing" :disabled="!canWrite" @click="importInput?.click()">
         <template #icon><Icon name="up" :size="15" /></template>
         导入本地 XMLTV
       </NButton>
@@ -338,7 +351,7 @@ onMounted(() => {
         @change="onImport"
       />
       <!-- D2：手动清理过期节目 -->
-      <NButton size="small" secondary :loading="cleaning" @click="cleanup">
+      <NButton size="small" secondary :loading="cleaning" :disabled="!canWrite" @click="cleanup">
         清理过期节目
       </NButton>
       <span class="spacer" />
@@ -373,7 +386,7 @@ onMounted(() => {
         @retry="run()"
       >
         <template #empty-action>
-          <NButton size="small" type="primary" @click="showAdd = true">
+          <NButton size="small" type="primary" :disabled="!canWrite" @click="showAdd = true">
             <template #icon><Icon name="plus" :size="14" /></template>
             添加第一个 EPG 源
           </NButton>

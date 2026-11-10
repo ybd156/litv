@@ -5,7 +5,7 @@ import { useRoute, useRouter } from 'vue-router'
 import Icon from '@/components/Icon.vue'
 import type { IconName } from '@/components/icons'
 import { mockEnabled } from '@/api/mock'
-import { session } from '@/session'
+import { canWrite, session } from '@/session'
 
 const route = useRoute()
 const router = useRouter()
@@ -89,6 +89,20 @@ onMounted(() => {
           </span>
         </div>
       </header>
+
+      <!--
+        只读提示：非管理员在服务端是「GET 放行、非 GET 403」，
+        所以页面看得见、按钮点下去才报错。这条横幅把那句话提前说出来，
+        并且各页面的写操作按钮已经 :disabled="!canWrite"。
+        权限判定仍然只认服务端，前端不拦路由。
+      -->
+      <div v-if="session.state === 'ready' && !canWrite" class="readonly-bar">
+        <Icon name="warning" :size="14" />
+        <span>
+          当前账号不是管理员：只能查看。保存 / 删除 / 停用这类操作会被服务端拒绝（403），
+          请用管理员账号从飞牛桌面进入。
+        </span>
+      </div>
 
       <main class="content">
         <router-view v-slot="{ Component }">
@@ -194,9 +208,25 @@ onMounted(() => {
   overflow: auto;
   padding: 20px 22px 40px;
 }
+/* 只读横幅：用 warning 色，和 danger 区分开——这不是错误，是权限事实 */
+.readonly-bar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 22px;
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: #e0a94a;
+  background: rgba(224, 169, 74, 0.09);
+  border-bottom: 1px solid rgba(224, 169, 74, 0.26);
+}
 @media (max-width: 760px) {
   .content {
     padding: 16px 12px 32px;
+  }
+  .readonly-bar {
+    padding: 8px 12px;
   }
 }
 </style>

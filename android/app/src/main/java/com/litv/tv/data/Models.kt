@@ -143,7 +143,22 @@ data class PlayCache(
     val ua: String = "",
     /** 签名过期时间（Unix 秒） */
     val expires: Long = 0,
-)
+) {
+    /**
+     * 这条缓存现在还能不能用。
+     *
+     * 抽成纯函数（原来埋在 PlayCacheStore.get 里）是为了能单测边界：
+     * 签名剩余不足 [MIN_REMAIN_SEC] 就不能用——否则会出现「刚起播地址就过期，
+     * 服务端 403，三个内核全失败」这种极难复现的现象。
+     */
+    fun isUsable(nowSec: Long, minRemainSec: Long = MIN_REMAIN_SEC): Boolean =
+        url.isNotBlank() && expires > nowSec + minRemainSec
+
+    companion object {
+        /** 签名剩余不足这个秒数就不用缓存——留足余量，避免刚起播就过期。 */
+        const val MIN_REMAIN_SEC = 60L
+    }
+}
 
 data class PlayInfo(
     val channel: PlayChannel = PlayChannel(),

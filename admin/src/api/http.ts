@@ -149,8 +149,17 @@ export async function request<T>(path: string, opts: RequestOptions = {}): Promi
   }
 
   if (!res.ok) {
-    const hint = res.status === 401 || res.status === 403 ? '没权限或登录态过期，请从飞牛桌面重新打开' : `HTTP ${res.status}`
-    throw fail(new ApiError(res.status === 401 ? 2001 : 0, hint, res.status, text.slice(0, 300)), opts.silent)
+    // 401 = 未认证（没身份 / 登录态过期），403 = 已认证但没有权限。
+    // 这两种要给用户完全不同的下一步动作，合成一句「没权限或登录态过期」等于什么都没说。
+    // 注意只有 401 能变成 2001（触发未认证页）；403 必须是 code 0，绝不能把
+    // 「你不是管理员」升级成「重新登录」，那会把用户踢到错误的页面。
+    const unauthorized = res.status === 401
+    const hint = unauthorized
+      ? '登录态已过期，请从飞牛桌面重新打开本应用'
+      : res.status === 403
+        ? '当前账号没有管理权限，请联系管理员'
+        : `HTTP ${res.status}`
+    throw fail(new ApiError(unauthorized ? 2001 : 0, hint, res.status, text.slice(0, 300)), opts.silent)
   }
 
   if (text && parsed === undefined) {
@@ -165,9 +174,25 @@ export async function request<T>(path: string, opts: RequestOptions = {}): Promi
   return parsed as T
 }
 
+/**
+ * 快捷方法的附加选项。
+ *
+ * `silent` 存在的原因：页面自己普遍有 `StateBlock` 错误块（首屏失败会显示
+ * 「没加载出来 + 重试」），而 `request()` 默认还会再弹一条全局红条 —— 一次断网
+ * 用户会同时看到两条错误，并且红条把页内那个带「重试」按钮的提示盖住。
+ * 有自己错误态的调用一律传 `{ silent: true }`。
+ */
+export interface HttpCallOptions {
+  silent?: boolean
+}
+
 export const http = {
-  get: <T>(path: string, query?: Record<string, unknown>) => request<T>(path, { method: 'GET', query }),
-  post: <T>(path: string, body?: unknown) => request<T>(path, { method: 'POST', body }),
-  put: <T>(path: string, body?: unknown) => request<T>(path, { method: 'PUT', body }),
-  del: <T>(path: string, query?: Record<string, unknown>) => request<T>(path, { method: 'DELETE', query }),
+  get: <T>(path: string, query?: Record<string, unknown>, opts?: HttpCallOptions) =>
+    request<T>(path, { method: 'GET', query, silent: opts?.silent }),
+  post: <T>(path: string, body?: unknown, opts?: HttpCallOptions) =>
+    request<T>(path, { method: 'POST', body, silent: opts?.silent }),
+  put: <T>(path: string, body?: unknown, opts?: HttpCallOptions) =>
+    request<T>(path, { method: 'PUT', body, silent: opts?.silent }),
+  del: <T>(path: string, query?: Record<string, unknown>, opts?: HttpCallOptions) =>
+    request<T>(path, { method: 'DELETE', query, silent: opts?.silent }),
 }

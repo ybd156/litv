@@ -35,6 +35,20 @@ function toDate(v?: string | number | Date | null): Date | null {
 
 const pad = (n: number): string => String(n).padStart(2, '0')
 
+/**
+ * 把服务端时间值压成毫秒数，用于**排序/比较**（不是展示）。
+ *
+ * ★ 存在的理由：不经过这里就会出现
+ * `new Date(b.time).getTime() - new Date(a.time).getTime()` 这种写法——
+ * 服务端给的是**秒**，`new Date(秒)` 得到的是 1970 年。同一批数据下排序
+ * 恰好还对（单调），一旦混进 ISO 字符串（mock 就是 ISO）就彻底乱。
+ * 凡是拿时间做比较的地方，统一走这里，别再自己 new Date。
+ */
+export function toMillis(v?: string | number | Date | null): number {
+  const d = toDate(v)
+  return d ? d.getTime() : 0
+}
+
 export function fmtDateTime(v?: string | number | Date | null): string {
   const d = toDate(v)
   if (!d) return '—'

@@ -206,12 +206,11 @@ class Api(private val prefs: Prefs) {
      * 服务端给的是站内相对路径（/app/litv/live/1/stream.ts），
      * 直接丢给 ExoPlayer/VLC 会因为没有 scheme 而失败。
      * 直连模式下给的是上游绝对地址，原样返回。
+     *
+     * 拼接待实现在 [UrlJoin] 里：那是纯函数，可以脱离 Android 框架单测
+     * （这段逻辑拼错的表现是"全黑屏 + 日志里只有一串 URI"，很难在真机上反推）。
      */
-    fun absolute(url: String): String {
-        if (url.startsWith("http://") || url.startsWith("https://")) return url
-        val base = prefs.serverBase.trimEnd('/')
-        return base + (if (url.startsWith("/")) url else "/$url")
-    }
+    fun absolute(url: String): String = UrlJoin.absolute(prefs.serverBase, url)
 
     /**
      * 播放地址缓存：聚焦时预取，按 OK 直接用。

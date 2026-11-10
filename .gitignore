@@ -13,6 +13,7 @@ build/
 **/generated/
 **/intermediates/
 **/.gradle/
+**/.kotlin/
 coverage/
 .cache/
 packaging/fnos/.build/
@@ -53,6 +54,11 @@ tmp/
 temp/
 *.tmp
 .review-artifacts/
+
+# 本机的抓包截图与解包目录（排查播放问题时留下的），不是源码。
+# 曾经一次 git add -A 就会把 release APK 与真实频道截图一起提进仓库。
+/.d/
+/.*.jpg
 
 # Windows 保留设备名：在 Git Bash 里重定向到 NUL 会真的创建一个文件，
 # 而且 git 每次都会报 "short read while indexing NUL"。它不是源码。

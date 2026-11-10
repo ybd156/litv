@@ -34,6 +34,16 @@ const minutesAgo = (m: number): string => new Date(now - m * 60_000).toISOString
 const hoursAgo = (h: number): string => new Date(now - h * 3_600_000).toISOString()
 const daysAgo = (d: number): string => new Date(now - d * 86_400_000).toISOString()
 
+/**
+ * 源样本。
+ *
+ * ★ `last_error` / `error` 与 `status` 三件套必须**同时给**：
+ * 服务端 `GET /sources` 的视图层保留 store 的 `last_error`，另外新增
+ * `error`（= last_error）与 `status`（ok|error|never）。界面两个键都读，
+ * mock 少给一个就等于把这个兜底分支藏起来，改坏了也看不出来。
+ *
+ * 三种 status 都在样本里：ok / error / never。
+ */
 export const seedSources: Source[] = [
   {
     id: 1,
@@ -43,6 +53,7 @@ export const seedSources: Source[] = [
     enabled: true,
     status: 'ok',
     last_fetch_at: minutesAgo(12),
+    last_error: null,
     error: null,
     channel_count: 22,
   },
@@ -54,6 +65,7 @@ export const seedSources: Source[] = [
     enabled: true,
     status: 'ok',
     last_fetch_at: hoursAgo(3),
+    last_error: null,
     error: null,
     channel_count: 12,
   },
@@ -65,6 +77,7 @@ export const seedSources: Source[] = [
     enabled: true,
     status: 'error',
     last_fetch_at: daysAgo(2),
+    last_error: '拉取失败：HTTP 403 Forbidden，源站可能换了地址',
     error: '拉取失败：HTTP 403 Forbidden，源站可能换了地址',
     channel_count: 0,
   },
@@ -76,6 +89,7 @@ export const seedSources: Source[] = [
     enabled: false,
     status: 'never',
     last_fetch_at: null,
+    last_error: null,
     error: null,
     channel_count: 0,
   },

@@ -22,7 +22,18 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/litv/litv/server/internal/safedial"
 )
+
+// logoClient 是下载外链台标用的客户端。
+//
+// 不用 http.DefaultClient：DefaultClient 没有超时、也不受任何地址策略约束。
+// 台标地址来自源清单（外部输入），所以必须过 safedial（默认档）：
+// 放行 LAN（自建图床），拒本机/链路本地/元数据端点。
+//
+// 做成包级变量复用：每次请求新建 Transport 会漏空闲连接。
+var logoClient = safedial.DefaultPolicy().Client(15 * time.Second)
 
 // MaxBytes 单个台标大小上限。台标是缩略图，2MB 已经非常宽松。
 const MaxBytes = 2 << 20
@@ -108,7 +119,7 @@ func (s *Store) SaveFromURL(ctx context.Context, channelID int64, rawURL, userAg
 	req.Header.Set("User-Agent", userAgent)
 	req.Header.Set("Accept", "image/*,*/*")
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := logoClient.Do(req)
 	if err != nil {
 		return "", err
 	}

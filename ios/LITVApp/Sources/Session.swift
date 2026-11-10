@@ -9,7 +9,11 @@ final class Session: ObservableObject {
 
     // 绑定相关
     @Published var serverBase: String = UserDefaults.standard.string(forKey: "server") ?? ""
-    @Published var token: String = UserDefaults.standard.string(forKey: "token") ?? ""
+    /// 设备 bearer token。**只存 Keychain**（见 CredentialStore），UserDefaults 里不再留明文。
+    ///
+    /// 初始值会顺带把历史上写在 UserDefaults 的旧 token 迁移进 Keychain 并删掉旧键；
+    /// 迁移或 Keychain 不可用都返回空 → 视为未登录，绝不回退明文。
+    @Published var token: String = CredentialStore.loadToken()
     /// 是否已被管理员批准。
     ///
     /// 不能用 `token.isEmpty` 当"已登录"：设备注册后服务端立刻返回 token，
@@ -49,13 +53,16 @@ final class Session: ObservableObject {
     @Published var statusText = ""
     @Published var errorText: String?
 
-    /// 设备标识：装一次生成一次，重装会变（和 Android 端行为一致）
-    var deviceKey: String {
-        if let k = UserDefaults.standard.string(forKey: "deviceKey"), !k.isEmpty { return k }
-        let k = UUID().uuidString.replacingOccurrences(of: "-", with: "")
-        UserDefaults.standard.set(k, forKey: "deviceKey")
-        return k
-    }
+    /// 设备标识：存 Keychain，**重装/清数据后不变**（AGENTS §3：服务端据此认回原设备）。
+    ///
+    /// 旧实现是随机 UUID 存 UserDefaults，重装就变，每次重装都要管理员重新批准
+    /// （旧注释写「和 Android 端行为一致」是错的：Android 用 ANDROID_ID 派生稳定标识）。
+    ///
+    /// 这里用 lazy 缓存一次：万一 Keychain 写不进去，也不能让同一个进程里
+    /// 两次读拿到两个不同的 key（那会直接注册出两台"设备"）。
+    private lazy var cachedDeviceKey: String = CredentialStore.loadDeviceKey()
+
+    var deviceKey: String { cachedDeviceKey }
 
     var api: ApiClient { ApiClient(base: serverBase, token: token) }
 
@@ -66,11 +73,18 @@ final class Session: ObservableObject {
         var b = input.trimmingCharacters(in: .whitespacesAndNewlines)
         if !b.lowercased().hasPrefix("http") { b = "http://" + b }
         b = b.hasSuffix("/") ? String(b.dropLast()) : b
+        let previous = serverBase
         serverBase = b
         do {
             let h = try await ApiClient(base: b, token: "").health()
             let ok = (h["code"] as? Int) == 0
-            if ok { UserDefaults.standard.set(b, forKey: "server") }
+            if ok {
+                // 换了服务端就必须丢掉旧凭据：否则下一次请求会把 A 服务器的
+                // bearer token 发给 B 服务器（凭据泄漏给第三方）。
+                // Android 端 Prefs.serverBase 的 setter 早就有这条守卫。
+                if !previous.isEmpty && previous != b { dropCredentials() }
+                UserDefaults.standard.set(b, forKey: "server")
+            }
             return ok
         } catch {
             errorText = "连不上：\(error.localizedDescription)"
@@ -86,8 +100,12 @@ final class Session: ObservableObject {
                                            name: deviceName.isEmpty ? "iPhone" : deviceName,
                                            model: UIDevice.current.model,
                                            code: code)
-            token = r.token
-            UserDefaults.standard.set(r.token, forKey: "token")
+            // 写 Keychain；存不进安全存储就等于没登录（不回退明文、不假装成功）。
+            setToken(r.token)
+            if token.isEmpty {
+                errorText = "系统安全存储不可用，无法保存绑定凭据，请重试"
+                return false
+            }
             // 只有 bound 才算真的进去了；pending 时 token 存着用于轮询，
             // 但不能让界面以为已登录（否则没批准也能进首页）。
             isBound = (r.status == "bound")
@@ -150,12 +168,33 @@ final class Session: ObservableObject {
     }
 
     func unbind() {
-        token = ""
+        setToken("")
         isBound = false
-        UserDefaults.standard.removeObject(forKey: "token")
         UserDefaults.standard.set(false, forKey: "isBound")
         channels = []
         favorites = []
+    }
+
+    // ---------------------------------------------------------------- 凭据
+
+    /// token 的唯一写入口。
+    ///
+    /// 刻意不用 `didSet`：写 Keychain 可能失败，失败时要把内存里的值也清空
+    /// （否则会出现"界面以为已登录、实际没有凭据"的半残状态）。
+    private func setToken(_ value: String) {
+        if value.isEmpty || !CredentialStore.saveToken(value) {
+            CredentialStore.clearToken()
+            token = ""
+        } else {
+            token = value
+        }
+    }
+
+    /// 彻底丢弃本机凭据（换服务端 / 解绑时用）。
+    private func dropCredentials() {
+        setToken("")
+        isBound = false
+        UserDefaults.standard.set(false, forKey: "isBound")
     }
 
     /// 按分组筛选（nil = 全部）。

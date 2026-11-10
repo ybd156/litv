@@ -8,7 +8,7 @@
     "dev": "vite",
     "dev:mock": "vite --mode mock",
     "build": "vue-tsc --noEmit -p tsconfig.json && vite build",
-    "build:mock": "vue-tsc --noEmit -p tsconfig.json && vite build --mode mock",
+    "build:mock": "vue-tsc --noEmit -p tsconfig.json && vite build --mode mock --outDir dist-mock",
     "typecheck": "vue-tsc --noEmit -p tsconfig.json",
     "preview": "vite preview"
   },

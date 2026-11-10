@@ -140,10 +140,17 @@ async function load(): Promise<void> {
   }
 }
 
+/**
+ * 建立映射。
+ *
+ * ★ 必须走 `setChannelEpg`（`PUT /channels/{id}/epg`），不能塞进 `updateChannel`：
+ * 频道更新接口的请求体里没有 `epg_id`，服务端又开了 `DisallowUnknownFields`，
+ * 塞进去就是 400 —— 之前这个页面的拖拽对应功能在真机上 100% 失败。
+ */
 async function assign(channel: Channel, epgId: string): Promise<void> {
   if (channel.epg_id === epgId) return
   try {
-    await channelsApi.updateChannel(channel.id, { epg_id: epgId })
+    await channelsApi.setChannelEpg(channel.id, epgId)
     channel.epg_id = epgId
     selectedId.value = null
     toast.success(`「${channel.name}」已对应到 ${epgName(epgId)}`)
@@ -152,9 +159,16 @@ async function assign(channel: Channel, epgId: string): Promise<void> {
   }
 }
 
+/**
+ * 解除映射。
+ *
+ * 传 `null` 给模块层，模块层会发**空字符串**（`{"epg_id": ""}`）而不是字符串
+ * `"null"` —— 服务端 `SetChannelEpgID(id, "")` 才是「清空」的语义，
+ * 发字面量 `"null"` 会被当成一个真的 epg id 存进去。
+ */
 async function clearMatch(channel: Channel): Promise<void> {
   try {
-    await channelsApi.updateChannel(channel.id, { epg_id: null })
+    await channelsApi.setChannelEpg(channel.id, null)
     channel.epg_id = null
     toast.success('已解除对应关系')
   } catch (e) {

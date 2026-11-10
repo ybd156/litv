@@ -167,4 +167,14 @@ dependencies {
     implementation("com.google.zxing:core:3.5.3")
 
     debugImplementation("com.squareup.leakcanary:leakcanary-android:2.14")
+
+    // ---- 单元测试（纯 JVM，不要 Robolectric）----
+    // 只测不依赖 Android 框架的纯函数：地址拼接、缓存过期判定、默认值一致性、
+    // 换台代际闸门。凡是需要 Context / Looper 的行为（换台竞态、重试额度、
+    // 内核降级）**不在单测覆盖范围内**，只能代码审查 + 真机验证。
+    //
+    // 注意：这里刻意**不**开 `testOptions { unitTests.isReturnDefaultValues = true }`。
+    // 开了之后调用未实现的 android.* 方法会静默返回默认值，测试会变成假绿；
+    // 不开则会直接抛 "Method ... not mocked" —— 我们要的就是这个响声。
+    testImplementation("junit:junit:4.13.2")
 }

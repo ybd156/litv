@@ -21,9 +21,6 @@ object PlayCacheStore {
 
     private const val MAX_ENTRIES = 24
 
-    /** 签名剩余不足这个秒数就不用缓存——留足余量，避免刚起播就过期。 */
-    private const val MIN_REMAIN_SEC = 60
-
     private val gson = Gson()
     private val listType = object : TypeToken<MutableList<PlayCache>>() {}.type
 
@@ -37,12 +34,14 @@ object PlayCacheStore {
     /**
      * 取这个频道还能用的缓存；没有或快过期就返回 null。
      *
+     * 过期判定在 [PlayCache.isUsable] 里（纯函数，余量阈值的单一来源
+     * 是 [PlayCache.MIN_REMAIN_SEC]，这里不再写字面量）。
+     *
      * @param nowSec 当前 Unix 秒
      */
     fun get(prefs: Prefs, channelId: Long, nowSec: Long): PlayCache? {
         val c = read(prefs).firstOrNull { it.channelId == channelId } ?: return null
-        if (c.url.isBlank() || c.expires <= nowSec + MIN_REMAIN_SEC) return null
-        return c
+        return if (c.isUsable(nowSec, PlayCache.MIN_REMAIN_SEC)) c else null
     }
 
     /** 存一条（同频道覆盖），并淘汰最旧的。 */

@@ -16,6 +16,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/litv/litv/server/internal/safedial"
 )
 
 // ErrTooManyStreams 并发流数超限。
@@ -123,6 +125,18 @@ type Upstream struct {
 
 	cancel context.CancelFunc
 	nextID atomic.Int64
+
+	// client 是这个上游专属的出站客户端，**在 Subscribe 时建一次**。
+	//
+	// 以前 readOnce 每次调用都新建 client + Transport：
+	//   - Transport 被丢弃后，它的空闲连接不会被主动关掉，
+	//     死台按指数退避（1s→10s）重连，等于每 10 秒漏一批 fd；
+	//   - 顺带也就没法给它接出站地址策略（SSRF）。
+	//
+	// 现在：每个上游一个 Transport（保住 opts.Timeout 对响应头的控制），
+	// 上游 close 时 CloseIdleConnections。
+	client    *http.Client
+	transport *http.Transport
 }
 
 // Subscribe 订阅一个频道。若该频道已有上游则直接复用。
@@ -175,6 +189,12 @@ func (h *Hub) Subscribe(ctx context.Context, channelID int64, url string, header
 			subs:      make(map[*Subscriber]struct{}),
 			started:   time.Now(),
 			cancel:    cancel,
+		}
+		up.transport = newUpstreamTransport(h.opts)
+		up.client = &http.Client{
+			// 直播流不设总超时，靠 ctx 控制。
+			Timeout:   0,
+			Transport: up.transport,
 		}
 		h.ups[channelID] = up
 		go up.run(ctx2)
@@ -332,6 +352,12 @@ func (u *Upstream) close() {
 	if u.cancel != nil {
 		u.cancel()
 	}
+	// 上游收尾时把空闲连接也关掉。
+	// Transport 是每个上游专属的（见 Upstream.client 的注释），
+	// 不关的话它会带着 keep-alive 连接一直挂在那里等 GC。
+	if u.transport != nil {
+		u.transport.CloseIdleConnections()
+	}
 }
 
 func (u *Upstream) broadcast(chunk []byte) {
@@ -391,6 +417,25 @@ func (u *Upstream) run(ctx context.Context) {
 	}
 }
 
+// newUpstreamTransport 造一个上游拉流用的 Transport。
+//
+// 出站地址策略：线路 URL 来自用户导入的清单，属于外部输入，必须过 safedial。
+// 用**默认档**（放行 RFC1918 / IPv6 ULA / 公网；拒绝 loopback、链路本地、
+// CGNAT、本机网卡地址）：
+//   - LAN 源（组播转单播网关、另一台机器上的 TS 服务）是正常用法，必须能播；
+//   - 但绝不能让一份恶意清单把 NAS 指到 127.0.0.1 的管理口
+//     或 169.254.169.254 的元数据端点。
+func newUpstreamTransport(opts Options) *http.Transport {
+	t := safedial.DefaultPolicy().Transport()
+	// 直播流不能压缩：DisableCompression 既省 CPU，也避免上游送 gzip TS 时解不明白。
+	t.DisableCompression = true
+	// 响应头超时沿用 Hub 的配置（upstream_timeout），语义与改动前一致。
+	t.ResponseHeaderTimeout = opts.Timeout
+	t.MaxIdleConnsPerHost = 4
+	t.IdleConnTimeout = 90 * time.Second
+	return t
+}
+
 func (u *Upstream) readOnce(ctx context.Context) error {
 	reqCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -411,13 +456,11 @@ func (u *Upstream) readOnce(ctx context.Context) error {
 		req.Header.Set(k, v)
 	}
 
-	client := &http.Client{
-		Timeout: 0, // 直播流不设总超时，靠 ctx 控制
-		Transport: &http.Transport{
-			ResponseHeaderTimeout: u.opts.Timeout,
-			DisableCompression:    true,
-			MaxIdleConnsPerHost:   4,
-		},
+	// client 在上游创建时建好并复用（见 Upstream.client 的注释）。
+	// 退回到新建只是防御：makeTestUpstream 之类的测试构造没有走 Subscribe。
+	client := u.client
+	if client == nil {
+		client = &http.Client{Timeout: 0, Transport: newUpstreamTransport(u.opts)}
 	}
 	resp, err := client.Do(req)
 	if err != nil {

@@ -28,6 +28,7 @@ import * as sourcesApi from '@/api/modules/sources'
 import type { Channel, GroupStat } from '@/api/types'
 import { toErrorMessage } from '@/api/errors'
 import { confirmAction, toast } from '@/utils/feedback'
+import { canWrite } from '@/session'
 
 const groups = ref<GroupStat[]>([])
 const rows = ref<Channel[]>([])
@@ -202,7 +203,9 @@ function confirmBatchDelete(): void {
   if (!ids.length) return
   confirmAction({
     title: `删除选中的 ${ids.length} 个频道？`,
-    content: '频道和它的线路都会被移除，电视上也就看不到了。这一步不可撤销。',
+    content:
+      '频道和它的线路都会被移除，电视上也就看不到了。' +
+      '相关收藏 / 续播进度 / 节目提醒也会失效。这一步不可撤销。',
     positiveText: '删除',
     onConfirm: () => batch('delete'),
   })
@@ -233,7 +236,9 @@ function openEdit(row: Channel): void {
 function remove(row: Channel): void {
   confirmAction({
     title: '删除这个频道？',
-    content: `「${row.name}」以及它的 ${row.stream_count ?? 0} 条线路都会被移除。`,
+    content:
+      `「${row.name}」以及它的 ${row.stream_count ?? 0} 条线路都会被移除，` +
+      '相关收藏 / 续播进度 / 节目提醒也会失效。',
     positiveText: '删除',
     onConfirm: async () => {
       await channelsApi.deleteChannel(row.id)
@@ -243,14 +248,40 @@ function remove(row: Channel): void {
   })
 }
 
-async function toggleEnabled(row: Channel): Promise<void> {
+/**
+ * 真正执行启用/停用切换。
+ *
+ * ★ 必须走 `patchChannel`（部分更新），只发 `{enabled}`：
+ * 旧服务端把这个接口当**全量覆盖**，只发一个字段会把没提到的
+ * name/group/logo/tvg_id/number 全写成空值——点一下「停用」，频道名就没了。
+ * 服务端已改成按需更新，前端这里也只说「我要改什么」，两边都收窄。
+ */
+async function applyToggle(row: Channel): Promise<void> {
+  const next = !row.enabled
   try {
-    await channelsApi.updateChannel(row.id, { enabled: !row.enabled })
-    row.enabled = !row.enabled
-    toast.success(row.enabled ? '已启用' : '已停用')
+    await channelsApi.patchChannel(row.id, { enabled: next })
+    row.enabled = next
+    toast.success(next ? `「${row.name}」已启用` : `「${row.name}」已停用`)
   } catch (e) {
     toast.error(toErrorMessage(e))
   }
+}
+
+function toggleEnabled(row: Channel): void {
+  if (row.enabled) {
+    confirmAction({
+      title: `停用「${row.name}」？`,
+      content:
+        '只切换启用状态，不改名称 / 分组 / 台标 / 频道号 / EPG 映射。' +
+        '停用后电视上立刻看不到这个台（随时可以再启用）。',
+      positiveText: '停用',
+      onConfirm: () => applyToggle(row),
+    })
+    return
+  }
+  // 启用是恢复动作、没有数据风险，不再弹确认框。
+  // 全都弹确认的结果是用户对确认框麻木，连「删除」也会条件反射点确定。
+  void applyToggle(row)
 }
 
 function markRowChanged(): void {
@@ -360,12 +391,8 @@ const allColumns = computed<Record<string, DataTableColumns<Channel>[number]>>((
     key: 'source_id',
     width: 130,
     ellipsis: { tooltip: true },
-    render: (row) =>
-      h(
-        'span',
-        { class: 'muted' },
-        sourceNameOf((row as unknown as { source_id?: number }).source_id),
-      ),
+    // Channel.source_id 现在在类型里了（服务端一直有这个字段），不用再强转
+    render: (row) => h('span', { class: 'muted' }, sourceNameOf(row.source_id)),
   },
   streams: {
     title: '线路',
@@ -434,14 +461,25 @@ const columns = computed<DataTableColumns<Channel>>(() => {
         default: () => [
           h(
             NButton,
-            { size: 'tiny', quaternary: true, type: 'primary', onClick: () => openEdit(row) },
+            {
+              size: 'tiny',
+              quaternary: true,
+              type: 'primary',
+              disabled: !canWrite.value,
+              onClick: () => openEdit(row),
+            },
             { default: () => '编辑' },
           ),
           h(NTooltip, null, {
             trigger: () =>
               h(
                 NButton,
-                { size: 'tiny', quaternary: true, onClick: () => void move(row.id, -1) },
+                {
+                  size: 'tiny',
+                  quaternary: true,
+                  disabled: !canWrite.value,
+                  onClick: () => void move(row.id, -1),
+                },
                 { icon: () => h(Icon, { name: 'up', size: 14 }) },
               ),
             default: () => '上移',
@@ -450,7 +488,12 @@ const columns = computed<DataTableColumns<Channel>>(() => {
             trigger: () =>
               h(
                 NButton,
-                { size: 'tiny', quaternary: true, onClick: () => void move(row.id, 1) },
+                {
+                  size: 'tiny',
+                  quaternary: true,
+                  disabled: !canWrite.value,
+                  onClick: () => void move(row.id, 1),
+                },
                 { icon: () => h(Icon, { name: 'down', size: 14 }) },
               ),
             default: () => '下移',
@@ -463,7 +506,8 @@ const columns = computed<DataTableColumns<Channel>>(() => {
                   size: 'tiny',
                   quaternary: true,
                   type: row.enabled ? 'default' : 'success',
-                  onClick: () => void toggleEnabled(row),
+                  disabled: !canWrite.value,
+                  onClick: () => toggleEnabled(row),
                 },
                 { default: () => (row.enabled ? '停用' : '启用') },
               ),
@@ -471,7 +515,13 @@ const columns = computed<DataTableColumns<Channel>>(() => {
           }),
           h(
             NButton,
-            { size: 'tiny', quaternary: true, type: 'error', onClick: () => remove(row) },
+            {
+              size: 'tiny',
+              quaternary: true,
+              type: 'error',
+              disabled: !canWrite.value,
+              onClick: () => remove(row),
+            },
             { icon: () => h(Icon, { name: 'trash', size: 14 }) },
           ),
         ],
@@ -517,7 +567,7 @@ watch(sourceFilter, () => {
           <template #icon><Icon name="refresh" :size="15" /></template>
           刷新
         </NButton>
-        <NButton size="small" type="primary" @click="openCreate">
+        <NButton size="small" type="primary" :disabled="!canWrite" @click="openCreate">
           <template #icon><Icon name="plus" :size="15" /></template>
           新增频道
         </NButton>
@@ -591,10 +641,10 @@ watch(sourceFilter, () => {
 
         <div v-if="checkedKeys.length > 0" class="batch-bar">
           <span class="count">已选 {{ checkedKeys.length }} 个</span>
-          <NButton size="tiny" secondary @click="batch('enable')">批量启用</NButton>
-          <NButton size="tiny" secondary @click="batch('disable')">批量停用</NButton>
-          <NButton size="tiny" secondary @click="batchGroupShow = true">改分组</NButton>
-          <NButton size="tiny" type="error" secondary @click="confirmBatchDelete">删除</NButton>
+          <NButton size="tiny" secondary :disabled="!canWrite" @click="batch('enable')">批量启用</NButton>
+          <NButton size="tiny" secondary :disabled="!canWrite" @click="batch('disable')">批量停用</NButton>
+          <NButton size="tiny" secondary :disabled="!canWrite" @click="batchGroupShow = true">改分组</NButton>
+          <NButton size="tiny" type="error" secondary :disabled="!canWrite" @click="confirmBatchDelete">删除</NButton>
           <span class="spacer" />
           <NButton size="tiny" quaternary @click="checkedKeys = []">取消选择</NButton>
         </div>
@@ -609,7 +659,7 @@ watch(sourceFilter, () => {
           >
             <template #empty-action>
               <NSpace :size="8" justify="center">
-                <NButton size="small" type="primary" @click="openCreate">
+                <NButton size="small" type="primary" :disabled="!canWrite" @click="openCreate">
                   <template #icon><Icon name="plus" :size="14" /></template>
                   手动建一个频道
                 </NButton>

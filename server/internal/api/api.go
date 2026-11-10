@@ -15,9 +15,12 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
+	"net/netip"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -31,6 +34,7 @@ import (
 	"github.com/litv/litv/server/internal/record"
 	"github.com/litv/litv/server/internal/remote"
 	"github.com/litv/litv/server/internal/remux"
+	"github.com/litv/litv/server/internal/safedial"
 	"github.com/litv/litv/server/internal/store"
 	"github.com/litv/litv/server/internal/stream"
 	"github.com/litv/litv/server/internal/timeshift"
@@ -53,6 +57,11 @@ type API struct {
 	authAudit    *authAuditGate
 	now          func() time.Time
 
+	// deviceLimiter 设备注册/绑定用的独立限流器。
+	//
+	// 绝不能和 loginLimiter 共用桶（见 New 里的注释）。
+	deviceLimiter *auth.LoginLimiter
+
 	// 运行时事实（由 main 注入）
 	actualPort int
 	ffmpegPath string
@@ -65,22 +74,69 @@ type API struct {
 	// 启动时可能是用 -config 显式指定的，反推会写到别的文件去，
 	// 表现就是"保存成功但重启后设置没了"。
 	cfgPath string
+
+	// recordDir 是录制目录的**规范化**路径（由 main 注入）。
+	//
+	// 为什么不能直接读 cfg.Record.Dir：main 会在配置为空时兜底成
+	// <cache>/recordings，而那个兜底值从没回写进 cfg。
+	// 于是 deleteRecording 的"路径必须在录制目录内"校验在默认配置下
+	// 恒为假（Clean("") == "."），结果是 DB 行删了、文件永久残留。
+	recordDir string
+
+	// dialPolicy 是出站地址策略（SSRF 防线）。
+	//
+	// 生产永远是 safedial.DefaultPolicy()：放行 RFC1918/ULA（LAN 源是产品功能），
+	// 拒绝 loopback / 链路本地 / CGNAT / 本机网卡地址（挡住"打 NAS 自己"与云元数据）。
+	//
+	// 刻意是未导出字段、也没有 Setter：生产代码不存在任何放宽它的入口
+	// （不读 config、不读环境变量）。测试在同包内直接赋值成
+	// Policy{AllowLoopback:true}——httptest 服务器都监听回环。
+	dialPolicy safedial.Policy
+
+	// segClient 是分片代理专用的出站客户端。
+	//
+	// 单独一个 client 而不是复用 fetch 的：分片是**持续流式**传输，
+	// 和"抓一个小清单"的超时语义完全不同（见 liveSegment 的注释）。
+	segClient *http.Client
+
+	// segAuditAt 记录"上次为某个频道记过私网分片审计"的时间。
+	// 每个分片都写一条会把 audit_logs 刷爆，所以按频道 + 时间窗去重。
+	segAuditMu sync.Mutex
+	segAuditAt map[int64]time.Time
+
+	// 投屏设备发现缓存。
+	//
+	// tvDLNAcast / tvDLNAstop 要用它做白名单比对（control_url 必须是
+	// 本进程真的发现过的设备），而 SSDP 扫描一次要 ~3 秒——
+	// 放进 cast 路径会把投屏起播从"几乎瞬间"拉到"等三秒"。
+	rendererMu   sync.Mutex
+	rendererAt   time.Time
+	rendererList []dlna.Renderer
 }
 
 // New 创建 API。
 func New(cfg *config.Config, st *store.Store, hub *stream.Hub, version string) *API {
-	return &API{
+	a := &API{
 		cfg:          cfg,
 		st:           st,
 		hub:          hub,
 		remote:       remote.NewHub(),
 		signer:       auth.NewSigner(cfg.Auth.Secret),
 		loginLimiter: auth.NewLoginLimiter(),
-		authAudit:    &authAuditGate{},
-		now:          time.Now,
-		startAt:      time.Now(),
-		version:      version,
+		// 设备注册用**独立**的限流器实例。
+		//
+		// 绝不能复用 loginLimiter：那是"IP 5/分 + 全局 30/分"的共享桶，
+		// 复用等于让攻击者用注册请求把全局额度吃光，
+		// 顺手把应急管理员登录也一起饿死（那是网关挂掉时唯一的后路）。
+		deviceLimiter: auth.NewLoginLimiter(),
+		authAudit:     &authAuditGate{},
+		now:           time.Now,
+		startAt:       time.Now(),
+		version:       version,
+		dialPolicy:    safedial.DefaultPolicy(),
 	}
+	a.segClient = &http.Client{Transport: a.segTransport()}
+	return a
 }
 
 // SetTimeshift 注入时移管理器（main 里创建，因为 Hub 也要用它做 tee）。
@@ -113,6 +169,61 @@ func (a *API) SetRuntime(actualPort int, ffmpegPath string) {
 
 // SetConfigPath 注入真实配置文件路径，供管理台保存设置时写回。
 func (a *API) SetConfigPath(path string) { a.cfgPath = path }
+
+// SetRecordDir 注入录制目录的规范化路径。
+//
+// main 会在 cfg.Record.Dir 为空时兜底成 <cache>/recordings，
+// 但那个兜底值不回写 cfg。所以这里必须显式注入，
+// 否则 deleteRecording 的"路径属于录制目录"校验拿不到真实根目录。
+func (a *API) SetRecordDir(dir string) { a.recordDir = dir }
+
+// segTransport 构造分片代理专用的 Transport。
+//
+// 关键点：DialContext 用闭包读 a.dialPolicy，而不是在构造时把策略值拷进去。
+// 测试会在 New() 之后注入 Policy{AllowLoopback:true}，闭包能读到新值；
+// 生产永远读到 DefaultPolicy()。
+//
+// 超时按"流式传输"配，不设总超时（http.Client.Timeout 会算上读完响应体的时间，
+// 一个 2MB 的分片在 1Mbps 的源上要 16 秒，设 15 秒必然超时 —— 弱网必卡）。
+// 真正的护栏是：拨号 10 秒、响应头 15 秒（都在 Policy.Transport 里），
+// 加上请求透传 r.Context()——客户端断开时上游读取会立刻跟着取消。
+func (a *API) segTransport() *http.Transport {
+	t := a.dialPolicy.Transport()
+	t.DialContext = func(ctx context.Context, network, address string) (net.Conn, error) {
+		return a.dialPolicy.DialContext(ctx, network, address)
+	}
+	return t
+}
+
+// notePrivateSegmentTarget 为"分片打到了 LAN"写一条审计。
+//
+// 为什么需要：放行 RFC1918 是产品功能（LAN 源），但"服务端替终端去取内网地址"
+// 是需要留下痕迹的行为——真出问题时这是唯一的线索。
+//
+// 为什么按频道 + 10 分钟窗口去重：HLS 每秒一个分片，每个都写一条
+// 会把 audit_logs 刷爆，反而把真正的审计线索淹掉。
+//
+// 只写 channel_id 与"落在私网"这个标记，**不写 URL**：
+// 分片地址里通常带源站签名，落到库里就是泄露凭据。
+func (a *API) notePrivateSegmentTarget(ctx context.Context, channelID int64, addr netip.Addr) {
+	if !safedial.IsPrivateAddr(addr) {
+		return
+	}
+	a.segAuditMu.Lock()
+	if a.segAuditAt == nil || len(a.segAuditAt) > 4096 {
+		// 4096 远超任何家庭场景的频道数；超过就整体重置，
+		// 宁可多记几条也不要让这张表无界增长。
+		a.segAuditAt = map[int64]time.Time{}
+	}
+	if t, ok := a.segAuditAt[channelID]; ok && time.Since(t) < 10*time.Minute {
+		a.segAuditMu.Unlock()
+		return
+	}
+	a.segAuditAt[channelID] = time.Now()
+	a.segAuditMu.Unlock()
+
+	a.st.Audit(ctx, 0, "seg.private_target", fmt.Sprint(channelID), "分片目标位于私网/LAN", "")
+}
 
 // DLNASource 返回 DLNA 需要的数据源适配器。
 func (a *API) DLNASource() dlna.ChannelSource { return dlnaSource{a: a} }

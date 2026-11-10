@@ -14,10 +14,11 @@ import (
 	"crypto/tls"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/litv/litv/server/internal/safedial"
 )
 
 // Result 是抓取结果。
@@ -45,33 +46,52 @@ func DefaultOptions() Options {
 	}
 }
 
-var client = &http.Client{
-	Transport: &http.Transport{
-		Proxy: http.ProxyFromEnvironment,
-		DialContext: (&net.Dialer{
-			Timeout:   8 * time.Second,
-			KeepAlive: 30 * time.Second,
-		}).DialContext,
+// newTransport 造一个抓取用 Transport。
+//
+// 两条必须保留的既有结论：
+//   - 关掉 HTTP/2：实测某些源站（live.ottiptv.cc 这类 Cloudflare 前置的）
+//     对 Go 的 h2 客户端会一直挂着不返回响应头，报
+//     "http2: timeout awaiting response headers" 或 context deadline exceeded；
+//     同一个地址用 curl（h1.1 或 h2）都是 200 秒回。抓清单/分片走 h1.1 没有损失。
+//   - 不设 Proxy：http.ProxyFromEnvironment 会让实际连接目标变成代理地址，
+//     地址策略要么误杀用户正常的代理，要么被代理整个绕过去。
+//     需要代理的场景应该在配置里显式声明，而不是靠环境变量悄悄改出站路径。
+//
+// 出站地址策略用 safedial 的默认档（全项目只有这一档）：
+// 放行 RFC1918 / IPv6 ULA（LAN 源是产品功能），拒绝 loopback、链路本地、
+// CGNAT 与本机网卡地址（挡住"打 NAS 自己"和云元数据端点）。
+func newTransport() *http.Transport {
+	return &http.Transport{
+		DialContext:           safedial.DefaultPolicy().DialContext,
 		TLSHandshakeTimeout:   8 * time.Second,
 		ResponseHeaderTimeout: 12 * time.Second,
 		MaxIdleConns:          32,
 		IdleConnTimeout:       60 * time.Second,
-		// 关掉 HTTP/2：实测某些源站（live.ottiptv.cc 这类 Cloudflare 前置的）
-		// 对 Go 的 h2 客户端会一直挂着不返回响应头，报
-		// "http2: timeout awaiting response headers" 或 context deadline exceeded；
-		// 同一个地址用 curl（h1.1 或 h2）都是 200 秒回。
-		// 抓清单/分片这种小请求走 h1.1 没有任何损失。
-		ForceAttemptHTTP2: false,
-		TLSNextProto:      map[string]func(string, *tls.Conn) http.RoundTripper{},
-	},
-	// 不自动跟随无限重定向
+		ForceAttemptHTTP2:     false,
+		TLSNextProto:          map[string]func(string, *tls.Conn) http.RoundTripper{},
+	}
+}
+
+// client 是包级复用的抓取客户端。
+//
+// 不要每次请求新建：Transport 被丢弃后它的空闲连接不会被主动关掉，
+// 长期运行会漏 fd。
+var client = &http.Client{
+	Transport: newTransport(),
+	// 不自动跟随无限重定向。
+	//
+	// 地址判定不在这里做：safedial 是在 DialContext（connect 之前）判的，
+	// 每一次重定向都是一次新的拨号，所以自动被同一套策略覆盖，
+	// 不需要（也不该）在 URL 层再判一遍——那既重复又更容易被绕过。
 	CheckRedirect: func(req *http.Request, via []*http.Request) error {
-		if len(via) >= 8 {
+		if len(via) >= maxRedirects {
 			return fmt.Errorf("重定向次数过多")
 		}
 		return nil
 	},
 }
+
+const maxRedirects = 8
 
 // Get 抓取一个 URL。
 func Get(ctx context.Context, url string, opt Options) (*Result, error) {
@@ -103,6 +123,11 @@ func Get(ctx context.Context, url string, opt Options) (*Result, error) {
 
 	resp, err := client.Do(req)
 	if err != nil {
+		// 被地址策略拦下的错误单独标注：调用方据此决定「不要重试」，
+		// 也别把它当成「源站挂了」去累加失败次数。
+		if safedial.IsBlockedError(err) {
+			return nil, fmt.Errorf("目标地址被出站策略拒绝: %w", err)
+		}
 		return nil, fmt.Errorf("请求失败: %w", err)
 	}
 	defer resp.Body.Close()

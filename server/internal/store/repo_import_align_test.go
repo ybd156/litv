@@ -469,6 +469,16 @@ func TestImportDoesNotBlockConcurrentWrites(t *testing.T) {
 				stamps = append(stamps, t0)
 			}
 			mu.Unlock()
+
+			// 写入节奏：这里必须让出一点时间。
+			//
+			// 不加 sleep 时这个循环会**死磕**写锁：SQLite 单写者模型下，
+			// writer 一释放就立刻重新抢，导入的分块事务可能连续几次抢不到，
+			// 2000ms 的 busy_timeout 也能被饿穿 —— 那是测试自身在制造竞争，
+			// 不是实现有问题（CI 第一次跑就是这么红的）。
+			// 5ms 的间隔在 60 个分块（约 600ms）里仍然能穿插几十次，
+			// 断言「落在导入窗口内的成功写入 ≥10 次」依旧有意义。
+			time.Sleep(5 * time.Millisecond)
 		}
 	}()
 

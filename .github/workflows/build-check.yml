@@ -88,6 +88,11 @@ jobs:
           if [ -n "$unformatted" ]; then
             echo "❌ 以下文件没格式化（本地跑 gofmt -w）："
             echo "$unformatted"
+            # 直接打印差异：不然只看到文件名，还得在本地重装 Go 才能知道差在哪。
+            # CI 是唯一权威的格式判定，日志里必须能直接抄。
+            echo "----- gofmt -d -----"
+            gofmt -d $unformatted
+            echo "----- end -----"
             exit 1
           fi
       - name: 编译

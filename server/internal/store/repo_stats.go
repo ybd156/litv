@@ -40,14 +40,14 @@ func (s *Store) AddPlayEvent(ctx context.Context, e PlayEvent) error {
 
 // StatsOverview 是总览指标。
 type StatsOverview struct {
-	Days           int     `json:"days"`
-	TotalPlays     int     `json:"total_plays"`
-	UniqueChannels int     `json:"unique_channels"`
-	UniqueDevices  int     `json:"unique_devices"`
-	AvgStartupMs   int     `json:"avg_startup_ms"`
-	P90StartupMs   int     `json:"p90_startup_ms"`
-	Stalls         int     `json:"stalls"`
-	Errors         int     `json:"errors"`
+	Days           int `json:"days"`
+	TotalPlays     int `json:"total_plays"`
+	UniqueChannels int `json:"unique_channels"`
+	UniqueDevices  int `json:"unique_devices"`
+	AvgStartupMs   int `json:"avg_startup_ms"`
+	P90StartupMs   int `json:"p90_startup_ms"`
+	Stalls         int `json:"stalls"`
+	Errors         int `json:"errors"`
 	// StallRate 是「卡顿**次数** / 起播次数」，它是事件计数比，**不是**
 	// rebuffer ratio。想知道"看了多久里卡了多久"要看 RebufferRatio。
 	// 保留它是因为管理台已经在用，且两个指标回答的是不同问题。

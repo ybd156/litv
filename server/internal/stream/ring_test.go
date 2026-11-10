@@ -142,16 +142,16 @@ func idrPacket(pid uint16) []byte {
 func TestRingBufferSnapshotStartsAtPATBeforeIDR(t *testing.T) {
 	const videoPID = 0x0101
 	var stream []byte
-	stream = append(stream, psiPacket(0, 0x00)...)           // PAT #1（旧实现会从这里起播）
-	stream = append(stream, psiPacket(0x1000, 0x02)...)      // PMT #1
-	for i := 0; i < 20; i++ {                                // 一段非 IDR 的 PES
+	stream = append(stream, psiPacket(0, 0x00)...)      // PAT #1（旧实现会从这里起播）
+	stream = append(stream, psiPacket(0x1000, 0x02)...) // PMT #1
+	for i := 0; i < 20; i++ {                           // 一段非 IDR 的 PES
 		stream = append(stream, tsPacket(videoPID, true, 0x11)...)
 	}
-	stream = append(stream, psiPacket(0, 0x00)...)           // PAT #2 ← 期望的起点
-	stream = append(stream, psiPacket(0x1000, 0x02)...)      // PMT #2
+	stream = append(stream, psiPacket(0, 0x00)...)      // PAT #2 ← 期望的起点
+	stream = append(stream, psiPacket(0x1000, 0x02)...) // PMT #2
 	stream = append(stream, tsPacket(videoPID, true, 0x11)...)
 	stream = append(stream, tsPacket(videoPID, true, 0x11)...)
-	stream = append(stream, idrPacket(videoPID)...)          // 第一个 IDR
+	stream = append(stream, idrPacket(videoPID)...) // 第一个 IDR
 	stream = append(stream, tsPacket(videoPID, true, 0x11)...)
 
 	r := newRingBuffer(1 << 20)

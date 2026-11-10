@@ -248,9 +248,9 @@ func Default() *Config {
 			AdminMaxSessions: DefaultAdminMaxSessions,
 		},
 		Stream: Stream{
-			CacheDir:        "./data/cache",
-			MaxConcurrent:   100,
-			BufferSize:      32 * 1024,
+			CacheDir:      "./data/cache",
+			MaxConcurrent: 100,
+			BufferSize:    32 * 1024,
 			// 6MB ≈ 8Mbps 下 6 秒、25Mbps 下 2 秒。为什么要 6MB 而不是 2MB：
 			// 新订阅者是从缓冲里起播的，缓冲必须至少覆盖一个完整 GOP（2–4 秒），
 			// 否则只能从 GOP 中间开始、等下一个 IDR 才出画 —— 那就是「起播要转很久圈」。

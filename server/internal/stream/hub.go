@@ -17,6 +17,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/litv/litv/server/internal/fetch"
 	"github.com/litv/litv/server/internal/safedial"
 )
 
@@ -439,7 +440,9 @@ func newUpstreamTransport(opts Options) *http.Transport {
 func (u *Upstream) readOnce(ctx context.Context) error {
 	// 出站连接的 SSRF 校验。订阅源是不可信输入：一条指向 127.0.0.1
 	// 或云元数据地址的线路，不应该让服务端替它去连。
-	// 真正的拦截在 fetch 的 DialContext 里按解析结果再做一次（防 DNS rebinding）。
+	// 这里是入口层的字符串校验（错误信息更清楚）；
+	// 真正的拦截在 safedial 的 Dialer.Control 里按**解析后的 IP**再做一次，
+	// 所以 DNS rebinding 换不掉判定结果。
 	if err := fetch.ValidateURL(u.URL); err != nil {
 		return err
 	}

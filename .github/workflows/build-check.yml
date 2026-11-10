@@ -194,7 +194,9 @@ jobs:
           if grep -qE 'abortOnError *= *false' app/build.gradle.kts; then
             echo "::warning::lint 处于报告模式（abortOnError=false）：本步骤恒绿，不代表 lint 干净。lint 门禁**未达成**。"
           fi
-          gradle --no-daemon lintDebug --console=plain
+          # 两个 flavor 都要跑：`lintDebug` 是歧义任务名（AGP 会报
+          # 「Task 'lintDebug' is ambiguous」，因为 tv/phone 各有自己的 debug 变体）。
+          gradle --no-daemon lintTvDebug lintPhoneDebug --console=plain
           ls -lh app/build/reports/ 2>/dev/null || true
 
       - name: 上传 lint 报告
@@ -202,7 +204,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: lint-report
-          path: android/app/build/reports/lint-results-debug.*
+          path: android/app/build/reports/lint-results-*
           if-no-files-found: warn
           retention-days: 7
 

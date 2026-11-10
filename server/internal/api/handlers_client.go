@@ -62,8 +62,9 @@ func (a *API) deviceRegister(w http.ResponseWriter, r *http.Request) {
 	}
 	outcome := registerInfra
 	defer func() {
-		// Finish 是幂等的，放在 defer 里保证每条返回路径都会记账。
-		a.deviceLimiter.Finish(att, outcome == registerOK, outcome == registerBad, a.now())
+		// Finish 在 *LoginAttempt 上（幂等），放在 defer 里保证每条返回路径都会记账。
+		// 只有"凭证类失败"才计入失败计数：基础设施错误不该让人被锁。
+		att.Finish(outcome == registerOK, outcome == registerBad, a.now())
 	}()
 
 	var body struct {

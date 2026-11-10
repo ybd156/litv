@@ -3,7 +3,9 @@ package store
 import (
 	"context"
 	"path/filepath"
+	"sync"
 	"testing"
+	"time"
 )
 
 // 本文件覆盖 A1（源刷新对齐上游）。
@@ -387,17 +389,26 @@ func TestImportPreservesUserFields(t *testing.T) {
 	}
 }
 
-// TestImportDoesNotBlockConcurrentWrites 证明「刷新会把 TV 端写死」这件事被修掉。
+// TestImportDoesNotBlockConcurrentWrites 证明「刷新把 TV 端写死」这件事不再成立。
 //
-// 背景：SQLite 的写是串行的。WAL 让**读**不被阻塞，所以"大事务阻塞读"不成立；
-// 真正的问题是**写**——一次几千条的导入如果是一个事务，
-// TV 端的 play_events / watch_progress 写入会一直排到 busy_timeout（8 秒）。
-// 用户描述里的「刷新时反而卡死」就是这么被放大的。
+// # 前提：SQLite 是**单写者**模型（这条必须留着，否则下一个人还会写错断言）
 //
-// 这条测试用 busy_timeout(100ms) 的库，断言并发小写在导入期间**不报锁错**。
-// 旧实现（单事务 + per-item 查询）会大面积 "database is locked"。
+// 一个写事务持锁期间，其它写**只能**等（busy_timeout）或失败（SQLITE_BUSY）。
+// WAL 只让**读**不被阻塞；写永远串行，这是数据库的模型，不是实现缺陷。
+//
+// 所以「并发写必须即时成功」是**错误**的断言——即使实现完全正确也过不了，
+// 因为导入本身就在写，它必然占着写锁。真正该断言的三件事：
+//
+//  1. **穿插**：并发写能在导入过程中成功若干次（不是全挤在导入前后）。
+//     这一点正是「分块写入」与「单个大事务」的分水岭：
+//     单个大事务时 writer 在整段导入里一次都挤不进去。
+//  2. **有界等待**：单次写的最长耗时不超过一个分块的持锁时长（这里取 500ms）。
+//  3. **零超时**：全程没有 SQLITE_BUSY。
+//
+// busy_timeout 取 2s：比生产默认（8s）短，能暴露"长时间持锁"；
+// 又远大于单个分块的持锁时长（毫秒级），正常实现不会超时。
 func TestImportDoesNotBlockConcurrentWrites(t *testing.T) {
-	st, err := openWithBusyTimeout(filepath.Join(t.TempDir(), "conc.db"), 100)
+	st, err := openWithBusyTimeout(filepath.Join(t.TempDir(), "conc.db"), 2000)
 	if err != nil {
 		t.Fatalf("打开库失败: %v", err)
 	}
@@ -406,7 +417,12 @@ func TestImportDoesNotBlockConcurrentWrites(t *testing.T) {
 	ctx := context.Background()
 	srcID := seedSource(t, st, "src-big")
 
-	const n = 600
+	// 3000 条 / 每块 50 条 = 60 个写事务。
+	// 事务数越多，"writer 能挤进去的窗口"越多；单事务实现永远是 1 个。
+	const (
+		n     = 3000
+		chunk = 50
+	)
 	items := make([]Channel, 0, n)
 	for i := 0; i < n; i++ {
 		items = append(items, Channel{
@@ -421,38 +437,79 @@ func TestImportDoesNotBlockConcurrentWrites(t *testing.T) {
 	}
 
 	// 并发写：模拟 TV 端在刷新期间上报 play_events。
+	var (
+		mu       sync.Mutex
+		stamps   []time.Time
+		maxWait  time.Duration
+		firstErr error
+	)
 	stop := make(chan struct{})
-	done := make(chan int, 1)
+	done := make(chan struct{})
 	go func() {
-		wrote := 0
+		defer close(done)
 		for {
 			select {
 			case <-stop:
-				done <- wrote
 				return
 			default:
 			}
-			if err := st.AddPlayEvent(ctx, PlayEvent{DeviceID: devID, Event: "stall", StallMs: 100}); err != nil {
-				// 锁超时 → 就是"卡死"的证据
-				t.Errorf("导入期间的并发写被锁住了: %v", err)
-				done <- wrote
-				return
+			t0 := time.Now()
+			werr := st.AddPlayEvent(ctx, PlayEvent{DeviceID: devID, Event: "stall", StallMs: 100})
+			el := time.Since(t0)
+
+			mu.Lock()
+			if werr != nil {
+				if firstErr == nil {
+					firstErr = werr
+				}
+			} else {
+				if el > maxWait {
+					maxWait = el
+				}
+				stamps = append(stamps, t0)
 			}
-			wrote++
+			mu.Unlock()
 		}
 	}()
 
-	// 小 chunk：让出写锁的机会。默认值也是这个量级。
-	if _, err := st.ImportChannels(ctx, srcID, items, ImportOptions{Align: true, ChunkSize: 100}); err != nil {
-		close(stop)
-		<-done
-		t.Fatalf("导入失败: %v", err)
-	}
-	close(stop)
-	wrote := <-done
+	startWall := time.Now()
+	_, ierr := st.ImportChannels(ctx, srcID, items, ImportOptions{Align: true, ChunkSize: chunk})
+	endWall := time.Now()
 
-	if wrote == 0 {
-		t.Fatal("并发写在导入期间一次都没成功——说明导入一直占着写锁")
+	close(stop)
+	<-done
+
+	if ierr != nil {
+		t.Fatalf("导入失败: %v", ierr)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	// 3) 零超时：这是"卡死"的直接证据。
+	if firstErr != nil {
+		t.Fatalf("导入期间出现写失败（说明写锁被长时间独占）: %v", firstErr)
+	}
+
+	// 1) 穿插：成功写入落在导入窗口内的次数。
+	//    单个大事务实现这里必然是 0（writer 整段被挡住），
+	//    分块实现是几十次——差距不是"快一点"，是"有没有"。
+	inWindow := 0
+	for _, ts := range stamps {
+		if ts.After(startWall) && ts.Before(endWall) {
+			inWindow++
+		}
+	}
+	if inWindow < 10 {
+		t.Errorf("导入窗口内只成功写入 %d 次（总成功 %d 次，事务块数 %d）："+
+			"写锁大概率被整段独占——SQLite 单写者模型下，分块才能让其它写插进来",
+			inWindow, len(stamps), (n+chunk-1)/chunk)
+	}
+
+	// 2) 有界等待：单次等待 ≤ 500ms，远低于 busy_timeout(2s)，
+	//    更远低于生产默认的 8s（那才是用户感受到的"卡死"）。
+	if maxWait > 500*time.Millisecond {
+		t.Errorf("单次并发写最长等待 %v，超过一个分块的持锁时长", maxWait)
 	}
 }
 

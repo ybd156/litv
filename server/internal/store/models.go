@@ -71,12 +71,6 @@ type Channel struct {
 	// 否则用户只会看到"台少了"，不知道为什么。
 	MissingSince int64 `json:"missing_since"`
 
-	// DisabledByMissing 表示当前的 enabled=0 是**我们**为了下线而设的，
-	// 不是用户手动关的。只有它为 true 时，频道回到上游才会被自动启用。
-	//
-	// 不对外暴露：终端/管理台判断"是否下线"只需看 MissingSince。
-	DisabledByMissing bool `json:"-"`
-
 	// PendingURL 只在「解析结果 → 入库」之间传递首条线路地址，不对外暴露。
 	PendingURL string `json:"-"`
 }

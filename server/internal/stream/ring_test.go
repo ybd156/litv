@@ -174,15 +174,22 @@ func TestRingBufferSnapshotStartsAtPATBeforeIDR(t *testing.T) {
 		t.Fatalf("快照没有从 PAT 开始，PID=%#x（换台后解码器认不出流结构）", pid)
 	}
 	// PMT 也必须落在开头附近，否则音频/视频 PID 认不出来。
+	//
+	// 注意别把循环写成「从 i 起还有 6 个包才检查」：本例的快照正好只有
+	// 6 个包，那样只会看到第 1 个包，PMT 在第 2 个包上就直接漏判了。
+	headPkts := len(snap) / tsPacketSize
+	if headPkts > 6 {
+		headPkts = 6
+	}
 	pmtFound := false
-	for i := 0; i+tsPacketSize*6 <= len(snap) && i < tsPacketSize*6; i += tsPacketSize {
-		if pidAt(snap, i) == 0x1000 {
+	for i := 0; i < headPkts; i++ {
+		if pidAt(snap, i*tsPacketSize) == 0x1000 {
 			pmtFound = true
 			break
 		}
 	}
 	if !pmtFound {
-		t.Fatal("快照开头 6 个包里没有 PMT，解码器拿不到 PID 表")
+		t.Fatalf("快照开头 %d 个包里没有 PMT，解码器拿不到 PID 表", headPkts)
 	}
 
 	// 关键断言：第一个 IDR 必须在开头 4 个包以内。

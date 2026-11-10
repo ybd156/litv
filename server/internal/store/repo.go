@@ -332,11 +332,16 @@ func (s *Store) ListGroups(ctx context.Context) ([]map[string]any, error) {
 // GetChannel 取单个频道。
 func (s *Store) GetChannel(ctx context.Context, id int64) (*Channel, error) {
 	var c Channel
-	var en, dbm int
+	var en int
+	// 列名必须与 db.go 的建表/迁移一一对应。
+	// 这里曾经多写了一个 disabled_by_missing —— 那一列从未被迁移创建过，
+	// 于是 GetChannel 直接报 "no such column"，连锁把 tvPlay / 提醒 / 线路
+	// 全部变成 404「频道不存在」。新增列时请同时改三处：
+	// schema、migrate() 的 ALTER、以及这里的 SELECT。
 	err := s.db.QueryRowContext(ctx,
-		`SELECT id,number,name,group_name,logo,tvg_id,epg_id,enabled,sort,source_id,created_at,missing_since,disabled_by_missing
+		`SELECT id,number,name,group_name,logo,tvg_id,epg_id,enabled,sort,source_id,created_at,missing_since
 		 FROM channels WHERE id=?`, id).
-		Scan(&c.ID, &c.Number, &c.Name, &c.Group, &c.Logo, &c.TvgID, &c.EpgID, &en, &c.Sort, &c.SourceID, &c.CreatedAt, &c.MissingSince, &dbm)
+		Scan(&c.ID, &c.Number, &c.Name, &c.Group, &c.Logo, &c.TvgID, &c.EpgID, &en, &c.Sort, &c.SourceID, &c.CreatedAt, &c.MissingSince)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, ErrNotFound
@@ -344,7 +349,6 @@ func (s *Store) GetChannel(ctx context.Context, id int64) (*Channel, error) {
 		return nil, err
 	}
 	c.Enabled = en != 0
-	c.DisabledByMissing = dbm != 0
 	return &c, nil
 }
 

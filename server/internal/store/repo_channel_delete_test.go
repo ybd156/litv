@@ -3,19 +3,10 @@ package store
 import (
 	"context"
 	"errors"
-	"path/filepath"
 	"testing"
 )
 
-func openTestStore(t *testing.T) *Store {
-	t.Helper()
-	st, err := Open(filepath.Join(t.TempDir(), "t.db"))
-	if err != nil {
-		t.Fatalf("打开库失败: %v", err)
-	}
-	t.Cleanup(func() { st.Close() })
-	return st
-}
+// openTestStore 由 repo_device_write_test.go 提供（同一个包，别重复定义）。
 
 // countRows 数一个表里某 channel_id 的行数。
 func countRows(t *testing.T, st *Store, table string, channelID int64) int {

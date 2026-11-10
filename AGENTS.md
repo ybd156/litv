@@ -168,7 +168,7 @@ packaging/fnos/app/server/litvd_*
 
 | 工作流 | 触发 | 做什么 |
 |---|---|---|
-| `.github/workflows/build-check.yml` | push 到 main、PR、手动 | Go 编译+vet+test、管理台 typecheck+build、Android 两个 flavor 编译+单测 |
+| `.github/workflows/build-check.yml` | push 到 main、PR、手动 | 四个 job：`preflight`（工作流 YAML/bash -n/契约对账/版本五处）、`server`（gofmt+build+vet+test -race）、`admin`（typecheck+build）、`android`（两 flavor 编译 + 两 flavor 单测 + lint 报告模式） |
 | `.github/workflows/ios-check.yml` | 只在 `ios/**` 变化时 | 编译 iOS（不发版） |
 | `.github/workflows/release.yml` | `v*` tag 或手动 | 出三端产物（APK / fpk / ipa） |
 | `.github/workflows/edge-deploy.yml` | 只在 `edge/**` 变化、每日定时、手动 | 边缘降级部署：typecheck + 自测 + 部署到 Cloudflare。**可选**，四个 Secrets 没配全时自动跳过部署（只跑检查），不会让 main 变红 |
@@ -249,11 +249,19 @@ npm run build
 
 ```bash
 cd android
-gradle lintDebug testDebugUnitTest assembleDebug
+gradle lintTvDebug lintPhoneDebug testTvDebugUnitTest testPhoneDebugUnitTest assembleTvDebug assemblePhoneDebug
 ```
 
 Release/R8 行为（JNI 回调、Gson 反射）需要 `assembleRelease` 验证，
 只过 debug 不算数。
+
+**注意两个坑：**
+
+- `lintDebug` 是**歧义任务名**（tv/phone 各有 debug 变体，AGP 会直接报
+  「Task 'lintDebug' is ambiguous」），必须写成 `lintTvDebug lintPhoneDebug`。
+- `android/app/build.gradle.kts` 里是 `lint { abortOnError = false }`，
+  所以 lint 目前**只是报告模式、不是门禁**。要让它变成门禁得先关掉这个开关，
+  并处理掉既有告警——别以为 CI 绿就代表 lint 干净。
 
 ### fnOS 包
 

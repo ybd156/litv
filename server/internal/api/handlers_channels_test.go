@@ -98,7 +98,7 @@ func TestUpdateChannelPartialKeepsFields(t *testing.T) {
 
 // TestUpdateChannelClearsGroupExplicitly 确认「显式清空」仍然生效。
 //
-// 反向 bug 的典型写法是 NULLIF(?,'') 或者 `if v != "" { set }`——
+// 反向 bug 的典型写法是 NULLIF(?, 空串) 或者 `if v != "" { set }`——
 // 那样用户永远清不空分组。
 func TestUpdateChannelClearsGroupExplicitly(t *testing.T) {
 	a, _ := newTestAPI(t)

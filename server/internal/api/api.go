@@ -167,7 +167,7 @@ func New(cfg *config.Config, st *store.Store, hub *stream.Hub, version string) *
 		refreshing:   map[int64]time.Time{},
 		refreshSem:   make(chan struct{}, 1),
 		statsLimiter: newStatsRateLimiter(statsEventsPerMinute, time.Minute),
-		streamClient:  streamClient,
+		streamClient: streamClient,
 	}
 	a.segClient = &http.Client{Transport: a.segTransport()}
 	a.importSource = a.defaultImportSource

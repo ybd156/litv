@@ -15,10 +15,10 @@ import (
 func statsRow(t *testing.T, a *API) store.PlayEvent {
 	t.Helper()
 	var (
-		ev                    store.PlayEvent
-		stall, watch          int
+		ev                   store.PlayEvent
+		stall, watch         int
 		path, engine, detail string
-		startup               int
+		startup              int
 	)
 	err := a.st.DB().QueryRowContext(context.Background(),
 		`SELECT id,device_id,channel_id,event,startup_ms,detail,created_at,stall_ms,watch_ms,path,engine
@@ -64,10 +64,10 @@ func TestReportStatsPersistsQoEFields(t *testing.T) {
 
 // TestReportStatsAcceptsUnknownFieldsAndEngineValues 覆盖两条兼容性要求。
 //
-// 1) J-2：path/engine 是**自由文本**，服务端不校验枚举。
-//    真实值是 exo|mpv|vlc|avs3；客户端以后加一个 "whatever" 也不该被拒。
-// 2) 新 APK + 旧 NAS：多带一个未知字段不能让整条上报链路 400。
-//    旧代码必然失败（全局 decode 开了 DisallowUnknownFields）。
+//  1. J-2：path/engine 是**自由文本**，服务端不校验枚举。
+//     真实值是 exo|mpv|vlc|avs3；客户端以后加一个 "whatever" 也不该被拒。
+//  2. 新 APK + 旧 NAS：多带一个未知字段不能让整条上报链路 400。
+//     旧代码必然失败（全局 decode 开了 DisallowUnknownFields）。
 func TestReportStatsAcceptsUnknownFieldsAndEngineValues(t *testing.T) {
 	a, _ := newTestAPI(t)
 	tok := boundDeviceToken(t, a, "qoe-device")

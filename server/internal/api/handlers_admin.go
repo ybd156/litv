@@ -331,8 +331,8 @@ func (a *API) listSources(w http.ResponseWriter, r *http.Request) {
 			// K-6：解析条数与库内真数分开，前端文案取 channel_count。
 			"parsed_count": s.ParsedCount,
 			// 管理台读取的视图键
-			"error":     s.LastError,
-			"status":    status,
+			"error":      s.LastError,
+			"status":     status,
 			"refreshing": a.isRefreshing(s.ID),
 			// 兼容旧键。时间口径保持整数秒（Unix 秒）。
 			"last_fetch_at": s.LastFetchAt,

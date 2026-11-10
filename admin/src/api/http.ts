@@ -51,7 +51,7 @@ export function setApiErrorNotifier(fn: ((msg: string) => void) | null): void {
   errorNotifier = fn
 }
 
-/** 收到 2001 时通知上层切到「请从飞牛桌面打开」说明页 */
+/** 收到 2001 时通知上层切到「未授权」说明页（文案按部署形态区分） */
 export function setUnauthorizedHandler(fn: (() => void) | null): void {
   unauthorizedHandler = fn
 }

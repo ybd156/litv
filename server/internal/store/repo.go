@@ -213,6 +213,32 @@ func (s *Store) ListChannels(ctx context.Context, q ChannelQuery) ([]Channel, in
 	return out, total, rows.Err()
 }
 
+// ListAllEnabledChannels 返回全部启用的频道（不分页）。
+//
+// tvBootstrap 需要完整列表。以前它复用管理台分页接口、写死 Limit=500，
+// 频道超过 500 的部署在电视端只能看到前 500 个，后面的台"凭空消失"。
+func (s *Store) ListAllEnabledChannels(ctx context.Context) ([]Channel, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT c.id,c.number,c.name,c.group_name,c.logo,c.tvg_id,c.epg_id,c.enabled,c.sort,c.source_id,c.created_at,
+		(SELECT COUNT(*) FROM streams st WHERE st.channel_id = c.id)
+		FROM channels c WHERE c.enabled = 1 ORDER BY c.sort, c.id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := []Channel{}
+	for rows.Next() {
+		var c Channel
+		var en int
+		if err := rows.Scan(&c.ID, &c.Number, &c.Name, &c.Group, &c.Logo, &c.TvgID, &c.EpgID, &en, &c.Sort, &c.SourceID, &c.CreatedAt, &c.StreamCnt); err != nil {
+			return nil, err
+		}
+		c.Enabled = en != 0
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}
+
 // ListGroups 返回分组名与计数。
 func (s *Store) ListGroups(ctx context.Context) ([]map[string]any, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT group_name, COUNT(*) FROM channels GROUP BY group_name ORDER BY group_name`)
@@ -833,12 +859,18 @@ func (s *Store) GetDeviceByToken(ctx context.Context, tokenHash string, ttlHours
 			return nil, ErrDeviceSessionExpired
 		}
 		// 滑动续期：把到期时间推到 now+ttl。
+		//
+		// 只有「剩余有效期不足一半」时才真的写库。以前每个请求都 UPDATE 一次：
+		// 直播时设备每秒都在发请求，等于把 devices 表变成了高频写目标
+		// （WAL 增长 + fsync），而滑动续期的语义并不要求每次都写。
 		// 用 MAX 避免并发下把到期时间往回拨。
-		if _, uerr := s.db.ExecContext(ctx,
-			`UPDATE devices SET session_expires_at=MAX(session_expires_at, ?) WHERE id=?`,
-			now+ttl, d.ID); uerr != nil {
-			// 续期失败不该让请求失败：本次已经通过了到期校验。
-			_ = uerr
+		if sessionExpires-now < ttl/2 {
+			if _, uerr := s.db.ExecContext(ctx,
+				`UPDATE devices SET session_expires_at=MAX(session_expires_at, ?) WHERE id=?`,
+				now+ttl, d.ID); uerr != nil {
+				// 续期失败不该让请求失败：本次已经通过了到期校验。
+				_ = uerr
+			}
 		}
 	}
 	return &d, nil
@@ -895,17 +927,42 @@ func (s *Store) DeleteDevice(ctx context.Context, id int64) error {
 	return tx.Commit()
 }
 
-// TouchDevice 更新心跳。
+// touchIntervalSec 是心跳写库的最小间隔。
+//
+// last_seen 只需要分钟级精度（管理台显示「最后在线」）。以前每个请求都
+// UPDATE 一次 devices 表：一台设备在播直播时每秒都有请求，SQLite 上就是
+// 持续的 WAL 写入 + fsync，纯属放大写。
+const touchIntervalSec = 60
+
+// TouchDevice 更新心跳（节流）。
 func (s *Store) TouchDevice(ctx context.Context, id int64) error {
-	_, err := s.db.ExecContext(ctx, `UPDATE devices SET last_seen=? WHERE id=?`, Now(), id)
+	now := Now()
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE devices SET last_seen=? WHERE id=? AND last_seen<?`,
+		now, id, now-touchIntervalSec)
 	return err
 }
 
-// TouchDeviceWithInfo 更新心跳，同时记录客户端 IP 与版本号。
+// TouchDeviceWithInfo 更新心跳，同时记录客户端 IP 与版本号（同样节流）。
 //
 // 这两个值只用于管理台展示（"这台设备是谁、装的是哪版"），
 // 不参与任何鉴权判断。
 func (s *Store) TouchDeviceWithInfo(ctx context.Context, id int64, ip, appVersion string) error {
+	now := Now()
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE devices SET last_seen=?,
+			ip=CASE WHEN ?<>'' THEN ? ELSE ip END,
+			app_version=CASE WHEN ?<>'' THEN ? ELSE app_version END
+		 WHERE id=? AND last_seen<?`,
+		now, ip, ip, appVersion, appVersion, id, now-touchIntervalSec)
+	return err
+}
+
+// UpdateDeviceClientInfo 在注册时补写客户端 IP 与版本号。
+//
+// 与心跳不同，这里必须立即生效：注册刚插入的行 last_seen=now，
+// 如果也走 60 秒节流，管理台会有一分钟看不到这台设备的 IP/版本。
+func (s *Store) UpdateDeviceClientInfo(ctx context.Context, id int64, ip, appVersion string) error {
 	_, err := s.db.ExecContext(ctx,
 		`UPDATE devices SET last_seen=?,
 			ip=CASE WHEN ?<>'' THEN ? ELSE ip END,
@@ -913,11 +970,6 @@ func (s *Store) TouchDeviceWithInfo(ctx context.Context, id int64, ip, appVersio
 		 WHERE id=?`,
 		Now(), ip, ip, appVersion, appVersion, id)
 	return err
-}
-
-// UpdateDeviceClientInfo 在注册/心跳时补写客户端 IP 与版本号。
-func (s *Store) UpdateDeviceClientInfo(ctx context.Context, id int64, ip, appVersion string) error {
-	return s.TouchDeviceWithInfo(ctx, id, ip, appVersion)
 }
 
 // SetDeviceConfig 下发/覆盖终端配置。

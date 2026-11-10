@@ -29,10 +29,16 @@ type Command struct {
 }
 
 // Conn 是一台电视的连接。
+//
+// done 关闭表示这条连接已经收尾。修复前是直接 close(send)：Send 在拿到
+// Conn 之后、真正写入之前，连接可能刚好被 close，于是往已关闭的 channel
+// 发送 → panic。现在 send 永不关闭，收尾只关 done，所有发送都 select 到
+// done 退出。
 type Conn struct {
 	DeviceID int64
 	ws       *websocket.Conn
 	send     chan []byte
+	done     chan struct{}
 	hub      *Hub
 	once     sync.Once
 }
@@ -53,6 +59,7 @@ func (h *Hub) Register(deviceID int64, ws *websocket.Conn) *Conn {
 		DeviceID: deviceID,
 		ws:       ws,
 		send:     make(chan []byte, 16),
+		done:     make(chan struct{}),
 		hub:      h,
 	}
 
@@ -81,9 +88,18 @@ func (h *Hub) Send(deviceID int64, cmd Command) bool {
 	if !ok {
 		return false
 	}
+	// 已收尾的连接直接失败。先做一次非阻塞判断，保证 close 之后
+	// Send 的结果是确定的（select 多路就绪时是随机选）。
+	select {
+	case <-c.done:
+		return false
+	default:
+	}
 	select {
 	case c.send <- b:
 		return true
+	case <-c.done:
+		return false
 	case <-time.After(2 * time.Second):
 		// 电视端卡住了，别把服务端拖死
 		slog.Warn("遥控指令发送超时", "device", deviceID)
@@ -112,8 +128,11 @@ func (h *Hub) IsOnline(deviceID int64) bool {
 
 func (c *Conn) close() {
 	c.once.Do(func() {
-		close(c.send)
-		_ = c.ws.Close()
+		close(c.done)
+		// 测试里会构造没有 ws 的 Conn；生产路径永远有。
+		if c.ws != nil {
+			_ = c.ws.Close()
+		}
 	})
 }
 
@@ -128,15 +147,15 @@ func (c *Conn) writePump() {
 
 	for {
 		select {
-		case msg, ok := <-c.send:
-			if !ok {
-				_ = c.ws.WriteMessage(websocket.CloseMessage, []byte{})
-				return
-			}
+		case msg := <-c.send:
 			_ = c.ws.SetWriteDeadline(time.Now().Add(10 * time.Second))
 			if err := c.ws.WriteMessage(websocket.TextMessage, msg); err != nil {
 				return
 			}
+		case <-c.done:
+			_ = c.ws.SetWriteDeadline(time.Now().Add(time.Second))
+			_ = c.ws.WriteMessage(websocket.CloseMessage, []byte{})
+			return
 		case <-ticker.C:
 			_ = c.ws.SetWriteDeadline(time.Now().Add(10 * time.Second))
 			if err := c.ws.WriteMessage(websocket.PingMessage, nil); err != nil {

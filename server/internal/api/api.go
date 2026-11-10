@@ -30,6 +30,7 @@ import (
 	"github.com/litv/litv/server/internal/auth"
 	"github.com/litv/litv/server/internal/config"
 	"github.com/litv/litv/server/internal/dlna"
+	"github.com/litv/litv/server/internal/fetch"
 	"github.com/litv/litv/server/internal/logo"
 	"github.com/litv/litv/server/internal/record"
 	"github.com/litv/litv/server/internal/remote"
@@ -112,10 +113,18 @@ type API struct {
 	rendererMu   sync.Mutex
 	rendererAt   time.Time
 	rendererList []dlna.Renderer
+
+	// HLS 清单缓存与清单代理的 HTTP 客户端，见 manifest_cache.go。
+	manMu        sync.Mutex
+	manSlots     map[int64]*manifestSlot
+	streamClient *http.Client
 }
 
 // New 创建 API。
 func New(cfg *config.Config, st *store.Store, hub *stream.Hub, version string) *API {
+	// 清单代理用小清单语义：60 秒足够，比 http.DefaultClient 的「永远」强。
+	// 分片代理走另一个 client（a.segClient），因为它是流式传输，不能设总超时。
+	streamClient := fetch.NewClient(60 * time.Second)
 	a := &API{
 		cfg:          cfg,
 		st:           st,
@@ -134,6 +143,7 @@ func New(cfg *config.Config, st *store.Store, hub *stream.Hub, version string) *
 		startAt:       time.Now(),
 		version:       version,
 		dialPolicy:    safedial.DefaultPolicy(),
+		streamClient:  streamClient,
 	}
 	a.segClient = &http.Client{Transport: a.segTransport()}
 	return a
@@ -267,6 +277,9 @@ func (a *API) Handler(viaGateway bool) http.Handler {
 	r.Get("/api/v1/health", a.health)
 	r.Post("/api/v1/device/register", a.deviceRegister)
 	r.Post("/api/v1/auth/login", a.passwordLogin)
+	// 注销当前应急会话。放在鉴权组外面：它自己会校验 admin_sessions，
+	// 设备 token 或网关头身份不会命中，也就不会误删别人的会话。
+	r.Post("/api/v1/auth/logout", a.passwordLogout)
 
 	// ---- 管理台（需管理员） ----
 	r.Group(func(pr chi.Router) {
@@ -350,6 +363,10 @@ func (a *API) Handler(viaGateway bool) http.Handler {
 		// 台标管理：抓外链入库 / 上传自己的图 / 清除
 		pr.Post("/api/v1/channels/{id}/logo", a.uploadLogo)
 		pr.Delete("/api/v1/channels/{id}/logo", a.deleteLogo)
+
+		// 撤销**全部**应急管理员会话（包括调用者自己）。
+		// 设备/网关身份不受影响，它们不会写 admin_sessions。
+		pr.Post("/api/v1/auth/logout-all", a.revokeAdminSessions)
 	})
 
 	// ---- 终端（需 device token） ----
@@ -483,6 +500,17 @@ func (a *API) identityMiddleware(viaGateway bool) func(http.Handler) http.Handle
 	}
 }
 
+// adminReadOnly 是**唯一**允许非管理员（同机其他 fnOS 用户）访问的管理接口。
+//
+// 修复前这里是「非管理员可以 GET 一切」，等于把这些东西开放给任何能打开
+// 管理台的用户：sources 里的源地址（通常带账号密码）、系统日志、
+// 设备列表、录制文件，以及 /api/v1/web/play/{id} 签发的播放地址。
+// 现在改成显式白名单：只有「我是谁」这种无副作用的身份查询放行，
+// 其余一律 403，前端据此提示「需要管理员」。
+var adminReadOnly = map[string]bool{
+	"/api/v1/system/me": true,
+}
+
 func (a *API) requireAdmin(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		id, ok := identityFrom(r.Context())
@@ -491,8 +519,7 @@ func (a *API) requireAdmin(next http.Handler) http.Handler {
 			return
 		}
 		if !id.IsAdmin {
-			// 非管理员只允许读
-			if r.Method != http.MethodGet {
+			if r.Method != http.MethodGet || !adminReadOnly[r.URL.Path] {
 				fail(w, http.StatusForbidden, 2002, "需要管理员权限")
 				return
 			}

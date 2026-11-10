@@ -153,3 +153,17 @@ func (s *Store) PurgePlayEvents(ctx context.Context, before int64) (int64, error
 	}
 	return res.RowsAffected()
 }
+
+// PurgeOldAuditLogs 清理过旧的操作日志。
+//
+// auth.* 那部分由 auditAuthTx 按行数上限自己维护；这里主要清掉
+// 非认证类日志（play、device.*、epg.*、config.* 等）。
+// 它们只用于管理台展示和排查，没有长期保留价值，但以前从来没人删——
+// 长期运行的 NAS 上 audit_logs 会一直长。
+func (s *Store) PurgeOldAuditLogs(ctx context.Context, before int64) (int64, error) {
+	res, err := s.db.ExecContext(ctx, `DELETE FROM audit_logs WHERE created_at < ?`, before)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}

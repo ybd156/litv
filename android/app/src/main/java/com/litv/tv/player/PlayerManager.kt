@@ -367,13 +367,15 @@ class PlayerManager(
             }
 
             override fun onFirstFrame() {
-                callback?.onFirstFrame()
+                main.post { callback?.onFirstFrame() }
             }
 
             override fun onSurfaceLost(message: String) {
-                Log.w(TAG, "Surface 丢失：$message")
-                // 先把当前 Surface 重新挂上（Activity 那边可能已经有新的了）
-                current?.attach(context, surface, container)
+                main.post {
+                    Log.w(TAG, "Surface 丢失：$message")
+                    // 先把当前 Surface 重新挂上（Activity 那边可能已经有新的了）
+                    current?.attach(context, surface, container)
+                }
             }
 
             override fun onDecoderFailed(message: String) {

@@ -15,6 +15,15 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+    inputs:
+      lint:
+        description: 额外跑 Android Lint（慢，默认关闭）
+        type: boolean
+        default: false
+
+# 只读仓库：编译检查不需要写权限，显式收紧。
+permissions:
+  contents: read
 
 concurrency:
   group: build-check-${{ github.ref }}
@@ -61,7 +70,7 @@ jobs:
 
       - name: 版本号五处一致性（AGENTS.md §11）
         # 发版前必须同步的五处，靠人记就会漏；漏了 release 会发错版本号。
-        run: python3 tools/checks/check-version-sync.py
+        run: python3 tools/checks/check-versions.py
 
   server:
     name: Go 服务端

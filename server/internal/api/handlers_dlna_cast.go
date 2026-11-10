@@ -175,13 +175,15 @@ func (a *API) tvDLNACast(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 给电视的播放地址：服务端中转，签名 6 小时有效
+	// 给电视的播放地址：服务端中转，签名 6 小时有效。
+	// dk 用派生值：投屏目标（电视）是共享设备，绝不能让它读到 device_key。
 	exp := a.now().Add(6 * time.Hour).Unix()
-	sig := a.signer.SignStream(ch.ID, st.ID, exp, dev.DeviceKey)
+	dk := a.signer.DeriveDeviceKey(dev.DeviceKey)
+	sig := a.signer.SignStream(ch.ID, st.ID, exp, dk)
 	q := url.Values{}
 	q.Set("sig", sig)
 	q.Set("exp", strconv.FormatInt(exp, 10))
-	q.Set("dk", dev.DeviceKey)
+	q.Set("dk", dk)
 	q.Set("stream_id", strconv.FormatInt(st.ID, 10))
 	mediaURL := fmt.Sprintf("http://%s:%d/live/%d/stream.ts?%s",
 		dlna.LanIPv4(), a.cfg.Server.Port, ch.ID, q.Encode())

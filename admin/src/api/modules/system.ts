@@ -25,6 +25,17 @@ export function saveSystemConfig(patch: Partial<SystemConfig>): Promise<SystemCo
   return http.put<SystemConfig>('system/config', patch, { silent: true })
 }
 
+/**
+ * 注销当前应急登录会话。
+ *
+ * 以前管理台没有任何退出入口，setAdminToken('') 只清本地存储，
+ * 服务端 admin_sessions 里那一行还在，token 能一直用到 TTL（默认 7 天）。
+ * 现在请服务端真正删掉会话；失败由调用方决定是否提示。
+ */
+export function logoutAdmin(): Promise<void> {
+  return http.post<void>('auth/logout')
+}
+
 /** 日志正文（兼容旧调用点）。 */
 export async function fetchLogs(lines = 200): Promise<string[]> {
   const raw = await http.get<unknown>('system/logs', { lines }, { silent: true })

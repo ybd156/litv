@@ -14,11 +14,12 @@ import (
 	"crypto/tls"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/url"
 	"strings"
+	"sync/atomic"
 	"time"
-
-	"github.com/litv/litv/server/internal/safedial"
 )
 
 // Result 是抓取结果。
@@ -46,55 +47,143 @@ func DefaultOptions() Options {
 	}
 }
 
-// newTransport 造一个抓取用 Transport。
+var client = NewClient(0)
+
+// allowLoopback 只给测试用（httptest 起在 127.0.0.1）。
+// 生产路径必须保持关闭，否则服务端就成了访问本机管理面的跳板。
+var allowLoopback atomic.Bool
+
+// SetAllowLoopback 打开/关闭对回环地址的访问。只应在测试初始化时调用。
+func SetAllowLoopback(v bool) { allowLoopback.Store(v) }
+
+// checkIP 拒绝「本机 / 链路本地 / 未指定 / 组播」地址。
 //
-// 两条必须保留的既有结论：
-//   - 关掉 HTTP/2：实测某些源站（live.ottiptv.cc 这类 Cloudflare 前置的）
-//     对 Go 的 h2 客户端会一直挂着不返回响应头，报
-//     "http2: timeout awaiting response headers" 或 context deadline exceeded；
-//     同一个地址用 curl（h1.1 或 h2）都是 200 秒回。抓清单/分片走 h1.1 没有损失。
-//   - 不设 Proxy：http.ProxyFromEnvironment 会让实际连接目标变成代理地址，
-//     地址策略要么误杀用户正常的代理，要么被代理整个绕过去。
-//     需要代理的场景应该在配置里显式声明，而不是靠环境变量悄悄改出站路径。
+// 私网（RFC1918、ULA）默认放行：很多用户的自建源就在局域网里，
+// 一刀切会让「源在 NAS 同网段」这种最常见的部署直接不可用。
+// 这里挡住的是 SSRF 最危险的那一档——本机服务与云元数据地址。
+func checkIP(ip net.IP) error {
+	if ip == nil {
+		return fmt.Errorf("地址不合法")
+	}
+	if allowLoopback.Load() {
+		return nil
+	}
+	if ip.IsLoopback() || ip.IsUnspecified() || ip.IsMulticast() ||
+		ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() {
+		return fmt.Errorf("禁止访问本机或链路本地地址")
+	}
+	return nil
+}
+
+// ValidateURL 是出站抓取的入口校验：只允许 http/https，并拒绝字面量形式的
+// 回环/链路本地地址。
 //
-// 出站地址策略用 safedial 的默认档（全项目只有这一档）：
-// 放行 RFC1918 / IPv6 ULA（LAN 源是产品功能），拒绝 loopback、链路本地、
-// CGNAT 与本机网卡地址（挡住"打 NAS 自己"和云元数据端点）。
+// 光靠这一步不够——域名可以在两次解析之间换 IP（DNS rebinding），
+// 所以真正的拦截在 DialContext 里按**解析结果**再做一次。
+func ValidateURL(raw string) error {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil {
+		return fmt.Errorf("地址不合法: %w", err)
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return fmt.Errorf("只允许 http/https 地址")
+	}
+	host := u.Hostname()
+	if host == "" {
+		return fmt.Errorf("地址缺少主机名")
+	}
+	// localhost 是域名形式的本机地址，必须在入口就挡住：
+	// DialContext 的解析结果校验也能拦，但这里拦得更早、错误信息更清楚。
+	if strings.EqualFold(host, "localhost") || strings.HasSuffix(strings.ToLower(host), ".localhost") {
+		return fmt.Errorf("禁止访问本机或链路本地地址")
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		return checkIP(ip)
+	}
+	return nil
+}
+
+// safeDialer 在真正建连前按解析结果校验每一个 IP。
+func safeDialer(d *net.Dialer) func(ctx context.Context, network, addr string) (net.Conn, error) {
+	return func(ctx context.Context, network, addr string) (net.Conn, error) {
+		host, port, err := net.SplitHostPort(addr)
+		if err != nil {
+			return nil, err
+		}
+		ips, err := net.DefaultResolver.LookupIPAddr(ctx, host)
+		if err != nil {
+			return nil, err
+		}
+		var lastErr error
+		for _, ipa := range ips {
+			if cerr := checkIP(ipa.IP); cerr != nil {
+				lastErr = cerr
+				continue
+			}
+			conn, derr := d.DialContext(ctx, network, net.JoinHostPort(ipa.IP.String(), port))
+			if derr == nil {
+				return conn, nil
+			}
+			lastErr = derr
+		}
+		if lastErr == nil {
+			lastErr = fmt.Errorf("地址解析失败: %s", host)
+		}
+		return nil, lastErr
+	}
+}
+
 func newTransport() *http.Transport {
 	return &http.Transport{
-		DialContext:           safedial.DefaultPolicy().DialContext,
+		Proxy: http.ProxyFromEnvironment,
+		DialContext: safeDialer(&net.Dialer{
+			Timeout:   8 * time.Second,
+			KeepAlive: 30 * time.Second,
+		}),
 		TLSHandshakeTimeout:   8 * time.Second,
 		ResponseHeaderTimeout: 12 * time.Second,
 		MaxIdleConns:          32,
 		IdleConnTimeout:       60 * time.Second,
-		ForceAttemptHTTP2:     false,
-		TLSNextProto:          map[string]func(string, *tls.Conn) http.RoundTripper{},
+		// 关掉 HTTP/2：实测某些源站（live.ottiptv.cc 这类 Cloudflare 前置的）
+		// 对 Go 的 h2 客户端会一直挂着不返回响应头，报
+		// "http2: timeout awaiting response headers" 或 context deadline exceeded；
+		// 同一个地址用 curl（h1.1 或 h2）都是 200 秒回。
+		// 抓清单/分片这种小请求走 h1.1 没有任何损失。
+		ForceAttemptHTTP2: false,
+		TLSNextProto:      map[string]func(string, *tls.Conn) http.RoundTripper{},
 	}
 }
 
-// client 是包级复用的抓取客户端。
+// NewTransport 返回带 SSRF 校验的 Transport。
 //
-// 不要每次请求新建：Transport 被丢弃后它的空闲连接不会被主动关掉，
-// 长期运行会漏 fd。
-var client = &http.Client{
-	Transport: newTransport(),
-	// 不自动跟随无限重定向。
-	//
-	// 地址判定不在这里做：safedial 是在 DialContext（connect 之前）判的，
-	// 每一次重定向都是一次新的拨号，所以自动被同一套策略覆盖，
-	// 不需要（也不该）在 URL 层再判一遍——那既重复又更容易被绕过。
-	CheckRedirect: func(req *http.Request, via []*http.Request) error {
-		if len(via) >= maxRedirects {
-			return fmt.Errorf("重定向次数过多")
-		}
-		return nil
-	},
-}
+// 直播上游（stream.Hub）要自己控制「等响应头的超时」和连接数，
+// 所以单独导出，由调用方在返回的 Transport 上改参数。
+func NewTransport() *http.Transport { return newTransport() }
 
-const maxRedirects = 8
+// NewClient 返回带 SSRF 防护和重定向上限的 HTTP 客户端。
+//
+// timeout <= 0 表示不设总超时，由调用方 ctx 控制（直播/分片这类长连接）。
+// 之所以要导出：分片代理必须用带超时的 client，
+// 以前的 http.DefaultClient 没有超时，一个卡住的源会永久占住一个 goroutine。
+func NewClient(timeout time.Duration) *http.Client {
+	return &http.Client{
+		Transport: newTransport(),
+		Timeout:   timeout,
+		// 不自动跟随无限重定向
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= 8 {
+				return fmt.Errorf("重定向次数过多")
+			}
+			return nil
+		},
+	}
+}
 
 // Get 抓取一个 URL。
 func Get(ctx context.Context, url string, opt Options) (*Result, error) {
+	if err := ValidateURL(url); err != nil {
+		return nil, err
+	}
 	if opt.Timeout <= 0 {
 		opt.Timeout = 20 * time.Second
 	}
@@ -123,11 +212,6 @@ func Get(ctx context.Context, url string, opt Options) (*Result, error) {
 
 	resp, err := client.Do(req)
 	if err != nil {
-		// 被地址策略拦下的错误单独标注：调用方据此决定「不要重试」，
-		// 也别把它当成「源站挂了」去累加失败次数。
-		if safedial.IsBlockedError(err) {
-			return nil, fmt.Errorf("目标地址被出站策略拒绝: %w", err)
-		}
 		return nil, fmt.Errorf("请求失败: %w", err)
 	}
 	defer resp.Body.Close()

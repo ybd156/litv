@@ -2,76 +2,78 @@ package fetch
 
 import (
 	"context"
-	"net/http"
-	"net/http/httptest"
 	"strings"
-	"sync/atomic"
 	"testing"
 	"time"
-
-	"github.com/litv/litv/server/internal/safedial"
 )
 
-// TestGetBlocksLoopback 是本轮 A3 在 fetch 层上的回归。
+// TestValidateURLRejectsDangerousTargets 覆盖 SSRF 最危险的几类目标。
 //
-// 修复前必然失败：fetch.Get 直接用默认客户端，没有任何地址判定，
-// 于是"订阅源地址"可以指向 127.0.0.1 / 169.254.169.254，
-// NAS 就会把内网服务的响应当成"M3U 清单"读进来。
-//
-// 断言方式：受害服务收到 **0 次**请求。
-// 只断言"返回了错误"是不够的——网络不通、超时、策略拒绝都会返回错误，
-// 那三种情况分不开，测试可能因为无关原因假绿。
-func TestGetBlocksLoopback(t *testing.T) {
-	var hits atomic.Int32
-	victim := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		hits.Add(1)
-		_, _ = w.Write([]byte("#EXTM3U\n#EXTINF:-1,内网台\nhttp://internal/1.ts\n"))
-	}))
-	defer victim.Close()
-
-	opt := DefaultOptions()
-	opt.Timeout = 3 * time.Second
-
-	_, err := Get(context.Background(), victim.URL+"/list.m3u", opt)
-	if err == nil {
-		t.Fatal("抓到了本机地址——出站地址策略没有生效")
+// 这些地址以前会被 fetch.Get 直接抓取：恶意 m3u 里写一条
+// http://127.0.0.1:8080/... 的线路，服务端就会替它去访问本机管理面；
+// 169.254.169.254 是云厂商的元数据服务，能读到实例凭据。
+func TestValidateURLRejectsDangerousTargets(t *testing.T) {
+	cases := []string{
+		"http://127.0.0.1:8080/api",
+		"http://localhost:8080/api",
+		"http://[::1]/x",
+		"http://169.254.169.254/latest/meta-data",
+		"http://0.0.0.0/x",
+		"file:///etc/passwd",
+		"ftp://example.com/x",
+		"//example.com/x",
 	}
-	if n := hits.Load(); n != 0 {
-		t.Fatalf("受害服务被访问了 %d 次", n)
-	}
-	// 错误里要能看出是策略拒绝，调用方据此决定"不要重试"。
-	if !safedial.IsBlockedError(err) {
-		t.Errorf("错误未标注为策略拒绝: %v", err)
+	for _, raw := range cases {
+		if err := ValidateURL(raw); err == nil {
+			t.Errorf("%q 被放行了（应当拒绝）", raw)
+		}
 	}
 }
 
-// TestGetBlocksCloudMetadata 覆盖云元数据端点（链路本地段）。
-//
-// 这一段是 SSRF 最经典的收益点：拿到云厂商的实例凭据。
-// 这里不需要真的连出去——策略在建连之前就拒了，所以用一个
-// 不会解析的域名也没有意义，直接判段更稳。
-func TestGetBlocksCloudMetadata(t *testing.T) {
-	opt := DefaultOptions()
-	opt.Timeout = 2 * time.Second
-
-	_, err := Get(context.Background(), "http://169.254.169.254/latest/meta-data/", opt)
-	if err == nil {
-		t.Fatal("抓到了云元数据端点")
-	}
-	if !safedial.IsBlockedError(err) {
-		t.Errorf("错误未标注为策略拒绝: %v", err)
+// TestValidateURLAllowsPrivateLAN 是兼容性回归：用户的自建源经常就在
+// 局域网（192.168/10/172.16），一刀切会让最常见的部署直接不可用。
+func TestValidateURLAllowsPrivateLAN(t *testing.T) {
+	for _, raw := range []string{
+		"http://192.168.1.10:8080/live.m3u8",
+		"http://10.0.0.5:9981/stream",
+		"https://example.com/playlist.m3u",
+		"http://user:pass@example.com:8080/x",
+	} {
+		if err := ValidateURL(raw); err != nil {
+			t.Errorf("%q 被错误拒绝: %v", raw, err)
+		}
 	}
 }
 
-// TestGetErrorMessageDoesNotLeakSchemeDetail 只是顺手确认错误串仍是中文可读的。
-func TestGetErrorMessageDoesNotLeakSchemeDetail(t *testing.T) {
-	opt := DefaultOptions()
-	opt.Timeout = time.Second
-	_, err := Get(context.Background(), "http://127.0.0.1:1/x", opt)
+// TestGetRejectsLoopbackBeforeDial 确认拒绝发生在建连之前：
+// 端口 1 上没有服务，如果错误是「连接被拒绝」就说明拦截没生效。
+func TestGetRejectsLoopbackBeforeDial(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	_, err := Get(ctx, "http://127.0.0.1:1/x", DefaultOptions())
 	if err == nil {
-		t.Fatal("应当失败")
+		t.Fatal("抓取本机地址竟然成功了")
 	}
-	if strings.Contains(err.Error(), "INTERNAL") {
-		t.Errorf("错误串里出现了不该有的内容: %v", err)
+	if !strings.Contains(err.Error(), "禁止访问") {
+		t.Fatalf("错误不是 SSRF 拦截: %v", err)
+	}
+}
+
+// TestSetAllowLoopback 确认测试开关真的能放开限制。
+// 这也说明生产默认值必须是关闭的——否则这个开关就形同虚设。
+func TestSetAllowLoopback(t *testing.T) {
+	t.Cleanup(func() { SetAllowLoopback(false) })
+	SetAllowLoopback(true)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	_, err := Get(ctx, "http://127.0.0.1:1/x", DefaultOptions())
+	if err == nil {
+		t.Fatal("端口 1 上不可能有服务")
+	}
+	if strings.Contains(err.Error(), "禁止访问") {
+		t.Fatalf("SetAllowLoopback(true) 之后仍然被拦: %v", err)
 	}
 }

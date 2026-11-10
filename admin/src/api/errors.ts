@@ -1,7 +1,9 @@
 /** 错误码 → 中文人话（对齐 docs/design/01-API.md 末尾的错误码表） */
 export const ERROR_MESSAGES: Record<number, string> = {
   1001: '参数不对，检查一下填写的内容',
-  2001: '未认证：请从飞牛桌面重新打开本应用',
+  // 只作为「服务端没给 msg」时的兜底。具体原因以服务端 msg 为准：
+  // 登录接口的 2001 是「口令不正确」，别处是「会话失效」。
+  2001: '未认证，请重新登录',
   2002: '当前账号没有管理权限',
   2003: '设备未绑定或令牌已失效，请在电视上重新生成绑定码',
   3001: '频道不存在，可能已被删除，刷新列表试试',
@@ -12,9 +14,16 @@ export const ERROR_MESSAGES: Record<number, string> = {
 
 export function messageForCode(code: number, fallback?: string): string {
   if (code === 0) return fallback || 'ok'
-  const mapped = ERROR_MESSAGES[code]
-  if (mapped) return fallback ? `${mapped}（${fallback}）` : mapped
-  return fallback ? `${fallback}（错误码 ${code}）` : `请求失败（错误码 ${code}）`
+  const detail = (fallback ?? '').trim()
+  // 服务端已经给了人话就直接用。同一个码在不同接口含义不同——
+  // 2001 在登录接口是「口令不正确」，在管理接口是「会话失效」。
+  // 以前是把表里的通用文案放前面、真实原因缩进括号，结果登录失败时
+  // 用户先读到一句「请从飞牛桌面重新打开本应用」，而 edge 部署上
+  // 根本没有飞牛桌面。
+  if (detail) {
+    return ERROR_MESSAGES[code] ? detail : `${detail}（错误码 ${code}）`
+  }
+  return ERROR_MESSAGES[code] ?? `请求失败（错误码 ${code}）`
 }
 
 export class ApiError extends Error {

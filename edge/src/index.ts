@@ -20,6 +20,9 @@ interface Env {
   ASSETS: Fetcher;
   DB: D1Database;
   BIND_CODE: string;
+  // 管理台口令。配了它以后 BIND_CODE 只能用来绑定设备，不能再登录管理台。
+  // 不配时退回 BIND_CODE（兼容老部署，但那是弱口令，见 adminPasscode）。
+  ADMIN_PASSWORD?: string;
   SERVER_NAME?: string;
   // 节目单的日边界用哪个时区算，默认东八区
   TZ_NAME?: string;
@@ -35,6 +38,12 @@ interface Env {
 const ADMIN_SESSION_SEC = 7 * 24 * 3600;
 const RATE_WINDOW_SEC = 600;
 const RATE_MAX_FAILS = 10;
+// playlist 是客户端启动时自动拉的，正常用户可能同时开几台设备。
+// 给它更宽的次数上限，同时用**更短的窗口**（1 分钟）：
+// 旧客户端拿着已作废的 BIND_CODE 高频重试时，只会让同一出口 IP 的
+// playlist 短暂 404，而不是像绑定码那样一锁 10 分钟。
+const PLAYLIST_MAX_FAILS = 20;
+const PLAYLIST_WINDOW_SEC = 60;
 
 // ---------------------------------------------------------------- 基础设施
 
@@ -88,41 +97,41 @@ function bearer(req: Request): string {
   return m ? m[1].trim() : "";
 }
 
-/** 失败计数与限速。返回 true 表示"已被锁"。 */
-async function rateLimited(env: Env, ip: string): Promise<boolean> {
-  const row = await env.DB.prepare(
-    "SELECT fails, window_start FROM bind_attempts WHERE ip = ?",
-  )
-    .bind(ip)
-    .first<{ fails: number; window_start: number }>();
-  if (!row) return false;
-  return nowSec() - row.window_start < RATE_WINDOW_SEC && row.fails >= RATE_MAX_FAILS;
-}
-
-async function noteFailure(env: Env, ip: string): Promise<void> {
+/**
+ * 失败计数与限速。
+ *
+ * 旧写法是「先 SELECT 判断是否超限 → 校验 → 再 UPDATE +1」，两条语句之间
+ * 有窗口：并发请求会一起读到 fails=9、一起放行，限速形同虚设。
+ *
+ * 现在合并成一条 UPSERT，并且**先占名额再校验口令**：
+ * 计数是原子的，并发下最多只有 RATE_MAX_FAILS 次校验会真正执行。
+ * 成功时 clearFailures 把计数清零，所以合法用户不会累积。
+ */
+async function bumpAttempt(env: Env, key: string, windowSec = RATE_WINDOW_SEC): Promise<number> {
   const now = nowSec();
   const row = await env.DB.prepare(
-    "SELECT window_start FROM bind_attempts WHERE ip = ?",
+    `INSERT INTO bind_attempts (ip, fails, window_start) VALUES (?, 1, ?)
+     ON CONFLICT(ip) DO UPDATE SET
+       fails = CASE WHEN ? - bind_attempts.window_start >= ?
+                    THEN 1 ELSE bind_attempts.fails + 1 END,
+       window_start = CASE WHEN ? - bind_attempts.window_start >= ?
+                           THEN ? ELSE bind_attempts.window_start END
+     RETURNING fails`,
   )
-    .bind(ip)
-    .first<{ window_start: number }>();
-
-  if (row && now - row.window_start < RATE_WINDOW_SEC) {
-    await env.DB.prepare("UPDATE bind_attempts SET fails = fails + 1 WHERE ip = ?")
-      .bind(ip)
-      .run();
-  } else {
-    await env.DB.prepare(
-      "INSERT INTO bind_attempts (ip, fails, window_start) VALUES (?, 1, ?) " +
-        "ON CONFLICT(ip) DO UPDATE SET fails = 1, window_start = excluded.window_start",
-    )
-      .bind(ip, now)
-      .run();
+    .bind(key, now, now, windowSec, now, windowSec, now)
+    .first<{ fails: number }>();
+  if (!row) {
+    // 解释器不支持 RETURNING 时的兜底：读一次当前值（限速会略宽，但不会失效）
+    const cur = await env.DB.prepare("SELECT fails FROM bind_attempts WHERE ip = ?")
+      .bind(key)
+      .first<{ fails: number }>();
+    return cur ? Number(cur.fails) : 0;
   }
+  return Number(row.fails);
 }
 
-async function clearFailures(env: Env, ip: string): Promise<void> {
-  await env.DB.prepare("DELETE FROM bind_attempts WHERE ip = ?").bind(ip).run();
+async function clearFailures(env: Env, key: string): Promise<void> {
+  await env.DB.prepare("DELETE FROM bind_attempts WHERE ip = ?").bind(key).run();
 }
 
 function clientIp(req: Request): string {
@@ -172,6 +181,22 @@ async function health(env: Env): Promise<Response> {
   });
 }
 
+/**
+ * 客户端自报的 platform 只用于展示与冲突检测，绝不能当权限用。
+ *
+ * 口径要与 Go 服务端保持一致：trim + 小写 + 截断，只挡保留值。
+ * 这里以前还加了字符集白名单，结果 "Android TV" 这类值在 NAS 上能注册、
+ * 在边缘版却被拒——平台名本来就不参与鉴权，没必要多一套规则。
+ * 控制字符会污染日志与管理台展示，直接剔掉。
+ */
+function normalizePlatform(raw: unknown): string {
+  return String(raw ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/[\u0000-\u001f\u007f]/g, "")
+    .slice(0, 32);
+}
+
 async function deviceRegister(req: Request, env: Env): Promise<Response> {
   if (!env.BIND_CODE) return fail(2001, "服务端未配置绑定码");
 
@@ -185,11 +210,11 @@ async function deviceRegister(req: Request, env: Env): Promise<Response> {
   // 绑定码只有 6 位数字（客户端输入框限死了），空间只有 100 万，
   // 不挡一下等于把设备注册开放给暴力枚举。
   const ip = clientIp(req);
-  if (await rateLimited(env, ip)) return fail(2005, "尝试次数过多，请 10 分钟后再试");
+  const attempt = await bumpAttempt(env, ip);
+  if (attempt > RATE_MAX_FAILS) return fail(2005, "尝试次数过多，请 10 分钟后再试");
 
   const code = String(body.code ?? "");
   if (!safeEqual(code, env.BIND_CODE)) {
-    await noteFailure(env, ip);
     return fail(2001, "绑定码不正确");
   }
   await clearFailures(env, ip);
@@ -197,19 +222,28 @@ async function deviceRegister(req: Request, env: Env): Promise<Response> {
   const deviceKey = String(body.device_key ?? "").slice(0, 128);
   if (!deviceKey) return fail(2001, "缺少 device_key");
 
-  const platform = String(body.platform ?? "").slice(0, 32);
+  // 保留值必须挡住：服务端曾经有过 `platform == "admin"` 就提权的实现，
+  // 留着这个口子等于把提权路径留在数据里。
+  let platform = normalizePlatform(body.platform);
+  if (!platform) platform = "android";
+  if (platform === "admin") return fail(2002, "platform 为保留值");
   const name = String(body.name ?? "").slice(0, 64);
   const ts = nowSec();
 
   // 对齐服务端语义：同一个 device_key 换平台必须拒绝，
   // 否则知道 key 的人就能顶掉这台设备。
+  //
+  // 历史数据里 platform 可能是空串（早期客户端没上报），那种行按
+  // 「平台未知」处理、允许补写；只要已有值就必须完全一致。
+  // 早期写法没转小写，旧行里可能是 "iOS" 这种混合大小写，这里按小写比较，
+  // 命中后顺手把新值写回去，等于就地迁移。
   const existing = await env.DB.prepare(
     "SELECT id, platform FROM devices WHERE device_key = ?",
   )
     .bind(deviceKey)
     .first<{ id: number; platform: string }>();
 
-  if (existing && existing.platform && existing.platform !== platform) {
+  if (existing && existing.platform && existing.platform.trim().toLowerCase() !== platform) {
     return fail(2002, "该设备已用其他平台注册");
   }
 
@@ -447,8 +481,22 @@ async function tvEpg(env: Env, channelId: number, url: URL): Promise<Response> {
 
 // ---------------------------------------------------------------- 管理台
 
+/**
+ * 管理台口令。
+ *
+ * 优先用 ADMIN_PASSWORD；没配才退回 BIND_CODE（兼容老部署）。
+ * 这两个值的用途本来完全不同：BIND_CODE 是给电视/手机绑定用的 6 位数字，
+ * 会显示在用户眼前、被反复输入；拿它当管理台口令等于把管理权限交给
+ * 一个只有 100 万种可能的短数字。一旦配置了 ADMIN_PASSWORD，
+ * BIND_CODE 就不再能登录管理台。
+ */
+function adminPasscode(env: Env): string {
+  return env.ADMIN_PASSWORD || env.BIND_CODE || "";
+}
+
 async function adminLogin(req: Request, env: Env): Promise<Response> {
-  if (!env.BIND_CODE) return fail(2001, "服务端未配置绑定码");
+  const passcode = adminPasscode(env);
+  if (!passcode) return fail(2001, "服务端未配置管理台口令");
 
   let body: Record<string, unknown>;
   try {
@@ -458,11 +506,11 @@ async function adminLogin(req: Request, env: Env): Promise<Response> {
   }
 
   const ip = clientIp(req);
-  if (await rateLimited(env, ip)) return fail(2005, "尝试次数过多，请 10 分钟后再试");
+  const attempt = await bumpAttempt(env, ip);
+  if (attempt > RATE_MAX_FAILS) return fail(2005, "尝试次数过多，请 10 分钟后再试");
 
   // 自带管理台的登录页发的是 { password }，管理台简版发的是 { code }，两个都收。
-  if (!safeEqual(String(body.code ?? body.password ?? ""), env.BIND_CODE)) {
-    await noteFailure(env, ip);
+  if (!safeEqual(String(body.code ?? body.password ?? ""), passcode)) {
     return fail(2001, "口令不正确");
   }
   await clearFailures(env, ip);
@@ -480,6 +528,22 @@ async function adminLogin(req: Request, env: Env): Promise<Response> {
     .run();
 
   return ok({ token, expires_at: expires });
+}
+
+/**
+ * 注销：删掉当前 bearer 对应的管理台会话。
+ *
+ * 以前这里是 `return ok(null)`——前端以为退出了，服务端会话其实还活着，
+ * 7 天内拿到旧 token 依然能进管理台。注销必须真的删行。
+ * 没有 token 也返回成功：注销是幂等操作，避免前端停在错误页。
+ */
+async function adminLogout(req: Request, env: Env): Promise<Response> {
+  const token = bearer(req);
+  if (!token) return ok(null);
+  await env.DB.prepare("DELETE FROM admin_sessions WHERE token_hash = ?")
+    .bind(await sha256hex(token))
+    .run();
+  return ok(null);
 }
 
 async function adminStats(env: Env): Promise<Response> {
@@ -1608,16 +1672,25 @@ export default {
     }
     // 自带管理台的登录接口（admin/src/views/LoginView.vue 调的是 auth/login）
     if (path === "/api/v1/auth/login" && method === "POST") return adminLogin(req, env);
-    if (path === "/api/v1/auth/logout") return ok(null);
+    if (path === "/api/v1/auth/logout") return adminLogout(req, env);
 
     // ---- 播放列表：里面是上游地址，必须和接口同等级保护 ----
     if (path === "/playlist.m3u") {
       const expected = env.BIND_CODE || "";
+      if (!expected) return new Response("Not Found", { status: 404 });
+
+      // 这里以前完全不限速：6 位口令可以随便猜，猜中就能拿到全部上游地址。
+      // 用独立的桶，避免猜 playlist 把设备绑定/管理台登录一起锁掉。
+      const bucket = `playlist:${clientIp(req)}`;
+      const attempt = await bumpAttempt(env, bucket, PLAYLIST_WINDOW_SEC);
+      if (attempt > PLAYLIST_MAX_FAILS) return new Response("Not Found", { status: 404 });
+
       const provided = url.searchParams.get("t") ?? "";
-      if (!expected || !safeEqual(provided, expected)) {
+      if (!safeEqual(provided, expected)) {
         // 用 404 而不是 401：不告诉对方这里确实有东西
         return new Response("Not Found", { status: 404 });
       }
+      await clearFailures(env, bucket);
       const clean = new URL(url);
       clean.search = "";
       const res = await env.ASSETS.fetch(new Request(clean.toString(), req));

@@ -18,6 +18,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/litv/litv/server/internal/fetch"
+	"github.com/litv/litv/server/internal/ffmpeg"
 	"github.com/litv/litv/server/internal/store"
 )
 
@@ -134,6 +136,13 @@ func (m *Manager) start(j store.Recording) {
 		_ = m.st.UpdateRecording(context.Background(), j.ID, "failed", "", 0)
 		return
 	}
+	// 出站 SSRF 校验：线路地址来自导入的订阅源，不能让它把 ffmpeg 指到
+	// 本机管理面或云元数据地址。（代理/局域网私网仍然放行。）
+	if err := fetch.ValidateURL(stream.URL); err != nil {
+		slog.Warn("录制失败：线路地址不被允许", "recording", j.ID, "err", err)
+		_ = m.st.UpdateRecording(context.Background(), j.ID, "failed", "", 0)
+		return
+	}
 
 	name := fmt.Sprintf("rec%d-ch%d-%s.ts", j.ID, j.ChannelID,
 		time.Unix(j.StartAt, 0).Format("20060102-1504"))
@@ -145,17 +154,7 @@ func (m *Manager) start(j store.Recording) {
 		duration = 5
 	}
 
-	args := []string{
-		"-hide_banner", "-loglevel", "warning",
-		"-y",
-		"-user_agent", m.opt.UserAgent,
-		"-i", stream.URL,
-		"-c", "copy", // 原样录制，不转码
-		"-t", fmt.Sprint(duration),
-		"-f", "mpegts",
-		path,
-	}
-	cmd := exec.Command(m.ffmpegPath(), args...)
+	cmd := exec.Command(m.ffmpegPath(), m.args(stream, duration, path)...)
 
 	if err := cmd.Start(); err != nil {
 		slog.Warn("启动录制进程失败", "recording", j.ID, "err", err)
@@ -187,6 +186,40 @@ func (m *Manager) start(j store.Recording) {
 		_ = m.st.UpdateRecording(context.Background(), j.ID, status, path, size)
 		slog.Info("录制结束", "recording", j.ID, "status", status, "bytes", size)
 	}()
+}
+
+// args 拼 ffmpeg 的录制参数。
+//
+// 单独抽出来是为了可测：这里最容易出的错不是"参数拼错导致录不了"，
+// 而是"忘了带 Referer/UA，某个源站直接 403"——那种错误只有断言参数
+// 才能稳定复现，不需要真的起 ffmpeg。
+func (m *Manager) args(stream *store.Stream, duration int64, path string) []string {
+	out := []string{
+		"-hide_banner", "-loglevel", "warning",
+		"-y",
+	}
+	// 录制和播放走同一条线路，请求头也必须一致。
+	//
+	// 以前这里只带 -user_agent：要求 Referer（或其它头）的源站会在录制
+	// 这一步 403，用户看到的现象是"直播能看，录出来是 0 字节 / 失败"。
+	ua, rest := ffmpeg.SplitUserAgent(stream.Headers())
+	if ua == "" {
+		ua = m.opt.UserAgent
+	}
+	if ua != "" {
+		out = append(out, "-user_agent", ua)
+	}
+	// -headers 必须写在 -i 之前，否则对输入不生效。
+	if h := ffmpeg.HeadersArg(rest); h != "" {
+		out = append(out, "-headers", h)
+	}
+	return append(out,
+		"-i", stream.URL,
+		"-c", "copy", // 原样录制，不转码
+		"-t", fmt.Sprint(duration),
+		"-f", "mpegts",
+		path,
+	)
 }
 
 // Stop 手动停止某条录制。

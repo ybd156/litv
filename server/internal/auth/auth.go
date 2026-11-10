@@ -105,6 +105,28 @@ type Signer struct {
 // NewSigner 创建签名器。
 func NewSigner(secret string) *Signer { return &Signer{secret: []byte(secret)} }
 
+// DeriveDeviceKey 把设备标识派生成可以安全放进 URL 的不透明串。
+//
+// 为什么需要：播放/分片地址里一直带着 dk=<device_key>。device_key 不是
+// 普通标识——服务端对「已 bound 且平台一致」的重复注册会**直接换发可用
+// token**，所以它等价于设备凭据。地址一旦进浏览器历史、反代日志或
+// Referer，知道它的人就能把设备顶掉。
+//
+// 派生值只由服务端密钥决定：不可反推、长度固定，且签名/校验都只用它做
+// HMAC，不需要回查设备。旧地址里的明文 device_key 仍然能校验通过
+// （签名内容一致），所以升级不会让已发出的 12 小时地址立刻失效。
+func (s *Signer) DeriveDeviceKey(deviceKey string) string {
+	if deviceKey == "" {
+		return ""
+	}
+	mac := hmac.New(sha256.New, s.secret)
+	mac.Write([]byte("dk|"))
+	mac.Write([]byte(deviceKey))
+	sum := base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
+	// 22 个 base64 字符 = 132 bit，足够抗碰撞，也不会把 URL 拉长太多
+	return sum[:22]
+}
+
 // Sign 生成签名：HMAC-SHA256(channelID|exp|deviceKey)。
 func (s *Signer) Sign(channelID int64, exp int64, deviceKey string) string {
 	mac := hmac.New(sha256.New, s.secret)
@@ -163,11 +185,16 @@ func (s *Signer) Verify(channelID int64, exp int64, deviceKey, sig string) error
 }
 
 // BuildSignedURL 拼出带签名的播放地址。
+//
+// dk 用派生值：device_key 等价于设备凭据，不能出现在地址里。目前没有
+// 调用方（各 handler 自己拼 URL），保留这个 helper 是为了不让将来的人
+// 又写一条「明文 dk」的路径。
 func BuildSignedURL(basePath string, channelID int64, deviceKey string, s *Signer, ttl time.Duration) string {
 	exp := time.Now().Add(ttl).Unix()
-	sig := s.Sign(channelID, exp, deviceKey)
+	dk := s.DeriveDeviceKey(deviceKey)
+	sig := s.Sign(channelID, exp, dk)
 	return fmt.Sprintf("%s?sig=%s&exp=%s&dk=%s",
-		basePath, sig, strconv.FormatInt(exp, 10), deviceKey)
+		basePath, sig, strconv.FormatInt(exp, 10), dk)
 }
 
 // ---------- 分片代理签名 ----------

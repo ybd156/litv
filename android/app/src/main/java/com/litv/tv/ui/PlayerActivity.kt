@@ -179,10 +179,14 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         // 直连失败基本都是网络层问题（源站在这个网络里不可达），换内核修不好。
         player.onDirectFailed = { reason ->
             main.post {
+                // 记住这个台直连不通：会话内再切回来就直接走中转，
+                // 不再让它每次都先撞一次 TLS 握手失败（那个往返在低端盒子上就是一两秒）。
+                current?.let { directBrokenChannels += it.id }
+                Log.w(TAG, "直连失败: $reason")
                 if (!relayRetried) {
                     relayRetried = true
                     forceRelayOnce = true
-                    toastTip("直连不通（$reason），改走服务端中转")
+                    toastTip("直连不通（${directFailureText(reason)}），已自动改走中转")
                     current?.let { playChannel(it, currentStreamId) }
                 }
             }
@@ -785,7 +789,9 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         osdName.text = osdNameText(ch)
 
         // 直连失败一次后，这次强制走服务端中转
-        val wantDirect = app.prefs.directMode != "relay" && !forceRelayOnce
+        // 已知直连不通的台（本次运行内）直接走中转：省掉必然失败的那次握手。
+        val wantDirect = app.prefs.directMode != "relay" && !forceRelayOnce &&
+            ch.id !in directBrokenChannels
         player.directMode = wantDirect
 
         // ---- 先用缓存地址起播，把 /tv/play 的往返从关键路径上摘掉 ----
@@ -1380,7 +1386,9 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         if (currentPlayMode == "direct" && !relayRetried) {
             relayRetried = true
             forceRelayOnce = true
-            toastTip("直连失败，改走服务端中转重试")
+            current?.let { directBrokenChannels += it.id }
+            Log.w(TAG, "直连失败（内核层）: $message")
+            toastTip("直连失败（${directFailureText(message)}），已自动改走中转")
             playChannel(current ?: return, currentStreamId)
             return
         }
@@ -1450,6 +1458,33 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
     private var relayRetried = false
     /** 这一次 play 请求强制走中转 */
     private var forceRelayOnce = false
+
+    /**
+     * 本次运行内直连不通的频道。
+     *
+     * 直连失败几乎都是"这台电视所在网络连不上这个源站"（TLS 被中断、CDN 限 IP、
+     * DNS 不通），换内核修不好、重试也修不好，所以记住它、下次直接走中转。
+     * 只放内存：重启后重新探一次是合理的（网络可能变了）；
+     * 要跨启动记住需要落盘 + TTL，留到下一轮。
+     */
+    private val directBrokenChannels = mutableSetOf<Long>()
+
+    /**
+     * 把直连失败的原始异常翻成一句人话。
+     *
+     * 电视上直接弹 SDK 的异常串（ERROR_CODE_IO_NETWORK_CONNECTION_FAILED:
+     * javax.net.ssl.SSLHandshakeException ... Connection reset by peer）
+     * 用户看不懂，还挡住画面；完整原因写 logcat 就够了。
+     */
+    private fun directFailureText(raw: String): String = when {
+        raw.contains("handshake", true) || raw.contains("HandshakeException", true) ->
+            "源站中断了 TLS 握手"
+        raw.contains("reset by peer", true) -> "源站主动断开连接"
+        raw.contains("refused", true) -> "源站拒绝连接"
+        raw.contains("timeout", true) -> "源站响应超时"
+        raw.contains("UnknownHost", true) || raw.contains("No address", true) -> "解析不到源站地址"
+        else -> "连不上源站"
+    }
     /** 当前正在播的线路 id，重试时要用 */
     private var currentStreamId: Long = 0
 

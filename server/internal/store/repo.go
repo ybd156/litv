@@ -582,12 +582,8 @@ func (s *Store) batchDeleteChannels(ctx context.Context, ids []int64) (int64, er
 	}
 	defer tx.Rollback()
 
-	if err := deleteChannelsTx(ctx, tx, ids); err != nil {
-		return 0, err
-	}
-	// 先数再提交：tx 关闭后 RowsAffected 就取不到了。
-	// 用 COUNT 而不是拿 DELETE 的 RowsAffected：deleteChannelsTx 是共用的，
-	// 不该为了这一处把返回值搞复杂。
+	// 先数再删：本函数的返回值是「删掉了几个频道」。
+	// 删完再 COUNT 只会得到 0 —— CI 第一次跑就抓到了这个 bug。
 	var n int64
 	ph := strings.Repeat("?,", len(ids))
 	ph = ph[:len(ph)-1]
@@ -596,6 +592,10 @@ func (s *Store) batchDeleteChannels(ctx context.Context, ids []int64) (int64, er
 		args = append(args, id)
 	}
 	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM channels WHERE id IN (`+ph+`)`, args...).Scan(&n); err != nil {
+		return 0, err
+	}
+
+	if err := deleteChannelsTx(ctx, tx, ids); err != nil {
 		return 0, err
 	}
 	if err := tx.Commit(); err != nil {

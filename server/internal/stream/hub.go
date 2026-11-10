@@ -18,7 +18,6 @@ import (
 	"time"
 
 	"github.com/litv/litv/server/internal/fetch"
-	"github.com/litv/litv/server/internal/safedial"
 )
 
 // ErrTooManyStreams 并发流数超限。
@@ -427,10 +426,15 @@ func (u *Upstream) run(ctx context.Context) {
 //   - 但绝不能让一份恶意清单把 NAS 指到 127.0.0.1 的管理口
 //     或 169.254.169.254 的元数据端点。
 func newUpstreamTransport(opts Options) *http.Transport {
-	t := safedial.DefaultPolicy().Transport()
+	// 基础 Transport 用 fetch 的：出站地址策略与 fetch 同源，
+	// 而且它认 fetch.SetAllowLoopback 这个测试开关——httptest 服务器都监听
+	// 127.0.0.1，stream 的测试正是靠它在本地起假上游。
+	// （拿 safedial 自己造会让所有走回环的测试变成"上游被策略拒绝"。）
+	t := fetch.NewTransport()
 	// 直播流不能压缩：DisableCompression 既省 CPU，也避免上游送 gzip TS 时解不明白。
 	t.DisableCompression = true
-	// 响应头超时沿用 Hub 的配置（upstream_timeout），语义与改动前一致。
+	// 响应头超时沿用 Hub 的配置（upstream_timeout），语义与改动前一致：
+	// 0 表示不限（直播流靠 ctx 控制），这里不做兜底，免得改变既有行为。
 	t.ResponseHeaderTimeout = opts.Timeout
 	t.MaxIdleConnsPerHost = 4
 	t.IdleConnTimeout = 90 * time.Second

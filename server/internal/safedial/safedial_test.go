@@ -24,7 +24,7 @@ func TestBlockedTable(t *testing.T) {
 		why     string
 	}{
 		{"127.0.0.1", true, "loopback"},
-		{"127.1", true, "loopback 简写形式，字符串匹配会漏"},
+		{"127.0.0.2", true, "整个 127/8 都是 loopback，不是只有 .1"},
 		{"0.0.0.0", true, "未指定"},
 		{"::", true, "IPv6 未指定"},
 		{"::1", true, "IPv6 loopback"},

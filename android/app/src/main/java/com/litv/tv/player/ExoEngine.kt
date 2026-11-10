@@ -11,10 +11,12 @@ import androidx.media3.common.Player
 import androidx.media3.common.VideoSize
 import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.DefaultHttpDataSource
+import androidx.media3.datasource.okhttp.OkHttpDataSource
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.ui.AspectRatioFrameLayout
+import com.litv.tv.data.DohDns
 
 /**
  * 内核 1：Media3 (ExoPlayer)。
@@ -91,6 +93,20 @@ class ExoEngine : PlayerEngine {
     private val dynamicHttpFactory: androidx.media3.datasource.HttpDataSource.Factory =
         object : androidx.media3.datasource.HttpDataSource.Factory {
             override fun createDataSource(): androidx.media3.datasource.HttpDataSource {
+                val extra = curHeaders.filterKeys { !it.equals("User-Agent", ignoreCase = true) }
+
+                // DoH 开启时改走 OkHttp 数据源：只有 OkHttp 的 Dns 是我们可以替换的
+                // （Media3 自带的 DefaultHttpDataSource 直接用系统解析，插不进去）。
+                // 关闭 DoH 时保持原路径，行为与旧版逐字节一致。
+                if (DohDns.isEnabled()) {
+                    val okF = OkHttpDataSource.Factory(DohDns.client())
+                    // ★ 源配置里的 UA 必须走 setUserAgent：OkHttp 数据源会用它构造
+                    //   Request，塞进 headers 会被 OkHttp 的 User-Agent 覆盖掉。
+                    okF.setUserAgent(curUa)
+                    if (extra.isNotEmpty()) okF.setDefaultRequestProperties(extra)
+                    return okF.createDataSource()
+                }
+
                 // ★ 源配置里的 UA 必须走 setUserAgent，不能只塞进请求头。
                 //   DefaultHttpDataSource 是「先应用 defaultRequestProperties、
                 //   再单独 setRequestProperty("User-Agent", userAgent)」——
@@ -100,7 +116,6 @@ class ExoEngine : PlayerEngine {
                     .setAllowCrossProtocolRedirects(true)
                     .setConnectTimeoutMs(8000)
                     .setReadTimeoutMs(15000)
-                val extra = curHeaders.filterKeys { !it.equals("User-Agent", ignoreCase = true) }
                 if (extra.isNotEmpty()) f.setDefaultRequestProperties(extra)
                 return f.createDataSource()
             }

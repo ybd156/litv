@@ -27,6 +27,7 @@ import com.litv.tv.data.EpgProgram
 import com.litv.tv.data.LastChannelResolver
 import com.litv.tv.data.PlayCache
 import com.litv.tv.data.PlayCacheStore
+import com.litv.tv.data.RelayDecision
 import com.litv.tv.player.EngineKind
 import com.litv.tv.player.PlayRequestGate
 import com.litv.tv.player.PlayerManager
@@ -175,20 +176,16 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
 
         player = PlayerManager(this, app.prefs).also { it.callback = this }
 
-        // 直连第一个内核就失败 → 立刻改走中转重播，不轮完所有内核（那要 20 秒）。
-        // 直连失败基本都是网络层问题（源站在这个网络里不可达），换内核修不好。
+        // 直连第一个内核就失败：**不再自动改走中转**（用户口径：中转默认不用）。
+        // 仍然立刻放弃后面几个内核——直连失败基本都是网络层问题（源站在这个网络里
+        // 不可达 / DNS 污染 / SNI 被重置），换内核修不好。
         player.onDirectFailed = { reason ->
             main.post {
-                // 记住这个台直连不通：会话内再切回来就直接走中转，
+                // 记住这个台直连不通：会话内再切回来时立刻进错误层并提示可以手动中转，
                 // 不再让它每次都先撞一次 TLS 握手失败（那个往返在低端盒子上就是一两秒）。
                 current?.let { directBrokenChannels += it.id }
                 Log.w(TAG, "直连失败: $reason")
-                if (!relayRetried) {
-                    relayRetried = true
-                    forceRelayOnce = true
-                    toastTip("直连不通（${directFailureText(reason)}），已自动改走中转")
-                    current?.let { playChannel(it, currentStreamId) }
-                }
+                handleDirectFailure(reason)
             }
         }
 
@@ -788,10 +785,12 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         switchTip.visibility = View.VISIBLE
         osdName.text = osdNameText(ch)
 
-        // 直连失败一次后，这次强制走服务端中转
-        // 已知直连不通的台（本次运行内）直接走中转：省掉必然失败的那次握手。
-        val wantDirect = app.prefs.directMode != "relay" && !forceRelayOnce &&
-            ch.id !in directBrokenChannels
+        // 走直连还是中转。
+        //
+        // 只有两种情况强制中转：设置里选了 relay，或用户刚点了「用 NAS 中转试试」。
+        // 以前还有第三个条件 `ch.id !in directBrokenChannels` —— 那等于"直连失败过的台
+        // 以后一律走中转"，正好是用户要求取消的自动行为。现在那个集合只用来改进提示文案。
+        val wantDirect = app.prefs.directMode != "relay" && !forceRelayOnce
         player.directMode = wantDirect
 
         // ---- 先用缓存地址起播，把 /tv/play 的往返从关键路径上摘掉 ----
@@ -1377,20 +1376,18 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
     override fun onError(message: String) {
         hideLoading()
 
-        // 直连失败 → 改走服务端中转再试。
+        // 直连失败（内核层也报错）→ 按 RelayDecision 处理。
         //
-        // 这是"电视播不了、手机能播"最常见的原因：
-        // 直连时是电视自己去连源站，电视所在网络连不上源站（CDN 被墙、
-        // 源站限 IP、DNS 不通）就全内核失败；而中转是 NAS 去拉，
-        // NAS 能连就一定能播。
-        if (currentPlayMode == "direct" && !relayRetried) {
-            relayRetried = true
-            forceRelayOnce = true
+        // 这是"电视播不了、手机能播"最常见的原因：直连时是电视自己去连源站，
+        // 它所在网络连不上（CDN 被墙 / 源站限 IP / DNS 污染）就全内核失败；
+        // 而中转是 NAS 去拉，NAS 能连就一定能播。
+        //
+        // 但**默认不再自动切**：以前一失败就悄悄用掉 NAS 上行，用户只看到一句
+        // "已自动改走中转"。现在默认弹选择，用户点了才走中转。
+        if (currentPlayMode == "direct") {
             current?.let { directBrokenChannels += it.id }
             Log.w(TAG, "直连失败（内核层）: $message")
-            toastTip("直连失败（${directFailureText(message)}），已自动改走中转")
-            playChannel(current ?: return, currentStreamId)
-            return
+            if (handleDirectFailure(message)) return
         }
 
         // 所有内核都失败时，先自动换这个台的下一条线路再试。
@@ -1484,6 +1481,76 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         raw.contains("timeout", true) -> "源站响应超时"
         raw.contains("UnknownHost", true) || raw.contains("No address", true) -> "解析不到源站地址"
         else -> "连不上源站"
+    }
+
+    /** 正在显示"直连不通"的选择弹层，避免内核层反复失败时叠出好几层。 */
+    private var relayDialogShowing = false
+
+    /**
+     * 直连失败的统一出口（两条路径都走这里：PlayerManager.onDirectFailed 与 onError）。
+     *
+     * 策略在 [RelayDecision] 里，默认（用户没开自动中转）**不自动切**，
+     * 而是把原因说清楚 + 给两个明确动作。
+     *
+     * @return true 表示已经接手（要么已改走中转重播，要么已弹出选择），调用方别再往下报错
+     */
+    private fun handleDirectFailure(reason: String): Boolean {
+        val ch = current ?: return false
+        hideLoading()
+        switchTip.text = "直连不通：${directFailureText(reason)}"
+        switchTip.visibility = View.VISIBLE
+
+        when (RelayDecision.decide(
+            autoRelay = app.prefs.autoRelay,
+            directFailed = true,
+            userTappedRelay = false,
+        )) {
+            RelayDecision.Action.USE_RELAY -> {
+                // 只有用户自己在设置里打开了「直连失败时自动改用中转」才走这里
+                relayRetried = true
+                forceRelayOnce = true
+                toastTip("直连不通（${directFailureText(reason)}），已自动改走中转")
+                playChannel(ch, currentStreamId)
+            }
+            RelayDecision.Action.SHOW_ERROR, RelayDecision.Action.RETRY_DIRECT -> showRelayChoice(reason)
+        }
+        return true
+    }
+
+    /**
+     * 错误层上的两个动作：「重试」与「用 NAS 中转试试」。
+     *
+     * 用弹层而不是在 OSD 上塞两个按钮：TV 上弹层天然吃遥控器焦点，
+     * 而 OSD 是 5 秒自动收的浮层，按钮会跟着一起消失。
+     */
+    private fun showRelayChoice(reason: String) {
+        val ch = current ?: return
+        if (relayDialogShowing) return
+        relayDialogShowing = true
+        val known = ch.id in directBrokenChannels
+        val why = directFailureText(reason)
+        android.app.AlertDialog.Builder(this)
+            .setTitle("直连不通")
+            .setMessage(
+                buildString {
+                    append(why)
+                    append("。\n\n")
+                    if (known) append("这个台之前直连也失败过。\n")
+                    append("可以再试一次直连；或者改用 NAS 中转（画质会经过 NAS，占用它的上行带宽）。")
+                }
+            )
+            .setPositiveButton("用 NAS 中转试试") { _, _ ->
+                relayDialogShowing = false
+                relayRetried = true
+                forceRelayOnce = true
+                playChannel(ch, currentStreamId)
+            }
+            .setNegativeButton("重试直连") { _, _ ->
+                relayDialogShowing = false
+                playChannel(ch, currentStreamId)
+            }
+            .setOnCancelListener { relayDialogShowing = false }
+            .show()
     }
     /** 当前正在播的线路 id，重试时要用 */
     private var currentStreamId: Long = 0

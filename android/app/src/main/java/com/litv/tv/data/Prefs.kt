@@ -108,7 +108,7 @@ class Prefs(ctx: Context) {
      *
      * 为什么要多存两个：上游刷新会**重建**频道行（改名/改分组都会生成新 id），
      * 只按 id 恢复必然失效，然后就静默跳到第一个台——这就是用户反馈的
-     * 「退出重进没有到上次看的频道」。恢复优先级见 [LastChannelRestore]。
+     * 「退出重进没有到上次看的频道」。恢复优先级见 [LastChannelResolver]。
      */
     var lastChannelTvgId: String
         get() = sp.getString(K_LAST_CH_TVG, "") ?: ""
@@ -128,6 +128,36 @@ class Prefs(ctx: Context) {
     var lastGroup: String
         get() = sp.getString(K_LAST_GROUP, "") ?: ""
         set(v) = sp.edit().putString(K_LAST_GROUP, v).apply()
+
+    // ---- 加密 DNS 与直连策略（本轮新增；都是本地偏好，不走服务端契约） ----
+
+    /**
+     * 加密 DNS（DoH）：`auto` = DoH 优先、失败回落系统；`off` = 只用系统 DNS。
+     *
+     * 默认 `auto`：直连源站时运营商 DNS 污染/SNI 重置是最常见的"连不上"原因，
+     * 而 DoH 失败会自动回落系统 DNS，开启的代价很低。
+     */
+    var dohMode: String
+        get() = sp.getString(K_DOH_MODE, "auto") ?: "auto"
+        set(v) = sp.edit().putString(K_DOH_MODE, v).apply()
+
+    /** DoH 服务商：ali | tencent | cloudflare（默认阿里，国内可达性最好）。 */
+    var dohProvider: String
+        get() = sp.getString(K_DOH_PROVIDER, "ali") ?: "ali"
+        set(v) = sp.edit().putString(K_DOH_PROVIDER, v).apply()
+
+    /** DoH 是否生效（`auto` 才算开）。 */
+    fun dohEnabled(): Boolean = dohMode != "off"
+
+    /**
+     * 直连失败时是否**自动**改用 NAS 中转。
+     *
+     * 默认关闭（用户口径：中转默认不用，只在手动点时用）。
+     * 打开即回退成旧行为：一失败就 forceRelayOnce 重播，不再询问。
+     */
+    var autoRelay: Boolean
+        get() = sp.getBoolean(K_AUTO_RELAY, false)
+        set(v) = sp.edit().putBoolean(K_AUTO_RELAY, v).apply()
 
     // ---- 本地播放偏好（服务端远程配置会覆盖它） ----
     var engine: String
@@ -251,6 +281,9 @@ class Prefs(ctx: Context) {
         const val K_LAST_CH_TVG = "last_channel_tvg"
         const val K_LAST_CH_NAME = "last_channel_name"
         const val K_LAST_GROUP = "last_group"
+        const val K_DOH_MODE = "doh_mode"
+        const val K_DOH_PROVIDER = "doh_provider"
+        const val K_AUTO_RELAY = "auto_relay"
         const val K_ENGINE = "engine"
         const val K_DECODE = "decode"
         const val K_BUFFER = "buffer_ms"

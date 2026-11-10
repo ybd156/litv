@@ -9,6 +9,7 @@ import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import com.litv.tv.LitvApp
 import com.litv.tv.R
+import com.litv.tv.data.DohDns
 import com.litv.tv.data.PlaybackDefaults
 import com.litv.tv.player.EngineKind
 
@@ -34,6 +35,9 @@ class SettingsActivity : AppCompatActivity() {
     private lateinit var valueUiMode: TextView
     private lateinit var valueStartTimeout: TextView
     private lateinit var valueRetry: TextView
+    private lateinit var valueDoh: TextView
+    private lateinit var valueDohProvider: TextView
+    private lateinit var valueAutoRelay: TextView
     private lateinit var valueDevice: TextView
     private lateinit var valueServer: TextView
     private lateinit var status: TextView
@@ -66,6 +70,9 @@ class SettingsActivity : AppCompatActivity() {
         valueUiMode = findViewById(R.id.valueUiMode)
         valueStartTimeout = findViewById(R.id.valueStartTimeout)
         valueRetry = findViewById(R.id.valueRetry)
+        valueDoh = findViewById(R.id.valueDoh)
+        valueDohProvider = findViewById(R.id.valueDohProvider)
+        valueAutoRelay = findViewById(R.id.valueAutoRelay)
         valueDevice = findViewById(R.id.valueDevice)
         valueServer = findViewById(R.id.valueServer)
         status = findViewById(R.id.status)
@@ -127,6 +134,25 @@ class SettingsActivity : AppCompatActivity() {
             app.prefs.uiMode) { v ->
             app.prefs.uiMode = v
             labelUiMode(v)
+        }
+
+        // ---- 网络：加密 DNS / 直连策略 ----
+        bindCycle(R.id.rowDoh, valueDoh, listOf("auto", "off"), app.prefs.dohMode) { v ->
+            app.prefs.dohMode = v
+            // 立刻生效：不用等下次启动（否则用户改了设置、当场换台还是旧解析）
+            DohDns.configure(app.prefs.dohEnabled(), app.prefs.dohProvider)
+            labelDoh(v)
+        }
+        bindCycle(R.id.rowDohProvider, valueDohProvider,
+            DohDns.Provider.entries.map { it.key }, app.prefs.dohProvider) { v ->
+            app.prefs.dohProvider = v
+            DohDns.configure(app.prefs.dohEnabled(), v)
+            labelDohProvider(v)
+        }
+        bindCycle(R.id.rowAutoRelay, valueAutoRelay, listOf("off", "on"),
+            if (app.prefs.autoRelay) "on" else "off") { v ->
+            app.prefs.autoRelay = (v == "on")
+            labelAutoRelay(v == "on")
         }
 
         // 设备信息（只读）
@@ -231,6 +257,9 @@ class SettingsActivity : AppCompatActivity() {
         labelUiMode(app.prefs.uiMode)
         labelStartTimeout(app.prefs.startTimeoutMs)
         labelRetry(app.prefs.retryCount)
+        labelDoh(app.prefs.dohMode)
+        labelDohProvider(app.prefs.dohProvider)
+        labelAutoRelay(app.prefs.autoRelay)
     }
 
     private fun labelEngine(v: String) {
@@ -314,5 +343,17 @@ class SettingsActivity : AppCompatActivity() {
 
     private fun labelRetry(n: Int) {
         valueRetry.text = if (n == 0) "不重试" else "$n 次"
+    }
+
+    private fun labelDoh(v: String) {
+        valueDoh.text = if (v == "off") "关闭（只用系统 DNS）" else "自动（DoH 优先，失败走系统）"
+    }
+
+    private fun labelDohProvider(key: String) {
+        valueDohProvider.text = DohDns.Provider.from(key).label
+    }
+
+    private fun labelAutoRelay(on: Boolean) {
+        valueAutoRelay.text = if (on) "开（一失败就中转）" else "关（失败时询问）"
     }
 }

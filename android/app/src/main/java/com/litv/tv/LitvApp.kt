@@ -3,6 +3,7 @@ package com.litv.tv
 import android.app.Application
 import android.util.Log
 import com.litv.tv.data.Api
+import com.litv.tv.data.DohDns
 import com.litv.tv.data.Prefs
 import com.litv.tv.data.RemoteClient
 // 注意：`is` 是 Kotlin 关键字，导入这个包必须用反引号转义
@@ -38,9 +39,14 @@ class LitvApp : Application() {
         tier = Tier.detect(this)
         remote = RemoteClient(prefs)
 
+        // 加密 DNS 的开关与端点来自本地偏好：进程一启动就同步给解析器，
+        // 否则第一次取流会先用默认值（阿里）跑一轮，用户改了设置也要等下次启动才生效。
+        DohDns.configure(prefs.dohEnabled(), prefs.dohProvider)
+
         Log.i(
             TAG,
             "LITV 启动 | 渲染档=${tier.name} | libmpv=${if (MPVLib.available) "可用" else "不可用(该 ABI 无 .so)"} " +
+                "| DoH=${if (prefs.dohEnabled()) prefs.dohProvider else "off"} " +
                 "| Android ${android.os.Build.VERSION.SDK_INT} | ${android.os.Build.MODEL}"
         )
 

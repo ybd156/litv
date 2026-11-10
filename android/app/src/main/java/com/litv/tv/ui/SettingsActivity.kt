@@ -10,7 +10,9 @@ import androidx.appcompat.app.AppCompatActivity
 import com.litv.tv.LitvApp
 import com.litv.tv.R
 import com.litv.tv.data.DohDns
+import com.litv.tv.data.Keymap
 import com.litv.tv.data.PlaybackDefaults
+import com.litv.tv.data.UiScaleOptions
 import com.litv.tv.player.EngineKind
 
 /**
@@ -38,6 +40,9 @@ class SettingsActivity : AppCompatActivity() {
     private lateinit var valueDoh: TextView
     private lateinit var valueDohProvider: TextView
     private lateinit var valueAutoRelay: TextView
+    private lateinit var valueUiScale: TextView
+    private lateinit var valueShowStatus: TextView
+    private lateinit var valueKeymap: TextView
     private lateinit var valueDevice: TextView
     private lateinit var valueServer: TextView
     private lateinit var status: TextView
@@ -73,6 +78,9 @@ class SettingsActivity : AppCompatActivity() {
         valueDoh = findViewById(R.id.valueDoh)
         valueDohProvider = findViewById(R.id.valueDohProvider)
         valueAutoRelay = findViewById(R.id.valueAutoRelay)
+        valueUiScale = findViewById(R.id.valueUiScale)
+        valueShowStatus = findViewById(R.id.valueShowStatus)
+        valueKeymap = findViewById(R.id.valueKeymap)
         valueDevice = findViewById(R.id.valueDevice)
         valueServer = findViewById(R.id.valueServer)
         status = findViewById(R.id.status)
@@ -162,6 +170,31 @@ class SettingsActivity : AppCompatActivity() {
         }
         valueDevice.text = "${Build.MANUFACTURER} ${Build.MODEL}".take(22)
         valueServer.text = app.prefs.serverBase
+
+        // ---- 界面 ----
+        bindCycle(R.id.rowUiScale, valueUiScale, UiScaleOptions.keys, app.prefs.uiScale) { v ->
+            app.prefs.uiScale = v
+            labelUiScale(v)
+            // 立即生效：下次进频道面板就能看到新字号/行高
+            status.text = "已保存 · 立即生效"
+        }
+        bindCycle(R.id.rowShowStatus, valueShowStatus, listOf("on", "off"),
+            if (app.prefs.showPlayStatus) "on" else "off") { v ->
+            app.prefs.showPlayStatus = (v == "on")
+            labelShowStatus(v == "on")
+            status.text = "已保存 · 下次呼出信息条生效"
+        }
+
+        // ---- 关于：遥控器操作说明（键位表的唯一可查入口）----
+        valueKeymap.text = "查看"
+        valueKeymap.setTextColor(getColor(R.color.accent))
+        findViewById<View>(R.id.rowKeymap).setOnClickListener {
+            android.app.AlertDialog.Builder(this)
+                .setTitle("遥控器操作说明")
+                .setMessage(Keymap.asText())
+                .setPositiveButton("知道了", null)
+                .show()
+        }
 
         // 解绑
         findViewById<View>(R.id.rowUnbind).setOnClickListener { confirmUnbind() }
@@ -260,6 +293,16 @@ class SettingsActivity : AppCompatActivity() {
         labelDoh(app.prefs.dohMode)
         labelDohProvider(app.prefs.dohProvider)
         labelAutoRelay(app.prefs.autoRelay)
+        labelUiScale(app.prefs.uiScale)
+        labelShowStatus(app.prefs.showPlayStatus)
+    }
+
+    private fun labelUiScale(key: String) {
+        valueUiScale.text = UiScaleOptions.from(key).label
+    }
+
+    private fun labelShowStatus(on: Boolean) {
+        valueShowStatus.text = if (on) "开（信息条第二层给线路/内核）" else "关（只显示台名）"
     }
 
     private fun labelEngine(v: String) {

@@ -17,7 +17,7 @@ import { useAsyncData } from '@/composables/useAsyncData'
 import * as epgApi from '@/api/modules/epg'
 import type { EpgProgramHit, EpgSource, EpgStats } from '@/api/types'
 import { toErrorMessage } from '@/api/errors'
-import { confirmAction, toast } from '@/utils/feedback'
+import { confirmDanger, toast } from '@/utils/feedback'
 import { fmtCount, fmtDateTime, timeAgo } from '@/utils/format'
 import { canWrite } from '@/session'
 
@@ -58,10 +58,12 @@ function fmtBytes(n?: number): string {
 
 async function cleanup(): Promise<void> {
   const keep = stats.value?.keep_days ?? 3
-  confirmAction({
-    title: `清理 ${keep} 天前的节目？`,
-    content: '只删除已经结束的旧节目，不影响正在播和未来的节目单。清理后需要重新刷新才能恢复。',
-    positiveText: '清理',
+  confirmDanger({
+    action: `清理 ${keep} 天前的节目`,
+    // 「会删多少条」事先算不出来（取决于库里的时间分布），所以这里不编数字，
+    // 而是把窗口说清：用户关心的是「我还能不能回看最近几天」。
+    cascade: [`${keep} 天以前已结束的节目`, '这部分历史节目单的搜索/回看'],
+    note: '正在播的和未来的节目单不受影响；清理后要重新刷新 EPG 源才能恢复。',
     onConfirm: async () => {
       cleaning.value = true
       try {
@@ -215,15 +217,18 @@ async function submit(): Promise<void> {
 }
 
 function remove(row: EpgSource): void {
-  confirmAction({
-    title: '删除这个 EPG 源？',
-    content: `「${row.name}」删掉后，用它做节目单的频道会没有节目信息。`,
-    positiveText: '删除',
+  confirmDanger({
+    action: `删除 EPG 源「${row.name}」`,
+    count: row.channel_count ?? 0,
+    unit: '个 EPG 频道',
+    cascade: ['这些频道的节目单', '已订阅的节目提醒'],
+    note: '节目数据本身不会立刻消失，但没有任何源再维护它，之后也不会更新。',
     onConfirm: async () => {
       await epgApi.deleteEpgSource(row.id)
       toast.success('已删除')
       await run(true)
     },
+    confirmText: '删除',
   })
 }
 

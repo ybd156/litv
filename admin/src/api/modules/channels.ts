@@ -64,7 +64,7 @@ export async function listGroups(): Promise<GroupStat[]> {
  * ★ 服务端只回 `{id}`（`createChannel` → `ok(w, {"id": id})`），不是 Channel。
  */
 export function createChannel(input: ChannelInput): Promise<{ id: number }> {
-  return http.post<{ id: number }>('channels', input)
+  return http.post<{ id: number }>('channels', input, { silent: true })
 }
 
 /**
@@ -78,7 +78,7 @@ export function createChannel(input: ChannelInput): Promise<{ id: number }> {
  * ★ `epg_id` 不在这里，走 `setChannelEpg()`。
  */
 export function patchChannel(id: number, patch: ChannelPatch): Promise<unknown> {
-  return http.put<unknown>(`channels/${id}`, patch)
+  return http.put<unknown>(`channels/${id}`, patch, { silent: true })
 }
 
 /**
@@ -101,20 +101,20 @@ export function updateChannel(id: number, patch: ChannelPatch): Promise<unknown>
  * 传空字符串表示解除映射（`store.SetChannelEpgID(id, "")`）。
  */
 export function setChannelEpg(id: number, epgId: string | null): Promise<unknown> {
-  return http.put<unknown>(`channels/${id}/epg`, { epg_id: epgId ?? '' })
+  return http.put<unknown>(`channels/${id}/epg`, { epg_id: epgId ?? '' }, { silent: true })
 }
 
 export function deleteChannel(id: number): Promise<unknown> {
-  return http.del<unknown>(`channels/${id}`)
+  return http.del<unknown>(`channels/${id}`, undefined, { silent: true })
 }
 
 /** 拖拽排序：把当前页的新顺序整体提交 */
 export function reorderChannels(ids: number[]): Promise<unknown> {
-  return http.post<unknown>('channels/reorder', { ids })
+  return http.post<unknown>('channels/reorder', { ids }, { silent: true })
 }
 
 export function batchChannels(ids: number[], action: BatchAction, value?: string): Promise<unknown> {
-  return http.post<unknown>('channels/batch', { ids, action, value })
+  return http.post<unknown>('channels/batch', { ids, action, value }, { silent: true })
 }
 
 /** 频道的线路列表（展开行里用）：面板自己有错误态，silent。 */
@@ -125,11 +125,11 @@ export async function listStreams(channelId: number): Promise<ChannelStream[]> {
 
 /** 加一条线路。服务端回 `{id}`，不是 Stream。 */
 export function addStream(channelId: number, input: StreamInput): Promise<{ id: number }> {
-  return http.post<{ id: number }>(`channels/${channelId}/streams`, input)
+  return http.post<{ id: number }>(`channels/${channelId}/streams`, input, { silent: true })
 }
 
 export function deleteStream(channelId: number, streamId: number): Promise<unknown> {
-  return http.del<unknown>(`channels/${channelId}/streams/${streamId}`)
+  return http.del<unknown>(`channels/${channelId}/streams/${streamId}`, undefined, { silent: true })
 }
 
 /**
@@ -140,7 +140,7 @@ export function deleteStream(channelId: number, streamId: number): Promise<unkno
  * 之后所有终端都从服务端取图，不用再去连不稳定的外链。
  */
 export function fetchLogo(channelId: number, url?: string): Promise<{ logo: string }> {
-  return http.post<{ logo: string }>(`channels/${channelId}/logo`, url ? { url } : {})
+  return http.post<{ logo: string }>(`channels/${channelId}/logo`, url ? { url } : {}, { silent: true })
 }
 
 /**
@@ -155,10 +155,10 @@ export function fetchLogo(channelId: number, url?: string): Promise<{ logo: stri
 export function uploadLogoFile(channelId: number, file: File): Promise<{ logo: string }> {
   const fd = new FormData()
   fd.append('file', file)
-  return http.post<{ logo: string }>(`channels/${channelId}/logo`, fd)
+  return http.post<{ logo: string }>(`channels/${channelId}/logo`, fd, { silent: true })
 }
 
 /** 清掉本地台标。 */
 export function deleteLogo(channelId: number): Promise<unknown> {
-  return http.del<unknown>(`channels/${channelId}/logo`)
+  return http.del<unknown>(`channels/${channelId}/logo`, undefined, { silent: true })
 }

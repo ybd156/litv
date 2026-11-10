@@ -21,16 +21,16 @@ export async function listSources(): Promise<Source[]> {
  * 去读 `.channel_count` 就会拿到 undefined。
  */
 export function createSource(input: SourceInput): Promise<{ id: number }> {
-  return http.post<{ id: number }>('sources', input)
+  return http.post<{ id: number }>('sources', input, { silent: true })
 }
 
 /** 更新源：服务端回 `{updated:true}`，不回实体。 */
 export function updateSource(id: number, input: Partial<SourceInput>): Promise<unknown> {
-  return http.put<unknown>(`sources/${id}`, input)
+  return http.put<unknown>(`sources/${id}`, input, { silent: true })
 }
 
 export function deleteSource(id: number): Promise<unknown> {
-  return http.del<unknown>(`sources/${id}`)
+  return http.del<unknown>(`sources/${id}`, undefined, { silent: true })
 }
 
 /**
@@ -44,7 +44,7 @@ export function deleteSource(id: number): Promise<unknown> {
  * 页面不要自己猜 `status` 的取值。
  */
 export function refreshSource(id: number): Promise<SourceRefreshResponse> {
-  return http.post<SourceRefreshResponse>(`sources/${id}/refresh`)
+  return http.post<SourceRefreshResponse>(`sources/${id}/refresh`, undefined, { silent: true })
 }
 
 /** 预览：拉取但不入库，只给前 50 条，用来肉眼排查脏数据 */

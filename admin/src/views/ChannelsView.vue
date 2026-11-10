@@ -27,7 +27,8 @@ import * as channelsApi from '@/api/modules/channels'
 import * as sourcesApi from '@/api/modules/sources'
 import type { Channel, GroupStat } from '@/api/types'
 import { toErrorMessage } from '@/api/errors'
-import { confirmAction, toast } from '@/utils/feedback'
+import { confirmDanger, toast } from '@/utils/feedback'
+import { useNarrowScreen } from '@/composables/useNarrow'
 import { canWrite } from '@/session'
 
 const groups = ref<GroupStat[]>([])
@@ -70,6 +71,25 @@ const COLUMN_LABELS: Record<string, string> = {
   status: '状态',
 }
 const visibleColumns = ref<string[]>([...ALL_COLUMN_KEYS])
+
+/**
+ * 窄屏（<1280）自动收起次要列。
+ *
+ * 为什么不是"按屏幕宽度改样式"：这张表最宽时有 8 列 + 操作列，
+ * 在 1024～1280 的分屏/笔记本上，横向滚动条会压住最右边的操作按钮。
+ * 约定是：窄屏只留「名称 / 状态 / 主操作」，其余靠展开行看——
+ * 展开行里已经有线路面板，缺的信息都在那儿。
+ *
+ * 用户手动在「列」菜单里选过的，以用户为准（只在窄屏时叠加收窄，
+ * 宽屏立刻恢复用户的选择，不做持久化改写）。
+ */
+const isNarrow = useNarrowScreen()
+const NARROW_HIDE = ['logo', 'number', 'group', 'source', 'epg'] as const
+
+const effectiveColumns = computed<string[]>(() => {
+  if (!isNarrow.value) return visibleColumns.value
+  return visibleColumns.value.filter((k) => !(NARROW_HIDE as readonly string[]).includes(k))
+})
 
 const totalAll = computed(() => groups.value.reduce((sum, g) => sum + g.count, 0))
 const groupNames = computed(() => groups.value.map((g) => g.name))
@@ -201,13 +221,18 @@ async function batch(
 function confirmBatchDelete(): void {
   const ids = selectedIds.value
   if (!ids.length) return
-  confirmAction({
-    title: `删除选中的 ${ids.length} 个频道？`,
-    content:
-      '频道和它的线路都会被移除，电视上也就看不到了。' +
-      '相关收藏 / 续播进度 / 节目提醒也会失效。这一步不可撤销。',
-    positiveText: '删除',
+  // 线路数是当前页已知的：只统计选中行的 stream_count，不假装知道全量
+  const streams = rows.value
+    .filter((r) => ids.includes(r.id))
+    .reduce((sum, r) => sum + (r.stream_count ?? 0), 0)
+  confirmDanger({
+    action: `删除选中的 ${ids.length} 个频道`,
+    count: ids.length,
+    unit: `个频道（含 ${streams} 条线路）`,
+    cascade: ['这些台的收藏', '续播进度', '节目提醒'],
+    note: '电视上会立刻看不到这些台。',
     onConfirm: () => batch('delete'),
+    confirmText: '删除',
   })
 }
 
@@ -234,17 +259,18 @@ function openEdit(row: Channel): void {
 }
 
 function remove(row: Channel): void {
-  confirmAction({
-    title: '删除这个频道？',
-    content:
-      `「${row.name}」以及它的 ${row.stream_count ?? 0} 条线路都会被移除，` +
-      '相关收藏 / 续播进度 / 节目提醒也会失效。',
-    positiveText: '删除',
+  confirmDanger({
+    action: `删除频道「${row.name}」`,
+    count: row.stream_count ?? 0,
+    unit: '条线路',
+    cascade: ['这个台的收藏', '续播进度', '节目提醒'],
+    note: '频道本身也会被删除，电视上立刻看不到。',
     onConfirm: async () => {
       await channelsApi.deleteChannel(row.id)
       toast.success('已删除')
       await reloadAll()
     },
+    confirmText: '删除',
   })
 }
 
@@ -269,13 +295,15 @@ async function applyToggle(row: Channel): Promise<void> {
 
 function toggleEnabled(row: Channel): void {
   if (row.enabled) {
-    confirmAction({
-      title: `停用「${row.name}」？`,
-      content:
-        '只切换启用状态，不改名称 / 分组 / 台标 / 频道号 / EPG 映射。' +
-        '停用后电视上立刻看不到这个台（随时可以再启用）。',
-      positiveText: '停用',
+    confirmDanger({
+      action: `停用频道「${row.name}」`,
+      count: 1,
+      unit: '个频道',
+      cascade: ['电视上这个台'],
+      note: '只切换启用状态：名称 / 分组 / 台标 / 频道号 / EPG 映射都不会改。',
+      reversible: true,
       onConfirm: () => applyToggle(row),
+      confirmText: '停用',
     })
     return
   }
@@ -473,7 +501,7 @@ const columns = computed<DataTableColumns<Channel>>(() => {
     },
   ]
   for (const key of ALL_COLUMN_KEYS) {
-    if (visibleColumns.value.includes(key)) list.push(allColumns.value[key])
+    if (effectiveColumns.value.includes(key)) list.push(allColumns.value[key])
   }
   list.push({
     title: '操作',

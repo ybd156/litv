@@ -26,6 +26,7 @@ import com.litv.tv.data.Channel
 import com.litv.tv.data.EpgProgram
 import com.litv.tv.data.LastChannelResolver
 import com.litv.tv.data.PlayCache
+import com.litv.tv.data.PlaybackErrorCard
 import com.litv.tv.data.PlayCacheStore
 import com.litv.tv.data.RelayDecision
 import com.litv.tv.player.EngineKind
@@ -129,6 +130,8 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
     private val main = Handler(Looper.getMainLooper())
     private val numberBuffer = StringBuilder()
     private var osdVisible = false
+    /** OSD 层级：0 隐藏 / 1 台号+台名+收藏态 / 2 再加排障信息。 */
+    private var osdLevel = 0
     private var panelVisible = false
     private var epgVisible = false
     /** 起播计时起点（毫秒），0 表示已上报过 */
@@ -523,6 +526,8 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         )
         panelList.layoutManager = LinearLayoutManager(this)
         panelList.adapter = panelAdapter
+        // 界面缩放档位在设置里改完立刻生效（下次进面板就能看到）
+        panelAdapter.setUiScale(app.prefs.uiScale)
 
         // 左侧分类列表
         grpList = findViewById(R.id.grpList)
@@ -1035,8 +1040,11 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         if (panelVisible) return
         osdVisible = true
         osd.visibility = View.VISIBLE
-        osdName.text = current?.name ?: ""
+        osdName.text = osdNameText(current ?: return)
         renderOsdNow()
+        // OSD 分层：第一层只给「台号 + 台名 + 收藏态」，
+        // 线路/内核/缓冲是排障信息，不该和台名抢注意力。
+        setOsdLevel(1)
         main.removeCallbacks(hideOsdRunnable)
         main.postDelayed(hideOsdRunnable, 5000)
     }
@@ -1046,8 +1054,38 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         osd.visibility = View.GONE
     }
 
+    /**
+     * OSD 层级可见性。
+     *
+     * @param level 1 = 只要台号 + 台名 + 收藏态；2 = 加上节目/进度/下一档/线路/内核
+     */
+    private fun setOsdLevel(level: Int) {
+        osdLevel = level
+        val detail = level >= 2 && app.prefs.showPlayStatus
+        osdNo.visibility = View.VISIBLE
+        osdName.visibility = View.VISIBLE
+        // 节目名在第一层也给：它是"这个台在演什么"，不是排障信息
+        osdNow.visibility = View.VISIBLE
+        osdProgress.visibility = if (detail) View.VISIBLE else View.GONE
+        osdNext.visibility = if (detail) View.VISIBLE else View.GONE
+        osdEngine.visibility = if (detail) View.VISIBLE else View.GONE
+        // 底部信息条（线路 x/y、延迟、时间）同样只在第二层出现
+        infoLine.visibility = if (detail) View.VISIBLE else View.GONE
+        infoTime.visibility = if (detail) View.VISIBLE else View.GONE
+        infoProgress.visibility = if (detail) View.VISIBLE else View.GONE
+    }
+
+    /** OK 键循环：隐 → 第一层 → 第二层 → 隐。 */
     private fun toggleOsd() {
-        if (osdVisible) hideOsd() else showOsd()
+        when {
+            !osdVisible -> showOsd()
+            osdLevel >= 2 -> hideOsd()
+            else -> {
+                setOsdLevel(2)
+                main.removeCallbacks(hideOsdRunnable)
+                main.postDelayed(hideOsdRunnable, 8000)
+            }
+        }
     }
 
     private fun openPanel() {
@@ -1403,6 +1441,18 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         }
         switchTip.text = "播放出错：$message"
         switchTip.visibility = View.VISIBLE
+        // 统一错误卡片（三处错误共用一套布局与动作顺序）：
+        // 这里已经试过"换下一条线路"了，所以卡片只给 重试 / 返回。
+        if (!relayDialogShowing) {
+            relayDialogShowing = true
+            renderErrorCard(
+                PlaybackErrorCard.build(
+                    PlaybackErrorCard.Kind.ALL_ENGINES_FAILED,
+                    reasonText = message.take(160),
+                    hasNextLine = false,
+                )
+            )
+        }
     }
 
     /**
@@ -1528,26 +1578,43 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         if (relayDialogShowing) return
         relayDialogShowing = true
         val known = ch.id in directBrokenChannels
-        val why = directFailureText(reason)
+        // 统一错误卡片：标题一句人话 + 原因一句 + 按优先级排的动作。
+        // 换线路不在这里给：直连失败换线路没用（同一条网络），交给 onError 的自动换线。
+        val model = PlaybackErrorCard.build(
+            PlaybackErrorCard.Kind.DIRECT_FAILED,
+            reasonText = directFailureText(reason) + if (known) "（这个台之前也失败过）" else "",
+            hasNextLine = false,
+            directFailed = true,
+        )
+        renderErrorCard(model)
+    }
+
+    /**
+     * 渲染统一错误卡片。
+     *
+     * 用 `setItems` 而不是三个按钮：AlertDialog 只有正/中/负三个位置，
+     * 而这里最多有四个动作（重试 / 换线路 / 中转 / 返回），必须能按优先级排序。
+     * 列表第一项默认获得焦点 = "重试"，BACK 取消卡片而不是退出播放页。
+     */
+    private fun renderErrorCard(model: PlaybackErrorCard.Model) {
+        val labels = model.actions.map { it.label }.toTypedArray()
         android.app.AlertDialog.Builder(this)
-            .setTitle("直连不通")
-            .setMessage(
-                buildString {
-                    append(why)
-                    append("。\n\n")
-                    if (known) append("这个台之前直连也失败过。\n")
-                    append("可以再试一次直连；或者改用 NAS 中转（画质会经过 NAS，占用它的上行带宽）。")
+            .setTitle(model.title)
+            .setMessage(model.subtitle)
+            .setItems(labels) { _, which ->
+                relayDialogShowing = false
+                when (model.actions[which]) {
+                    PlaybackErrorCard.Action.RETRY ->
+                        current?.let { playChannel(it, currentStreamId) }
+                    PlaybackErrorCard.Action.NEXT_LINE ->
+                        current?.let { tryNextStreamLine("手动换线路") }
+                    PlaybackErrorCard.Action.RELAY -> current?.let {
+                        relayRetried = true
+                        forceRelayOnce = true
+                        playChannel(it, currentStreamId)
+                    }
+                    PlaybackErrorCard.Action.CLOSE -> hideLoading()
                 }
-            )
-            .setPositiveButton("用 NAS 中转试试") { _, _ ->
-                relayDialogShowing = false
-                relayRetried = true
-                forceRelayOnce = true
-                playChannel(ch, currentStreamId)
-            }
-            .setNegativeButton("重试直连") { _, _ ->
-                relayDialogShowing = false
-                playChannel(ch, currentStreamId)
             }
             .setOnCancelListener { relayDialogShowing = false }
             .show()

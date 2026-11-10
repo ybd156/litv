@@ -28,22 +28,22 @@ export async function listPendingDevices(): Promise<Device[]> {
 }
 
 export function createBindCode(): Promise<BindCode> {
-  return http.post<BindCode>('devices/bindcode')
+  return http.post<BindCode>('devices/bindcode', undefined, { silent: true })
 }
 
 export function approveDevice(id: number): Promise<unknown> {
-  return http.post<unknown>(`devices/${id}/approve`)
+  return http.post<unknown>(`devices/${id}/approve`, undefined, { silent: true })
 }
 
 export function rejectDevice(id: number): Promise<unknown> {
-  return http.post<unknown>(`devices/${id}/reject`)
+  return http.post<unknown>(`devices/${id}/reject`, undefined, { silent: true })
 }
 
 /** 吊销：DELETE 后 token 立即失效 */
 export function revokeDevice(id: number): Promise<unknown> {
-  return http.del<unknown>(`devices/${id}`)
+  return http.del<unknown>(`devices/${id}`, undefined, { silent: true })
 }
 
 export function updateDeviceConfig(id: number, config: DeviceConfig): Promise<unknown> {
-  return http.put<unknown>(`devices/${id}/config`, config)
+  return http.put<unknown>(`devices/${id}/config`, config, { silent: true })
 }

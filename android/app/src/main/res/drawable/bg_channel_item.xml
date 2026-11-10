@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  频道行背景。
+
+  为什么要换掉原来通用的 bg_focusable：频道列表里要同时表达**两件不同的事**——
+    · 焦点在哪（遥控器现在指向谁）
+    · 正在播哪个台
+  以前两者都靠同一个左侧竖条，用户根本分不清"我选中了"和"我在看"。
+
+  现在分工：
+    焦点   → 本文件的 focused 态：半透明高亮底 + 2dp accent 描边 + 轻微放大（代码里做）
+    正在播 → 最左侧 3dp 竖条（selBar，代码里控制），与焦点视觉完全不同
+-->
+<selector xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:state_focused="true">
+        <shape>
+            <solid android:color="#33FFFFFF" />
+            <corners android:radius="8dp" />
+            <stroke
+                android:width="2dp"
+                android:color="@color/accent" />
+        </shape>
+    </item>
+    <item>
+        <shape>
+            <solid android:color="#00000000" />
+            <corners android:radius="8dp" />
+        </shape>
+    </item>
+</selector>

@@ -59,6 +59,7 @@ class PhonePlayerActivity : AppCompatActivity(), PlayerManager.Callback {
     private lateinit var audio: AudioManager
     private var gestureMode = 0 // 0 无 / 1 音量 / 2 亮度 / 3 换台
     private var downY = 0f
+    private var downX = 0f
     private var downVolume = 0
     private var downBrightness = 0.5f
     private var channelSwitched = false
@@ -73,10 +74,17 @@ class PhonePlayerActivity : AppCompatActivity(), PlayerManager.Callback {
             }
 
             override fun onDoubleTap(e: MotionEvent): Boolean {
-                if (player.let { true }) {
-                    // 直播没有"暂停"概念，这里做成"重新加载当前台"
-                    current?.let { playChannel(it) }
+                // 双击 = 暂停/继续。以前这里做的是"重新加载当前台"，
+                // 但用户对双击的肌肉记忆是播放器暂停，不是刷新。
+                if (player.isPlaying) {
+                    player.pause()
+                    tip("已暂停")
+                } else {
+                    player.resume()
+                    tip("继续播放")
                 }
+                main.removeCallbacks(hideOsd)
+                if (osdVisible) main.postDelayed(hideOsd, 1500)
                 return true
             }
         })
@@ -106,6 +114,19 @@ class PhonePlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         setupGestures()
         setupVideoBox()
 
+        // 返回键：先收控制条，再退出播放页。
+        // 以前直接 finish()，用户在横屏全屏下一按就退回列表，很容易误触。
+        onBackPressedDispatcher.addCallback(this, object : androidx.activity.OnBackPressedCallback(true) {
+            override fun handleOnBackPressed() {
+                if (osdVisible) {
+                    setOsd(false)
+                    return
+                }
+                isEnabled = false
+                onBackPressedDispatcher.onBackPressed()
+            }
+        })
+
         findViewById<TextView>(R.id.btnPrev).setOnClickListener { switchBy(-1) }
         findViewById<TextView>(R.id.btnNext).setOnClickListener { switchBy(+1) }
         findViewById<TextView>(R.id.btnList).setOnClickListener { finish() }
@@ -133,6 +154,7 @@ class PhonePlayerActivity : AppCompatActivity(), PlayerManager.Callback {
             when (ev.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
                     downY = ev.y
+                    downX = ev.x
                     gestureMode = 0
                     channelSwitched = false
                     downVolume = audio.getStreamVolume(AudioManager.STREAM_MUSIC)
@@ -163,9 +185,16 @@ class PhonePlayerActivity : AppCompatActivity(), PlayerManager.Callback {
                 }
                 MotionEvent.ACTION_UP -> {
                     val dy = ev.y - downY
-                    // 没有触发音量/亮度且是明显的纵向滑动 → 换台
-                    if (gestureMode == 0 && abs(dy) > 120f) {
-                        if (dy < 0) switchBy(+1) else switchBy(-1)
+                    val dx = ev.x - downX
+                    // 没有触发音量/亮度时：
+                    //   横向明显 → 换台（左滑下一个 / 右滑上一个，短视频时代的直觉）
+                    //   纵向明显 → 也换台（保留老用户的手感）
+                    if (gestureMode == 0) {
+                        if (abs(dx) > SWIPE_CHANNEL_PX && abs(dx) > abs(dy) * 1.2f) {
+                            if (dx < 0) switchBy(+1) else switchBy(-1)
+                        } else if (abs(dy) > SWIPE_CHANNEL_PX) {
+                            if (dy < 0) switchBy(+1) else switchBy(-1)
+                        }
                     }
                     if (gestureMode != 0) main.postDelayed({ gestureTip.visibility = View.GONE }, 600)
                     gestureMode = 0
@@ -330,5 +359,13 @@ class PhonePlayerActivity : AppCompatActivity(), PlayerManager.Callback {
 
     companion object {
         const val EXTRA_CHANNEL_ID = "channel_id"
+
+        /**
+         * 换台手势的拖动阈值（像素，约 0.4cm @ 3x）。
+         *
+         * 定成常量而不是散在代码里：太低会在滑动调音量时误换台，
+         * 太高老年用户拖不动。120px 是原来纵向滑动的实测值，横向沿用同一个数量级。
+         */
+        private const val SWIPE_CHANNEL_PX = 120f
     }
 }

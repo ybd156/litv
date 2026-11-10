@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { canWrite } from '@/session'
 import { computed, onMounted, ref } from 'vue'
 import { NButton, NCheckbox, NInput, NTag } from 'naive-ui'
 import StateBlock from './StateBlock.vue'
@@ -177,6 +178,12 @@ async function clearMatch(channel: Channel): Promise<void> {
 }
 
 function onDragStart(channel: Channel, e: DragEvent): void {
+  // 只读账号不让拖：之前拖了会静默失败（服务端 403），用户以为界面坏了。
+  if (!canWrite.value) {
+    e.preventDefault()
+    toast.warning('当前账号没有管理权限，无法修改对应关系')
+    return
+  }
   dragId.value = channel.id
   selectedId.value = channel.id
   if (e.dataTransfer) {
@@ -191,6 +198,7 @@ function onDragEnd(): void {
 }
 
 function onDropOn(epg: EpgChannel): void {
+  if (!canWrite.value) return
   const id = dragId.value
   dragId.value = null
   hoverEpg.value = null
@@ -288,7 +296,7 @@ onMounted(() => {
               :key="c.id"
               class="row"
               :class="{ active: selectedId === c.id, dragging: dragId === c.id }"
-              draggable="true"
+              :draggable="canWrite"
               @dragstart="onDragStart(c, $event)"
               @dragend="onDragEnd"
               @click="selectedId = selectedId === c.id ? null : c.id"

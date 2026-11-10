@@ -13,6 +13,7 @@ import android.widget.TextView
 import androidx.recyclerview.widget.RecyclerView
 import com.litv.tv.R
 import com.litv.tv.data.Channel
+import com.litv.tv.data.UiScaleOptions
 import java.net.HttpURLConnection
 import java.net.URL
 import java.util.concurrent.Executors
@@ -50,6 +51,15 @@ class ChannelAdapter(
     fun setPlayingId(id: Long) {
         if (id == playingId) return
         playingId = id
+        notifyDataSetChanged()
+    }
+
+    /** 界面缩放档位 key（s/m/l）：影响台名字号与行高，见 [UiScaleOptions]。 */
+    private var uiScaleKey: String = "m"
+
+    fun setUiScale(key: String) {
+        if (key == uiScaleKey) return
+        uiScaleKey = key
         notifyDataSetChanged()
     }
 
@@ -123,8 +133,26 @@ class ChannelAdapter(
         }
 
         holder.itemView.setOnClickListener { onClick(ch) }
-        // 正在播的台：即使焦点不在它上面也保留竖条，用户一眼能看到自己的台在哪
-        holder.selBar.visibility = if (ch.id == playingId) View.VISIBLE else View.GONE
+
+        // 界面缩放：台名字号与行高按档位缩放（设置页「界面缩放」小/中/大）
+        val scale = UiScaleOptions.from(uiScaleKey)
+        holder.name.textSize = 17f * scale.fontScale
+        holder.tvNo.textSize = 15f * scale.fontScale
+        holder.now.textSize = 11f * scale.fontScale
+        holder.itemView.minimumHeight =
+            (scale.rowHeightDp * holder.itemView.resources.displayMetrics.density).toInt()
+
+        // 「正在播」用左侧竖条 + accent 台名；
+        // 「焦点」用背景描边 + 轻微放大（见 bg_channel_item.xml）。
+        // 两者视觉必须不同 —— 以前都用同一个竖条，用户分不清"选中"和"在看"。
+        val playing = ch.id == playingId
+        holder.selBar.visibility = if (playing) View.VISIBLE else View.GONE
+        holder.name.setTextColor(
+            holder.itemView.context.getColor(
+                if (playing) R.color.accent else R.color.text_primary
+            )
+        )
+
         holder.itemView.setOnLongClickListener {
             onLongClick?.invoke(ch)
             onLongClick != null
@@ -134,9 +162,7 @@ class ChannelAdapter(
             v.animate().scaleX(if (hasFocus) 1.02f else 1f)
                 .scaleY(if (hasFocus) 1.02f else 1f)
                 .setDuration(120).start()
-            holder.selBar.visibility =
-                if (hasFocus || ch.id == playingId) View.VISIBLE else View.GONE
-            // 三列联动：焦点到哪个台，右侧就显示哪个台的节目单
+            // 焦点不再复用竖条：竖条只表示"正在播"
             if (hasFocus) onFocus?.invoke(ch)
         }
 

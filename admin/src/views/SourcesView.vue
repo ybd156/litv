@@ -3,7 +3,6 @@ import { computed, h, onBeforeUnmount, onMounted, ref } from 'vue'
 import {
   NButton,
   NDataTable,
-  NSpace,
   NTag,
   NTooltip,
   type DataTableColumns,
@@ -17,7 +16,7 @@ import { useAsyncData } from '@/composables/useAsyncData'
 import * as sourcesApi from '@/api/modules/sources'
 import type { Source } from '@/api/types'
 import { toErrorMessage } from '@/api/errors'
-import { confirmAction, toast } from '@/utils/feedback'
+import { confirmDanger, toast } from '@/utils/feedback'
 import { fmtDateTime, timeAgo } from '@/utils/format'
 import { derivedSourceStatus, sourceError } from '@/utils/sourceStatus'
 import { isRefreshRunning, refreshDetail, refreshSummary, sourceCountsOf } from '@/utils/sourceRefresh'
@@ -195,76 +194,93 @@ function resumeOrphanRefreshes(): void {
 }
 
 function remove(row: Source): void {
-  // 文案必须说真话：服务端 DeleteSource 是级联删除（`DELETE FROM channels WHERE source_id=?`），
-  // 而且 ImportChannels 的判重键是 (name, group) **不含 source_id**，
-  // 所以别的源里同名的频道也可能一起被删掉。这句之前写的是「不会自动消失」，正好说反了。
-  //
-  // ★ 数字取 `channel_count`（库内真数），不是 `parsed_count`（上游解析条数）：
+  // 数字取 `channel_count`（库内真数），不是 `parsed_count`（上游解析条数）：
   // 删的是库里那些行，用上游条数会多报；两个数语义不同，不能混。
   const n = row.channel_count ?? 0
-  confirmAction({
-    title: '删除这个源？',
-    content:
-      `「${row.name}」会从源列表里移除，并一并删除库里属于它的 ${n} 个频道和这些频道的线路，不可撤销。` +
-      `另外，其它源里同名的频道也可能被一并删除。电视上这些台会立刻消失。`,
-    positiveText: '删除',
+  confirmDanger({
+    action: `删除源「${row.name}」`,
+    count: n,
+    unit: '个频道（及其线路）',
+    cascade: ['这些频道的收藏', '续播进度', '节目提醒'],
+    // 这句必须留：服务端 DeleteSource 是级联删（DELETE FROM channels WHERE source_id=?），
+    // 而 ImportChannels 的判重键是 (name, group) **不含 source_id**，
+    // 所以别的源里同名的频道也可能被一起删掉。之前这里写的是「不会自动消失」，正好说反了。
+    note: '其它源里同名的频道也可能被一并删除；电视上这些台会立刻消失。',
     onConfirm: async () => {
       await sourcesApi.deleteSource(row.id)
       toast.success('已删除')
       await run(true)
     },
+    confirmText: '删除',
   })
 }
 
+/** 展开行里的「标签 + 值」：统一一种排版，别每个字段自己拼字符串 */
+function kv(label: string, value: string, opts: { mono?: boolean; danger?: boolean } = {}) {
+  const cls = ['kv-value', opts.mono ? 'mono' : '', opts.danger ? 'kv-danger' : ''].filter(Boolean).join(' ')
+  return h('div', { class: 'kv-item' }, [
+    h('span', { class: 'kv-label' }, label),
+    // 长文本（地址、错误串）单行截断 + title 兜底，绝不撑破布局
+    h('span', { class: cls, title: value }, value),
+  ])
+}
+
+/** 次要操作（预览/编辑/删除）：主行只留一个主操作，其余收进展开行 */
+function detailActions(row: Source) {
+  return h('div', { class: 'src-actions' }, [
+    h(
+      NButton,
+      { size: 'tiny', quaternary: true, onClick: () => openPreview(row) },
+      { default: () => '预览解析结果' },
+    ),
+    h(
+      NButton,
+      { size: 'tiny', quaternary: true, disabled: !canWrite.value, onClick: () => openEdit(row) },
+      { default: () => '编辑' },
+    ),
+    h(
+      NButton,
+      { size: 'tiny', quaternary: true, type: 'error', disabled: !canWrite.value, onClick: () => remove(row) },
+      { default: () => '删除' },
+    ),
+  ])
+}
+
+/**
+ * 列设计：**主行只放 4 列**（名称 / 状态 / 频道数 / 主操作），其余全部进展开行。
+ *
+ * 原来一行塞了 7 列：名称+解析数+上次刷新+类型+地址+状态+多久没更新+错误。
+ * 1280 宽度下横向滚动条压在「操作」列上，用户想点删除要先滚表头；
+ * 而且「上游解析 24 条 / 上次刷新：新增 0 · 更新 3 · 下线 2」这种次要信息
+ * 天天占着最显眼的位置，真正要看的「这个源现在行不行」反而不突出。
+ */
 const columns: DataTableColumns<Source> = [
   {
-    title: '名称',
-    key: 'name',
-    width: 210,
-    fixed: 'left',
-    render: (row) => {
-      // 上次刷新结果（新增/更新/下线）挂在名字下面：用户最关心的就是「这次刷新到底有没有变化」，
-      // 而它以前只能靠 toast 一闪而过，错过就再也看不到。
-      const counts = sourceCountsOf(row)
-      const detail = refreshDetail(counts)
-      const line = refreshSummary(counts) || detail
-      // ★ 两个数语义不同，分开显示、不要相加也不要互相顶替：
-      //   channel_count = 这个源在**库内**有几个频道（删源时删的就是这些）
-      //   parsed_count  = 上一轮**上游给了**多少条（可能因为去重/过滤入库更少）
-      const meta: string[] = []
-      if (typeof row.channel_count === 'number') meta.push(`${row.channel_count} 个频道`)
-      if (typeof row.parsed_count === 'number') meta.push(`上游 ${row.parsed_count} 条`)
-      const cells = [
-        h('span', { class: 'nm' }, row.name),
-        meta.length ? h('span', { class: 'cnt' }, meta.join(' · ')) : null,
-      ]
-      if (line) {
-        cells.push(
-          h(
-            NTooltip,
-            null,
-            {
-              trigger: () => h('span', { class: 'cnt' }, `上次刷新：${line}`),
-              default: () => detail || line,
-            },
-          ),
-        )
-      }
-      return h('div', { class: 'name-cell' }, cells)
+    type: 'expand',
+    renderExpand: (row) => {
+      const detail = refreshDetail(sourceCountsOf(row))
+      const msg = sourceError(row)
+      return h('div', { class: 'src-detail' }, [
+        kv('类型', TYPE_LABEL[row.type] ?? row.type),
+        kv('地址', row.url, { mono: true }),
+        kv(
+          '上次刷新',
+          row.last_fetch_at ? `${timeAgo(row.last_fetch_at)}（${fmtDateTime(row.last_fetch_at)}）` : '还没成功拉取过',
+        ),
+        kv('上次结果', detail || '—'),
+        kv('上游条数', typeof row.parsed_count === 'number' ? `${row.parsed_count} 条` : '—'),
+        msg ? kv('错误原因', msg, { danger: true }) : null,
+        detailActions(row),
+      ])
     },
   },
   {
-    title: '类型',
-    key: 'type',
-    width: 92,
-    render: (row) => h(NTag, { size: 'small', bordered: false }, { default: () => TYPE_LABEL[row.type] ?? row.type }),
-  },
-  {
-    title: '地址',
-    key: 'url',
+    title: '名称',
+    key: 'name',
     minWidth: 240,
+    fixed: 'left',
     ellipsis: { tooltip: true },
-    render: (row) => h('span', { class: 'mono', style: 'color:#8fb6c4' }, row.url),
+    render: (row) => h('span', { class: 'nm' }, row.name),
   },
   {
     title: '状态',
@@ -280,79 +296,49 @@ const columns: DataTableColumns<Source> = [
     },
   },
   {
-    title: '多久没更新了',
-    key: 'last_fetch_at',
-    width: 150,
-    render: (row) =>
-      h(NTooltip, null, {
-        trigger: () => h('span', { class: row.last_fetch_at ? '' : 'muted' }, timeAgo(row.last_fetch_at)),
-        default: () => (row.last_fetch_at ? fmtDateTime(row.last_fetch_at) : '这条源还没成功拉取过'),
-      }),
-  },
-  {
-    title: '错误信息',
-    key: 'error',
-    minWidth: 200,
-    ellipsis: { tooltip: true },
+    title: '频道数',
+    key: 'channel_count',
+    width: 104,
     render: (row) => {
-      // 新服务端给 error（= last_error），老服务端只有 last_error —— 两个都读，
-      // 否则这个列在真实环境里永远是「—」，用户看不到源站为什么失败。
-      const msg = sourceError(row)
-      return msg
-        ? h('span', { style: 'color:#e4635c' }, msg)
-        : h('span', { class: 'muted' }, '—')
+      // 两个数语义不同：channel_count = 库内真数（删源删的就是这些），
+      // parsed_count = 上游给了几条。主行只显示库内真数，上游数放 tooltip + 展开行。
+      const n = row.channel_count
+      const tip =
+        typeof row.parsed_count === 'number'
+          ? `库里有 ${n ?? 0} 个频道；上一轮上游给了 ${row.parsed_count} 条`
+          : '库里属于这个源的频道数'
+      return h(
+        NTooltip,
+        null,
+        {
+          trigger: () =>
+            h('span', { class: typeof n === 'number' ? 'mono' : 'mono muted' }, typeof n === 'number' ? String(n) : '—'),
+          default: () => tip,
+        },
+      )
     },
   },
   {
     title: '操作',
     key: 'actions',
-    width: 236,
+    width: 116,
     fixed: 'right',
     render: (row) =>
-      h(NSpace, { size: 4, wrap: false }, {
-        default: () => [
-          h(
-            NButton,
-            { size: 'tiny', quaternary: true, type: 'primary', onClick: () => openPreview(row) },
-            { default: () => '预览' },
-          ),
-          h(
-            NButton,
-            {
-              size: 'tiny',
-              quaternary: true,
-              // 刷新会写库（导入频道），非管理员会被服务端 403；按钮先禁掉。
-              // 已经在刷新的行也禁掉：服务端虽然是单飞（第二次直接回 running），
-              // 但让按钮可点只会造出「点了没反应」的错觉。
-              disabled: !canWrite.value || rowRefreshing(row),
-              loading: refreshing.value.includes(row.id),
-              onClick: () => void refreshOne(row),
-            },
-            { default: () => (rowRefreshing(row) ? '刷新中…' : '立即刷新') },
-          ),
-          h(
-            NButton,
-            {
-              size: 'tiny',
-              quaternary: true,
-              disabled: !canWrite.value,
-              onClick: () => openEdit(row),
-            },
-            { default: () => '编辑' },
-          ),
-          h(
-            NButton,
-            {
-              size: 'tiny',
-              quaternary: true,
-              type: 'error',
-              disabled: !canWrite.value,
-              onClick: () => remove(row),
-            },
-            { default: () => '删除' },
-          ),
-        ],
-      }),
+      h(
+        NButton,
+        {
+          size: 'tiny',
+          type: 'primary',
+          secondary: true,
+          // 刷新会写库（导入频道），非管理员会被服务端 403；按钮先禁掉。
+          // 已经在刷新的行也禁掉：服务端虽然是单飞（第二次直接回 running），
+          // 但让按钮可点只会造出「点了没反应」的错觉。
+          disabled: !canWrite.value || rowRefreshing(row),
+          loading: refreshing.value.includes(row.id),
+          onClick: () => void refreshOne(row),
+        },
+        { default: () => (rowRefreshing(row) ? '刷新中…' : '立即刷新') },
+      ),
   },
 ]
 
@@ -393,20 +379,24 @@ onMounted(async () => {
         :loading="loading && !data"
         :error="error"
         :empty="sources.length === 0"
+        empty-title="还没有添加任何源"
+        empty-hint="源就是频道来源（M3U / TXT / TVBox JSON）。先加一条，再点「立即刷新」把频道导进来。"
+        error-hint="确认 LITV 服务在运行；刚改过网关配置的话，刷新页面再试。"
+        loading-text="正在加载源列表…"
         :min-height="320"
         @retry="run()"
       >
         <template #empty-action>
           <NButton type="primary" size="small" :disabled="!canWrite" @click="openCreate">
             <template #icon><Icon name="plus" :size="14" /></template>
-            导入第一条 M3U
+            添加第一个源
           </NButton>
         </template>
         <NDataTable
           :columns="columns"
           :data="sources"
           :row-key="(row: Source) => row.id"
-          :scroll-x="1240"
+          :scroll-x="620"
           :bordered="false"
           size="small"
           striped

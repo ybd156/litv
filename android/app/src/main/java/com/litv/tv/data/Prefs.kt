@@ -159,6 +159,21 @@ class Prefs(ctx: Context) {
         get() = sp.getBoolean(K_AUTO_RELAY, false)
         set(v) = sp.edit().putBoolean(K_AUTO_RELAY, v).apply()
 
+    /** 界面缩放档位 key：s | m | l（见 [UiScaleOptions]）。默认中档 = 设计稿基准。 */
+    var uiScale: String
+        get() = sp.getString(K_UI_SCALE, "m") ?: "m"
+        set(v) = sp.edit().putString(K_UI_SCALE, v).apply()
+
+    /**
+     * OSD 是否显示"播放状态叠加"（线路 / 内核 / 缓冲）。
+     *
+     * 默认开，但这些是排障信息，不该和台名抢注意力：关掉之后 OSD 恒为第一层，
+     * 只留「台号 + 台名 + 收藏态」。
+     */
+    var showPlayStatus: Boolean
+        get() = sp.getBoolean(K_SHOW_PLAY_STATUS, true)
+        set(v) = sp.edit().putBoolean(K_SHOW_PLAY_STATUS, v).apply()
+
     // ---- 本地播放偏好（服务端远程配置会覆盖它） ----
     var engine: String
         get() = sp.getString(K_ENGINE, "auto") ?: "auto"
@@ -284,6 +299,8 @@ class Prefs(ctx: Context) {
         const val K_DOH_MODE = "doh_mode"
         const val K_DOH_PROVIDER = "doh_provider"
         const val K_AUTO_RELAY = "auto_relay"
+        const val K_UI_SCALE = "ui_scale"
+        const val K_SHOW_PLAY_STATUS = "show_play_status"
         const val K_ENGINE = "engine"
         const val K_DECODE = "decode"
         const val K_BUFFER = "buffer_ms"

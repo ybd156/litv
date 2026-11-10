@@ -36,6 +36,8 @@ const message = useMessage()
 const channels = ref<Channel[]>([])
 const keyword = ref('')
 const loading = ref(true)
+/** 频道列表本身的加载错误（和 playError 分开：一个是「列表没拉到」，一个是「这个台放不出来」） */
+const listError = ref('')
 const playing = ref<Channel | null>(null)
 const playError = ref('')
 const buffering = ref(false)
@@ -70,13 +72,17 @@ const grouped = computed(() => {
 
 async function loadChannels() {
   loading.value = true
+  listError.value = ''
   try {
+    // silent：错误由 StateBlock 在页内显示（带「重试」按钮），
+    // 再来一条全局红条就是双份报错。
     const r = await request<{ total: number; items: Channel[] }>('/channels', {
       query: { limit: 500, enabled: true },
+      silent: true,
     })
     channels.value = r.items ?? []
   } catch (e) {
-    message.error(e instanceof Error ? e.message : '加载频道失败')
+    listError.value = e instanceof Error ? e.message : '加载频道失败'
   } finally {
     loading.value = false
   }
@@ -202,12 +208,22 @@ onBeforeUnmount(destroyPlayer)
     <div class="body">
       <!-- 左：频道 -->
       <aside class="channels">
-        <NSpin :show="loading">
-          <StateBlock
-            v-if="!loading && channels.length === 0"
-            title="还没有频道"
-            desc="先去「源管理」导入一条 M3U/TXT，再回来这里看"
-          />
+        <!--
+          三态统一：以前外面套了一层 NSpin、里面又放了个 StateBlock 却传错 prop
+          （StateBlock 认的是 emptyTitle/emptyHint，不是 title/desc）——
+          结果加载时是「转圈 + 转圈」，空的时候什么都没有。
+        -->
+        <StateBlock
+          :loading="loading && channels.length === 0"
+          :error="listError"
+          :empty="!loading && channels.length === 0"
+          empty-title="还没有频道"
+          empty-hint="先去「源管理」导入一条 M3U / TXT 源，点「立即刷新」，频道会自动出现在这里。"
+          error-hint="确认 LITV 服务在运行；如果刚改过网关配置，刷新页面再试。"
+          loading-text="正在加载频道列表…"
+          :min-height="160"
+          @retry="loadChannels"
+        >
           <div v-for="[group, list] in grouped" :key="group" class="group">
             <div class="group-title">
               {{ group }}
@@ -225,7 +241,7 @@ onBeforeUnmount(destroyPlayer)
               <span v-if="ch.stream_count > 1" class="badge">{{ ch.stream_count }}</span>
             </button>
           </div>
-        </NSpin>
+        </StateBlock>
       </aside>
 
       <!-- 右：播放器 -->

@@ -10,7 +10,7 @@ import { useAsyncData } from '@/composables/useAsyncData'
 import * as devicesApi from '@/api/modules/devices'
 import type { Device } from '@/api/types'
 import { toErrorMessage } from '@/api/errors'
-import { confirmAction, toast } from '@/utils/feedback'
+import { confirmDanger, toast } from '@/utils/feedback'
 import { fmtDateTime, timeAgo } from '@/utils/format'
 import { canWrite } from '@/session'
 
@@ -71,28 +71,35 @@ async function approve(d: Device): Promise<void> {
 }
 
 function reject(d: Device): void {
-  confirmAction({
-    title: '拒绝这台设备？',
-    content: `「${d.name}」将无法绑定，需要重新输入绑定码。`,
-    positiveText: '拒绝',
+  confirmDanger({
+    action: `拒绝设备「${d.name}」`,
+    count: 1,
+    unit: '台设备',
+    cascade: ['这台设备的绑定请求'],
+    note: '要在电视上重新生成绑定码才能再申请一次；设备本身的其它数据不受影响。',
+    reversible: true,
     onConfirm: async () => {
       await devicesApi.rejectDevice(d.id)
       toast.success('已拒绝')
       await run(true)
     },
+    confirmText: '拒绝',
   })
 }
 
 function revoke(d: Device): void {
-  confirmAction({
-    title: '吊销这台设备？',
-    content: `「${d.name}」的 token 会立即失效，电视上需要重新生成绑定码才能再连上。`,
-    positiveText: '吊销',
+  confirmDanger({
+    action: `吊销设备「${d.name}」`,
+    count: 1,
+    unit: '台设备',
+    cascade: ['这台设备的登录态', '它上面正在进行的播放/遥控'],
+    note: 'token 立即失效，需要在电视上重新生成绑定码才能再连上；设备记录会被删除。',
     onConfirm: async () => {
       await devicesApi.revokeDevice(d.id)
       toast.success('已吊销')
       await run(true)
     },
+    confirmText: '吊销',
   })
 }
 

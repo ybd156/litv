@@ -1,0 +1,136 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/bg"
+    android:orientation="vertical">
+
+    <ScrollView
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:fillViewport="true"
+        android:scrollbars="none">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:gravity="center_vertical"
+        android:orientation="horizontal">
+
+        <TextView
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="遥控器"
+            android:textColor="@color/text_primary"
+            android:textSize="22sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/status"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:textColor="@color/accent"
+            android:textSize="12sp" />
+    </LinearLayout>
+
+    <!-- 目标设备选择 -->
+    <HorizontalScrollView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="12dp"
+        android:scrollbars="none">
+
+        <LinearLayout
+            android:id="@+id/targets"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal" />
+    </HorizontalScrollView>
+
+    <!-- 方向键区 -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_marginTop="20dp"
+        android:layout_weight="1"
+        android:gravity="center"
+        android:orientation="vertical">
+
+        <LinearLayout
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal">
+
+            <TextView style="@style/RemoteKey" android:text="" />
+
+            <TextView
+                android:id="@+id/keyUp"
+                style="@style/RemoteKey"
+                android:text="▲" />
+
+            <TextView style="@style/RemoteKey" android:text="" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal">
+
+            <TextView
+                android:id="@+id/keyLeft"
+                style="@style/RemoteKey"
+                android:text="◀" />
+
+            <TextView
+                android:id="@+id/keyOk"
+                style="@style/RemoteKeyAccent"
+                android:text="OK" />
+
+            <TextView
+                android:id="@+id/keyRight"
+                style="@style/RemoteKey"
+                android:text="▶" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal">
+
+            <TextView
+                android:id="@+id/keyBack"
+                style="@style/RemoteKey"
+                android:text="返回" />
+
+            <TextView
+                android:id="@+id/keyDown"
+                style="@style/RemoteKey"
+                android:text="▼" />
+
+            <TextView
+                android:id="@+id/keyMenu"
+                style="@style/RemoteKey"
+                android:text="菜单" />
+        </LinearLayout>
+    </LinearLayout>
+
+    <!-- 数字键 -->
+    <LinearLayout
+        android:id="@+id/numberPad"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical" />
+
+    
+        </LinearLayout>
+    </ScrollView>
+
+    <include layout="@layout/view_bottom_tabs" />
+</LinearLayout>

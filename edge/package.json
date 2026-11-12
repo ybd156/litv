@@ -1,0 +1,18 @@
+{
+  "name": "litv-edge",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "边缘版最小 litvd：让现有 LITV 客户端直连上游源，无中转",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "test": "node scripts/selftest.mjs && node scripts/workertest.mjs",
+    "typecheck": "tsc --noEmit",
+    "deploy": "wrangler deploy"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20261103.1",
+    "typescript": "5.7.3",
+    "wrangler": "4.158.0"
+  }
+}

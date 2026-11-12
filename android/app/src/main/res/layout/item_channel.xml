@@ -1,0 +1,125 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  电视频道行。合并两套参考实现：
+
+    酷9（item_live_channel）：台号 + 台标 + 台名/节目走马灯 + 星标
+    mediaplayer（item_channel）：左侧选中竖条 + 行内节目进度条
+
+  最终结构：
+    [选中竖条] [台号] [台标 56dp] [台名 17sp / 节目 11sp / 进度条 2dp] [星标]
+
+  行高约 68dp，一屏能看到 9-10 个台（之前是 92-136px 一张卡，只看得到 3 个）。
+-->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:layout_marginHorizontal="2dp"
+    android:layout_marginVertical="2dp"
+    android:background="@drawable/bg_channel_item"
+    android:clickable="true"
+    android:focusable="true"
+    android:gravity="center_vertical"
+    android:orientation="horizontal"
+    android:paddingHorizontal="10dp"
+    android:paddingVertical="7dp">
+
+    <!-- 选中/正在播指示条（mediaplayer 的做法） -->
+    <View
+        android:id="@+id/selBar"
+        android:layout_width="3dp"
+        android:layout_height="34dp"
+        android:background="@color/accent"
+        android:visibility="gone" />
+
+    <!-- 台号 -->
+    <!-- 台号：参考图里是个深色小方块，不是裸数字。
+         裸数字在深色背景上位置感很弱，扫视时容易跳过；方块给了视觉锚点，
+         和右边的台标连成一组。 -->
+    <TextView
+        android:id="@+id/tvNo"
+        android:layout_width="40dp"
+        android:layout_height="30dp"
+        android:layout_gravity="center_vertical"
+        android:background="@drawable/bg_no_chip"
+        android:gravity="center"
+        android:textColor="@color/text_secondary"
+        android:textSize="15sp" />
+
+    <!-- 台标：有图显示图，没图显示首字方块（不然一行只剩中间一串字，很空） -->
+    <FrameLayout
+        android:layout_width="56dp"
+        android:layout_height="34dp">
+
+        <TextView
+            android:id="@+id/logoText"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:background="@drawable/bg_card"
+            android:gravity="center"
+            android:maxLines="1"
+            android:textColor="@color/text_secondary"
+            android:textSize="18sp" />
+
+        <ImageView
+            android:id="@+id/logo"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:contentDescription="@null"
+            android:scaleType="fitCenter" />
+    </FrameLayout>
+
+    <!-- 台名 + 当前节目 + 进度条 -->
+    <LinearLayout
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="10dp"
+        android:layout_weight="1"
+        android:orientation="vertical">
+
+        <TextView
+            android:id="@+id/name"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:ellipsize="marquee"
+            android:focusable="false"
+            android:marqueeRepeatLimit="marquee_forever"
+            android:scrollHorizontally="true"
+            android:singleLine="true"
+            android:textColor="@color/text_primary"
+            android:textSize="22sp" />
+
+        <TextView
+            android:id="@+id/now"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:ellipsize="marquee"
+            android:focusable="false"
+            android:marqueeRepeatLimit="marquee_forever"
+            android:scrollHorizontally="true"
+            android:singleLine="true"
+            android:textColor="@color/text_secondary"
+            android:textSize="16sp" />
+
+        <!-- 当前节目进度：2dp 细条，不占地方但能看出还剩多少 -->
+        <ProgressBar
+            android:id="@+id/prog"
+            style="?android:attr/progressBarStyleHorizontal"
+            android:layout_width="match_parent"
+            android:layout_height="2dp"
+            android:layout_marginTop="3dp"
+            android:max="100"
+            android:progress="0"
+            android:progressTint="@color/accent"
+            android:visibility="gone" />
+    </LinearLayout>
+
+    <!-- 星标 / 线路数 -->
+    <TextView
+        android:id="@+id/badge"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="6dp"
+        android:textColor="@color/accent"
+        android:textSize="15sp"
+        android:visibility="gone" />
+</LinearLayout>

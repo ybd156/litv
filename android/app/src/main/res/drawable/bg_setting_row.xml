@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 设置行背景：默认完全透明，只有焦点/选中时铺一层浅色。
+     原来是直接复用 bg_focusable（圆角卡片 + 3dp 描边），于是每一行都变成
+     一个独立小盒子、盒子和盒子之间还有空隙 —— 一屏四行看下来像四个不相干
+     的控件，割裂感就是这儿来的。
+     参考常见 TV 客户端的设置页：整列是一块连续的面板，行与行之间只靠
+     间距分隔，选中项才浮出一层浅底。 -->
+<selector xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:state_focused="true">
+        <shape android:shape="rectangle">
+            <solid android:color="#1FFFFFFF" />
+            <corners android:radius="8dp" />
+        </shape>
+    </item>
+    <item android:state_pressed="true">
+        <shape android:shape="rectangle">
+            <solid android:color="#14FFFFFF" />
+            <corners android:radius="8dp" />
+        </shape>
+    </item>
+    <item>
+        <shape android:shape="rectangle">
+            <solid android:color="@android:color/transparent" />
+            <corners android:radius="8dp" />
+        </shape>
+    </item>
+</selector>

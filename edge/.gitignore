@@ -1,0 +1,19 @@
+node_modules/
+.wrangler/
+.npm-cache/
+.tmp/
+
+# CI 从 D1 读出来的源清单（含订阅地址，不能入库）
+sources.json
+epg-state.json
+build-state.json
+
+# 生成物不入库：里面有上游源地址和凭据
+public/playlist.m3u
+sql/seed.sql
+sql/source-status.sql
+sql/meta.sql
+sql/epg.sql
+
+# 自带管理台的构建产物由 CI 拷进来，不入库
+public/assets/

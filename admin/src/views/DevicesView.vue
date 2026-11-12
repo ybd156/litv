@@ -1,0 +1,512 @@
+<script setup lang="ts">
+import { computed, h, onMounted, ref } from 'vue'
+import { NButton, NDataTable, NSpace, NTag, NTooltip, type DataTableColumns } from 'naive-ui'
+import PageHeader from '@/components/PageHeader.vue'
+import StateBlock from '@/components/StateBlock.vue'
+import BindCodeModal from '@/components/BindCodeModal.vue'
+import DeviceConfigModal from '@/components/DeviceConfigModal.vue'
+import Icon from '@/components/Icon.vue'
+import { useAsyncData } from '@/composables/useAsyncData'
+import * as devicesApi from '@/api/modules/devices'
+import * as systemApi from '@/api/modules/system'
+import type { Device, EdgeSettings } from '@/api/types'
+import { toErrorMessage } from '@/api/errors'
+import { confirmDanger, toast } from '@/utils/feedback'
+import { fmtDateTime, timeAgo } from '@/utils/format'
+import { canWrite } from '@/session'
+import { EDGE_DEPLOY } from '@/deploy'
+
+interface DevicesData {
+  devices: Device[]
+  pending: Device[]
+}
+
+const { data, loading, error, run } = useAsyncData<DevicesData>(async () => {
+  const [d, p] = await Promise.allSettled([devicesApi.listDevices(), devicesApi.listPendingDevices()])
+  // 两个都失败才算「拉取失败」：现在这两个请求都是 silent（页面自己有错误块），
+  // 要是这里也把失败吞掉，后端挂了页面会显示成「一台设备都没有」——比报错更误导人。
+  if (d.status === 'rejected' && p.status === 'rejected') throw d.reason
+  const devices = d.status === 'fulfilled' ? d.value : []
+  let pending = p.status === 'fulfilled' ? p.value : []
+  if (pending.length === 0) pending = devices.filter((x) => x.status === 'pending')
+  return { devices, pending }
+})
+
+const devices = computed(() => data.value?.devices ?? [])
+const pending = computed(() => data.value?.pending ?? [])
+const onlineCount = computed(() => devices.value.filter((d) => d.online).length)
+
+const bindShow = ref(false)
+const configShow = ref(false)
+const configTarget = ref<Device | null>(null)
+const busyId = ref<number | null>(null)
+
+/**
+ * 边缘部署的设置自省（绑定码 / 入口）。
+ *
+ * 只有边缘版有：NAS 的身份来自飞牛网关，没有"绑定码"这个概念。
+ * 单独用 allSettled 拉，失败不影响设备列表——设备页的主职责还是看设备。
+ */
+const edgeInfo = ref<EdgeSettings | null>(null)
+const codeRevealed = ref(false)
+const revealBusy = ref(false)
+
+async function loadEdgeInfo(): Promise<void> {
+  if (!EDGE_DEPLOY) return
+  try {
+    // 始终先拿打码版本；「显示」是单独的一次明确动作
+    edgeInfo.value = await systemApi.fetchEdgeSettings(false)
+  } catch {
+    edgeInfo.value = null
+  }
+}
+
+async function revealCode(): Promise<void> {
+  revealBusy.value = true
+  try {
+    edgeInfo.value = await systemApi.fetchEdgeSettings(true)
+    codeRevealed.value = true
+  } catch (e) {
+    toast.error(toErrorMessage(e))
+  } finally {
+    revealBusy.value = false
+  }
+}
+
+function hideCode(): void {
+  codeRevealed.value = false
+  edgeInfo.value = edgeInfo.value
+    ? { ...edgeInfo.value, bind_code: edgeInfo.value.bind_code_masked }
+    : null
+}
+
+const DECODE_LABEL: Record<string, string> = { hard: '硬解', soft: '软解', auto: '自动' }
+const ASPECT_LABEL: Record<string, string> = { auto: '自动', '16:9': '16:9', '4:3': '4:3', fill: '拉伸' }
+
+function configSummary(d: Device): string {
+  const c = d.config
+  if (!c) return '默认'
+  const parts: string[] = []
+  if (c.decode) parts.push(DECODE_LABEL[c.decode] ?? c.decode)
+  if (c.aspect) parts.push(ASPECT_LABEL[c.aspect] ?? c.aspect)
+  if (typeof c.buffer_ms === 'number') parts.push(`${c.buffer_ms}ms`)
+  return parts.length ? parts.join(' · ') : '默认'
+}
+
+function openConfig(d: Device): void {
+  configTarget.value = d
+  configShow.value = true
+}
+
+async function approve(d: Device): Promise<void> {
+  busyId.value = d.id
+  try {
+    await devicesApi.approveDevice(d.id)
+    toast.success(`已批准「${d.name}」`)
+    await run(true)
+  } catch (e) {
+    toast.error(toErrorMessage(e))
+  } finally {
+    busyId.value = null
+  }
+}
+
+function reject(d: Device): void {
+  confirmDanger({
+    action: `拒绝设备「${d.name}」`,
+    count: 1,
+    unit: '台设备',
+    cascade: ['这台设备的绑定请求'],
+    note: '要在电视上重新生成绑定码才能再申请一次；设备本身的其它数据不受影响。',
+    reversible: true,
+    onConfirm: async () => {
+      await devicesApi.rejectDevice(d.id)
+      toast.success('已拒绝')
+      await run(true)
+    },
+    confirmText: '拒绝',
+  })
+}
+
+function revoke(d: Device): void {
+  confirmDanger({
+    action: `吊销设备「${d.name}」`,
+    count: 1,
+    unit: '台设备',
+    cascade: ['这台设备的登录态', '它上面正在进行的播放/遥控'],
+    note: 'token 立即失效，需要在电视上重新生成绑定码才能再连上；设备记录会被删除。',
+    onConfirm: async () => {
+      await devicesApi.revokeDevice(d.id)
+      toast.success('已吊销')
+      await run(true)
+    },
+    confirmText: '吊销',
+  })
+}
+
+const columns: DataTableColumns<Device> = [
+  {
+    title: '设备',
+    key: 'name',
+    width: 210,
+    fixed: 'left',
+    render: (row) =>
+      h('div', { class: 'dev-cell' }, [
+        h('span', { class: 'nm' }, row.name),
+        row.status === 'pending'
+          ? h(NTag, { size: 'tiny', type: 'warning', bordered: false }, { default: () => '待批准' })
+          : null,
+      ]),
+  },
+  {
+    title: '平台 / 型号',
+    key: 'platform',
+    width: 200,
+    render: (row) =>
+      h('div', { class: 'dev-cell' }, [
+        h('span', {}, row.platform || '未知平台'),
+        h('span', { class: 'sub' }, row.model || '—'),
+      ]),
+  },
+  {
+    title: '在线',
+    key: 'online',
+    width: 96,
+    render: (row) =>
+      h(
+        NTag,
+        { size: 'small', bordered: false, type: row.online ? 'success' : 'default' },
+        { default: () => (row.online ? '在线' : '离线') },
+      ),
+  },
+  {
+    title: '最后心跳',
+    key: 'last_heartbeat_at',
+    width: 150,
+    render: (row) =>
+      h(
+        NTooltip,
+        null,
+        {
+          trigger: () =>
+            h(
+              'span',
+              { class: row.last_heartbeat_at ? '' : 'muted' },
+              // 心跳为 0 时不能拿去算相对时间——会算成「57 年前」（1970 年）
+              row.last_heartbeat_at ? timeAgo(row.last_heartbeat_at) : '从未',
+            ),
+          default: () => (row.last_heartbeat_at ? fmtDateTime(row.last_heartbeat_at) : '还没上报过心跳'),
+        },
+      ),
+  },
+  {
+    title: 'IP',
+    key: 'ip',
+    width: 130,
+    render: (row) => h('span', { class: 'mono' }, row.ip || '—'),
+  },
+  {
+    title: '版本',
+    key: 'app_version',
+    width: 96,
+    render: (row) => h('span', { class: 'mono' }, row.app_version || '—'),
+  },
+  {
+    title: '远程配置',
+    key: 'config',
+    width: 190,
+    render: (row) =>
+      row.config
+        ? h(NTag, { size: 'small', bordered: false, type: 'info' }, { default: () => configSummary(row) })
+        : h('span', { class: 'muted' }, '默认（未覆盖）'),
+  },
+  {
+    title: '操作',
+    key: 'actions',
+    width: 170,
+    fixed: 'right',
+    render: (row) =>
+      h(NSpace, { size: 4, wrap: false }, {
+        default: () => [
+          h(
+            NButton,
+            {
+              size: 'tiny',
+              quaternary: true,
+              type: 'primary',
+              disabled: !canWrite.value,
+              onClick: () => openConfig(row),
+            },
+            { default: () => '配置' },
+          ),
+          h(
+            NButton,
+            {
+              size: 'tiny',
+              quaternary: true,
+              type: 'error',
+              disabled: !canWrite.value,
+              onClick: () => revoke(row),
+            },
+            { default: () => '吊销' },
+          ),
+        ],
+      }),
+  },
+]
+
+onMounted(() => {
+  void run()
+  void loadEdgeInfo()
+})
+</script>
+
+<template>
+  <div>
+    <PageHeader
+      title="终端设备"
+      subtitle="电视、手机、盒子都是终端。新设备要先输绑定码，再在这里批准，才能看你的频道。"
+    >
+      <template #actions>
+        <NButton size="small" :loading="loading" @click="run(true)">
+          <template #icon><Icon name="refresh" :size="15" /></template>
+          刷新
+        </NButton>
+        <!-- 边缘版的绑定码是固定的 BIND_CODE（上面那张卡里就能看），
+             没有「临时签发一个」这回事——留着按钮只会让人点了吃 2006。 -->
+        <NButton
+          v-if="!EDGE_DEPLOY"
+          size="small"
+          type="primary"
+          :disabled="!canWrite"
+          @click="bindShow = true"
+        >
+          <template #icon><Icon name="key" :size="15" /></template>
+          生成绑定码
+        </NButton>
+      </template>
+    </PageHeader>
+
+    <!-- 边缘部署：绑定码 + 管理台入口。
+         放这里是因为「要登录才看得到」，而设备页本来就是管绑定关系的地方；
+         部署完几个月再回来加电视时，不用去翻 GitHub Secrets。 -->
+    <div v-if="EDGE_DEPLOY && edgeInfo" class="edge-info">
+      <div v-if="!edgeInfo.admin_password_set" class="edge-warn">
+        还没配 <b>ADMIN_PASSWORD</b>，管理台无法登录——绑定码已经不能当管理台口令了。
+        去仓库 Settings → Secrets 加一个。
+      </div>
+      <div v-if="!edgeInfo.bind_code_set" class="edge-warn">
+        还没配 <b>BIND_CODE</b>，电视绑不上。去仓库 Settings → Secrets 加一个 6 位数字。
+      </div>
+
+      <div v-if="edgeInfo.bind_code_set" class="edge-row">
+        <div>
+          <div class="edge-k">电视绑定码</div>
+          <div class="edge-v edge-mono">{{ edgeInfo.bind_code }}</div>
+        </div>
+        <NButton
+          v-if="!codeRevealed"
+          size="tiny"
+          quaternary
+          :loading="revealBusy"
+          @click="revealCode"
+        >
+          显示
+        </NButton>
+        <NButton v-else size="tiny" quaternary @click="hideCode">隐藏</NButton>
+      </div>
+
+      <div class="edge-row">
+        <div>
+          <div class="edge-k">管理台入口</div>
+          <div class="edge-v edge-mono">{{ edgeInfo.admin_entry }}</div>
+        </div>
+        <span class="edge-hint">
+          {{ edgeInfo.admin_path ? '已自定义入口，根路径返回 404' : '根路径即入口（可配 ADMIN_PATH 改掉）' }}
+        </span>
+      </div>
+    </div>
+
+    <div v-if="pending.length > 0" class="pending">      <div class="pending-head">
+        <Icon name="warning" :size="16" />
+        <span>{{ pending.length }} 台设备正在等你批准</span>
+      </div>
+      <div v-for="d in pending" :key="d.id" class="pending-row">
+        <div class="info">
+          <span class="nm">{{ d.name }}</span>
+          <span class="sub">{{ d.platform }}{{ d.model ? ` · ${d.model}` : '' }}{{ d.ip ? ` · ${d.ip}` : '' }}</span>
+        </div>
+        <NSpace :size="6">
+          <NButton size="tiny" type="primary" :disabled="!canWrite" :loading="busyId === d.id" @click="approve(d)">批准</NButton>
+          <NButton size="tiny" quaternary :disabled="!canWrite" @click="reject(d)">拒绝</NButton>
+        </NSpace>
+      </div>
+    </div>
+
+    <div class="summary">
+      <NTag size="small" :bordered="false">共 {{ devices.length }} 台</NTag>
+      <NTag size="small" :bordered="false" type="success">{{ onlineCount }} 台在线</NTag>
+    </div>
+
+    <div class="card-panel table-wrap">
+      <StateBlock
+        :loading="loading && !data"
+        :error="error"
+        :empty="devices.length === 0"
+        :min-height="320"
+        @retry="run()"
+      >
+        <template #empty-action>
+          <!-- NAS 走"生成绑定码"；边缘版绑定码固定，指回上面那张卡 -->
+          <NButton
+            v-if="!EDGE_DEPLOY"
+            size="small"
+            type="primary"
+            :disabled="!canWrite"
+            @click="bindShow = true"
+          >
+            <template #icon><Icon name="key" :size="14" /></template>
+            生成绑定码去绑一台
+          </NButton>
+          <span v-else class="muted">用上面那张卡里的绑定码去绑一台。</span>
+        </template>
+        <NDataTable
+          :columns="columns"
+          :data="devices"
+          :row-key="(row: Device) => row.id"
+          :scroll-x="1220"
+          :bordered="false"
+          size="small"
+          striped
+        />
+      </StateBlock>
+    </div>
+
+    <BindCodeModal v-model:show="bindShow" />
+    <DeviceConfigModal v-model:show="configShow" :device="configTarget" @saved="run(true)" />
+  </div>
+</template>
+
+<style scoped>
+/* 边缘部署的绑定码 / 入口卡片 */
+.edge-info {
+  padding: 12px 14px;
+  margin-bottom: 14px;
+  border-radius: 13px;
+  background: rgba(31, 162, 192, 0.07);
+  border: 1px solid rgba(31, 162, 192, 0.2);
+}
+.edge-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 10px;
+  border-radius: 9px;
+  background: rgba(13, 18, 22, 0.45);
+  margin-bottom: 6px;
+}
+.edge-row:last-child {
+  margin-bottom: 0;
+}
+.edge-k {
+  font-size: 12px;
+  color: #7f8f9b;
+  margin-bottom: 3px;
+}
+.edge-v {
+  font-size: 17px;
+  letter-spacing: 2px;
+  color: #eaf6fa;
+}
+.edge-mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  letter-spacing: 1px;
+}
+.edge-hint {
+  flex: none;
+  font-size: 11.5px;
+  color: #7f8f9b;
+  max-width: 46%;
+  text-align: right;
+  line-height: 1.5;
+}
+.edge-warn {
+  padding: 8px 10px;
+  margin-bottom: 8px;
+  border-radius: 9px;
+  font-size: 12.5px;
+  line-height: 1.7;
+  color: #ffcf8a;
+  background: rgba(224, 169, 74, 0.1);
+  border: 1px solid rgba(224, 169, 74, 0.3);
+}
+.pending {
+  padding: 12px 14px;
+  margin-bottom: 14px;
+  border-radius: 13px;
+  background: rgba(224, 169, 74, 0.09);
+  border: 1px solid rgba(224, 169, 74, 0.26);
+}
+.pending-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #e0a94a;
+  margin-bottom: 10px;
+}
+.pending-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 10px;
+  border-radius: 9px;
+  background: rgba(13, 18, 22, 0.45);
+  margin-bottom: 6px;
+}
+.pending-row:last-child {
+  margin-bottom: 0;
+}
+.pending-row .info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.pending-row .nm {
+  font-size: 13px;
+  color: #e2ecf1;
+  font-weight: 500;
+}
+.pending-row .sub {
+  font-size: 11.5px;
+  color: #8b9aa5;
+}
+.summary {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.table-wrap {
+  padding: 6px 6px 2px;
+  overflow: hidden;
+}
+:deep(.dev-cell) {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  min-width: 0;
+}
+:deep(.dev-cell .nm) {
+  color: #e2ecf1;
+  font-weight: 500;
+}
+:deep(.dev-cell .sub) {
+  font-size: 11.5px;
+  color: #74838e;
+}
+</style>

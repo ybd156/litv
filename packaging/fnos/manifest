@@ -1,0 +1,47 @@
+# ============================================================================
+# LITV 飞牛 fnOS 应用清单
+# 格式：无扩展名的 key = value 文本（不是 YAML/TOML）。
+# 说明：fnpack 1.2.3 会原样保留注释与未识别的 key（仅校验 platform / appname /
+#       desktop_applaunchname / ui 入口名等少数字段），因此这里可以写注释。
+#       checksum 由 fnpack build 自动追加（= md5(app.tgz)），不要手写。
+# ============================================================================
+
+appname               = litv
+version               = 0.1.19
+
+# 显示名/描述走 i18n 变量：实际文本来自 i18n/zh-CN、i18n/en-US 的 [common] 段。
+# 注意：fnpack 不会校验这里引用的 key 是否存在（实测），漏写会在应用中心显示成
+# 字面量 "${common.displayName}"。build.sh 里加了一道引用完整性检查来兜底。
+display_name          = ${common.displayName}
+desc                  = ${common.desc}
+
+# 架构：x86 / arm / loongarch / risc-v / all
+# 取 x86 而不是 all：包里带的是架构相关的 Go 二进制，官方明确 all 仅用于"无架构相关
+# 二进制"的包。要出 ARM 包请用 ./build.sh --arch arm（会把本行改写为 arm）。
+platform              = x86
+
+source                = thirdparty
+# 开发者：个人 GitHub 主页
+maintainer            = ybd156
+maintainer_url        = https://github.com/ybd156
+# 发布者：本项目 GitHub 主页
+distributor           = ybd156
+distributor_url       = https://github.com/ybd156/litv
+
+# 统一网关依赖的系统版本量级（官方 Native 示例与社区生产包同款取值）。
+os_min_version        = 1.1.3100
+
+# 桌面入口：app/ui 目录 + 默认打开哪个入口 ID（必须与 app/ui/config 中的 key 完全一致，
+# 且必须以 appname 开头——这条是 fnpack 的硬校验，实测报错原文：
+#   The entry name "xxx" in "app/ui/config" should start with litv）
+desktop_uidir         = ui
+desktop_applaunchname = litv.main
+
+# 显示启停按钮与运行状态（常驻服务要 true）
+ctl_stop              = true
+
+# 走统一网关时不监听 manifest 声明的固定端口，因此关掉框架的端口预检查；
+# 我们自己的 TCP 端口由 cmd/main 自行探测并只做告警，不作为启动失败条件。
+checkport             = false
+
+changelog             = 首个版本：统一网关 + 独立 TCP 端口双入口，SQLite 存储。

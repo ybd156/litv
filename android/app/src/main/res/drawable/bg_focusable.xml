@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 焦点 / 选中态。
+     TV 上只靠颜色微调在远处根本分辨不出，所以要"看得见"的反馈。
+
+     ★ 选中态（state_selected）排最前，并且和焦点态**长得不一样**：
+       选中 = 青色实底（参考常见 IPTV 客户端的做法，一眼能看出"当前是哪个"）
+       焦点 = 描边（不填充，表示"光标在这")
+     以前这里没有 selected 态，频道面板左栏「焦点在『全部』、选中的却是
+     『央视-MCP』」看着自相矛盾——选中根本没有背景，只有文字变色。
+
+     两者叠加时（焦点正好落在选中项）会同时看到实底和描边，语义清楚。 -->
+<selector xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:state_selected="true">
+        <shape android:shape="rectangle">
+            <solid android:color="@color/select_bg" />
+            <corners android:radius="10dp" />
+            <stroke android:width="1dp" android:color="@android:color/white" />
+        </shape>
+    </item>
+    <item android:state_focused="true">
+        <shape android:shape="rectangle">
+            <solid android:color="@color/bg_card" />
+            <corners android:radius="10dp" />
+            <stroke android:width="3dp" android:color="@color/focus_stroke" />
+        </shape>
+    </item>
+    <item android:state_pressed="true">
+        <shape android:shape="rectangle">
+            <solid android:color="@color/accent_dim" />
+            <corners android:radius="10dp" />
+        </shape>
+    </item>
+    <item>
+        <shape android:shape="rectangle">
+            <solid android:color="@color/bg_card" />
+            <corners android:radius="10dp" />
+        </shape>
+    </item>
+</selector>

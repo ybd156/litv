@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  底部菜单栏（播放 / 频道 / 遥控器 / 设置）。
+
+  抽成 include 是为了让首页、遥控器页、设置页**长得一样**——
+  之前只有首页有，遥控器和设置打开就是"另一个页面"，用户会懵。
+-->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:background="@color/bg_panel"
+    android:orientation="horizontal"
+    android:paddingVertical="10dp">
+
+    <TextView
+        android:id="@+id/tabPlay"
+        style="@style/PhoneTab"
+        android:text="播放" />
+
+    <TextView
+        android:id="@+id/tabChannel"
+        style="@style/PhoneTab"
+        android:text="频道" />
+
+    <TextView
+        android:id="@+id/tabRemote"
+        style="@style/PhoneTab"
+        android:text="遥控器" />
+
+    <TextView
+        android:id="@+id/tabSettings"
+        style="@style/PhoneTab"
+        android:text="设置" />
+</LinearLayout>

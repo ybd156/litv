@@ -1,0 +1,159 @@
+#!/bin/bash
+# =============================================================================
+# 配置变更后（应用设置页提交后执行）
+#
+# 向导字段（wizard/config）：
+#   wizard_port              新端口，留空表示不改
+#   wizard_admin_password    新管理员密码，留空表示不改
+#   wizard_transcode_enabled 是否开启转码（switch，值 "true"/"false"）
+#
+# 处理方式：改文件 → 写 server_port → restart 服务。
+# 用 restart 而不是 reload：服务端不保证实现了 SIGHUP 重载，restart 才能确保生效。
+# 注意 main 脚本的位置是 cmd/main（和本脚本同目录），不是 target/cmd/main。
+# =============================================================================
+
+set -u
+umask 022
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+APP_ROOT="$(dirname "$SCRIPT_DIR")"
+
+if [ -z "${TRIM_APPDEST:-}" ]; then
+    if [ -d "${APP_ROOT}/app" ]; then TRIM_APPDEST="${APP_ROOT}/app"; else TRIM_APPDEST="/var/apps/litv/target"; fi
+fi
+if [ -z "${TRIM_PKGVAR:-}" ]; then
+    if [ -d "${APP_ROOT}/var" ]; then TRIM_PKGVAR="${APP_ROOT}/var"; else TRIM_PKGVAR="/var/apps/litv/var"; fi
+fi
+if [ -z "${TRIM_PKGETC:-}" ]; then
+    if [ -d "${APP_ROOT}/etc" ]; then TRIM_PKGETC="${APP_ROOT}/etc"; else TRIM_PKGETC="/var/apps/litv/etc"; fi
+fi
+
+CONFIG="${TRIM_PKGETC}/config.yaml"
+PORT_FILE="${TRIM_PKGVAR}/server_port"
+
+log() { echo "[config_callback] $1"; }
+
+# 整行替换（保留 @@ 标记，保证可重复执行）；用 ENVIRON 传值避免特殊字符被解释
+replace_line_marked() {
+    local file="$1" marker="$2" newline="$3"
+    REPL="${newline}" awk -v m="${marker}" '
+        index($0, m) { print ENVIRON["REPL"]; next }
+        { print }
+    ' "${file}" >"${file}.tmp" || return 1
+    mv -f "${file}.tmp" "${file}"
+}
+
+# yaml_dq() —— 把任意字符串编码成可安全嵌入 YAML 双引号标量的形式。
+#
+# R18：旧实现把密码直接塞进引号里。合法密码只要含一个 " 或 \，
+# 写出的 YAML 就变成另一个值，甚至解析失败、服务起不来——
+# 用户看到的是"改个密码就装不上"，而且要到重启才发现。
+#
+# 双引号标量里 \ 和 " 必须转义；换行会让标量跨行，直接拒绝。
+yaml_dq() {
+    local s="$1"
+    case "${s}" in
+        *$'\n'*) return 1 ;;
+    esac
+    local out="" i=0 n=${#s} ch
+    while [ "$i" -lt "$n" ]; do
+        ch="${s:$i:1}"
+        case "${ch}" in
+            \\) out="${out}\\\\" ;;
+            \")  out="${out}\\\"" ;;
+            *)  out="${out}${ch}" ;;
+        esac
+        i=$((i + 1))
+    done
+    printf '"%s"' "${out}"
+}
+
+if [ ! -f "${CONFIG}" ]; then
+    echo "配置文件不存在: ${CONFIG}，请重新安装应用" >"${TRIM_TEMP_LOGFILE:-/dev/null}" 2>/dev/null || true
+    log "错误: 配置文件不存在 ${CONFIG}"
+    exit 1
+fi
+
+CHANGED=0
+
+# ---- 1. 端口 ----
+NEW_PORT="$(printf '%s' "${wizard_port:-}" | tr -dc '0-9')"
+if [ -n "${NEW_PORT}" ]; then
+    if [ "${NEW_PORT}" -lt 1 ] || [ "${NEW_PORT}" -gt 65535 ]; then
+        echo "端口 ${NEW_PORT} 非法（1-65535）" >"${TRIM_TEMP_LOGFILE:-/dev/null}" 2>/dev/null || true
+        log "端口 ${NEW_PORT} 非法，未修改"
+        exit 1
+    fi
+    if replace_line_marked "${CONFIG}" '@@SERVER_PORT@@' "  port: ${NEW_PORT}                        # @@SERVER_PORT@@"; then
+        printf '%s' "${NEW_PORT}" >"${PORT_FILE}" 2>/dev/null || true
+        log "端口已改为 ${NEW_PORT}"
+        CHANGED=1
+    else
+        log "警告: 端口写入失败（模板缺少 @@SERVER_PORT@@ 标记）"
+    fi
+else
+    log "端口未填写，保持 $([ -f "${PORT_FILE}" ] && head -n1 "${PORT_FILE}" || echo 28027)"
+fi
+
+# ---- 2. 管理员密码 ----
+NEW_PWD="${wizard_admin_password:-}"
+case "${NEW_PWD}" in
+    *$'\n'*)
+        echo "管理员密码不能包含换行符" >"${TRIM_TEMP_LOGFILE:-/dev/null}" 2>/dev/null || true
+        log "密码含换行符，拒绝"
+        exit 1
+        ;;
+esac
+if [ -n "${NEW_PWD}" ]; then
+    # R18：编码后再写，避免 " 与 \ 破坏 YAML
+    if ! PWD_ENC="$(yaml_dq "${NEW_PWD}")"; then
+        log "密码含换行符，拒绝"
+        exit 1
+    fi
+    if replace_line_marked "${CONFIG}" '@@ADMIN_PASSWORD@@' "  admin_password: ${PWD_ENC}     # @@ADMIN_PASSWORD@@"; then
+        log "管理员密码已更新（长度 ${#NEW_PWD}）"
+        # 用户已自行设置密码，初始随机密码文件就没用了
+        rm -f "${TRIM_PKGVAR}/initial_admin_password" 2>/dev/null || true
+        CHANGED=1
+    else
+        log "警告: 密码写入失败（模板缺少 @@ADMIN_PASSWORD@@ 标记）"
+    fi
+else
+    log "密码未填写，保持不变"
+fi
+
+# ---- 3. 转码开关 ----
+TC="${wizard_transcode_enabled:-}"
+if [ -n "${TC}" ]; then
+    case "${TC}" in
+        true | 1 | yes | on) TC_VAL="true" ;;
+        false | 0 | no | off) TC_VAL="false" ;;
+        *) TC_VAL="" ;;
+    esac
+    if [ -n "${TC_VAL}" ]; then
+        if replace_line_marked "${CONFIG}" '@@TRANSCODE_ENABLED@@' "  enabled: ${TC_VAL}                          # @@TRANSCODE_ENABLED@@"; then
+            log "转码开关 = ${TC_VAL}"
+            CHANGED=1
+        else
+            log "警告: 转码开关写入失败（模板缺少 @@TRANSCODE_ENABLED@@ 标记）"
+        fi
+    else
+        log "转码开关值无法识别: ${TC}，忽略"
+    fi
+else
+    log "转码开关未提交，保持不变"
+fi
+
+# ---- 4. 重启服务 ----
+if [ "${CHANGED}" = "1" ]; then
+    log "配置已变更，重启服务以生效"
+    if [ -f "${SCRIPT_DIR}/main" ]; then
+        bash "${SCRIPT_DIR}/main" restart || log "警告: 重启失败，请在应用中心手动启动"
+    else
+        log "警告: 未找到 ${SCRIPT_DIR}/main，请手动重启"
+    fi
+else
+    log "没有检测到有效修改，不重启"
+fi
+
+exit 0

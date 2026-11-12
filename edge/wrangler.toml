@@ -1,0 +1,59 @@
+name = "litv-edge"
+main = "src/index.ts"
+compatibility_date = "2026-11-01"
+
+# 只保留首页占位；playlist.m3u 由 CI 生成，不入库。
+[assets]
+directory = "./public"
+binding = "ASSETS"
+# ★ 必须关掉自动 html 处理。
+#
+# 默认行为会把 `/` 映射到 index.html、把 `/admin.html` 307 到 `/admin`，
+# 而且这些都在**跑 Worker 之前**完成——于是入口控制（ADMIN_PATH）对 `/`
+# 完全失效：配了入口之后根路径照样能打开管理台。
+# 线上实测确认过：`/` 返回 200（Vue 的 index.html），`/admin.html` 返回 307。
+#
+# 关掉之后 assets 只按**精确路径**匹配文件，其余全部落到 Worker，
+# 入口判断才有意义。
+html_handling = "none"
+
+# 哪些路径要先过 Worker。
+#
+# - /api/*            全部接口
+# - /playlist.m3u     里面是上游地址，必须先鉴权
+# - / /index.html /admin.html
+#                     管理台首页。**必须列进来**：Cloudflare 的 assets 对匹配到的
+#                     文件会直接返回、不跑 Worker，而入口控制（ADMIN_PATH）正是
+#                     在 Worker 里判断的——不列这三条，配了自定义入口之后根路径
+#                     照样能打开管理台，等于白配。
+#                     ADMIN_PATH 为空时 Worker 会把它们原样转给 assets，
+#                     多一次函数调用，静态资源本身不计费。
+run_worker_first = ["/api/*", "/playlist.m3u", "/", "/index.html", "/admin.html"]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "litv-edge"
+# 这是标识不是凭据：没有 CLOUDFLARE_API_TOKEN 用不了它，所以可以提交进仓库。
+# 建库：Cloudflare 控制台 → Workers & Pages → D1 → Create database
+database_id = "66c1a87d-e266-4e32-ab45-d9f4bf8fa527"
+
+[vars]
+SERVER_NAME = "LITV Edge"
+# 「立即重建」要 dispatch 的仓库 / 工作流 / 分支。
+# 正常走 CI 部署时，工作流会用 --var 覆盖成真实仓库，所以 fork 不用改这里；
+# 这两行是给「本地手动 wrangler deploy」兜底的。
+GITHUB_REPO = "ybd156/litv"
+GITHUB_WORKFLOW = "edge-deploy.yml"
+GITHUB_REF = "main"
+
+# 口令通过 secret 注入，不要写在这里：
+#   npx wrangler secret put BIND_CODE
+# 用户在电视绑定页的"绑定码"里填的就是它。
+#
+# 管理台入口路径（可选，留空 = 根路径即入口）：
+#   npx wrangler secret put ADMIN_PATH
+# 填了之后只有 /<这个名字> 能打开管理台，根路径与 /admin.html 一律 404。
+# 只接受字母/数字/下划线/短横线（单段），其它值会被忽略。
+#
+# 管理台口令（必须配，否则登不进去；绑定码不能当口令用）：
+#   npx wrangler secret put ADMIN_PASSWORD

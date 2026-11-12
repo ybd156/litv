@@ -1,0 +1,255 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/bg"
+    android:fillViewport="true">
+
+    <!-- 键盘弹出时（adjustResize 缩小窗口）靠这层滚动，避免标题被顶出屏幕 -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:gravity="center"
+        android:orientation="vertical"
+        android:padding="60dp">
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="@string/bind_title"
+        android:textColor="@color/text_primary"
+        android:textSize="30sp"
+        android:textStyle="bold" />
+
+    <TextView
+        android:id="@+id/hint"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="12dp"
+        android:text="@string/bind_hint"
+        android:textColor="@color/text_secondary"
+        android:textSize="16sp" />
+
+    <!-- 服务器地址：4 段 IP + 端口分框
+         电视遥控器输完整地址太痛苦（要反复切数字/符号），拆成框后可以自动跳格 -->
+    <LinearLayout
+        android:layout_width="640dp"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="32dp"
+        android:orientation="vertical">
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="@string/bind_server_label"
+            android:textColor="@color/text_secondary"
+            android:textSize="16sp" />
+
+        <LinearLayout
+            android:id="@+id/ipRow"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="10dp"
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
+
+            <EditText
+            android:focusable="true"
+            android:focusableInTouchMode="true"
+                android:id="@+id/ip1"
+                style="@style/AddrBox"
+                android:maxLength="3"
+                android:nextFocusUp="@+id/ip1"
+                android:nextFocusDown="@+id/codeInput" />
+
+            <TextView style="@style/AddrDot" android:text="." />
+
+            <EditText
+            android:focusable="true"
+            android:focusableInTouchMode="true"
+                android:id="@+id/ip2"
+                style="@style/AddrBox"
+                android:maxLength="3" />
+
+            <TextView style="@style/AddrDot" android:text="." />
+
+            <EditText
+            android:focusable="true"
+            android:focusableInTouchMode="true"
+                android:id="@+id/ip3"
+                style="@style/AddrBox"
+                android:maxLength="3" />
+
+            <TextView style="@style/AddrDot" android:text="." />
+
+            <EditText
+            android:focusable="true"
+            android:focusableInTouchMode="true"
+                android:id="@+id/ip4"
+                style="@style/AddrBox"
+                android:maxLength="3" />
+
+            <TextView style="@style/AddrDot" android:text=":" />
+
+            <EditText
+            android:focusable="true"
+            android:focusableInTouchMode="true"
+                android:id="@+id/portInput"
+                style="@style/AddrBox"
+                android:layout_width="88dp"
+                android:layout_weight="0"
+                android:maxLength="5" />
+        </LinearLayout>
+
+        <TextView
+            android:id="@+id/addrHint"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="端口默认 28027。若服务端提示端口被占用，用管理台概览页显示的实际端口。"
+            android:textColor="#66FFFFFF"
+            android:textSize="17sp" />
+
+        <!-- 域名模式：DDNS / 反向代理进来的必须能填域名，分框只收数字 -->
+        <EditText
+            android:focusable="true"
+            android:focusableInTouchMode="true"
+            android:id="@+id/domainInput"
+            android:minHeight="48dp"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="10dp"
+            android:autofillHints="none"
+            android:background="@drawable/bg_card"
+            android:hint="tv.example.com 或 tv.example.com:28027"
+            android:inputType="textUri"
+            android:paddingHorizontal="14dp"
+            android:paddingVertical="12dp"
+            android:singleLine="true"
+            android:nextFocusDown="@+id/codeInput"
+            android:imeOptions="actionNext"
+            android:textColor="@color/text_primary"
+            android:textSize="17sp"
+            android:visibility="gone" />
+
+                <TextView
+            android:id="@+id/btnScheme"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:paddingVertical="8dp"
+            android:paddingEnd="16dp"
+            android:text="协议：HTTPS"
+            android:textColor="@color/accent"
+            android:textSize="13sp" />
+
+<TextView
+            android:id="@+id/btnToggleHost"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:paddingVertical="4dp"
+            android:text="用域名访问"
+            android:textColor="@color/accent"
+            android:textSize="14sp" />
+    </LinearLayout>
+
+    <LinearLayout
+        android:layout_width="640dp"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="16dp"
+        android:gravity="center_vertical"
+        android:orientation="horizontal">
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="@string/bind_code_label"
+            android:textColor="@color/text_secondary"
+            android:textSize="16sp" />
+
+        <EditText
+            android:focusable="true"
+            android:focusableInTouchMode="true"
+            android:id="@+id/codeInput"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="16dp"
+            android:layout_weight="1"
+            android:minHeight="48dp"
+            android:paddingVertical="12dp"
+            android:gravity="center_vertical"
+            android:hint="6 位数字（可留空，去管理台批准）"
+            android:inputType="number"
+            android:maxLength="6"
+            android:singleLine="true"
+            android:nextFocusDown="@+id/bindButton"
+            android:nextFocusUp="@+id/domainInput"
+            android:imeOptions="actionDone"
+            android:textColor="@color/text_primary"
+            android:textSize="18sp"
+            android:autofillHints="none" />
+    </LinearLayout>
+
+    <Button
+        android:id="@+id/bindButton"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="28dp"
+        android:nextFocusUp="@+id/codeInput"
+        android:background="@drawable/bg_focusable"
+        android:paddingHorizontal="48dp"
+        android:paddingVertical="14dp"
+        android:text="@string/bind_action"
+        android:textColor="@color/text_primary"
+        android:textSize="18sp" />
+
+    <!-- 遥控操作提示。
+         电视上没有鼠标，第一次用的人不知道方向键能走、OK 能弹键盘，
+         会以为这页只能看。一行小字比什么引导页都省事。 -->
+    <TextView
+        android:id="@+id/remoteHint"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="14dp"
+        android:text="遥控：方向键移动 · OK 弹出键盘 · 输完按「确定」"
+        android:textColor="@color/text_secondary"
+        android:textSize="15sp" />
+
+    <TextView
+        android:id="@+id/status"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="20dp"
+        android:textColor="@color/accent"
+        android:textSize="17sp" />
+
+    <!-- 手机扫码区：扫这个码直接打开管理台，省去在电视上输入地址 -->
+    <LinearLayout
+        android:id="@+id/qrBox"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="18dp"
+        android:gravity="center_horizontal"
+        android:orientation="vertical"
+        android:visibility="gone">
+
+        <ImageView
+            android:id="@+id/qrImage"
+            android:layout_width="150dp"
+            android:layout_height="150dp"
+            android:background="@android:color/white"
+            android:contentDescription="管理台二维码"
+            android:padding="6dp"
+            android:scaleType="fitCenter" />
+
+        <TextView
+            android:id="@+id/qrHint"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="手机扫码 → 管理台「终端设备」→ 批准这台电视"
+            android:textColor="@color/text_secondary"
+            android:textSize="17sp" />
+    </LinearLayout>
+</LinearLayout>
+</ScrollView>

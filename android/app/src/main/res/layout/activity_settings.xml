@@ -1,0 +1,331 @@
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/bg"
+    android:orientation="vertical">
+<ScrollView
+    android:layout_width="match_parent"
+    android:layout_height="0dp"
+    android:layout_weight="1">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="@dimen/screen_padding">
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="设置"
+            android:textColor="@color/text_primary"
+            android:textSize="30sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/settingsHint"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:text="用遥控器上下移动，左右键修改，OK 确认"
+            android:textColor="@color/text_secondary"
+            android:textSize="16sp" />
+
+        <!-- ============ 播放 ============ -->
+        <TextView
+            style="@style/SectionTitle"
+            android:text="播放" />
+
+        <LinearLayout
+            android:id="@+id/rowEngine"
+            style="@style/SettingRow">
+
+            <TextView
+                style="@style/SettingLabel"
+                android:text="播放内核" />
+
+            <TextView
+                android:id="@+id/valueEngine"
+                style="@style/SettingValue" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:id="@+id/rowDecode"
+            style="@style/SettingRow">
+
+            <TextView
+                style="@style/SettingLabel"
+                android:text="解码方式" />
+
+            <TextView
+                android:id="@+id/valueDecode"
+                style="@style/SettingValue" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:id="@+id/rowBuffer"
+            style="@style/SettingRow">
+
+            <TextView
+                style="@style/SettingLabel"
+                android:text="网络缓冲" />
+
+            <TextView
+                android:id="@+id/valueBuffer"
+                style="@style/SettingValue" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:id="@+id/rowAspect"
+            style="@style/SettingRow">
+
+            <TextView
+                style="@style/SettingLabel"
+                android:text="画面比例" />
+
+            <TextView
+                android:id="@+id/valueAspect"
+                style="@style/SettingValue" />
+        </LinearLayout>
+
+        <!-- ============ 操作 ============ -->
+        <TextView
+            style="@style/SectionTitle"
+            android:text="操作习惯" />
+
+        <LinearLayout
+            android:id="@+id/rowReverse"
+            style="@style/SettingRow">
+
+            <TextView
+                style="@style/SettingLabel"
+                android:text="换台方向反转" />
+
+            <TextView
+                android:id="@+id/valueReverse"
+                style="@style/SettingValue" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:id="@+id/rowAv3a"
+            style="@style/SettingRow">
+
+            <TextView
+                style="@style/SettingLabel"
+                android:text="AV3A 音频解码" />
+
+            <TextView
+                android:id="@+id/valueAv3a"
+                style="@style/SettingValue" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:id="@+id/rowAutoPlay"
+            style="@style/SettingRow">
+
+            <TextView
+                style="@style/SettingLabel"
+                android:text="开机自动播放上次频道" />
+
+            <TextView
+                android:id="@+id/valueAutoPlay"
+                style="@style/SettingValue" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:id="@+id/rowNumberTimeout"
+            style="@style/SettingRow">
+
+            <TextView
+                style="@style/SettingLabel"
+                android:text="数字跳台等待" />
+
+            <TextView
+                android:id="@+id/valueNumberTimeout"
+                style="@style/SettingValue" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:id="@+id/rowUiMode"
+            style="@style/SettingRow">
+
+            <TextView
+                style="@style/SettingLabel"
+                android:text="数字跳台等待" />
+
+            <TextView
+                android:id="@+id/valueUiMode"
+                style="@style/SettingValue" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:id="@+id/rowStartTimeout"
+            style="@style/SettingRow">
+
+            <TextView
+                style="@style/SettingLabel"
+                android:text="起播超时" />
+
+            <TextView
+                android:id="@+id/valueStartTimeout"
+                style="@style/SettingValue" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:id="@+id/rowRetry"
+            style="@style/SettingRow">
+
+            <TextView
+                style="@style/SettingLabel"
+                android:text="超时重试次数" />
+
+            <TextView
+                android:id="@+id/valueRetry"
+                style="@style/SettingValue" />
+        </LinearLayout>
+
+        <!-- ============ 网络（加密 DNS / 直连策略） ============ -->
+        <TextView
+            style="@style/SectionTitle"
+            android:text="网络" />
+
+        <LinearLayout
+            android:id="@+id/rowDoh"
+            style="@style/SettingRow">
+
+            <TextView
+                style="@style/SettingLabel"
+                android:text="加密 DNS（DoH）" />
+
+            <TextView
+                android:id="@+id/valueDoh"
+                style="@style/SettingValue" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:id="@+id/rowDohProvider"
+            style="@style/SettingRow">
+
+            <TextView
+                style="@style/SettingLabel"
+                android:text="DoH 服务商" />
+
+            <TextView
+                android:id="@+id/valueDohProvider"
+                style="@style/SettingValue" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:id="@+id/rowAutoRelay"
+            style="@style/SettingRow">
+
+            <TextView
+                style="@style/SettingLabel"
+                android:text="直连失败时自动改用中转" />
+
+            <TextView
+                android:id="@+id/valueAutoRelay"
+                style="@style/SettingValue" />
+        </LinearLayout>
+
+        <!-- ============ 界面 ============ -->
+        <TextView
+            style="@style/SectionTitle"
+            android:text="界面" />
+
+        <LinearLayout
+            android:id="@+id/rowUiScale"
+            style="@style/SettingRow">
+
+            <TextView
+                style="@style/SettingLabel"
+                android:text="界面缩放" />
+
+            <TextView
+                android:id="@+id/valueUiScale"
+                style="@style/SettingValue" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:id="@+id/rowShowStatus"
+            style="@style/SettingRow">
+
+            <TextView
+                style="@style/SettingLabel"
+                android:text="显示播放状态叠加" />
+
+            <TextView
+                android:id="@+id/valueShowStatus"
+                style="@style/SettingValue" />
+        </LinearLayout>
+
+        <!-- ============ 关于 ============ -->
+        <TextView
+            style="@style/SectionTitle"
+            android:text="关于" />
+
+        <LinearLayout
+            android:id="@+id/rowKeymap"
+            style="@style/SettingRow">
+
+            <TextView
+                style="@style/SettingLabel"
+                android:text="遥控器操作说明" />
+
+            <TextView
+                android:id="@+id/valueKeymap"
+                style="@style/SettingValue" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:id="@+id/rowDevice"
+            style="@style/SettingRow">
+
+            <TextView
+                style="@style/SettingLabel"
+                android:text="本机信息" />
+
+            <TextView
+                android:id="@+id/valueDevice"
+                style="@style/SettingValue" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:id="@+id/rowServer"
+            style="@style/SettingRow">
+
+            <TextView
+                style="@style/SettingLabel"
+                android:text="服务器" />
+
+            <TextView
+                android:id="@+id/valueServer"
+                style="@style/SettingValue" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:id="@+id/rowUnbind"
+            style="@style/SettingRow">
+
+            <TextView
+                style="@style/SettingLabel"
+                android:text="解绑本机（需重新绑定）" />
+
+            <TextView
+                android:id="@+id/valueUnbind"
+                style="@style/SettingValue"
+                android:text="按 OK 执行" />
+        </LinearLayout>
+
+        <TextView
+            android:id="@+id/status"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="24dp"
+            android:textColor="@color/accent"
+            android:textSize="16sp" />
+    </LinearLayout>
+</ScrollView>
+
+    <include layout="@layout/view_bottom_tabs" />
+</LinearLayout>

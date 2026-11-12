@@ -1,0 +1,124 @@
+# Dependencies
+**/node_modules/
+
+# Build outputs
+build/apk-re/
+**/dist/
+**/dist-mock/
+# 只忽略真正的构建产物目录；build/test/ 里是版本管理的脚本
+build/
+**/build/
+!build/test/
+!build/test/**
+**/generated/
+**/intermediates/
+**/.gradle/
+**/.kotlin/
+coverage/
+.cache/
+packaging/fnos/.build/
+packaging/fnos/dist/
+packaging/fnos/app/server/litvd_*
+server/litvd
+*.fpk
+*.apk
+*.aab
+*.ipa
+*.so
+# 例外：jniLibs 里的预编译库是**必需的构建输入**，必须进仓库。
+# 之前这里把整个目录忽略了，导致 CI 从 git 克隆构建时拿不到任何 .so，
+# 正式包里 libmpv/libplayer/libav* 全部缺失 —— 表现为 mpv 内核"未打包"，
+# 少了一个兜底内核。本地构建有这些文件，所以一直没发现。
+!android/app/src/main/jniLibs/**/*.so
+*.db
+*.log
+
+# Local configuration and credentials
+.env
+.env.*
+!.env.example
+local.properties
+android/local.properties
+*.jks
+*.keystore
+# 例外：android/keystore/litv-release.jks 是历史遗留的**公开**自签密钥，
+# 已经随所有发布过的 APK 一起分发。删掉它会让老用户无法覆盖升级
+# （Android 拒绝用不同签名覆盖安装），所以保留。
+# 但这只是"能升级"，不是"能证明来源"：自己的发布密钥请走 CI secrets
+# （ANDROID_KEYSTORE_BASE64 等），**不要**再往仓库里提交新的 .jks。
+!android/keystore/litv-release.jks
+
+# IDE and operating system
+.idea/
+.vscode/
+*.iml
+.DS_Store
+Thumbs.db
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+.review-artifacts/
+
+# 本机的抓包截图与解包目录（排查播放问题时留下的），不是源码。
+# 曾经一次 git add -A 就会把 release APK 与真实频道截图一起提进仓库。
+/.d/
+/.*.jpg
+
+# Windows 保留设备名：在 Git Bash 里重定向到 NUL 会真的创建一个文件，
+# 而且 git 每次都会报 "short read while indexing NUL"。它不是源码。
+NUL
+nul
+
+# Third-party reference code used only for local research
+ref/
+
+# Android native libraries：**不要忽略**。
+# 这些 .so 不是本地构建产物，是打包时必须带上的预编译库。
+# （曾经忽略过，直接导致正式版 APK 缺 mpv/ffmpeg，见上面 *.so 处的说明）
+
+# iOS
+ios/build/
+ios/LITV.xcodeproj/
+ios/LITVApp/Info.plist
+ios/*.ipa
+ios/Payload/
+ios/Pods/
+ios/LITV.xcworkspace/
+ios/Podfile.lock
+
+# Python 编译缓存
+__pycache__/
+*.pyc
+
+# 本机诊断/构建临时产物（不要进仓库：体积大，且含本机路径）
+.apk.zip
+.apkout/
+.getapk.sh
+.watch.sh
+.apkflow.sh
+.art.json
+.run.json
+.anim*.jpg
+.an[0-9]*.png
+.bn[0-9]*.png
+.q[0-9]*.png
+# 真机走查的临时产物（截图 / uiautomator dump）
+.ui*.png
+.e[0-9]*.png
+.an[0-9]*.png
+.bn[0-9]*.png
+.o[0-9]*.png
+.*.xml
+*.cjs
+
+# 临时调试残留（曾误提交 .loc/.a.json/.r.json/.rid/.sz 与 37 张截图）
+.*.json
+.loc
+.rid
+.sz
+.bc.tmp
+.dl*.cjs
+.emu*.log
+*.xcresult

@@ -1,0 +1,8 @@
+{
+    "defaults": {
+        "run-as": "package"
+    },
+    "username": "litv",
+    "groupname": "litv",
+    "join-groups": ["video", "render"]
+}

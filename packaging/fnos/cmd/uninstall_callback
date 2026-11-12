@@ -1,0 +1,170 @@
+#!/bin/bash
+# =============================================================================
+# 卸载后清理
+#
+# 用户选择来自 wizard/uninstall 的 wizard_data_action：
+#   keep   —— 保留数据库/配置/媒体库，方便重装恢复（默认）
+#   delete —— 彻底删除
+#
+# 安全红线：绝不 rm -rf 一个"可能指向用户整个磁盘"的路径。
+# 媒体库根目录来自向导输入，卸载时先过一遍白名单校验，宁可少删也不误删。
+#
+# 2026-11-12 加固（评审项 M01）：
+#   1. 所有路径先 canonicalize（解析软链接与 ..），校验的是真实路径
+#   2. 裸的存储空间根（/vol1、/volume1）单独拒；不再用 /vol* 前缀通配
+#      ——那会把 /vol1/media/xxx 这类合法子目录一起误拒
+#   3. 应用自有根之外的目录，必须存在 .litv-owned 标记才自动删；
+#      证明不了所有权就跳过并写清日志
+# =============================================================================
+
+set -u
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+APP_ROOT="$(dirname "$SCRIPT_DIR")"
+
+if [ -z "${TRIM_PKGVAR:-}" ]; then
+    if [ -d "${APP_ROOT}/var" ]; then TRIM_PKGVAR="${APP_ROOT}/var"; else TRIM_PKGVAR="/var/apps/litv/var"; fi
+fi
+if [ -z "${TRIM_PKGETC:-}" ]; then
+    if [ -d "${APP_ROOT}/etc" ]; then TRIM_PKGETC="${APP_ROOT}/etc"; else TRIM_PKGETC="/var/apps/litv/etc"; fi
+fi
+
+log() { echo "[uninstall_callback] $1"; }
+
+DATA_PATH_FILE="${TRIM_PKGVAR}/wizard_data_path"
+ACTION="${wizard_data_action:-keep}"
+
+# 规范化路径：解析软链接和 ..。
+# 拿不到规范化结果就返回非 0——调用方按"拒绝删除"处理，宁可少删。
+canonical_path() {
+    local p="$1"
+    [ -n "${p}" ] || return 1
+    if command -v realpath >/dev/null 2>&1; then
+        realpath -m -- "${p}" 2>/dev/null && return 0
+    fi
+    return 1
+}
+
+# 本应用自有的根目录（规范化之后的形态）。
+#
+# 只有落在这些位置下的目录，才算"能证明是本应用的数据"。
+# 用户自选的媒体库可能在共享目录里（/vol1/media），那种必须另有标记。
+is_app_owned_root() {
+    local p="$1"
+    case "${p}" in
+        /vol[0-9]*/@appdata/litv*) return 0 ;;
+        /vol[0-9]*/@appstore/litv*) return 0 ;;
+        /volume[0-9]*/@appdata/litv*) return 0 ;;
+        /volume[0-9]*/@appstore/litv*) return 0 ;;
+        /var/apps/litv*) return 0 ;;
+    esac
+    return 1
+}
+
+# 判断一个路径是否可以安全递归删除：
+#   - 能规范化成绝对路径
+#   - 不能是根目录、系统关键目录、**裸的存储空间根**
+#   - 至少要有 2 层（/vol1/litv 这种）
+is_safe_to_remove() {
+    local raw="$1"
+    local p
+    p=$(canonical_path "${raw}") || return 1
+    case "${p}" in
+        /*) ;;
+        *) return 1 ;;
+    esac
+    # 去掉结尾斜杠，便于比较
+    p="${p%/}"
+    case "${p}" in
+        "" | / | /bin | /boot | /dev | /etc | /home | /lib | /lib64 | /mnt | /opt | \
+        /proc | /root | /run | /sbin | /srv | /sys | /tmp | /usr | /var)
+            return 1
+            ;;
+    esac
+    # 裸的存储空间根：/vol1、/volume2 这类**整盘**，删掉等于清空用户磁盘。
+    # 这里只拒"光秃秃的根"，/vol1/media/litv 这种子目录不受影响。
+    if printf '%s' "${p}" | grep -Eq '^/vol(ume)?[0-9]+$'; then
+        return 1
+    fi
+    # 至少两级：/vol1/litv 可以，/litv 不行
+    local depth
+    depth=$(printf '%s' "${p}" | awk -F/ '{print NF-1}')
+    [ "${depth}" -ge 2 ] || return 1
+    return 0
+}
+
+# 所有权证明：应用自有根，或者目录里有 .litv-owned 标记。
+# 证明不了就不自动删——用户填的可能是共享目录，删错是数据事故。
+proves_ownership() {
+    local dir="$1"
+    is_app_owned_root "${dir}" && return 0
+    [ -f "${dir}/.litv-owned" ] && return 0
+    return 1
+}
+
+# 清空一个目录的内容（不删目录本身）。
+# 为什么不是 rm -rf 目录：fnOS 上 ${TRIM_PKGVAR} 是软链接
+# （/var/apps/litv/var -> /vol1/@appdata/litv），对软链接 rm -rf 只会删链接，
+# 真正的数据反而留在存储空间里变成垃圾。清内容才是"删干净"。
+clear_dir_contents() {
+    local raw="$1"
+    local dir
+    dir=$(canonical_path "${raw}") || {
+        log "跳过清理（路径无法规范化）: ${raw}"
+        return 0
+    }
+    [ -n "${dir}" ] && [ -d "${dir}" ] || return 0
+    # 以前只判"路径里含 litv"，于是 /vol1/mylitvdata 这种共享目录也会被清空。
+    # 现在要求落在应用自有根下，或者带所有权标记。
+    if ! is_app_owned_root "${dir}" && [ ! -f "${dir}/.litv-owned" ]; then
+        log "跳过清理（不是应用自有目录，拒绝自动删除）: ${dir}"
+        return 0
+    fi
+    find "${dir}" -mindepth 1 -maxdepth 1 -exec rm -rf {} + 2>/dev/null \
+        || log "警告: 清理 ${dir} 时部分文件删除失败"
+}
+
+case "${ACTION}" in
+    delete)
+        log "用户选择：彻底删除数据"
+
+        # 1. 先删媒体库目录（用户自选路径，最危险的一步，所以带校验）
+        if [ -f "${DATA_PATH_FILE}" ]; then
+            LIB_ROOT=$(head -n 1 "${DATA_PATH_FILE}" 2>/dev/null | tr -d '\r\n')
+            LIB_CANON=""
+            if [ -n "${LIB_ROOT}" ]; then
+                LIB_CANON=$(canonical_path "${LIB_ROOT}") || LIB_CANON=""
+            fi
+            if [ -n "${LIB_CANON}" ] && [ -d "${LIB_CANON}" ]; then
+                if ! is_safe_to_remove "${LIB_CANON}"; then
+                    log "跳过删除（路径不在安全白名单内，请手工确认）: ${LIB_CANON}"
+                elif ! proves_ownership "${LIB_CANON}"; then
+                    log "跳过删除（无法证明是本应用创建的目录，请手工确认）: ${LIB_CANON}"
+                else
+                    log "删除媒体库目录: ${LIB_CANON}"
+                    rm -rf "${LIB_CANON}" 2>/dev/null || log "警告: ${LIB_CANON} 删除失败"
+                fi
+            elif [ -n "${LIB_ROOT}" ] && [ -z "${LIB_CANON}" ]; then
+                log "跳过删除（路径无法规范化，请手工确认）: ${LIB_ROOT}"
+            fi
+        fi
+
+        # 2. 运行时数据（数据库/缓存/转码临时文件）
+        log "清空运行时数据目录: ${TRIM_PKGVAR}"
+        clear_dir_contents "${TRIM_PKGVAR}"
+
+        # 3. 配置目录
+        log "清空配置目录: ${TRIM_PKGETC}"
+        clear_dir_contents "${TRIM_PKGETC}"
+        ;;
+    keep | *)
+        log "用户选择：保留数据 (${ACTION})"
+        # 只清运行时残留，数据库/配置/媒体库全部保留
+        rm -f "${TRIM_PKGVAR}/litvd.pid" "${TRIM_PKGVAR}/.litvd.lock" "${TRIM_PKGVAR}/.watchdog.state" 2>/dev/null || true
+        rm -f "${TRIM_PKGVAR}/litvd.log" "${TRIM_PKGVAR}/litvd.log.1" 2>/dev/null || true
+        log "已保留：${TRIM_PKGVAR}（数据库/缓存）与 ${TRIM_PKGETC}（配置）"
+        ;;
+esac
+
+log "卸载清理完成"
+exit 0

@@ -1,0 +1,9 @@
+# 打包中间产物与输出：都不进版本库
+.build/
+dist/
+*.fpk
+*.sha256
+
+# 二进制由 build.sh 生成（仓库只保留 app/server/.gitkeep）
+app/server/litvd_*
+app/server/litvd

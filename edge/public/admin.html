@@ -1,0 +1,1079 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LITV 边缘管理台</title>
+<!-- 内联 favicon：不加的话浏览器每次都会请求 /favicon.ico 拿 404，
+     控制台里一直挂一条红字，看着像坏了。data URI 不产生额外请求。 -->
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%231f3b8c'/%3E%3Ctext x='16' y='22' font-family='sans-serif' font-size='13' font-weight='700' fill='%23fff' text-anchor='middle'%3EL%3C/text%3E%3C/svg%3E">
+<style>
+  :root {
+    --bg: #14161a; --panel: #1c1f26; --panel2: #23272f; --line: #2e333d;
+    --text: #e6e8ec; --dim: #8b93a1; --accent: #4c8dff; --ok: #3fbf7f;
+    --warn: #e0a33e; --bad: #e35d5d;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 14px/1.6 system-ui, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  }
+  button, input, select { font: inherit; color: inherit; }
+  button {
+    background: var(--panel2); border: 1px solid var(--line); border-radius: 6px;
+    padding: 6px 12px; cursor: pointer;
+  }
+  button:hover { border-color: #3d4453; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button.ghost { background: transparent; }
+  button.danger { color: var(--bad); border-color: #4a2c2c; }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  input, select {
+    background: #12141a; border: 1px solid var(--line); border-radius: 6px; padding: 6px 10px;
+  }
+  input:focus, select:focus { outline: none; border-color: var(--accent); }
+
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 20px; }
+  .top { display: flex; align-items: center; gap: 12px; margin-bottom: 18px; }
+  .top h1 { font-size: 17px; margin: 0; font-weight: 600; }
+  .top .spacer { flex: 1; }
+
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px; margin-bottom: 18px; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; }
+  .card .n { font-size: 22px; font-weight: 600; }
+  .card .l { color: var(--dim); font-size: 12px; }
+
+  .tabs { display: flex; gap: 6px; margin-bottom: 14px; }
+  .tabs button.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+  .toolbar { display: flex; gap: 8px; padding: 12px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+  .toolbar input[type=search] { flex: 1; min-width: 160px; }
+
+  table { width: 100%; border-collapse: collapse; }
+  th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--line); }
+  th { color: var(--dim); font-weight: 500; font-size: 12px; background: #191c22; }
+  tr:hover td { background: #1a1e25; }
+  td.num { color: var(--dim); width: 60px; }
+  .tag { display: inline-block; padding: 1px 7px; border-radius: 4px; font-size: 12px; border: 1px solid var(--line); color: var(--dim); }
+  .tag.ok { color: var(--ok); border-color: #24513c; }
+  .tag.bad { color: var(--bad); border-color: #4a2c2c; }
+  .tag.warn { color: var(--warn); border-color: #4a3d24; }
+  .tag.manual { color: var(--accent); border-color: #24406b; }
+
+  .empty { padding: 28px; text-align: center; color: var(--dim); }
+
+  .drawer { position: fixed; inset: 0; background: #0009; display: flex; justify-content: flex-end; z-index: 20; }
+  .drawer .body { width: min(620px, 100%); background: var(--panel); height: 100%; overflow: auto; border-left: 1px solid var(--line); }
+  .drawer .head { display: flex; align-items: center; gap: 10px; padding: 14px 16px; border-bottom: 1px solid var(--line); position: sticky; top: 0; background: var(--panel); }
+  .drawer .head h2 { font-size: 15px; margin: 0; flex: 1; }
+
+  .stream { padding: 12px 16px; border-bottom: 1px solid var(--line); }
+  .stream .url { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12px; color: var(--dim); word-break: break-all; margin: 4px 0 8px; }
+  .stream .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+
+  .form { padding: 14px 16px; border-bottom: 1px solid var(--line); display: grid; gap: 8px; }
+  .form .line { display: flex; gap: 8px; flex-wrap: wrap; }
+  .form input { flex: 1; min-width: 140px; }
+
+  /* 登录页：照 admin/src/views/LoginView.vue 的设计做——
+     径向渐变背景 + 半透明玻璃卡片 + 品牌方块 + 主机名。 */
+  .login-page {
+    min-height: 100vh; display: flex; align-items: center; justify-content: center;
+    background: radial-gradient(1200px 600px at 50% -10%, #1b2a4a 0%, #0b0e11 60%);
+    padding: 24px;
+  }
+  .login-card {
+    width: 100%; max-width: 420px;
+    background: rgba(22, 27, 34, 0.72);
+    border: 1px solid #ffffff14; border-radius: 18px;
+    padding: 36px 32px 28px;
+    backdrop-filter: blur(14px);
+  }
+  .brand { text-align: center; margin-bottom: 26px; }
+  .mark {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 64px; height: 64px; border-radius: 16px;
+    background: linear-gradient(160deg, #1e3a8a, #0f1e3d);
+    color: #fff; font-weight: 800; font-size: 18px; letter-spacing: 1px;
+    margin-bottom: 12px;
+  }
+  .brand h1 { margin: 0; font-size: 20px; color: #e6edf3; font-weight: 600; }
+  .brand .host { margin: 6px 0 0; font-size: 13px; letter-spacing: 2px; color: #8b949e; }
+  .login-form { display: flex; flex-direction: column; gap: 14px; }
+  .login-form input[type="text"], .login-form input[type="password"] {
+    width: 100%; padding: 11px 14px; font-size: 15px; border-radius: 8px;
+  }
+  .code-input { text-align: center; letter-spacing: 8px; font-size: 20px; }
+  .login-form .row { display: flex; align-items: center; justify-content: space-between; font-size: 13px; }
+  .remember { display: flex; align-items: center; gap: 6px; color: #8b949e; cursor: pointer; }
+  .link { color: #8b949e; cursor: pointer; text-decoration: none; }
+  .link:hover { color: #2dd4bf; }
+  .err { margin: 0; color: #ff8f88; font-size: 13px; }
+  .login-form .btn-block { width: 100%; padding: 10px; font-size: 15px; }
+  .login-form .btn-ghost-block { width: 100%; padding: 10px; background: transparent; }
+  .login-tip { margin: 10px 0 0; font-size: 12px; line-height: 1.6; color: #8b949e; }
+
+  .toast { position: fixed; left: 50%; bottom: 28px; transform: translateX(-50%); background: #2b313c; border: 1px solid var(--line); border-radius: 8px; padding: 9px 16px; z-index: 40; }
+  .muted { color: var(--dim); }
+  /* 屏蔽清单的 chip */
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; }
+  .chip {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 4px 6px 4px 10px; border: 1px solid var(--line); border-radius: 999px;
+    font-size: 13px; background: #171d25;
+  }
+  .chip .x {
+    border: none; background: transparent; color: var(--dim); cursor: pointer;
+    padding: 0 4px; font-size: 15px; line-height: 1;
+  }
+  .chip .x:hover { color: var(--bad); }
+  /* 已被屏蔽的分类行淡化，一眼能看出哪些不生效 */
+  tr.row-off td { opacity: .62; }
+  /* 设置卡：左标题+值，右操作 */
+  .kv {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 12px; padding: 10px 12px; border-radius: 10px;
+    background: rgba(13, 18, 22, .45); margin-bottom: 8px;
+  }
+  .kv:last-child { margin-bottom: 0; }
+  .kv .k { font-size: 12px; color: var(--dim); margin-bottom: 4px; }
+  .kv .v { font-size: 17px; letter-spacing: 2px; }
+  .kv .v.mono { font-family: ui-monospace, monospace; }
+  .kv-act { flex: none; }
+  .warnbox {
+    padding: 10px 12px; margin-bottom: 8px; border-radius: 10px;
+    font-size: 13px; line-height: 1.7; color: #ffcf8a;
+    background: rgba(224, 169, 74, .1); border: 1px solid rgba(224, 169, 74, .3);
+  }
+</style>
+</head>
+<body>
+<div id="app"></div>
+
+<script>
+"use strict";
+
+const TOKEN_KEY = "litv_admin_token";
+
+const state = {
+  token: localStorage.getItem(TOKEN_KEY) || "",
+  tab: "channels",
+  stats: null,
+  channels: [],
+  groups: [],
+  devices: [],
+  sources: [],
+  build: null,
+  // 设置自省：绑定码 / 入口路径 / 是否配了管理台密码
+  settings: null,
+  // 绑定码默认打码，点「显示」才拿明文
+  codeRevealed: false,
+  // 屏蔽清单：整类频道不想看时用它，比逐个「隐藏」省事，而且新加的同类频道会被一起挡掉
+  blocked: { groups: [], channels: [] },
+  q: "",
+  group: "",
+  drawer: null,      // { channelId, name, streams }
+  form: { url: "", ua: "", referer: "" },
+  // 「源」页的新增表单
+  srcForm: { open: false, id: 0, name: "", url: "", ua: "", referer: "" },
+  busy: false,
+  error: "",
+};
+
+// ---------------------------------------------------------------- 工具
+
+// 频道名、URL 全部来自上游 m3u，属于不可信输入，拼进 HTML 前必须转义
+function esc(v) {
+  return String(v ?? "").replace(/[&<>"']/g, (c) => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+  })[c]);
+}
+
+function toast(msg, bad) {
+  const el = document.createElement("div");
+  el.className = "toast";
+  el.textContent = msg;
+  if (bad) el.style.color = "var(--bad)";
+  document.body.appendChild(el);
+  setTimeout(() => el.remove(), 2600);
+}
+
+async function api(path, opts = {}) {
+  const headers = { "content-type": "application/json" };
+  if (state.token) headers.authorization = "Bearer " + state.token;
+  const res = await fetch(path, { ...opts, headers: { ...headers, ...(opts.headers || {}) } });
+  let body;
+  try {
+    body = await res.json();
+  } catch {
+    throw new Error("服务器返回了非 JSON 响应");
+  }
+  // 2001 = 管理台未登录/会话过期（服务端现在回的是 2001 + HTTP 401），
+  // 2003 = 设备未绑定。两个都要踢回登录页，否则用户停在一个死界面上。
+  if (body.code === 2001 || body.code === 2003) {
+    void logout();
+    throw new Error("会话已过期，请重新登录");
+  }
+  if (body.code !== 0) throw new Error(body.msg || "请求失败");
+  return body.data;
+}
+
+async function logout() {
+  const tk = state.token;
+  state.token = "";
+  localStorage.removeItem(TOKEN_KEY);
+  state.stats = null;
+  state.channels = [];
+  state.devices = [];
+  state.drawer = null;
+  render();
+  // 只清本地是不够的：服务端 admin_sessions 里那行还在的话，
+  // 7 天内拿到旧 token 依然能进管理台。这里真的把会话删掉。
+  // 直接用 fetch 而不是 api()，否则 401 会又回调一次 logout。
+  if (tk) {
+    try {
+      await fetch("/api/v1/auth/logout", {
+        method: "POST",
+        headers: { authorization: "Bearer " + tk },
+      });
+    } catch {
+      /* 断网也要能退出界面 */
+    }
+  }
+}
+
+function healthTag(h) {
+  if (h === 1) return '<span class="tag ok">正常</span>';
+  if (h === 0) return '<span class="tag bad">失效</span>';
+  return '<span class="tag">未测</span>';
+}
+
+// ---------------------------------------------------------------- 数据加载
+
+async function loadAll() {
+  try {
+    const [stats, ch, dev, src, build, blocked, settings] = await Promise.all([
+      api("/api/v1/admin/stats"),
+      api("/api/v1/admin/channels?limit=500"),
+      api("/api/v1/admin/devices"),
+      api("/api/v1/admin/sources"),
+      api("/api/v1/admin/build"),
+      api("/api/v1/admin/blocked"),
+      // 始终拿打码版本；点「显示」时才单独请求 reveal=1
+      api("/api/v1/admin/settings"),
+    ]);
+    state.stats = stats;
+    state.channels = ch.items;
+    state.groups = ch.groups;
+    state.devices = dev;
+    state.sources = src;
+    state.build = build;
+    state.blocked = blocked;
+    state.settings = settings;
+  } catch (e) {
+    toast(e.message, true);
+  }
+  render();
+}
+
+async function reloadChannels() {
+  const qs = new URLSearchParams({ limit: "500" });
+  if (state.q) qs.set("q", state.q);
+  if (state.group) qs.set("group", state.group);
+  try {
+    const ch = await api("/api/v1/admin/channels?" + qs);
+    state.channels = ch.items;
+    state.groups = ch.groups;
+  } catch (e) {
+    toast(e.message, true);
+  }
+  render();
+}
+
+async function openStreams(channelId, name) {
+  state.drawer = { channelId, name, streams: [], loading: true };
+  render();
+  try {
+    const streams = await api("/api/v1/admin/streams?channel_id=" + channelId);
+    state.drawer.streams = streams;
+  } catch (e) {
+    toast(e.message, true);
+  }
+  state.drawer.loading = false;
+  render();
+}
+
+async function refreshStreams() {
+  if (!state.drawer) return;
+  try {
+    state.drawer.streams = await api("/api/v1/admin/streams?channel_id=" + state.drawer.channelId);
+  } catch (e) {
+    toast(e.message, true);
+  }
+  render();
+}
+
+// ---------------------------------------------------------------- 动作
+
+async function login(code, remember) {
+  const errEl = document.getElementById("loginErr");
+  const showErr = (m) => {
+    if (errEl) {
+      errEl.textContent = m;
+      errEl.style.display = "block";
+    } else {
+      toast(m, true);
+    }
+  };
+
+  if (!code) return showErr("请输入口令");
+
+  try {
+    const data = await api("/api/v1/admin/login", {
+      method: "POST",
+      body: JSON.stringify({ code }),
+    });
+    state.token = data.token;
+    // 「记住口令」= 存 localStorage；不勾就只留在内存里，刷新要重输
+    if (remember) localStorage.setItem(TOKEN_KEY, data.token);
+    else localStorage.removeItem(TOKEN_KEY);
+    await loadAll();
+  } catch (e) {
+    showErr(e.message);
+  }
+}
+
+async function patchChannel(id, patch) {
+  try {
+    await api("/api/v1/admin/channel/" + id, {
+      method: "PATCH",
+      body: JSON.stringify(patch),
+    });
+    await Promise.all([loadAll()]);
+    if (state.drawer && state.drawer.channelId === id) await refreshStreams();
+  } catch (e) {
+    toast(e.message, true);
+  }
+}
+
+async function deleteChannel(id, origin) {
+  const msg = origin === "manual"
+    ? "删除这个手工频道？它和它的线路都会被移除。"
+    : "隐藏这个订阅频道？下次重建后它仍然是隐藏状态。";
+  if (!confirm(msg)) return;
+  try {
+    await api("/api/v1/admin/channel/" + id, { method: "DELETE" });
+    state.drawer = null;
+    await loadAll();
+  } catch (e) {
+    toast(e.message, true);
+  }
+}
+
+async function addStream() {
+  const f = state.form;
+  if (!f.url.trim()) return toast("请填线路地址", true);
+  try {
+    await api("/api/v1/admin/stream", {
+      method: "POST",
+      body: JSON.stringify({
+        channel_id: state.drawer.channelId,
+        url: f.url.trim(),
+        ua: f.ua.trim(),
+        referer: f.referer.trim(),
+      }),
+    });
+    state.form = { url: "", ua: "", referer: "" };
+    await refreshStreams();
+    toast("已添加");
+  } catch (e) {
+    toast(e.message, true);
+  }
+}
+
+async function deleteStream(id) {
+  if (!confirm("删除这条线路？")) return;
+  try {
+    await api("/api/v1/admin/stream/" + id, { method: "DELETE" });
+    await refreshStreams();
+  } catch (e) {
+    toast(e.message, true);
+  }
+}
+
+async function probeStream(id, btn) {
+  btn.disabled = true;
+  btn.textContent = "测试中…";
+  try {
+    const r = await api("/api/v1/admin/stream/" + id + "/probe", { method: "POST" });
+    toast(r.health === 1 ? `通了（${r.latency_ms}ms）` : `不通（HTTP ${r.status}）`, r.health !== 1);
+    await refreshStreams();
+  } catch (e) {
+    toast(e.message, true);
+    btn.disabled = false;
+    btn.textContent = "测试";
+  }
+}
+
+async function deleteDevice(id) {
+  if (!confirm("吊销这台设备？它会立刻掉线，需要重新绑定。")) return;
+  try {
+    await api("/api/v1/admin/device/" + id, { method: "DELETE" });
+    await loadAll();
+  } catch (e) {
+    toast(e.message, true);
+  }
+}
+
+// ---------------------------------------------------------------- 源
+
+async function saveSource() {
+  const f = state.srcForm;
+  if (!f.url.trim()) return toast("请填订阅地址", true);
+  const body = { name: f.name.trim(), url: f.url.trim(), ua: f.ua.trim(), referer: f.referer.trim() };
+  try {
+    if (f.id) {
+      await api("/api/v1/admin/source/" + f.id, { method: "PATCH", body: JSON.stringify(body) });
+    } else {
+      await api("/api/v1/admin/sources", { method: "POST", body: JSON.stringify(body) });
+    }
+    state.srcForm = { open: false, id: 0, name: "", url: "", ua: "", referer: "" };
+    await loadAll();
+    toast("已保存，下次重建生效");
+  } catch (e) {
+    toast(e.message, true);
+  }
+}
+
+async function patchSource(id, patch) {
+  try {
+    await api("/api/v1/admin/source/" + id, { method: "PATCH", body: JSON.stringify(patch) });
+    await loadAll();
+  } catch (e) {
+    toast(e.message, true);
+  }
+}
+
+async function deleteSource(id) {
+  if (!confirm("删除这个源？已经生成的频道不会立刻消失，下次重建时才会被清掉。")) return;
+  try {
+    await api("/api/v1/admin/source/" + id, { method: "DELETE" });
+    await loadAll();
+  } catch (e) {
+    toast(e.message, true);
+  }
+}
+
+async function triggerRebuild(btn) {
+  btn.disabled = true;
+  btn.textContent = "已触发…";
+  try {
+    await api("/api/v1/admin/rebuild", { method: "POST" });
+    toast("已触发重建，约 1 分钟后自动刷新");
+    // 重建要跑 CI（装依赖、拉源、灌库、部署），大概一两分钟。
+    // 自动刷一次，省得用户盯着手动点。
+    setTimeout(() => loadAll(), 60000);
+  } catch (e) {
+    toast(e.message, true);
+  }
+  btn.disabled = false;
+  btn.textContent = "立即重建";
+}
+
+async function testSource(id, btn) {  btn.disabled = true;
+  btn.textContent = "测试中…";
+  try {
+    const r = await api("/api/v1/admin/source/" + id + "/test", { method: "POST" });
+    const ok = r.format === "m3u" || r.format === "txt";
+    toast(
+      ok
+        ? `通了，是 ${r.format.toUpperCase()}（${r.latency_ms}ms）`
+        : `没拿到播放列表：${r.format}（HTTP ${r.status}）`,
+      !ok,
+    );
+  } catch (e) {
+    toast(e.message, true);
+  }
+  btn.disabled = false;
+  btn.textContent = "测试";
+}
+
+// ---------------------------------------------------------------- 屏蔽
+//
+// 场景：订阅源里几百个台，购物/测试/成人这类整类不想要。
+// 逐个「隐藏」太费事，而且源每周加新的同类频道又得再藏一遍。
+//
+// 分类是**从源里读出来的**（channels 的原始分组统计），直接列在页面上点，
+// 不用手打名字。点完立刻生效，下一次重建时这些频道也不再入库。
+
+function rebuildWhy(b) {
+  const t = (b && b.rebuild_target) || {};
+  // GitHub 上这个 Secret 叫 DISPATCH_TOKEN（不能以 GITHUB_ 开头），
+  // 提示里要说 GitHub 那一侧的名字，否则用户照着 Worker 变量名去建会被 GitHub 拦。
+  if (!t.configured) return "没配 DISPATCH_TOKEN（仓库 Settings → Secrets）：只能在 Actions 里手动跑，或等定时任务";
+  if (!t.repo) return "没配 GITHUB_REPO：正常走 CI 部署会自动写入这个变量";
+  return "当前环境暂不可用";
+}
+
+function renderBlocked() {
+  const b = state.blocked || { groups: [], channels: [], candidates: [] };
+  const blockedGroups = new Set(b.groups || []);
+
+  // 分类行：源里读到的每个分类，一行，右边是屏蔽/解除
+  const rows = (b.candidates || []).map((c) => {
+    const on = blockedGroups.has(c.name);
+    return `
+      <tr class="${on ? "row-off" : ""}">
+        <td>${esc(c.name)}</td>
+        <td class="num">${esc(c.count)}</td>
+        <td>${on ? '<span class="tag bad">已屏蔽</span>' : '<span class="tag ok">可见</span>'}</td>
+        <td>
+          ${on
+            ? `<button data-act="unblock" data-kind="group" data-name="${esc(c.name)}">解除屏蔽</button>`
+            : `<button class="danger" data-act="blockGroupOne" data-name="${esc(c.name)}">屏蔽这个分类</button>`}
+        </td>
+      </tr>`;
+  }).join("");
+
+  const chip = (name) => `
+    <span class="chip">${esc(name)}<button class="x" data-act="unblock" data-kind="channel"
+      data-name="${esc(name)}" title="解除屏蔽">×</button></span>`;
+  const channels = (b.channels || []).map(chip).join("")
+    || '<span class="muted" style="font-size:12px">还没有屏蔽任何单个频道</span>';
+
+  return `
+    <div class="panel">
+      <div class="muted" style="font-size:12px;line-height:1.7;margin-bottom:12px">
+        下面是<b>从源里读出来的分类</b>。屏蔽某个分类后，它下面所有频道都不再下发给客户端
+        （包括以后新加的同类频道），<b>点完立刻生效</b>，下一次重建时也不再入库、不进 playlist.m3u。<br>
+        只想藏一个台，用频道页那一行的「隐藏」。
+      </div>
+      ${rows
+        ? `<table>
+             <thead><tr><th>分类</th><th>频道数</th><th>状态</th><th></th></tr></thead>
+             <tbody>${rows}</tbody>
+           </table>`
+        : '<div class="empty">还没有从源里读到任何分类。先在「源」页配一个源，等一次重建。</div>'}
+
+      <div style="margin-top:20px"><strong style="font-size:13px">按频道名屏蔽</strong></div>
+      <div class="form" style="margin-top:8px">
+        <div class="line">
+          <input id="blkChannel" placeholder="频道名（精确匹配，比如：CCTV-5 体育）">
+          <button data-act="blockChannel">屏蔽这个频道</button>
+        </div>
+      </div>
+      <div class="chips" style="margin-top:10px">${channels}</div>
+    </div>`;
+}
+
+async function blockGroup(name) {
+  try {
+    await api("/api/v1/admin/blocked", {
+      method: "POST",
+      body: JSON.stringify({ kind: "group", value: name }),
+    });
+    toast(`已屏蔽分类「${name}」`);
+    // 重新拉整页：屏蔽清单变了，频道列表和统计都跟着变
+    await loadAll();
+  } catch (e) {
+    toast(e.message, true);
+  }
+}
+
+async function blockChannelByName() {
+  const el = document.getElementById("blkChannel");
+  const value = (el && el.value ? el.value : "").trim();
+  if (!value) return toast("先填一个频道名", true);
+  try {
+    await api("/api/v1/admin/blocked", {
+      method: "POST",
+      body: JSON.stringify({ kind: "channel", value }),
+    });
+    if (el) el.value = "";
+    toast(`已屏蔽频道「${value}」`);
+    await loadAll();
+  } catch (e) {
+    toast(e.message, true);
+  }
+}
+
+async function unblock(kind, value) {
+  try {
+    await api("/api/v1/admin/blocked?" + new URLSearchParams({ kind, value }), { method: "DELETE" });
+    toast("已解除屏蔽");
+    await loadAll();
+  } catch (e) {
+    toast(e.message, true);
+  }
+}
+
+// 显示绑定码明文：单独请求一次 reveal=1，并标记状态。
+// 不把它塞进 loadAll 的批量请求里，是因为「看明文」应该是一个明确的动作，
+// 而不是每次打开设备页就自动把明文拉下来。
+async function revealCode() {
+  try {
+    const s = await api("/api/v1/admin/settings?reveal=1");
+    state.settings = s;
+    state.codeRevealed = true;
+    render();
+  } catch (e) {
+    toast(e.message, true);
+  }
+}
+
+// ---------------------------------------------------------------- 渲染
+
+function renderLogin() {
+  // 主机名那行跟 NAS 版一样：让人一眼确认自己连的是哪台
+  const host = (location.hostname || "edge").toUpperCase();
+  return `
+    <div class="login-page">
+      <div class="login-card">
+        <div class="brand">
+          <div class="mark">LITV</div>
+          <h1>LITV 边缘管理台</h1>
+          <p class="host">${esc(host)}</p>
+        </div>
+
+        <div class="login-form">
+          <input id="code" class="code-input" type="password" maxlength="128"
+                 placeholder="访问口令" autocomplete="off">
+
+          <div class="row">
+            <label class="remember">
+              <input type="checkbox" id="remember" checked />
+              <span>记住口令</span>
+            </label>
+            <a class="link" id="hintLink">口令是什么？</a>
+          </div>
+
+          <p class="err" id="loginErr" style="display:none"></p>
+
+          <button class="primary btn-block" id="doLogin">登录</button>
+          <button class="ghost btn-ghost-block" id="hintBtn">口令在 GitHub Secrets 的 ADMIN_PASSWORD</button>
+        </div>
+
+        <p class="login-tip">
+          这是 NAS 不可用时的边缘部署：只做频道表分发，播放时客户端直连上游源站。
+          口令是部署时配的 <b>ADMIN_PASSWORD</b>；没配这个 Secret 时才退回 BIND_CODE
+          （6 位数字的绑定码，也就是电视绑定页填的那个，安全性差很多）。
+        </p>
+      </div>
+    </div>`;
+}
+
+function renderStats() {
+  const s = state.stats || {};
+  const cards = [
+    ["频道", s.channels ?? "–"],
+    ["启用中", s.enabled ?? "–"],
+    ["线路", s.streams ?? "–"],
+    ["分组", s.groups ?? "–"],
+    ["设备", s.devices ?? "–"],
+    ["人工改动", s.overrides ?? "–"],
+  ];
+  return `<div class="cards">${cards.map(([l, n]) => `
+    <div class="card"><div class="n">${esc(n)}</div><div class="l">${esc(l)}</div></div>`).join("")}</div>`;
+}
+
+function renderChannels() {
+  const rows = state.channels.map((c) => `
+    <tr>
+      <td class="num">${esc(c.number)}</td>
+      <td>
+        <div>${esc(c.name)}</div>
+        ${c.tvg_id ? `<div class="muted" style="font-size:12px">${esc(c.tvg_id)}</div>` : ""}
+      </td>
+      <td>${esc(c.grp)}</td>
+      <td>${esc(c.streams)}</td>
+      <td>
+        ${c.enabled ? '<span class="tag ok">显示</span>' : '<span class="tag bad">隐藏</span>'}
+        ${c.origin === "manual" ? '<span class="tag manual">手工</span>' : ""}
+      </td>
+      <td style="text-align:right; white-space:nowrap">
+        <button data-act="streams" data-id="${c.id}" data-name="${esc(c.name)}">线路</button>
+        <button data-act="toggle" data-id="${c.id}" data-on="${c.enabled ? 0 : 1}">${c.enabled ? "隐藏" : "显示"}</button>
+        <button data-act="rename" data-id="${c.id}" data-name="${esc(c.name)}" data-group="${esc(c.grp)}">编辑</button>
+        <button class="danger" data-act="delch" data-id="${c.id}" data-origin="${esc(c.origin)}">${c.origin === "manual" ? "删除" : "隐藏"}</button>
+      </td>
+    </tr>`).join("");
+
+  const groupOpts = state.groups.map((g) =>
+    `<option value="${esc(g.name)}"${state.group === g.name ? " selected" : ""}>${esc(g.name)} (${esc(g.count)})</option>`
+  ).join("");
+
+  return `
+    <div class="panel">
+      <div class="toolbar">
+        <input type="search" id="q" placeholder="搜索频道名或 tvg-id" value="${esc(state.q)}">
+        <select id="groupFilter"><option value="">全部分组</option>${groupOpts}</select>
+        <button id="doSearch">搜索</button>
+      </div>
+      ${state.channels.length === 0
+        ? '<div class="empty">没有频道。先跑一次 Actions 生成数据。</div>'
+        : `<table>
+             <thead><tr><th class="num">#</th><th>频道</th><th>分组</th><th>线路</th><th>状态</th><th></th></tr></thead>
+             <tbody>${rows}</tbody>
+           </table>`}
+    </div>`;
+}
+
+// 源地址里常带账号密码。列表里默认打码，避免截图外泄；
+// 编辑时表单里是完整值。
+function maskUrl(u) {
+  return String(u)
+    // user:pass@host 这种内嵌凭据
+    .replace(/\/\/[^/@\s]+@/g, "//•••@")
+    // 面板常见的 ?username=&password=&sign=&auth_token= 查询参数
+    .replace(
+      /([?&](?:password|passwd|pass|pwd|token|key|sign|auth|auth_token|username|user|userid)=)[^&]*/gi,
+      "$1•••",
+    );
+}
+
+function statusTag(s) {
+  if (!s) return '<span class="tag">未拉取</span>';
+  if (s === "ok") return '<span class="tag ok">正常</span>';
+  if (s === "empty_list") return '<span class="tag warn">空列表</span>';
+  if (s === "html" || s === "json") return '<span class="tag bad">不是播放列表</span>';
+  return `<span class="tag bad">${esc(s)}</span>`;
+}
+
+function renderSources() {
+  const f = state.srcForm;
+  const form = f.open ? `
+    <div class="form">
+      <div class="line">
+        <input id="sUrl" placeholder="订阅地址 http(s)://…" value="${esc(f.url)}">
+      </div>
+      <div class="line">
+        <input id="sName" placeholder="备注名（可空）" value="${esc(f.name)}">
+        <input id="sUa" placeholder="拉取用的 User-Agent（可空）" value="${esc(f.ua)}">
+        <input id="sRef" placeholder="拉取用的 Referer（可空）" value="${esc(f.referer)}">
+      </div>
+      <div class="line">
+        <button class="primary" data-act="saveSrc">${f.id ? "保存" : "添加"}</button>
+        <button class="ghost" data-act="cancelSrc">取消</button>
+        <span class="muted" style="font-size:12px">
+          这个 UA 只用于抓订阅；播放时用的 UA 在线路里单独配
+        </span>
+      </div>
+    </div>` : "";
+
+  const rows = state.sources.map((s) => `
+    <tr>
+      <td>
+        <div>${esc(s.name || "未命名源")}</div>
+        <div class="muted" style="font-size:12px;font-family:ui-monospace,monospace;word-break:break-all">
+          ${esc(maskUrl(s.url))}
+        </div>
+      </td>
+      <td>${s.enabled ? '<span class="tag ok">启用</span>' : '<span class="tag">停用</span>'}</td>
+      <td>${statusTag(s.last_status)}</td>
+      <td class="muted">${s.last_count || 0}</td>
+      <td class="muted">${s.last_fetch_at ? fmtTime(s.last_fetch_at) : "—"}</td>
+      <td style="text-align:right; white-space:nowrap">
+        <button data-act="testSrc" data-id="${s.id}">测试</button>
+        <button data-act="toggleSrc" data-id="${s.id}" data-on="${s.enabled ? 0 : 1}">${s.enabled ? "停用" : "启用"}</button>
+        <button data-act="editSrc" data-id="${s.id}">编辑</button>
+        <button class="danger" data-act="delSrc" data-id="${s.id}">删除</button>
+      </td>
+    </tr>`).join("");
+
+  const b = state.build;
+  const last = b && b.last_build;
+  const buildLine = last
+    ? `上次重建：${fmtTime(last.at)} · ${last.channels} 个频道 / ${last.lines} 条线路`
+    : "还没有重建过";
+
+  return `
+    <div class="panel">
+      <div class="toolbar">
+        <button class="primary" data-act="newSrc">添加源</button>
+        ${b && b.can_rebuild
+          ? '<button data-act="rebuild">立即重建</button>'
+          : `<button disabled title="${esc(rebuildWhy(b))}">立即重建</button>`}
+        <span class="muted" style="font-size:12px;align-self:center">
+          ${esc(buildLine)}　·　定时：${esc(b ? b.schedule : "每小时 :17（GitHub Actions 定时）")}
+        </span>
+      </div>
+      ${form}
+      ${state.sources.length === 0
+        ? '<div class="empty">还没有订阅源。点「添加源」填面板给的订阅/播放列表地址。</div>'
+        : `<table>
+             <thead><tr><th>源</th><th>状态</th><th>上次结果</th><th>条目</th><th>上次拉取</th><th></th></tr></thead>
+             <tbody>${rows}</tbody>
+           </table>`}
+    </div>`;
+}
+
+function renderDevices() {
+  const s = state.settings || {};
+  // 绑定码卡片：默认打码，点「显示」再单独请求一次明文。
+  // 部署完几个月要加台电视时，没人记得那 6 位数字——藏起来等于逼人去翻 Secrets。
+  const code = s.bind_code || "";
+  const codeCard = !s.bind_code_set
+    ? `<div class="warnbox">还没配 <b>BIND_CODE</b>，电视绑不上。去仓库 Settings → Secrets 加一个 6 位数字。</div>`
+    : `<div class="kv">
+         <div>
+           <div class="k">电视绑定码</div>
+           <div class="v mono" id="bindCode">${esc(code)}</div>
+         </div>
+         <div class="kv-act">
+           ${state.codeRevealed
+             ? '<button data-act="hideCode">隐藏</button>'
+             : '<button data-act="showCode">显示</button>'}
+         </div>
+       </div>`;
+
+  const entryCard = `
+    <div class="kv">
+      <div>
+        <div class="k">管理台入口</div>
+        <div class="v mono">${esc(s.admin_entry || "/")}</div>
+      </div>
+      <div class="kv-act muted" style="font-size:12px">
+        ${s.admin_entry && s.admin_entry !== "/"
+          ? "已自定义入口，根路径返回 404"
+          : "根路径即入口（可在 Secrets 里配 ADMIN_PATH 改掉）"}
+      </div>
+    </div>`;
+
+  const pwdCard = s.admin_password_set
+    ? ""
+    : `<div class="warnbox">还没配 <b>ADMIN_PASSWORD</b>，管理台无法登录（绑定码已经不能当管理台口令了）。</div>`;
+
+  const settings = `<div class="panel">
+    ${pwdCard}
+    ${codeCard}
+    ${entryCard}
+  </div>`;
+
+  if (state.devices.length === 0) {
+    return settings + '<div class="panel"><div class="empty">还没有设备绑上来。</div></div>';
+  }
+  const rows = state.devices.map((d) => `
+    <tr>
+      <td>${esc(d.name || "未命名")}</td>
+      <td><span class="tag">${esc(d.platform || "?")}</span></td>
+      <td class="muted" style="font-family:ui-monospace,monospace">${esc(d.device_key)}</td>
+      <td class="muted">${fmtTime(d.last_seen)}</td>
+      <td style="text-align:right"><button class="danger" data-act="deldev" data-id="${d.id}">吊销</button></td>
+    </tr>`).join("");
+
+  return settings + `<div class="panel"><table>
+    <thead><tr><th>设备</th><th>平台</th><th>标识</th><th>最近在线</th><th></th></tr></thead>
+    <tbody>${rows}</tbody></table></div>`;
+}
+
+function fmtTime(sec) {
+  if (!sec) return "–";
+  const d = new Date(sec * 1000); // 服务端是 Unix 秒，JS 要毫秒
+  const p = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
+function renderDrawer() {
+  const d = state.drawer;
+  if (!d) return "";
+  const body = d.loading
+    ? '<div class="empty">加载中…</div>'
+    : (d.streams.length === 0
+        ? '<div class="empty">这个频道还没有线路</div>'
+        : d.streams.map((s) => `
+          <div class="stream">
+            <div class="row">
+              <strong>${esc(s.label || "线路")}</strong>
+              ${healthTag(s.health)}
+              <span class="tag">优先级 ${esc(s.priority)}</span>
+              ${s.origin === "manual" ? '<span class="tag manual">手工</span>' : ""}
+              ${s.latency_ms ? `<span class="muted">${esc(s.latency_ms)}ms</span>` : ""}
+            </div>
+            <div class="url">${esc(maskUrl(s.url))}</div>
+            <div class="row">
+              ${s.ua ? `<span class="tag">UA</span>` : ""}
+              ${s.headers && s.headers.Referer ? `<span class="tag">Referer</span>` : ""}
+              <span style="flex:1"></span>
+              <button data-act="probe" data-id="${s.id}">测试</button>
+              <button class="danger" data-act="delst" data-id="${s.id}">删除</button>
+            </div>
+          </div>`).join(""));
+
+  return `
+    <div class="drawer" data-act="closeDrawerBg">
+      <div class="body">
+        <div class="head">
+          <h2>${esc(d.name)} · 线路</h2>
+          <button data-act="closeDrawer">关闭</button>
+        </div>
+        <div class="form">
+          <div class="line">
+            <input id="fUrl" placeholder="线路地址 http(s)://…" value="${esc(state.form.url)}">
+          </div>
+          <div class="line">
+            <input id="fUa" placeholder="User-Agent（可空）" value="${esc(state.form.ua)}">
+            <input id="fRef" placeholder="Referer（可空）" value="${esc(state.form.referer)}">
+          </div>
+          <div class="line">
+            <button class="primary" data-act="addStream">添加线路</button>
+            <span class="muted" style="font-size:12px">手工添加的线路在每天重建后仍然保留</span>
+          </div>
+        </div>
+        ${body}
+      </div>
+    </div>`;
+}
+
+function render() {
+  const app = document.getElementById("app");
+
+  if (!state.token) {
+    app.innerHTML = renderLogin();
+    const btn = document.getElementById("doLogin");
+    const input = document.getElementById("code");
+    const remember = document.getElementById("remember");
+    btn.onclick = () => login(input.value.trim(), remember.checked);
+    input.onkeydown = (e) => { if (e.key === "Enter") btn.onclick(); };
+
+    const hint = () =>
+      toast("口令是部署时配的 ADMIN_PASSWORD；没配这个 Secret 时才用 6 位绑定码 BIND_CODE");
+    document.getElementById("hintBtn").onclick = hint;
+    document.getElementById("hintLink").onclick = hint;
+
+    input.focus();
+    return;
+  }
+
+  const tabBody = state.tab === "channels" ? renderChannels()
+    : state.tab === "sources" ? renderSources()
+    : state.tab === "devices" ? renderDevices()
+    : state.tab === "blocked" ? renderBlocked()
+    : `<div class="panel"><div class="empty">
+         这是 NAS 挂掉之后的降级部署：只做频道表分发，播放时客户端直连上游源站。<br><br>
+         <span class="muted">没有中转、没有时移、没有录制、没有投屏。节目单由 CI 从源的 x-tvg-url 拉取（6 小时一次），不在这里导入。</span>
+       </div></div>`;
+
+  app.innerHTML = `
+    <div class="wrap">
+      <div class="top">
+        <h1>LITV 边缘管理台</h1>
+        <span class="spacer"></span>
+        <button class="ghost" id="refresh">刷新</button>
+        <button class="ghost" id="logout">退出</button>
+      </div>
+      ${renderStats()}
+      <div class="tabs">
+        <button data-tab="channels" class="${state.tab === "channels" ? "on" : ""}">频道</button>
+        <button data-tab="sources" class="${state.tab === "sources" ? "on" : ""}">源</button>
+        <button data-tab="devices" class="${state.tab === "devices" ? "on" : ""}">设备</button>
+        <button data-tab="blocked" class="${state.tab === "blocked" ? "on" : ""}">屏蔽</button>
+        <button data-tab="about" class="${state.tab === "about" ? "on" : ""}">关于</button>
+      </div>
+      ${tabBody}
+    </div>
+    ${renderDrawer()}`;
+
+  document.getElementById("refresh").onclick = () => loadAll();
+  document.getElementById("logout").onclick = () => logout();
+
+  app.querySelectorAll("[data-tab]").forEach((el) => {
+    el.onclick = () => {
+      state.tab = el.dataset.tab;
+      // 切页要顺手关掉线路抽屉：它是浮层，不关的话会一直压在新页面上，
+      // 把「屏蔽」「关于」这些页面挡掉一半。
+      state.drawer = null;
+      render();
+    };
+  });
+
+  const search = document.getElementById("doSearch");
+  if (search) {
+    const q = document.getElementById("q");
+    const gf = document.getElementById("groupFilter");
+    search.onclick = () => {
+      state.q = q.value.trim();
+      state.group = gf.value;
+      reloadChannels();
+    };
+    q.onkeydown = (e) => { if (e.key === "Enter") search.onclick(); };
+    gf.onchange = () => search.onclick();
+  }
+
+  const fUrl = document.getElementById("fUrl");
+  if (fUrl) {
+    fUrl.oninput = (e) => { state.form.url = e.target.value; };
+    document.getElementById("fUa").oninput = (e) => { state.form.ua = e.target.value; };
+    document.getElementById("fRef").oninput = (e) => { state.form.referer = e.target.value; };
+  }
+
+  // 「源」页的新增/编辑表单。不回写 state 再 render，避免输入时丢焦点。
+  const sUrl = document.getElementById("sUrl");
+  if (sUrl) {
+    const bind = (elId, key) => {
+      const el = document.getElementById(elId);
+      if (el) el.oninput = (e) => { state.srcForm[key] = e.target.value; };
+    };
+    bind("sUrl", "url");
+    bind("sName", "name");
+    bind("sUa", "ua");
+    bind("sRef", "referer");
+  }
+}
+
+// ---------------------------------------------------------------- 事件委托
+
+document.addEventListener("click", (e) => {
+  const el = e.target.closest("[data-act]");
+  if (!el) return;
+  const act = el.dataset.act;
+  const id = Number(el.dataset.id || 0);
+
+  if (act === "closeDrawerBg" && e.target === el) { state.drawer = null; render(); }
+  else if (act === "closeDrawer") { state.drawer = null; render(); }
+  else if (act === "streams") openStreams(id, el.dataset.name);
+  else if (act === "toggle") patchChannel(id, { enabled: el.dataset.on === "1" });
+  else if (act === "rename") {
+    const name = prompt("频道名", el.dataset.name);
+    if (name === null) return;
+    const group = prompt("分组", el.dataset.group);
+    if (group === null) return;
+    patchChannel(id, { name: name.trim(), group: group.trim() });
+  }
+  else if (act === "delch") deleteChannel(id, el.dataset.origin);
+  else if (act === "addStream") addStream();
+  else if (act === "probe") probeStream(id, el);
+  else if (act === "delst") deleteStream(id);
+  else if (act === "deldev") deleteDevice(id);
+  else if (act === "newSrc") { state.srcForm = { open: true, id: 0, name: "", url: "", ua: "", referer: "" }; render(); }
+  else if (act === "cancelSrc") { state.srcForm.open = false; render(); }
+  else if (act === "editSrc") {
+    const s = state.sources.find((x) => x.id === id);
+    if (s) {
+      state.srcForm = { open: true, id: s.id, name: s.name, url: s.url, ua: s.ua, referer: s.referer };
+      render();
+    }
+  }
+  else if (act === "saveSrc") saveSource();
+  else if (act === "toggleSrc") patchSource(id, { enabled: el.dataset.on === "1" });
+  else if (act === "delSrc") deleteSource(id);
+  else if (act === "testSrc") testSource(id, el);
+  else if (act === "rebuild") triggerRebuild(el);
+  else if (act === "blockGroupOne") blockGroup(el.dataset.name);
+  else if (act === "blockChannel") blockChannelByName();
+  else if (act === "unblock") unblock(el.dataset.kind, el.dataset.name);
+  else if (act === "showCode") revealCode();
+  else if (act === "hideCode") {
+    state.codeRevealed = false;
+    void loadAll();
+    return;
+  }
+});
+
+// ---------------------------------------------------------------- 启动
+
+render();
+if (state.token) loadAll();
+</script>
+</body>
+</html>

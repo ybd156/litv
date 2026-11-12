@@ -1,0 +1,2 @@
+# 占位文件：构建时 build.sh 会把 litvd_x86_64 / litvd_aarch64 拷到这个目录。
+# 仓库里不提交二进制（见 packaging/fnos/.gitignore），所以这里放 .gitkeep 保证目录存在。

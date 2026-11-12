@@ -1,0 +1,20 @@
+# Shell 脚本必须保持 LF。
+#
+# fnOS 是 Linux。用 CRLF 检出的 #!/bin/bash 脚本会被解释器直接拒绝：
+#   bash: line 45: syntax error near unexpected token `$'{\r''
+# Windows 上 core.autocrlf=true 会把仓库里的 LF 转成 CRLF，
+# 打包出来的 install_callback / config_callback 就全部失效——
+# 用户看到的是"装不上"，而且只在 NAS 上才会暴露。
+* text=auto
+
+*.sh                text eol=lf
+packaging/fnos/**   text eol=lf
+build/test/*.sh     text eol=lf
+
+# 二进制与图片不要参与行尾转换
+*.png   binary
+*.PNG   binary
+*.fpk   binary
+*.apk   binary
+*.ipa   binary
+*.db    binary

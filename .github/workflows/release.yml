@@ -1,0 +1,519 @@
+name: Release
+
+# =============================================================================
+# 一键出三端安装包并发布到 Releases。
+#
+# 产物：
+#   LITV-<ver>-tv-armv7.apk    ← 电视版 32 位（Android 9 老盒子，约 68MB）
+#   LITV-<ver>-tv-arm64.apk    ← 电视版 64 位（约 75MB）
+#   LITV-<ver>-phone-armv7.apk ← 手机版 32 位
+#   LITV-<ver>-phone-arm64.apk ← 手机版 64 位（绝大多数手机装这个）
+#   litv_x86_<ver>.fpk         ← 飞牛 NAS（N100 等 x86）
+#   litv_arm_<ver>.fpk         ← 飞牛 NAS（ARM 机型）
+#   LITV-<ver>-unsigned.ipa    ← iOS（未签名，自己用 Sideloadly 签）
+#
+# 触发：手动 workflow_dispatch，或推 v* tag。
+#
+# 版本号的唯一来源是「本次事件」：
+#   推 tag  → 取 tag 名去掉前导 v（v0.1.14 → 0.1.14）
+#   手动    → 取输入值；留空**直接失败**（要让脚本自己挑版本，只能勾 confirm_restate）
+# 三种来源都会先过一遍 §11 五处一致性检查，不一致直接失败，
+# 不再出现「发成上一版」这种静默错误。
+# =============================================================================
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "版本号（x.y.z，必填；留空会直接失败，见 confirm_restate）"
+        required: false
+        default: ""
+      confirm_restate:
+        description: "留空 version 时，允许用仓库里的 DEFAULT_VERSION 重发（会覆盖同名线上 Release）"
+        type: boolean
+        required: false
+        default: false
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+env:
+  # 只是「手动触发且没填输入」时的兜底，不是版本号的权威来源。
+  # 它仍然是 AGENTS.md §11 五处同步点之一：发版时这里也要跟着改，
+  # tools/checks/check-versions.py 会把它和另外四处对齐。
+  DEFAULT_VERSION: "0.1.19"
+
+jobs:
+  # --------------------------------------------------------------- 版本闸门
+  #
+  # 下游所有 job 的版本号**只从这里取**，不再各自推导。
+  #
+  # 为什么要单独一个 job：
+  #   以前每个用到版本号的地方都写 `inputs.version || DEFAULT_VERSION`。
+  #   推 v0.1.14 的 tag 时 inputs 为空，于是整条链路（产物文件名、Release 标题、
+  #   要删的 tag）全部退回 DEFAULT_VERSION 里的旧值 —— 结果不是「发版失败」，
+  #   而是**静默发成上一版**，并且 delete 那一步会把上一版已发布的 tag 一起删掉。
+  #   整条流水线一路绿灯，没有任何一步会觉得不对。
+  #   版本号必须从事件本身取，不能从常量兜底。
+  version:
+    name: 版本闸门
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      version: ${{ steps.resolve.outputs.version }}
+      source: ${{ steps.resolve.outputs.source }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: 解析版本号（tag 取 tag；手动必须显式填；不允许静默兜底）
+        id: resolve
+        env:
+          # 所有外部可控字符串一律经 env 传入，**不内联进 run: 的脚本文本**。
+          # 内联等于把 tag 名/输入值里的 $(...) 交给 shell 去执行。
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+          INPUT_VERSION: ${{ github.event.inputs.version }}
+          CONFIRM_RESTATE: ${{ github.event.inputs.confirm_restate }}
+        run: |
+          set -euo pipefail
+          if [ "${REF_TYPE}" = "tag" ]; then
+            RAW="${REF_NAME}"
+            V="${RAW#v}"
+            SRC="tag ${RAW}"
+          elif [ -n "${INPUT_VERSION}" ]; then
+            V="${INPUT_VERSION}"
+            SRC="workflow_dispatch 输入"
+          elif [ "${CONFIRM_RESTATE}" = "true" ]; then
+            # 「用仓库里的版本号再发一次」是重跑失败发布时的正当场景，
+            # 但它会覆盖同名的线上 Release，所以必须由人显式勾选。
+            # 不能靠「忘了填 version」自动掉进来 —— 那正是本次要消灭的事故形态，
+            # 只是从 tag 路径挪到了手动路径。
+            V="${DEFAULT_VERSION}"
+            SRC="DEFAULT_VERSION（已显式勾选 confirm_restate）"
+            echo "::warning::走 confirm_restate 兜底：将重发 ${V}；若该版本已发布，同名线上 Release 会被覆盖。"
+          else
+            echo "::error::workflow_dispatch 必须显式填写 version（x.y.z）。"
+            echo "::error::只有 tag 推送才自动取值。留空走 DEFAULT_VERSION 会静默重发旧版本并覆盖线上 Release，所以这里直接失败。"
+            echo "::error::确实要重发仓库当前版本，请勾选 confirm_restate。"
+            exit 1
+          fi
+
+          # tag 名与输入都是**外部可控**字符串。在它们进入任何 shell 逻辑之前：
+          #   1. 只通过 env 传进来（本步骤的 INPUT_VERSION），不内联进 run: 脚本文本，
+          #      否则 $(...) 会被 shell 展开 —— 等于把注入点交给 tag 名；
+          #   2. 去换行，避免日志/注释被劈开（伪造 ::error:: 之类的 workflow 命令）；
+          #   3. 形状必须是 x.y.z 才允许往下走，也顺带挡住 GITHUB_OUTPUT 注入。
+          V="$(printf '%s' "$V" | tr -d '\r\n')"
+          SRC="$(printf '%s' "$SRC" | tr -d '\r\n')"
+
+          if ! printf '%s' "$V" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::版本号不是 x.y.z 形式：'${V}'（来源：${SRC}）"
+            exit 1
+          fi
+
+          echo "version=${V}" >> "$GITHUB_OUTPUT"
+          echo "source=${SRC}"  >> "$GITHUB_OUTPUT"
+          echo "本次发布版本：${V}（来源：${SRC}）"
+
+      - name: 版本一致性（AGENTS.md §11 五处）
+        env:
+          V: ${{ steps.resolve.outputs.version }}
+        run: |
+          set -euo pipefail
+          # 五处必须一起改：manifest / Android versionName /
+          # iOS CFBundleShortVersionString / 本文件 DEFAULT_VERSION / CHANGELOG 顶部。
+          # 漏一处，装出来的包「关于」里的版本就和 Release 标题对不上。
+          python3 tools/checks/check-versions.py --expect "$V"
+
+  # ---------------------------------------------------------------- Android
+  android:
+    needs: version
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    env:
+      V: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: 准备 JDK 17
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: 确认 Android SDK 组件
+        run: |
+          echo "ANDROID_HOME=$ANDROID_HOME"
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null 2>&1 || true
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
+            "platforms;android-35" "build-tools;35.0.0" >/dev/null 2>&1 || true
+          ls "$ANDROID_HOME/platforms" || true
+
+      - name: 安装 Gradle 8.14.6
+        uses: gradle/actions/setup-gradle@v6
+        with:
+          gradle-version: "8.14.6"
+
+      - name: 还原发布签名密钥（可选）
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          # 仓库里那份 legacy keystore 是公开的，只能用来自证"能覆盖升级"，
+          # 不能证明包是我们发的。配了 secret 就用私钥，没配则回落（并告警）。
+          if [ -z "$KEYSTORE_B64" ]; then
+            echo "::warning::未配置 ANDROID_KEYSTORE_BASE64，使用仓库内公开的 legacy 密钥签名"
+            exit 0
+          fi
+          mkdir -p "$RUNNER_TEMP/keystore"
+          printf '%s' "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/keystore/release.jks"
+          chmod 600 "$RUNNER_TEMP/keystore/release.jks"
+          echo "LITV_KEYSTORE_FILE=$RUNNER_TEMP/keystore/release.jks" >> "$GITHUB_ENV"
+
+      - name: 构建 APK（release，已签名）
+        working-directory: android
+        env:
+          LITV_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          LITV_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          LITV_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          # 用 setup-gradle 装的 gradle 命令（仓库里没有 gradlew wrapper）。
+          # 签名材料由上面的步骤写进 LITV_KEYSTORE_FILE；没配 secret 时
+          # 回落到仓库内的 legacy keystore，CI 不需要额外配置也能出包。
+          gradle --no-daemon assembleRelease
+
+      - name: 校验签名方案（必须 v1+v2+v3 全 true）
+        run: |
+          APK=android/app/build/outputs/apk/tv/release/app-tv-armeabi-v7a-release.apk
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify -v "$APK" | tee /tmp/sig.txt
+          for v in v1 v2 v3; do
+            grep -q "Verified using $v scheme.*: true" /tmp/sig.txt \
+              || { echo "❌ $v 签名缺失"; exit 1; }
+          done
+          echo "✅ v1+v2+v3 签名齐全"
+
+      - name: 收集 APK
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          # V 来自 version job 的输出（job 级 env），这里不再自己推导版本号。
+          # 电视版 / 手机版分开出包（flavor: tv / phone），
+          # 每个 flavor 再按 ABI 拆成 armv7 / arm64 两个包。
+          APK=android/app/build/outputs/apk
+          cp $APK/tv/release/app-tv-armeabi-v7a-release.apk      "out/LITV-${V}-tv-armv7.apk"
+          cp $APK/tv/release/app-tv-arm64-v8a-release.apk        "out/LITV-${V}-tv-arm64.apk"
+          cp $APK/phone/release/app-phone-armeabi-v7a-release.apk "out/LITV-${V}-phone-armv7.apk"
+          cp $APK/phone/release/app-phone-arm64-v8a-release.apk   "out/LITV-${V}-phone-arm64.apk"
+          ls -lh out/
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: android-apk
+          path: out/*.apk
+
+  # ---------------------------------------------------------------- fnOS fpk
+  fpk:
+    needs: version
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      V: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version: "1.23"
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+
+      - name: 构建管理台
+        working-directory: admin
+        run: |
+          npm install --no-audit --no-fund
+          npm run build
+
+      - name: 下载 fnpack
+        run: |
+          curl -fsSL -o /tmp/fnpack https://static2.fnnas.com/fnpack/fnpack-1.2.3-linux-amd64
+          chmod +x /tmp/fnpack
+          mkdir -p ~/.local/bin && cp /tmp/fnpack ~/.local/bin/fnpack
+          ~/.local/bin/fnpack --help | head -3
+
+      - name: 打 fpk（x86 + arm）
+        run: |
+          cd packaging/fnos
+          chmod +x build.sh
+          # build.sh 会在编译 Go 之前把 admin/dist 同步进 go:embed 路径，
+          # 所以这里不需要额外拷前端——同步是脚本的唯一机制。
+          ./build.sh --arch x86
+          ./build.sh --arch arm
+          ls -lh dist/
+
+      - name: 验证前端确实进了包（R11 门禁）
+        run: |
+          set -o pipefail
+          # 服务端用 go:embed 打静态资源。若构建顺序错了，
+          # 包会静默带着上一次的前端，而构建一路显示成功。
+          # 这里断言 embed 与本次 dist 一致、且资源引用齐全。
+          bash build/test/verify-frontend-embed.sh packaging/fnos/dist/litv_x86_v*.fpk
+
+      - name: 收集 fpk
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          # V 来自 version job 的输出（job 级 env）。
+          cp packaging/fnos/dist/litv_x86_v*.fpk "out/litv_x86_${V}.fpk"
+          cp packaging/fnos/dist/litv_arm_v*.fpk "out/litv_arm_${V}.fpk"
+          ls -lh out/
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: fnos-fpk
+          path: out/*.fpk
+
+  # ---------------------------------------------------------------- iOS ipa
+  ios:
+    needs: version
+    runs-on: macos-latest
+    timeout-minutes: 40
+    env:
+      V: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: 安装工具
+        run: brew install xcodegen
+
+      - name: 生成工程 + 装 Pod
+        working-directory: ios
+        run: |
+          xcodegen generate
+          pod install --repo-update 2>&1 | tail -10
+
+      - name: 编译（不签名）
+        working-directory: ios
+        run: |
+          # ⚠️ pipefail 不能少：否则 xcodebuild 失败会被 tail 的退出码盖掉，
+          #    表现为"构建成功但 ipa 里没有主二进制"（踩过）。
+          set -o pipefail
+          xcodebuild \
+            -workspace LITV.xcworkspace \
+            -scheme LITV \
+            -sdk iphoneos \
+            -configuration Release \
+            -derivedDataPath build \
+            -destination 'generic/platform=iOS' \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGN_ENTITLEMENTS="" \
+            build 2>&1 | tail -60
+
+      - name: 打包未签名 ipa
+        working-directory: ios
+        run: |
+          APP="build/Build/Products/Release-iphoneos/LITV.app"
+          test -d "$APP" || { echo "没找到 LITV.app"; exit 1; }
+          # 主二进制必须存在——防"假成功"（构建失败但产物目录是空的）
+          test -f "$APP/LITV" || { echo "LITV.app 里没有主二进制，构建其实失败了"; exit 1; }
+          rm -rf Payload LITV-unsigned.ipa
+          mkdir -p Payload
+          cp -R "$APP" Payload/
+          rm -rf Payload/LITV.app/_CodeSignature Payload/LITV.app/embedded.mobileprovision
+          zip -qry LITV-unsigned.ipa Payload
+          ls -lh LITV-unsigned.ipa
+
+      - name: 收集 ipa
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          # V 来自 version job 的输出（job 级 env）。
+          cp ios/LITV-unsigned.ipa "out/LITV-${V}-unsigned.ipa"
+          ls -lh out/
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ios-ipa
+          path: out/*.ipa
+
+  # ---------------------------------------------------------------- 发 Release
+  release:
+    needs: [version, android, fpk, ios]
+    # iOS 失败不该拖住安卓和飞牛包：
+    #   - version / android / fpk 必须成功（没有它们发布没意义）
+    #   - ios 只要"跑完了"就放行，成功就带上 ipa，失败就只发安卓和 fpk
+    # 之前写成 needs 三者全成功，结果 macOS runner 排队被取消，
+    # 整个 0.1.11 一个产物都没发出去。
+    if: |
+      always() &&
+      needs.version.result == 'success' &&
+      needs.android.result == 'success' &&
+      needs.fpk.result == 'success'
+    runs-on: ubuntu-24.04
+    env:
+      V: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: 下载全部产物
+        uses: actions/download-artifact@v8
+        with:
+          path: artifacts
+
+      - name: 整理文件
+        run: |
+          mkdir -p out
+          find artifacts -type f \( -name "*.apk" -o -name "*.fpk" -o -name "*.ipa" \) -exec cp {} out/ \;
+          ls -lh out/
+
+      - name: 断言产物文件名与本次版本一致
+        run: |
+          set -euo pipefail
+          # 这是「版本只有一个来源」的交叉验证：如果将来又有哪个 job 自己推导
+          # 版本号（这次修的正是这个病），产物文件名就会和 version job 的输出对不上，
+          # 在发布之前就炸掉，而不是发出去之后才被人从「关于」里发现。
+          shopt -s nullglob
+          n=0
+          for f in out/*.apk out/*.fpk out/*.ipa; do
+            n=$((n + 1))
+            case "$(basename "$f")" in
+              *"${V}"*) ;;
+              *)
+                echo "::error::产物 $(basename "$f") 的名字里不含版本 ${V}，说明某个 job 用了不同的版本号"
+                exit 1
+                ;;
+            esac
+          done
+          if [ "$n" -eq 0 ]; then
+            echo "::error::out/ 里没有任何产物，不发布"
+            exit 1
+          fi
+          echo "已核对 ${n} 个产物，全部带版本 ${V}"
+
+      - name: 生成 sha256
+        run: |
+          cd out
+          sha256sum * > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: 发布 Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO_SLUG: ${{ github.repository }}
+          RELEASE_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          TAG="v${V}"
+
+          # 破坏性操作前先自证。这里是第一轮体检发现的缺陷的落点：
+          # 以前 V 从 DEFAULT_VERSION 常量推导，推 v0.1.14 的 tag 时
+          # V 还是旧值，于是下面的 delete 会删掉**上一版已发布**的
+          # tag + Release，再把新产物发成旧版本号，全程绿灯。
+          # 现在 V 只来自 version job，并且这里再挡一次形状。
+          if ! printf '%s' "$TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::拒绝发布：tag '$TAG' 不是 vX.Y.Z 形式"
+            exit 1
+          fi
+          echo "本次发布 tag：${TAG}"
+
+          # 只提示不拦截：§12 要求版本号只能往上加。
+          # 回退发版是有意的场景，所以这里给警告而不是失败。
+          LATEST="$(gh release list --limit 1 --exclude-drafts --json tagName \
+                    --jq '.[0].tagName // ""' 2>/dev/null || true)"
+          if [ -n "$LATEST" ]; then
+            echo "当前最新 Release：${LATEST}"
+            if [ "v${V}" = "$LATEST" ]; then
+              echo "::warning::${TAG} 已存在，本次会覆盖它（重跑同一版本）"
+            fi
+          fi
+
+          # ---------- tag 必须绑定本次构建的提交 ----------
+          #
+          # 以前这里是 `gh release delete --cleanup-tag` 删掉 tag，然后
+          # `gh release create` 不带 --target/--verify-tag。tag 缺失时 gh 会从
+          # **默认分支最新提交**重建它：构建期间 main 一前进，产物源提交就和
+          # 重建出来的 tag 对不上，溯源错位、已发布版本也不再不可变。
+          echo "本次构建提交：${RELEASE_SHA}"
+
+          TAG_REF_SHA="$(gh api "repos/${REPO_SLUG}/git/ref/tags/${TAG}" \
+                          --jq '.object.sha // ""' 2>/dev/null || true)"
+
+          if [ -n "${TAG_REF_SHA}" ]; then
+            if [ "${TAG_REF_SHA}" != "${RELEASE_SHA}" ]; then
+              echo "::error::tag ${TAG} 已指向 ${TAG_REF_SHA}，与本次构建 ${RELEASE_SHA} 不一致。拒绝移动已发布的 tag。"
+              exit 1
+            fi
+            echo "tag ${TAG} 已存在且指向本次提交，按重跑处理（只重建 Release，不动 tag）"
+            # 只删 Release，**不删 tag**——删了下一步就会从默认分支重建它
+            gh release delete "$TAG" --yes 2>/dev/null || true
+          else
+            echo "tag ${TAG} 不存在，绑定本次提交创建"
+            gh api --method POST "repos/${REPO_SLUG}/git/refs" \
+              -f ref="refs/tags/${TAG}" -f sha="${RELEASE_SHA}" >/dev/null
+          fi
+
+          # 发布说明 = 下载指引 + 该版本的 CHANGELOG 段落
+          # （说明放仓库文件里，不在 YAML 里写 heredoc——
+          #   YAML 块标量不允许顶格内容，heredoc 会把它截断）
+          cp docs/release-notes.md /tmp/notes.md
+          echo "" >> /tmp/notes.md
+          echo "## 本版变化" >> /tmp/notes.md
+          echo "" >> /tmp/notes.md
+          # 用 index() 而不是正则：awk 里 "\[" 这种转义不可靠
+          awk -v v="$V" '
+            index($0, "## [" v "]") == 1 { found = 1; next }
+            found && index($0, "## [") == 1 { exit }
+            found { print }
+          ' CHANGELOG.md > /tmp/changes.md
+          # CHANGELOG 里没有这一版就是不完整的发布（§12 第 2 条）。
+          # 空段落会让 Release 说明只剩下载指引，用户看不到这版改了什么。
+          if [ ! -s /tmp/changes.md ]; then
+            echo "::error::CHANGELOG.md 里找不到 ${V} 的段落，发版说明会是空的"
+            exit 1
+          fi
+          cat /tmp/changes.md >> /tmp/notes.md
+          echo "" >> /tmp/notes.md
+          echo "完整更新日志见 [CHANGELOG.md](../blob/main/CHANGELOG.md)。" >> /tmp/notes.md
+          echo "----- 发布说明预览 -----"
+          head -50 /tmp/notes.md
+
+          gh release create "$TAG" out/* \
+            --title "LITV ${V}" \
+            --notes-file /tmp/notes.md \
+            --verify-tag
+
+      - name: 打印 Release 地址
+        env:
+          # 与其它步骤一致：表达式只出现在 env，不进 run 的脚本文本。
+          REPO: ${{ github.repository }}
+        run: echo "https://github.com/${REPO}/releases/tag/v${V}"
+
+      - name: 同步 README 下载表
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # 为什么不靠 readme-downloads.yml 的 release:published 事件：
+          # 用 GITHUB_TOKEN 创建的 Release **不会再触发其它工作流**
+          # （GitHub 防止递归的规则），那个事件根本不会到达。
+          # 所以在这里直接同步，readme-downloads.yml 只留作手动触发。
+          git fetch --quiet origin main
+          git checkout --quiet main
+          git reset --quiet --hard origin/main
+
+          python3 tools/ops/update-downloads.py
+
+          if git diff --quiet README.md; then
+            echo "README 已是最新，跳过提交"
+            exit 0
+          fi
+
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add README.md
+          git commit -m "docs: README 下载表同步到 v${V} [skip ci]"
+          git push origin HEAD:main

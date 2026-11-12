@@ -1,0 +1,20 @@
+# CocoaPods 依赖
+#
+# 为什么用 VLCKit 而不是自编 libmpv：
+#   libmpv 在 iOS 上要编 uavs3d → ffmpeg → fribidi → freetype → libass → mpv 六层，
+#   每层都有自己的交叉编译坑（详见 docs/design/02-iOS构建现状.md）。
+#   MobileVLCKit 是预编译 xcframework，一次链接搞定，且能力覆盖更全：
+#   AC3/EAC3/DTS/MPEG-TS/AVS3(部分)，License 是 LGPL-2.1+（比 mpv 的 GPL 宽松）。
+#
+# 注意：MobileVLCKit 是静态 framework，CI 里用 CODE_SIGNING_ALLOWED=NO 编译没问题。
+
+platform :ios, '15.0'
+
+target 'LITV' do
+  # MobileVLCKit 是静态 framework，显式指定 static linkage，
+  # 否则 CocoaPods 会按动态库处理，和 xcodegen 生成的工程配置打架。
+  use_frameworks! :linkage => :static
+
+  # 3.5.x 是稳定线；4.x 还在 alpha
+  pod 'MobileVLCKit', '~> 3.5'
+end

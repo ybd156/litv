@@ -1,0 +1,224 @@
+#!/bin/bash
+# =============================================================================
+# 安装后回调（应用文件已落地，target/ 可用）
+#
+# 职责：
+#   1. 从向导变量生成 ${TRIM_PKGETC}/config.yaml（模板：target/server/config.yaml.template）
+#   2. 生成随机 auth.secret（openssl rand -hex 32）
+#   3. 创建 ${TRIM_PKGVAR}/data 并设权限
+#   4. 把端口写到 ${TRIM_PKGVAR}/server_port（运维/调试/独立端口入口都读它）
+#
+# 幂等性：框架可能重跑本脚本（安装重试、修复、升级前的兜底）。所以：
+#   - 已存在的 config.yaml 不覆盖（否则会重新生成 secret，把所有已登录会话踢掉）
+#   - 目录创建、权限设置全部可重复
+#
+# 向导变量（字段名即环境变量名）：
+#   wizard_port / wizard_admin_password / wizard_data_path
+# =============================================================================
+
+set -u
+umask 022
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+APP_ROOT="$(dirname "$SCRIPT_DIR")"
+
+# ---- 目录解析（与 cmd/main 保持一致；本地开发降级到源码相对路径）----
+if [ -z "${TRIM_APPDEST:-}" ]; then
+    if [ -d "${APP_ROOT}/app" ]; then TRIM_APPDEST="${APP_ROOT}/app"; else TRIM_APPDEST="/var/apps/litv/target"; fi
+fi
+if [ -z "${TRIM_PKGVAR:-}" ]; then
+    if [ -d "${APP_ROOT}/var" ]; then TRIM_PKGVAR="${APP_ROOT}/var"; else TRIM_PKGVAR="/var/apps/litv/var"; fi
+fi
+if [ -z "${TRIM_PKGETC:-}" ]; then
+    if [ -d "${APP_ROOT}/etc" ]; then TRIM_PKGETC="${APP_ROOT}/etc"; else TRIM_PKGETC="/var/apps/litv/etc"; fi
+fi
+
+TEMPLATE="${TRIM_APPDEST}/server/config.yaml.template"
+CONFIG="${TRIM_PKGETC}/config.yaml"
+PORT_FILE="${TRIM_PKGVAR}/server_port"
+DATA_PATH_FILE="${TRIM_PKGVAR}/wizard_data_path"
+INIT_PWD_FILE="${TRIM_PKGVAR}/initial_admin_password"
+DATA_DIR="${TRIM_PKGVAR}/data"
+DEFAULT_PORT=28027
+
+log() { echo "[install_callback] $1"; }
+die() {
+    log "错误: $1"
+    if [ -n "${TRIM_TEMP_LOGFILE:-}" ]; then printf '%s\n' "$1" >"${TRIM_TEMP_LOGFILE}" 2>/dev/null || true; fi
+    exit 1
+}
+
+# 用 awk 的 ENVIRON 传值，避免密码里的反斜杠/&/$ 被 sed 解释（sed 的 c\ 与 s/// 都
+# 对特殊字符敏感，这是最容易"改个密码就装不上"的地方）。
+# 按"标记"整行替换：模板里每行末尾带 # @@XXX@@ 标记，标记会写回新行，保证可重复执行。
+replace_line_marked() {
+    local file="$1" marker="$2" newline="$3"
+    REPL="${newline}" awk -v m="${marker}" '
+        index($0, m) { print ENVIRON["REPL"]; next }
+        { print }
+    ' "${file}" >"${file}.tmp" || return 1
+    mv -f "${file}.tmp" "${file}"
+}
+
+# yaml_dq() —— 把任意字符串编码成可安全嵌入 YAML 双引号标量的形式。
+#
+# R18：旧实现把密码直接塞进引号里。合法密码只要含一个 " 或 \，
+# 写出的 YAML 就变成另一个值，甚至解析失败、服务起不来——
+# 用户看到的是"改个密码就装不上"，而且要到重启才发现。
+#
+# 双引号标量里 \ 和 " 必须转义；换行会让标量跨行，直接拒绝。
+yaml_dq() {
+    local s="$1"
+    case "${s}" in
+        *$'\n'*) return 1 ;;
+    esac
+    local out="" i=0 n=${#s} ch
+    while [ "$i" -lt "$n" ]; do
+        ch="${s:$i:1}"
+        case "${ch}" in
+            \\) out="${out}\\\\" ;;
+            \")  out="${out}\\\"" ;;
+            *)  out="${out}${ch}" ;;
+        esac
+        i=$((i + 1))
+    done
+    printf '"%s"' "${out}"
+}
+
+# ---- 0. 基础目录 ----
+mkdir -p "${TRIM_PKGVAR}" "${TRIM_PKGETC}" "${DATA_DIR}" 2>/dev/null || die "无法创建目录 ${TRIM_PKGVAR} / ${TRIM_PKGETC}"
+
+# ---- 1. 二进制可执行位 ----
+# .fpk 内的 app.tgz 会保留构建机上的权限位，但为了防"构建机 umask 把 755 变成 644"，
+# 这里再兜一次底。
+chmod +x "${TRIM_APPDEST}"/server/litvd* 2>/dev/null || true
+
+# ---- 2. 校验向导输入 ----
+PORT="${wizard_port:-}"
+PORT="$(printf '%s' "${PORT}" | tr -dc '0-9')"
+if [ -z "${PORT}" ]; then
+    PORT="${DEFAULT_PORT}"
+    log "未提供端口，使用默认 ${DEFAULT_PORT}"
+elif [ "${PORT}" -lt 1 ] || [ "${PORT}" -gt 65535 ]; then
+    log "端口 ${PORT} 非法（1-65535），回退为 ${DEFAULT_PORT}"
+    PORT="${DEFAULT_PORT}"
+fi
+
+ADMIN_PWD="${wizard_admin_password:-}"
+# 换行会破坏 yaml，直接拒绝；其他字符原样保留
+case "${ADMIN_PWD}" in
+    *$'\n'*) die "管理员密码不能包含换行符" ;;
+esac
+if [ -n "${ADMIN_PWD}" ] && [ "${#ADMIN_PWD}" -lt 8 ]; then
+    log "警告: 管理员密码长度 ${#ADMIN_PWD} 小于 8，建议在应用设置里改长一点"
+fi
+
+# ---- 3. 生成随机 secret ----
+gen_secret() {
+    local s=""
+    if command -v openssl >/dev/null 2>&1; then
+        s=$(openssl rand -hex 32 2>/dev/null || true)
+    fi
+    if [ -z "${s}" ] && [ -r /dev/urandom ]; then
+        s=$(tr -dc 'a-f0-9' </dev/urandom 2>/dev/null | head -c 64)
+    fi
+    if [ -z "${s}" ]; then
+        # 最后兜底：时间 + PID 派生（可预测，仅用于"装得上"，日志里会警告）
+        s=$(printf '%s' "$(date +%s%N)-$$-${RANDOM}" | sha256sum 2>/dev/null | cut -d' ' -f1)
+        log "警告: openssl 与 /dev/urandom 均不可用，auth.secret 使用弱随机值，请手工替换"
+    fi
+    printf '%s' "${s}"
+}
+
+# ---- 4. 生成 config.yaml ----
+if [ -f "${CONFIG}" ]; then
+    # 已有配置：secret 与密码一律保留（重新生成会把所有已登录会话踢掉），
+    # 但端口和 socket 路径必须与当前安装位置对齐——换存储空间后 target 路径会变，
+    # 残留旧路径会让 cmd/main 等的 socket 和服务端实际监听的对不上，表现为启动超时。
+    log "配置已存在，保留原有 secret/密码: ${CONFIG}"
+    if grep -q '@@SERVER_PORT@@' "${CONFIG}"; then
+        replace_line_marked "${CONFIG}" '@@SERVER_PORT@@' "  port: ${PORT}                        # @@SERVER_PORT@@"
+    fi
+    if grep -q '@@GATEWAY_SOCKET@@' "${CONFIG}"; then
+        replace_line_marked "${CONFIG}" '@@GATEWAY_SOCKET@@' "  gateway_socket: \"${TRIM_APPDEST}/app.sock\"   # @@GATEWAY_SOCKET@@"
+    fi
+else
+    [ -f "${TEMPLATE}" ] || die "配置模板缺失: ${TEMPLATE}（安装包不完整，请重新下载 .fpk）"
+
+    SECRET="$(gen_secret)"
+
+    # 密码为空时随机生成一个，写到 0600 的初始密码文件里，由用户首次登录后自行修改。
+    # 不把密码回显到 stdout/日志：安装日志会进应用中心，属于半公开信息。
+    if [ -z "${ADMIN_PWD}" ]; then
+        ADMIN_PWD="$(gen_secret | cut -c1-16)"
+        (umask 077 && printf '%s' "${ADMIN_PWD}" >"${INIT_PWD_FILE}") 2>/dev/null \
+            || log "警告: 初始密码文件写入失败: ${INIT_PWD_FILE}"
+        log "未提供管理员密码，已随机生成初始密码，见 ${INIT_PWD_FILE}"
+    else
+        rm -f "${INIT_PWD_FILE}" 2>/dev/null || true
+    fi
+
+    cp -f "${TEMPLATE}" "${CONFIG}" || die "无法写入配置文件: ${CONFIG}"
+
+    replace_line_marked "${CONFIG}" '@@SERVER_PORT@@'    "  port: ${PORT}                        # @@SERVER_PORT@@"
+    replace_line_marked "${CONFIG}" '@@GATEWAY_SOCKET@@' "  gateway_socket: \"${TRIM_APPDEST}/app.sock\"   # @@GATEWAY_SOCKET@@"
+    replace_line_marked "${CONFIG}" '@@DB_PATH@@'        "  path: \"${DATA_DIR}/litv.db\"          # @@DB_PATH@@"
+    # R18：用 yaml_dq 编码，密码/密钥里的 " 与 \ 不会破坏 YAML 结构
+    if ! SECRET_ENC="$(yaml_dq "${SECRET}")"; then
+        die "签名密钥含非法字符，无法写入配置"
+    fi
+    if ! PWD_ENC="$(yaml_dq "${ADMIN_PWD}")"; then
+        die "管理员密码含换行符，无法写入配置"
+    fi
+    replace_line_marked "${CONFIG}" '@@AUTH_SECRET@@'    "  secret: ${SECRET_ENC}   # @@AUTH_SECRET@@"
+    replace_line_marked "${CONFIG}" '@@ADMIN_PASSWORD@@' "  admin_password: ${PWD_ENC}     # @@ADMIN_PASSWORD@@"
+    replace_line_marked "${CONFIG}" '@@CACHE_DIR@@'      "  cache_dir: \"${DATA_DIR}/cache\"       # @@CACHE_DIR@@"
+
+    log "配置已生成: ${CONFIG}"
+fi
+
+# 生成结果自检：模板里如果新增了字段却忘了在本脚本加替换，这里能立刻发现
+# （注意：替换后的行会保留 @@XXX@@ 标记，所以不能靠"是否还有 @@"判断）
+if ! grep -q "^  port: ${PORT}" "${CONFIG}" 2>/dev/null; then
+    log "警告: config.yaml 中的 port 与预期 ${PORT} 不一致，请检查模板格式"
+fi
+if grep -qE '^  secret: "(CHANGE_ME|)"' "${CONFIG}" 2>/dev/null; then
+    log "警告: auth.secret 仍是模板占位值，服务端会拒绝启动"
+fi
+
+# ---- 5. 数据目录与权限 ----
+# 服务端 EnsureDirs 只会自建 database.path 所在目录与 stream.cache_dir，
+# 这里提前建好，避免首次启动因权限不足而失败。
+mkdir -p "${DATA_DIR}/cache" "${TRIM_PKGVAR}/library" 2>/dev/null || true
+# 0750：同组可读（render/video 组要读缓存做硬解），其他用户不可读
+chmod 0750 "${DATA_DIR}" 2>/dev/null || true
+# root 安装场景下把属主交给应用用户，否则服务端（降权后）写不进去
+if [ "$(id -u)" = "0" ] && [ -n "${TRIM_USERNAME:-}" ]; then
+    chown -R "${TRIM_USERNAME}:${TRIM_GROUPNAME:-${TRIM_USERNAME}}" "${TRIM_PKGVAR}" 2>/dev/null || true
+fi
+
+# ---- 6. 端口与向导数据目录落盘 ----
+printf '%s' "${PORT}" >"${PORT_FILE}" 2>/dev/null || log "警告: 端口文件写入失败 ${PORT_FILE}"
+
+# 媒体库根目录（录播/播放列表）：用户选了就建好并记录，服务端与共享目录都读这个文件
+LIB_ROOT="${wizard_data_path:-}"
+case "${LIB_ROOT}" in
+    *$'\n'*) LIB_ROOT="" ;;
+esac
+if [ -n "${LIB_ROOT}" ]; then
+    if mkdir -p "${LIB_ROOT}" 2>/dev/null; then
+        printf '%s' "${LIB_ROOT}" >"${DATA_PATH_FILE}" 2>/dev/null || true
+        # 只改我们自己创建的目录权限，不动用户上级目录
+        chmod 0770 "${LIB_ROOT}" 2>/dev/null || true
+        if [ "$(id -u)" = "0" ] && [ -n "${TRIM_USERNAME:-}" ]; then
+            chown "${TRIM_USERNAME}:${TRIM_GROUPNAME:-${TRIM_USERNAME}}" "${LIB_ROOT}" 2>/dev/null || true
+        fi
+        log "媒体库目录: ${LIB_ROOT}"
+    else
+        log "警告: 无法创建媒体库目录 ${LIB_ROOT}，回退到 ${TRIM_PKGVAR}/library"
+        rm -f "${DATA_PATH_FILE}" 2>/dev/null || true
+    fi
+fi
+
+log "安装完成：端口 ${PORT}，数据目录 ${DATA_DIR}，网关前缀 /app/litv"
+exit 0

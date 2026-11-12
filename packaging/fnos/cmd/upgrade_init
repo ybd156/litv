@@ -1,0 +1,26 @@
+#!/bin/bash
+# =============================================================================
+# 升级前（新版本文件尚未替换）
+#
+# 目的：先停掉正在跑的服务，避免"旧进程还占着 app.sock / 数据库文件"时
+# 新版本二进制被替换或迁移脚本抢文件锁。框架有时也会自己停，这里做幂等处理。
+# =============================================================================
+
+set -u
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+APP_ROOT="$(dirname "$SCRIPT_DIR")"
+
+log() { echo "[upgrade_init] $1"; }
+log "升级前准备：停止服务（旧版本 ${TRIM_OLD_APPVER:-?} → ${TRIM_APPVER:-?}）"
+
+if [ -f "${SCRIPT_DIR}/main" ]; then
+    bash "${SCRIPT_DIR}/main" stop || log "警告: 停止服务返回非 0（继续升级）"
+fi
+
+# 升级前给配置做一份快照，万一新版本模板不兼容可以回滚
+if [ -n "${TRIM_PKGETC:-}" ] && [ -f "${TRIM_PKGETC}/config.yaml" ]; then
+    cp -f "${TRIM_PKGETC}/config.yaml" "${TRIM_PKGETC}/config.yaml.bak.${TRIM_OLD_APPVER:-old}" 2>/dev/null \
+        && log "已备份旧配置到 ${TRIM_PKGETC}/config.yaml.bak.${TRIM_OLD_APPVER:-old}"
+fi
+
+exit 0

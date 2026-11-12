@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  屏幕边距。
+  电视横屏屏幕宽（960dp 起），48dp 内边距视觉上正好；
+  手机竖屏只有 360dp 左右，48dp 会吃掉 1/4 宽度，所以 values-port 里降到 20dp。
+-->
+<resources>
+    <dimen name="screen_padding">48dp</dimen>
+</resources>

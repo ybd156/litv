@@ -1,0 +1,113 @@
+name: iOS Build Check
+
+# iOS 编译与 C05 会话隔离行为测试。只用标准免费 macOS runner，不发版。
+# 会话测试独立编译真实 Session/API 源码，不依赖播放器 Pod，也不能空跑。
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "ios/**"
+      - ".github/workflows/ios-check.yml"
+  pull_request:
+    paths:
+      - "ios/**"
+      - ".github/workflows/ios-check.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ios-check-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test-session:
+    name: iOS 会话隔离行为回归
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: 安装 xcodegen
+        run: brew install xcodegen
+
+      - name: 执行真实 Session/API 的 XCTest（禁止空跑）
+        working-directory: ios
+        run: |
+          set -euo pipefail
+          xcodegen generate
+          # 选 runner 已有的 iOS 模拟器，不写本机型号、路径或固定 UDID。
+          SIMULATOR_ID=$(xcrun simctl list devices available -j | python3 -c 'import json,sys; d=json.load(sys.stdin)["devices"]; print(next(x["udid"] for runtime,devices in d.items() if ".iOS-" in runtime for x in devices if x.get("isAvailable") and "iPhone" in x["name"]))')
+          mkdir -p build
+          xcodebuild \
+            -project LITV.xcodeproj \
+            -scheme LITVSessionTests \
+            -sdk iphonesimulator \
+            -configuration Debug \
+            -derivedDataPath build/session-tests \
+            -destination "platform=iOS Simulator,id=$SIMULATOR_ID" \
+            -parallel-testing-enabled NO \
+            -resultBundlePath build/C05.xcresult \
+            CODE_SIGNING_ALLOWED=NO \
+            test 2>&1 | tee build/c05-tests.log | tail -120
+          python3 Tests/check-test-log.py build/c05-tests.log
+
+      - name: 保存测试证据（失败也保存）
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: c05-session-tests
+          path: |
+            ios/build/c05-tests.log
+            ios/build/C05.xcresult
+          if-no-files-found: error
+          retention-days: 7
+
+  build-ios:
+    runs-on: macos-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: 安装工具
+        run: brew install xcodegen
+
+      - name: 生成工程 + 装 Pod
+        working-directory: ios
+        run: |
+          xcodegen generate
+          pod install --repo-update 2>&1 | tail -20 || \
+            pod install 2>&1 | tail -20
+
+      - name: 编译（不签名）
+        working-directory: ios
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -workspace LITV.xcworkspace \
+            -scheme LITV \
+            -sdk iphoneos \
+            -configuration Debug \
+            -derivedDataPath build \
+            -destination 'generic/platform=iOS' \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGN_ENTITLEMENTS="" \
+            build 2>&1 | tee /tmp/xcodebuild.log | tail -80
+
+      - name: 断言主二进制真的产出了
+        working-directory: ios
+        run: |
+          APP="build/Build/Products/Debug-iphoneos/LITV.app"
+          test -d "$APP" || { echo "没找到 LITV.app"; exit 1; }
+          test -f "$APP/LITV" || { echo "LITV.app 里没有主二进制，构建其实失败了"; exit 1; }
+          ls -lh "$APP/LITV"
+          echo "iOS 编译通过"
+
+      - name: 失败时回传完整日志
+        if: failure()
+        run: |
+          echo "=== xcodebuild.log 末尾 ==="
+          tail -200 /tmp/xcodebuild.log 2>/dev/null || echo "（没有日志）"

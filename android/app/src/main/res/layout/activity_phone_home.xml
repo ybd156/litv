@@ -1,0 +1,291 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  手机端首页：单页四 Tab，不开新页面。
+
+  播放   内嵌播放器 + 控制条 + 节目单
+  频道   搜索 + 分组 chip + 频道列表（点一下就地播放，切到播放页）
+  遥控器  跳 RemoteActivity（带同样的底部栏，像切页而不是跳页）
+  设置   跳 SettingsActivity（同上）
+
+  注意：XML 注释里不能出现连续两个减号，所以这里不用横线做分隔。
+-->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/bg"
+    android:orientation="vertical">
+
+    <FrameLayout
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1">
+
+        <!-- 播放页 -->
+        <LinearLayout
+            android:id="@+id/panelPlay"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:orientation="vertical">
+
+            <LinearLayout
+                android:id="@+id/playHeader"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:gravity="center_vertical"
+                android:orientation="horizontal"
+                android:paddingHorizontal="16dp"
+                android:paddingTop="16dp"
+                android:paddingBottom="8dp">
+
+                <TextView
+                    android:id="@+id/playName"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:ellipsize="end"
+                    android:maxLines="1"
+                    android:text="还没选频道"
+                    android:textColor="@color/text_primary"
+                    android:textSize="19sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:id="@+id/playEngine"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="8dp"
+                    android:textColor="@color/accent"
+                    android:textSize="11sp" />
+            </LinearLayout>
+
+            <FrameLayout
+                android:id="@+id/videoBox"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:background="@android:color/black">
+
+                <SurfaceView
+                    android:id="@+id/surface"
+                    android:layout_width="match_parent"
+                    android:layout_height="match_parent" />
+
+                <ProgressBar
+                    android:id="@+id/loading"
+                    android:layout_width="38dp"
+                    android:layout_height="38dp"
+                    android:layout_gravity="center"
+                    android:indeterminateTint="@color/accent"
+                    android:visibility="gone" />
+
+                <TextView
+                    android:id="@+id/gestureTip"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_gravity="center"
+                    android:background="#CC151A21"
+                    android:paddingHorizontal="18dp"
+                    android:paddingVertical="10dp"
+                    android:textColor="@color/text_primary"
+                    android:textSize="15sp"
+                    android:visibility="gone" />
+
+                <TextView
+                    android:id="@+id/playHint"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_gravity="center"
+                    android:text="去「频道」选一个台"
+                    android:textColor="#66FFFFFF"
+                    android:textSize="13sp" />
+
+                <!-- 播放控件浮层：像现代播放器一样做在画面里。
+                     点画面呼出，4 秒后自动隐藏，不遮挡内容。 -->
+                <LinearLayout
+                    android:id="@+id/playerControls"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_gravity="bottom"
+                    android:background="#99000000"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal"
+                    android:paddingHorizontal="8dp"
+                    android:paddingVertical="6dp"
+                    android:visibility="gone">
+
+                    <TextView
+                        android:id="@+id/btnPrev"
+                        style="@style/PhoneCtl"
+                        android:text="⏮&#10;上一台" />
+
+                    <TextView
+                        android:id="@+id/btnPlayPause"
+                        style="@style/PhoneCtl"
+                        android:text="⏸&#10;暂停" />
+
+                    <TextView
+                        android:id="@+id/btnNext"
+                        style="@style/PhoneCtl"
+                        android:text="⏭&#10;下一台" />
+
+                    <TextView
+                        android:id="@+id/btnMute"
+                        style="@style/PhoneCtl"
+                        android:text="🔇&#10;静音" />
+
+                    <TextView
+                        android:id="@+id/btnFullscreen"
+                        style="@style/PhoneCtl"
+                        android:text="⛶&#10;全屏" />
+
+                    <TextView
+                        android:id="@+id/btnCast"
+                        style="@style/PhoneCtl"
+                        android:text="📺&#10;投屏" />
+                </LinearLayout>
+            </FrameLayout>
+
+            <TextView
+                android:id="@+id/playNow"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:ellipsize="end"
+                android:maxLines="1"
+                android:paddingHorizontal="16dp"
+                android:paddingTop="10dp"
+                android:textColor="@color/text_secondary"
+                android:textSize="12sp" />
+
+            <!-- 播放链路：直连/中转 + 实际用的 UA，方便排查源站校验 -->
+            <TextView
+                android:id="@+id/playRoute"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:ellipsize="end"
+                android:maxLines="1"
+                android:paddingHorizontal="16dp"
+                android:paddingTop="3dp"
+                android:textColor="#66FFFFFF"
+                android:textSize="11sp" />
+
+            <ScrollView
+                android:layout_width="match_parent"
+                android:layout_height="0dp"
+                android:layout_weight="1"
+                android:clipToPadding="false"
+                android:paddingHorizontal="16dp"
+                android:scrollbars="none">
+
+                <LinearLayout
+                    android:id="@+id/epgList"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical" />
+            </ScrollView>
+        </LinearLayout>
+
+        <!-- 频道页 -->
+        <LinearLayout
+            android:id="@+id/panelChannel"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:background="@color/bg"
+            android:orientation="vertical"
+            android:visibility="gone">
+
+            <TextView
+                android:id="@+id/status"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:paddingHorizontal="16dp"
+                android:paddingTop="16dp"
+                android:textColor="@color/text_secondary"
+                android:textSize="12sp" />
+
+            <EditText
+                android:id="@+id/searchInput"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginHorizontal="16dp"
+                android:layout_marginTop="8dp"
+                android:autofillHints="none"
+                android:background="@drawable/bg_card"
+                android:hint="搜频道名 / 分组"
+                android:imeOptions="actionSearch"
+                android:inputType="text"
+                android:maxLines="1"
+                android:paddingHorizontal="14dp"
+                android:paddingVertical="9dp"
+                android:singleLine="true"
+                android:textColor="@color/text_primary"
+                android:textColorHint="@color/text_secondary"
+                android:textSize="14sp" />
+
+            <HorizontalScrollView
+                android:id="@+id/groupBar"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="6dp"
+                android:paddingHorizontal="12dp"
+                android:scrollbars="none">
+
+                <LinearLayout
+                    android:id="@+id/groupChips"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal" />
+            </HorizontalScrollView>
+
+            <androidx.recyclerview.widget.RecyclerView
+                android:id="@+id/list"
+                android:layout_width="match_parent"
+                android:layout_height="0dp"
+                android:layout_marginTop="4dp"
+                android:layout_weight="1"
+                android:clipToPadding="false"
+                android:paddingHorizontal="16dp"
+                android:paddingBottom="12dp"
+                android:scrollbars="none" />
+
+            <TextView
+                android:id="@+id/empty"
+                android:layout_width="match_parent"
+                android:layout_height="0dp"
+                android:layout_weight="1"
+                android:gravity="center"
+                android:text="@string/empty_channels"
+                android:textColor="@color/text_secondary"
+                android:textSize="16sp"
+                android:visibility="gone" />
+        </LinearLayout>
+    </FrameLayout>
+
+    <!-- 底部 Tab -->
+    <LinearLayout
+        android:id="@+id/bottomTabs"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:background="@color/bg_panel"
+        android:orientation="horizontal"
+        android:paddingVertical="10dp">
+
+        <TextView
+            android:id="@+id/tabPlay"
+            style="@style/PhoneTab"
+            android:text="播放" />
+
+        <TextView
+            android:id="@+id/tabChannel"
+            style="@style/PhoneTab"
+            android:text="频道" />
+
+        <TextView
+            android:id="@+id/tabRemote"
+            style="@style/PhoneTab"
+            android:text="遥控器" />
+
+        <TextView
+            android:id="@+id/tabSettings"
+            style="@style/PhoneTab"
+            android:text="设置" />
+    </LinearLayout>
+</LinearLayout>

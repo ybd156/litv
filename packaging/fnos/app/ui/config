@@ -1,0 +1,14 @@
+{
+    ".url": {
+        "litv.main": {
+            "title": "${entry.title}",
+            "icon": "images/icon_{0}.png",
+            "type": "iframe",
+            "protocol": "",
+            "gatewayPrefix": "/app/litv",
+            "gatewaySocket": "app.sock",
+            "url": "/app/litv",
+            "allUsers": true
+        }
+    }
+}

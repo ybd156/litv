@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 台号小方块：深色底、小圆角，给频道行一个视觉锚点。
+     参考常见 IPTV 客户端，台号是带底色的方块而不是裸数字——
+     一行行扫下去时，方块让人一眼定位到"第几个台"。 -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
+    <solid android:color="#33252E38" />
+    <corners android:radius="6dp" />
+</shape>

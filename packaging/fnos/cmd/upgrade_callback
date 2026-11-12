@@ -1,0 +1,48 @@
+#!/bin/bash
+# =============================================================================
+# 升级后（新版本文件已就位）
+#
+# 1. 修正可执行位（新包里的二进制权限位可能变）
+# 2. 配置缺失则补生成（老版本可能没有 config.yaml，比如从更早的版本升上来）
+# 3. 重启服务
+# =============================================================================
+
+set -u
+umask 022
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+APP_ROOT="$(dirname "$SCRIPT_DIR")"
+
+if [ -z "${TRIM_APPDEST:-}" ]; then
+    if [ -d "${APP_ROOT}/app" ]; then TRIM_APPDEST="${APP_ROOT}/app"; else TRIM_APPDEST="/var/apps/litv/target"; fi
+fi
+if [ -z "${TRIM_PKGVAR:-}" ]; then
+    if [ -d "${APP_ROOT}/var" ]; then TRIM_PKGVAR="${APP_ROOT}/var"; else TRIM_PKGVAR="/var/apps/litv/var"; fi
+fi
+if [ -z "${TRIM_PKGETC:-}" ]; then
+    if [ -d "${APP_ROOT}/etc" ]; then TRIM_PKGETC="${APP_ROOT}/etc"; else TRIM_PKGETC="/var/apps/litv/etc"; fi
+fi
+
+log() { echo "[upgrade_callback] $1"; }
+
+log "升级完成: ${TRIM_OLD_APPVER:-?} → ${TRIM_APPVER:-?}"
+
+chmod +x "${TRIM_APPDEST}"/server/litvd* 2>/dev/null || true
+mkdir -p "${TRIM_PKGVAR}/data" 2>/dev/null || true
+
+# 老版本没有配置文件时补一份（install_callback 幂等，已存在则只对齐端口）
+if [ ! -f "${TRIM_PKGETC}/config.yaml" ]; then
+    log "未发现 config.yaml，调用 install_callback 生成"
+    bash "${SCRIPT_DIR}/install_callback" || log "警告: 配置生成失败"
+fi
+
+if [ -f "${SCRIPT_DIR}/main" ]; then
+    log "启动服务"
+    bash "${SCRIPT_DIR}/main" start || {
+        log "错误: 服务启动失败，请查看 ${TRIM_PKGVAR}/litvd.log"
+        [ -n "${TRIM_TEMP_LOGFILE:-}" ] && echo "升级后启动失败，请查看日志: ${TRIM_PKGVAR}/litvd.log" >"${TRIM_TEMP_LOGFILE}"
+        exit 1
+    }
+fi
+
+exit 0

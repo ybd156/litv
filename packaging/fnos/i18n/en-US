@@ -1,0 +1,44 @@
+# LITV English strings
+# Syntax: INI-style [section] + key="value", no escaping (avoid double quotes in values).
+# Referenced from manifest / app/ui/config / wizard/* as ${section.key}.
+# NOTE: fnpack only requires that this file (or i18n/en) exists; it does not validate keys.
+
+[common]
+displayName="LITV Live"
+desc="<b>LITV</b> is an IPTV management backend for fnOS: manage live sources and EPG, and serve Android TV / mobile / iOS clients with stable playback and token-based auth.<br/><br/><b>⚡ Features</b><br/>📺 Source and channel group management<br/>🗓️ EPG fetching and catch-up<br/>🔐 Device tokens to stop stream hotlinking<br/>🎞️ Optional Intel QSV hardware transcoding<br/>🌐 Two entry points: fnOS unified gateway (no extra login for the console) and a standalone TCP port for native clients"
+
+[entry]
+title="LITV Live"
+
+[install]
+stepTitle="LITV setup"
+helpText="Choose a standalone service port for native clients (Android TV / mobile). The admin console itself is served through the fnOS unified gateway and does not use this port. Keep the default 28027 if unsure."
+portLabel="Service port (native clients)"
+portPlaceholder="default 28027"
+portRequiredMsg="Port is required"
+portPatternMsg="Port must be numeric (1-65535)"
+passwordLabel="Admin password"
+passwordPlaceholder="At least 8 characters; leave empty to auto-generate"
+passwordLengthMsg="Password must be 8-64 characters"
+dataDirLabel="Media library directory (recordings / playlists, optional)"
+dataDirPlaceholder="e.g. /vol1/litv, leave empty to use the app data directory"
+
+[config]
+stepTitle="LITV settings"
+helpText="Changes are written to the config file and the service restarts immediately. Leave a field empty to keep the current value."
+portLabel="Service port"
+portPlaceholder="Leave empty to keep unchanged"
+portPatternMsg="Port must be numeric (1-65535)"
+passwordLabel="Admin password"
+passwordPlaceholder="Leave empty to keep unchanged"
+passwordLengthMsg="Password must be 8-64 characters"
+transcodeLabel="Enable server-side transcoding"
+transcodeHelp="Uses Intel QSV to transcode high-bitrate channels into a format clients can play. Costs CPU / iGPU time and requires ffmpeg."
+
+[uninstall]
+stepTitle="Confirm uninstall"
+helpText="<strong>You are about to uninstall LITV</strong><br/><br/>This stops the service and removes the program files. Choose what to do with the database, configuration and media library."
+dataOptionLabel="Data handling"
+keepDataLabel="Keep data (recommended) - keeps database, config and media library for a later reinstall"
+deleteDataLabel="Delete all data - wipes database, config and media library, irreversible"
+selectionRequiredMsg="Please choose how to handle data"

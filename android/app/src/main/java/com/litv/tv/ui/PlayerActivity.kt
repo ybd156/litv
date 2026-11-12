@@ -1,0 +1,2104 @@
+package com.litv.tv.ui
+
+import android.annotation.SuppressLint
+import android.content.Intent
+import android.os.Bundle
+import android.util.Log
+import android.os.Handler
+import android.os.Looper
+import android.view.KeyEvent
+import android.view.SurfaceView
+import android.view.View
+import android.view.WindowManager
+import android.view.animation.DecelerateInterpolator
+import android.widget.ImageView
+import android.widget.LinearLayout
+import android.widget.ProgressBar
+import android.widget.TextView
+import androidx.appcompat.app.AppCompatActivity
+import androidx.recyclerview.widget.LinearLayoutManager
+import androidx.recyclerview.widget.RecyclerView
+import com.google.gson.Gson
+import com.litv.tv.LitvApp
+import com.litv.tv.R
+import com.litv.tv.data.Bootstrap
+import com.litv.tv.data.Channel
+import com.litv.tv.data.EpgProgram
+import com.litv.tv.data.LastChannelResolver
+import com.litv.tv.data.PlayCache
+import com.litv.tv.data.PlaybackErrorCard
+import com.litv.tv.data.PlayCacheStore
+import com.litv.tv.data.RelayDecision
+import com.litv.tv.player.EngineKind
+import com.litv.tv.player.PlayRequestGate
+import com.litv.tv.player.PlayerManager
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+
+/**
+ * 播放页。整个 TV 端体验的核心。
+ *
+ * 交互设计参考了主流 IPTV 客户端的通行做法：
+ *
+ *   面板收起时：↑↓ 换台 · ← 呼出频道列表 · → 呼出设置 · OK 信息条
+ *   面板展开时：↑↓ 选台 · OK 播放 · ←→ 切分组/收起 · BACK 关闭
+ *   数字键    ：连按累积，2500ms 无输入后跳台
+ *   长按 OK   ：800ms 触发线路/内核切换
+ *   BACK 层级 ：面板 → OSD → 退出（逐级返回，不能一按就退出）
+ *
+ * 三个"不能省"的细节：
+ *   1. 换台时用上一帧截图盖住黑屏（否则每次切台闪一下黑，观感极差）
+ *   2. 起播失败自动换内核，并把结果记住
+ *   3. OSD 5 秒自动隐藏，但换台时立刻刷新内容
+ */
+class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
+    private val TAG = "LITV"
+
+
+    private lateinit var app: LitvApp
+    private lateinit var surface: SurfaceView
+    private lateinit var surfaceTex: android.view.TextureView
+    private lateinit var playerView: androidx.media3.ui.PlayerView
+    private var videoSurface: android.view.Surface? = null
+
+    /** 换台转场幕布（见 [startCurtain]）。 */
+    private lateinit var curtain: View
+
+    /** 本次转场的方向：+1 从下往上扫，-1 从上往下扫。 */
+    private var curtainDir = 1f
+    private lateinit var loading: ProgressBar
+    private lateinit var switchTip: TextView
+    private lateinit var osd: LinearLayout
+    private lateinit var osdName: TextView
+    private lateinit var osdNow: TextView
+    private lateinit var osdNo: TextView
+    private lateinit var osdNext: TextView
+    private lateinit var osdEngine: TextView
+    private lateinit var osdProgress: ProgressBar
+    private lateinit var panel: LinearLayout
+    private lateinit var panelTitle: TextView
+    private lateinit var panelList: RecyclerView
+    private lateinit var grpList: RecyclerView
+    private val srcAdapter = GroupAdapter()
+    private val grpAdapter = GroupAdapter()
+    /** 当前选中的源 id，0 = 全部 */
+    private var selSource = 0L
+    /** 当前选中的分组，空 = 全部 */
+    private var selGroup = ""
+    private var srcNames: Map<Long, String> = emptyMap()
+    private lateinit var numberTip: TextView
+    private lateinit var settingsMenu: android.view.View
+    private var menuVisible = false
+    private lateinit var epgPanel: LinearLayout
+    private lateinit var epgTitle: TextView
+    private lateinit var epgList: RecyclerView
+
+    /** C1：收藏按钮（面板里可聚焦）与列表空态引导 */
+    private lateinit var favBtn: TextView
+    private lateinit var panelEmpty: TextView
+
+    /** 本台观看起始时刻（毫秒）。QoE 的 watch_ms 与"稳定播放归零"要用。 */
+    private var watchStartAt = 0L
+    /** 服务端下发的封装类型：ts | hls | remux（QoE 的 path，**不是** direct/relay）。 */
+    private var currentPlayKind = ""
+    /** 离开页面时已经报过 stop，避免 onDestroy 重复上报 */
+    private var reportedStop = false
+
+    // 底部信息条（对齐 DIYP / 群晖电视的样式）
+    private lateinit var infoLogo: ImageView
+    private lateinit var infoName: TextView
+    private lateinit var infoNow: TextView
+    private lateinit var infoNext: TextView
+    private lateinit var infoLine: TextView
+    private lateinit var infoProgress: ProgressBar
+    private lateinit var infoTime: TextView
+
+    /** 当前频道的线路总数 / 正在用的第几条 / 该线路延迟 */
+    private var streamTotal = 0
+    private var streamIndex = 0
+    private var streamLatency = 0
+
+    private lateinit var player: PlayerManager
+    private lateinit var panelAdapter: ChannelAdapter
+    private lateinit var epgAdapter: EpgAdapter
+
+    private var channels: List<Channel> = emptyList()
+    private var allChannels: List<Channel> = emptyList()
+    private val favoriteIds = mutableSetOf<Long>()
+
+    /**
+     * 「每个频道此刻在播什么」，来自 bootstrap 的 `now`。
+     *
+     * 以前这里没有这个字段：`ChannelAdapter` 明明支持显示当前节目
+     * （`holder.now` + 进度条），但两处 `submit(...)` 都传的是 `emptyMap()`，
+     * 于是列表每行右边永远空着。数据一直在响应里，只是没接线。
+     */
+    private val nowMap = HashMap<Long, com.litv.tv.data.NowPlaying>()
+    private var groups: List<String> = emptyList()
+    private var groupIdx = 0
+    private var index = 0
+    private var current: Channel? = null
+    private var programs: List<EpgProgram> = emptyList()
+
+    private val main = Handler(Looper.getMainLooper())
+    private val numberBuffer = StringBuilder()
+    private var osdVisible = false
+    /** OSD 层级：0 隐藏 / 1 台号+台名+收藏态 / 2 再加排障信息。 */
+    private var osdLevel = 0
+    private var panelVisible = false
+    private var epgVisible = false
+    /** 起播计时起点（毫秒），0 表示已上报过 */
+    private var startAt = 0L
+
+    /**
+     * 换台请求的代际闸门。
+     *
+     * 连续换台时 /tv/play 的响应**不保证按序返回**：晚到的旧响应会把播放器
+     * 切回它自己的频道，表现为"台名是 C、画面在放 A"；旧请求的失败提示
+     * 也会盖掉新台的信息。详见 PlayRequestGate 的注释。
+     */
+    private val playGate = PlayRequestGate()
+
+    // 长按判定：800ms（逆向实测值，不是 320ms）
+    private val longPressRunnable = Runnable { onLongPressOk() }
+    private var okDownTime = 0L
+    /** 上一次按返回的时间，用于「再按一次退出」 */
+    private var lastBackAt = 0L
+    /** 首次进入还没自动播放过 */
+    private var autoPlayPending = true
+    /** 进播放页时想播的频道 id（0 = 上次那个） */
+    private var pendingChannelId = 0L
+    /**
+     * 遥控发来的待切频道 id。
+     *
+     * singleTask 下 Activity 不会重建，只是收到 onNewIntent，
+     * 所以换台不能再依赖 onCreate 的 intent。
+     * 如果收到指令时频道列表还没 bootstrap 完，就先记下来，
+     * 等列表就绪后再执行——否则会出现"遥控没反应"。
+     */
+    private var pendingRemoteChannelId = 0L
+
+    private val hideOsdRunnable = Runnable { hideOsd() }
+    private val numberJumpRunnable = Runnable { jumpByNumber() }
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        setContentView(R.layout.activity_player)
+        app = application as LitvApp
+
+        bindViews()
+        loadChannels()
+
+        player = PlayerManager(this, app.prefs).also { it.callback = this }
+
+        // 直连第一个内核就失败：**不再自动改走中转**（用户口径：中转默认不用）。
+        // 仍然立刻放弃后面几个内核——直连失败基本都是网络层问题（源站在这个网络里
+        // 不可达 / DNS 污染 / SNI 被重置），换内核修不好。
+        player.onDirectFailed = { reason ->
+            main.post {
+                // 记住这个台直连不通：会话内再切回来时立刻进错误层并提示可以手动中转，
+                // 不再让它每次都先撞一次 TLS 握手失败（那个往返在低端盒子上就是一两秒）。
+                current?.let { directBrokenChannels += it.id }
+                Log.w(TAG, "直连失败: $reason")
+                handleDirectFailure(reason)
+            }
+        }
+
+        player.playerView = playerView
+        setupRenderTarget()
+
+        // 自动播放不能在这里做：没有本地缓存时 loadChannels() 走的是异步 bootstrap，
+        // 这一刻 channels 还是空的，直接判断会永远不播。交给 applyBootstrap 触发。
+        pendingChannelId = intent.getLongExtra(EXTRA_CHANNEL_ID, 0)
+        Log.i(TAG, "onCreate: 初始 channels=${channels.size} 待播=$pendingChannelId")
+
+        setupTouchGestures()
+    }
+
+    // ---------------------------------------------------------------- 触控手势
+    //
+    // 电视上很多场景没有遥控器（触摸屏一体机、用鼠标的盒子、模拟器调试），
+    // 所以补一套和遥控器等价的手势：
+    //
+    //   单击画面        呼出 / 收起 OSD
+    //   从左往右滑      打开频道面板（分类 + 频道 + 节目单）
+    //   从右往左滑      打开设置菜单
+    //   上滑 / 下滑     下一个台 / 上一个台
+    //   左侧边缘上下拖  调亮度（和换台区分开，否则垂直方向会打架）
+    private var gestureDetector: android.view.GestureDetector? = null
+    private var downX = 0f
+    private var downY = 0f
+    private var brightnessDragging = false
+    private var brightnessStart = -1f
+
+    private fun setupTouchGestures() {
+        val root = findViewById<android.view.View>(R.id.root) ?: return
+        gestureDetector = android.view.GestureDetector(this,
+            object : android.view.GestureDetector.SimpleOnGestureListener() {
+                override fun onSingleTapConfirmed(e: android.view.MotionEvent): Boolean {
+                    // 面板开着时点画面交给面板自己处理
+                    if (panelVisible) return false
+                    if (osdVisible) hideOsd() else showOsd()
+                    return true
+                }
+            })
+
+        root.setOnTouchListener { _, ev ->
+            gestureDetector?.onTouchEvent(ev)
+            handleGesture(ev)
+            true
+        }
+    }
+
+    private fun handleGesture(ev: android.view.MotionEvent): Boolean {
+        val slop = (24 * resources.displayMetrics.density).coerceAtLeast(24f)
+        val screenW = resources.displayMetrics.widthPixels.toFloat().coerceAtLeast(1f)
+        val screenH = resources.displayMetrics.heightPixels.toFloat().coerceAtLeast(1f)
+
+        when (ev.actionMasked) {
+            android.view.MotionEvent.ACTION_DOWN -> {
+                downX = ev.x
+                downY = ev.y
+                brightnessDragging = false
+                brightnessStart = -1f
+            }
+
+            android.view.MotionEvent.ACTION_MOVE -> {
+                val dx = ev.x - downX
+                val dy = ev.y - downY
+                // 只在「左边缘 + 以垂直为主」时进入亮度模式，
+                // 避免和上下滑换台抢事件。
+                if (!brightnessDragging &&
+                    downX < screenW * 0.25f &&
+                    Math.abs(dy) > slop &&
+                    Math.abs(dy) > Math.abs(dx) * 1.5f
+                ) {
+                    brightnessDragging = true
+                    brightnessStart = currentScreenBrightness()
+                }
+                if (brightnessDragging) {
+                    val v = (brightnessStart - dy / screenH).coerceIn(0.05f, 1f)
+                    setScreenBrightness(v)
+                    switchTip.text = "亮度 ${(v * 100).toInt()}%"
+                    switchTip.visibility = android.view.View.VISIBLE
+                }
+            }
+
+            android.view.MotionEvent.ACTION_UP -> {
+                if (brightnessDragging) {
+                    brightnessDragging = false
+                    main.postDelayed({
+                        if (switchTip.text.startsWith("亮度")) switchTip.visibility = android.view.View.GONE
+                    }, 900)
+                    return true
+                }
+                val dx = ev.x - downX
+                val dy = ev.y - downY
+                when {
+                    Math.abs(dx) > slop && Math.abs(dx) > Math.abs(dy) * 1.5f -> {
+                        // 方向按「从哪边滑出来」算，不是「往哪边滑」：
+                        //   从左往右滑（dx > 0） -> 频道面板从左边出来
+                        //   从右往左滑（dx < 0） -> 设置菜单从右边出来
+                        if (dx > 0) openPanel() else toggleSettingsMenu()
+                    }
+                    Math.abs(dy) > slop && Math.abs(dy) > Math.abs(dx) * 1.5f -> {
+                        // 上滑 = 下一个台，下滑 = 上一个台
+                        switchBy(if (dy < 0) +1 else -1)
+                    }
+                }
+            }
+        }
+        return false
+    }
+
+    /** 当前窗口亮度；未显式设置过时返回系统亮度。 */
+    private fun currentScreenBrightness(): Float {
+        val v = window.attributes.screenBrightness
+        if (v >= 0f) return v
+        return try {
+            android.provider.Settings.System.getInt(
+                contentResolver, android.provider.Settings.System.SCREEN_BRIGHTNESS
+            ) / 255f
+        } catch (t: Throwable) {
+            0.5f
+        }
+    }
+
+    /** 只改本窗口亮度，不动系统设置（退出播放页自动恢复）。 */
+    private fun setScreenBrightness(v: Float) {
+        val attrs = window.attributes
+        attrs.screenBrightness = v
+        window.attributes = attrs
+    }
+
+    /**
+     * 遥控换台的入口。
+     *
+     * 为什么必须实现：PlayerActivity 在 manifest 里是 singleTask，
+     * 已经在播时 startActivity 不会新建实例，只会回调 onNewIntent。
+     * 没有这个方法，遥控指令虽然发出去了（服务端也显示已转发），
+     * 电视却停在原来的台上——用户看到的就是"遥控换台没反应"。
+     */
+    override fun onNewIntent(intent: Intent?) {
+        super.onNewIntent(intent)
+        // 必须更新 Activity 持有的 intent，否则后续 getIntent() 还是旧的
+        setIntent(intent)
+        val targetId = intent?.getLongExtra(EXTRA_CHANNEL_ID, 0) ?: 0
+        if (targetId <= 0) return
+        Log.i(TAG, "onNewIntent: 遥控换台 -> $targetId")
+        switchToChannelById(targetId)
+    }
+
+    /**
+     * 按 id 换台。频道列表可能还没就绪，这种情况先记账。
+     *
+     * 只接受列表里真实存在的频道：遥控传的是不可信输入，
+     * 指向不存在的 id 应当安静忽略，而不是让播放器去请求一个空频道。
+     */
+    private fun switchToChannelById(id: Long) {
+        val idx = channels.indexOfFirst { it.id == id }
+        if (idx < 0) {
+            if (channels.isEmpty()) {
+                // 列表还没加载完：等 applyBootstrap 再处理
+                pendingRemoteChannelId = id
+                Log.i(TAG, "onNewIntent: 列表未就绪，暂存 $id")
+            } else {
+                // 列表已就绪但没有这个频道：拒绝，不改变当前播放
+                Log.w(TAG, "onNewIntent: 频道 $id 不存在，忽略")
+            }
+            return
+        }
+        pendingRemoteChannelId = 0L
+        index = idx
+        playChannel(channels[idx])
+    }
+
+    /**
+     * 按「渲染方式」设置选一套渲染目标并绑定播放器。
+     *
+     * 自动 = 优先 TextureView：实测这台 Amlogic 盒子用 SurfaceView 时
+     * 解码器不往 Surface 写帧（DequeueBuffer time out），画面全黑。
+     */
+    private fun setupRenderTarget() {
+        val mode = app.prefs.renderView
+        // 默认改为 SurfaceView。
+        //
+        // 历史：这台 Amlogic 盒子用 SurfaceView 曾报 DequeueBuffer time out，
+        // 于是改成优先 TextureView。但实测 TextureView 下解码器同样出不了帧
+        // （wait timeout 刷屏，画面全黑），两条路都试过。
+        // 现在以 SurfaceView 为默认——它是硬解的正常输出路径，
+        // TextureView 需要 GPU 拷贝，在 Amlogic 上更容易出问题。
+        // 设置里仍可切回 TextureView。
+        val useTexture = mode == "texture"
+        Log.i(TAG, "渲染方式=$mode 使用=" + if (useTexture) "TextureView" else "SurfaceView")
+
+        // 渲染目标必须真正 VISIBLE。
+        //
+        // 这里曾经把 surfaceTex 设成 GONE，而 GONE 的视图**不参与布局**，
+        // onSurfaceTextureAvailable 永远不会回调 —— videoSurface 一直是 null，
+        // VLC / mpv 拿不到 Surface，画面全黑。
+        // 这台电视的 Exo 硬解会失败并回退到 VLC，于是表现为「电视无法播放」。
+        //
+        // 两个目标互斥：按「渲染方式」只显示一个，另一个 GONE。
+        surface.visibility = if (useTexture) android.view.View.GONE else android.view.View.VISIBLE
+        surfaceTex.visibility = if (useTexture) android.view.View.VISIBLE else android.view.View.GONE
+
+        // PlayerView 只给 Exo 用。它在布局里位于最上层，
+        // 给 VLC / mpv 时必须隐藏，否则会盖住下面的渲染目标。
+        // 初始显示它（默认链首选 Exo），真正的切换在 onEngineChanged 里做。
+        playerView.visibility = android.view.View.VISIBLE
+
+        if (useTexture) {
+            surfaceTex.surfaceTextureListener = object : android.view.TextureView.SurfaceTextureListener {
+                override fun onSurfaceTextureAvailable(st: android.graphics.SurfaceTexture, w: Int, h: Int) {
+                    Log.i(TAG, "TextureView 就绪 ${w}x$h")
+                    videoSurface = android.view.Surface(st)
+                    player.attach(videoSurface, findViewById(android.R.id.content))
+                    if (!player.isPlaying) current?.let { playChannel(it) }
+                }
+
+                override fun onSurfaceTextureSizeChanged(st: android.graphics.SurfaceTexture, w: Int, h: Int) {}
+
+                override fun onSurfaceTextureDestroyed(st: android.graphics.SurfaceTexture): Boolean {
+                    player.onSurfaceDestroyed()
+                    videoSurface?.release()
+                    videoSurface = null
+                    return true
+                }
+
+                override fun onSurfaceTextureUpdated(st: android.graphics.SurfaceTexture) {}
+            }
+        } else {
+            surface.holder.addCallback(object : android.view.SurfaceHolder.Callback {
+                override fun surfaceCreated(h: android.view.SurfaceHolder) {
+                    Log.i(TAG, "SurfaceView 就绪，绑定播放器")
+                    player.attach(surface.holder.surface, findViewById(android.R.id.content))
+                    if (!player.isPlaying) current?.let { playChannel(it) }
+                }
+
+                override fun surfaceChanged(h: android.view.SurfaceHolder, f: Int, w: Int, hh: Int) {}
+
+                override fun surfaceDestroyed(h: android.view.SurfaceHolder) {
+                    // 必须通知内核松手：否则 libVLC 会拿着已销毁的 Surface
+                    // 在自己的线程里抛 IllegalStateException，把播放页整个崩掉。
+                    Log.i(TAG, "Surface 销毁，通知播放器断开")
+                    player.onSurfaceDestroyed()
+                }
+            })
+        }
+    }
+
+    private fun bindViews() {
+        surface = findViewById(R.id.surface)
+        surfaceTex = findViewById(R.id.surfaceTex)
+        playerView = findViewById(R.id.playerView)
+        curtain = findViewById(R.id.curtain)
+        loading = findViewById(R.id.loading)
+        switchTip = findViewById(R.id.switchTip)
+        osd = findViewById(R.id.osd)
+        osdName = findViewById(R.id.osdName)
+        osdNow = findViewById(R.id.osdNow)
+        osdNo = findViewById(R.id.osdNo)
+        osdNext = findViewById(R.id.osdNext)
+        osdEngine = findViewById(R.id.osdEngine)
+        osdProgress = findViewById(R.id.osdProgress)
+        panel = findViewById(R.id.channelPanel)
+        panelTitle = findViewById(R.id.panelTitle)
+        panelList = findViewById(R.id.panelList)
+        panelEmpty = findViewById(R.id.panelEmpty)
+        favBtn = findViewById(R.id.favBtn)
+        // C1：收藏必须有**明确动作**。之前 Api.favorite 在本页零调用，
+        // 「收藏」分组又只在非空时出现 —— 新用户既看不到也没法收藏。
+        favBtn.setOnClickListener { toggleFavoriteOnFocused() }
+        numberTip = findViewById(R.id.numberTip)
+        settingsMenu = findViewById(R.id.settingsMenu)
+        // 右侧设置菜单：能就地改的就地改，改不了的转给完整设置弹层
+        // 比例和解码不再「按一下循环到下一个值」（改完不知道变成了什么），
+        // 改成弹选择框。
+        findViewById<TextView>(R.id.miAspect).setOnClickListener {
+            val opts = listOf("auto", "16:9", "4:3", "fill")
+            val labels = listOf("自动", "16:9", "4:3", "铺满")
+            val idx = opts.indexOf(app.prefs.aspect).coerceAtLeast(0)
+            closeSettingsMenu()
+            PickerDialog(this, "画面比例", labels, idx) { i ->
+                app.prefs.aspect = opts[i]
+                // 比例是引擎在 prepare 时读的，改完下次起播生效
+                toastTip("画面比例：" + labels[i])
+            }.show()
+        }
+        findViewById<TextView>(R.id.miDecode).setOnClickListener {
+            val opts = listOf("auto", "hard", "soft")
+            val labels = listOf("自动", "硬件解码", "软件解码")
+            val idx = opts.indexOf(app.prefs.decode).coerceAtLeast(0)
+            closeSettingsMenu()
+            PickerDialog(this, "解码方式", labels, idx) { i ->
+                app.prefs.decode = opts[i]
+                toastTip("解码方式：" + labels[i])
+            }.show()
+        }
+        findViewById<TextView>(R.id.miLine).setOnClickListener { openLinePicker() }
+
+        // 缓冲：原本叫「超时换源」，但设置页里根本没有那一项——点开只是又弹
+        // 一遍设置页。改成真能调的「缓冲」，值用中文（3 秒 / 5 秒）。
+        findViewById<TextView>(R.id.miTimeout).setOnClickListener {
+            val opts = listOf(1000, 2000, 3000, 5000)
+            val labels = listOf("1 秒（省内存）", "2 秒", "3 秒（更稳）", "5 秒（慢网）")
+            val idx = opts.indexOf(app.prefs.bufferMs).coerceAtLeast(0)
+            closeSettingsMenu()
+            PickerDialog(this, "缓冲", labels, idx) { i ->
+                app.prefs.bufferMs = opts[i]
+                toastTip("缓冲：" + labels[i])
+            }.show()
+        }
+        // 分类管理：频道分类确实在频道面板里，这里直接打开它是对的。
+        findViewById<TextView>(R.id.miCategory).setOnClickListener {
+            closeSettingsMenu(); openPanel()
+        }
+        // 界面缩放：原本叫「列表配置」，设置页里同样没有这一项。
+        findViewById<TextView>(R.id.miList).setOnClickListener {
+            val opts = com.litv.tv.data.UiScaleOptions.keys
+            val labels = com.litv.tv.data.UiScaleOptions.all.map { it.label }
+            val idx = opts.indexOf(app.prefs.uiScale).coerceAtLeast(0)
+            closeSettingsMenu()
+            PickerDialog(this, "界面缩放", labels, idx) { i ->
+                app.prefs.uiScale = opts[i]
+                toastTip("界面缩放：" + labels[i] + "（重开列表生效）")
+            }.show()
+        }
+        // 显示 / 偏好 / 其他：分别落到设置页的三个分类，不再都是同一个默认页。
+        findViewById<TextView>(R.id.miDisplay).setOnClickListener {
+            closeSettingsMenu(); SettingsDialog(this, 0).show()
+        }
+        findViewById<TextView>(R.id.miPrefs).setOnClickListener {
+            closeSettingsMenu(); SettingsDialog(this, 1).show()
+        }
+        findViewById<TextView>(R.id.miOther).setOnClickListener {
+            closeSettingsMenu(); SettingsDialog(this, 2).show()
+        }
+        epgPanel = findViewById(R.id.epgPanel)
+        epgTitle = findViewById(R.id.epgTitle)
+        epgList = findViewById(R.id.epgList)
+        infoLogo = findViewById(R.id.infoLogo)
+        infoName = findViewById(R.id.infoName)
+        infoNow = findViewById(R.id.infoNow)
+        infoNext = findViewById(R.id.infoNext)
+        infoLine = findViewById(R.id.infoLine)
+        infoProgress = findViewById(R.id.infoProgress)
+        infoTime = findViewById(R.id.infoTime)
+    }
+
+    private fun loadChannels() {
+        val cached = app.prefs.cachedBootstrap
+        if (cached.isNotBlank()) {
+            runCatching {
+                val b = Gson().fromJson(cached, Bootstrap::class.java)
+                applyBootstrap(b)
+            }
+        }
+        if (channels.isEmpty()) {
+            app.api.bootstrap(onOk = { b -> applyBootstrap(b) }, onErr = {})
+        }
+        panelAdapter = ChannelAdapter(
+            logoMaxPx = app.tier.logoMaxPx,
+            onClick = { ch ->
+                closePanel()
+                val i = channels.indexOfFirst { it.id == ch.id }
+                if (i >= 0) {
+                    index = i
+                    playChannel(ch)
+                }
+            },
+        )
+        panelList.layoutManager = LinearLayoutManager(this)
+        panelList.adapter = panelAdapter
+        // 界面缩放档位在设置里改完立刻生效（下次进面板就能看到）
+        panelAdapter.setUiScale(app.prefs.uiScale)
+
+        // 左侧分类列表
+        grpList = findViewById(R.id.grpList)
+        grpList.layoutManager = LinearLayoutManager(this)
+        grpList.adapter = grpAdapter
+        grpAdapter.onPick = { name ->
+            selGroup = name ?: ""
+            applyChannelFilter()
+            index = 0
+            panelList.scrollToPosition(0)
+        }
+        panelAdapter.submit(channels, nowMap)
+        panelTitle.text = "频道列表（${channels.size}）"
+
+        epgAdapter = EpgAdapter()
+        epgList.layoutManager = LinearLayoutManager(this)
+        epgList.adapter = epgAdapter
+        // C3：点节目看详情。之前这个回调根本没接线，点节目毫无反应。
+        epgAdapter.onProgramClick = { p -> showProgramDetails(p) }
+        // C4：点标题切换分类
+        epgTitle.setOnClickListener { cycleEpgCategory() }
+    }
+
+    /**
+     * 节目详情弹层（C3），顺带提供 C5 提醒 / C6 预约录制。
+     *
+     * 为什么放在这里而不是单独一页：电视上多一层页面就多一次"返回"，
+     * 用户看完详情多半是要么设提醒、要么接着看，用弹层最省事。
+     */
+    /**
+     * 回看某个频道（时移缓冲）。
+     *
+     * 服务端只在「有人看过这个台」时才有缓冲，所以先问 available_seconds；
+     * 没有缓冲就明确告诉用户，而不是切过去黑屏。
+     */
+    private fun openTimeshiftFor(ch: Channel) {
+        app.api.timeshift(ch.id,
+            onOk = { info ->
+                if (!info.enabled || info.availableSeconds <= 0) {
+                    toastTip("这个台暂时没有可回看的缓冲")
+                    return@timeshift
+                }
+                val abs = app.api.absolute(info.url)
+                val minutes = info.availableSeconds / 60
+                toastTip("回看中（可回看约 $minutes 分钟）")
+                player.play(
+                    ch.id, abs,
+                    mapOf("User-Agent" to "LITV/1.0 (Android)"),
+                    app.prefs.engine,
+                )
+            },
+            onErr = { toastTip("回看不可用：$it") })
+    }
+
+    private fun showProgramDetails(p: com.litv.tv.data.EpgProgram) {
+        val ch = current ?: return
+        val fmt = SimpleDateFormat("MM-dd HH:mm", Locale.getDefault())
+        val now = System.currentTimeMillis() / 1000
+        val timeText = fmt.format(Date(p.startAt * 1000)) + " - " +
+            SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(p.endAt * 1000))
+
+        val lines = StringBuilder()
+        lines.append(timeText)
+        if (p.category.isNotBlank()) lines.append("  ·  ").append(p.category)
+        if (p.description.isNotBlank()) lines.append("\n\n").append(p.description)
+
+        val finished = p.endAt in 1 until now
+        val builder = android.app.AlertDialog.Builder(this, R.style.LitvAlertDialog)
+            .setTitle(p.title.ifBlank { "（无标题）" })
+            .setMessage(lines.toString())
+            .setNegativeButton("关闭", null)
+
+        if (finished) {
+            // 已播完：给回看入口
+            builder.setPositiveButton("回看") { _, _ -> openTimeshiftFor(ch) }
+        } else {
+            // 未播完：给提醒 + 预约录制
+            builder.setPositiveButton("提醒我") { _, _ ->
+                app.api.createReminder(ch.id, p.title, p.startAt,
+                    onOk = { toastTip("已设置提醒，开播时推送") },
+                    onErr = { toastTip("设置提醒失败：$it") })
+            }
+            builder.setNeutralButton("预约录制") { _, _ ->
+                val dur = (p.endAt - p.startAt).toInt().coerceIn(60, 8 * 3600)
+                app.api.createRecording(ch.id, p.title, p.startAt, dur,
+                    onOk = { toastTip("已预约录制：${p.title}") },
+                    onErr = { toastTip("预约失败：$it") })
+            }
+        }
+        builder.show()
+    }
+
+    /** 存全量频道 + 分组名 + 收藏，供「列表内左右键切分组」用。 */
+    private fun applyBootstrap(b: Bootstrap) {
+        // 记下服务端当前的频道指纹作为基线：之后心跳里发现不一样才重拉，
+        // 避免每次心跳都白拉一次列表。
+        if (b.channelsVersion.isNotBlank()) knownChannelsVersion = b.channelsVersion
+        lastListRefreshAt = System.currentTimeMillis()
+        allChannels = b.channels
+        favoriteIds.clear()
+        favoriteIds.addAll(b.favorites)
+        // 当前节目：列表行右边显示"正在播什么"，数据本来就在响应里
+        nowMap.clear()
+        b.now.forEach { nowMap[it.channelId] = it }
+
+        // 节目单：服务端只下发 xmltv 地址，客户端自己下载解析（不占 D1 额度）。
+        // 解析在后台线程跑，完成后拿当前频道刷一次 OSD/节目单列。
+        if (b.epgUrl.isNotBlank()) {
+            app.epg.ensure(b.epgUrl) { ok ->
+                if (ok) main.post { current?.let { refreshEpg(it.id) } }
+            }
+        }
+        groups = allChannels.map { it.group }.filter { it.isNotBlank() }.distinct()
+
+        // C2：先从**全量**里定位"上次看的台"，再决定默认分组。
+        //
+        // 顺序不能反：先设 selGroup → applyGroupFilter() 重建 channels →
+        // 再在 channels 里取 index。反过来先算 index 再改分组，index 会指到别的台上。
+        //
+        // 另外：从桌面正常启动时 pendingChannelId 是 0（只有通知/外部跳转才带），
+        // 所以必须回落到 app.prefs.lastChannelId —— 这个坑以前踩过（永远播第一个台）。
+        val wantId = if (pendingChannelId > 0) pendingChannelId else app.prefs.lastChannelId
+        val hit = LastChannelResolver.resolve(
+            allChannels, wantId, app.prefs.lastChannelTvgId, app.prefs.lastChannelName,
+        )
+        val want = hit?.channel
+        if (want != null) {
+            Log.i(TAG, "恢复上次频道：${want.name}（依据=${hit.via} id=${want.id}）")
+        } else {
+            Log.i(TAG, "上次频道找不到（id=$wantId tvg=${app.prefs.lastChannelTvgId} " +
+                "name=${app.prefs.lastChannelName}），回落到第一个台")
+        }
+
+        // 恢复"上次所在分组"。存的是**分组名**，不是索引 —— 索引会随分组数量变化而错位
+        // （C1 让收藏行常显之后，所有索引整体后移一位，老用户升级就会落到隔壁分组）。
+        // 上次那个台还在就按它的分组；彻底不在了才退回 lastGroup。
+        val wantGroup = want?.group?.takeIf { it.isNotBlank() } ?: app.prefs.lastGroup
+        selGroup = if (wantGroup.isNotBlank() && groups.contains(wantGroup)) wantGroup else ""
+        applyGroupFilter()
+        // 分组名在上游被改掉时过滤结果可能为空：退回「全部」，否则界面会是一片空白。
+        if (channels.isEmpty() && selGroup.isNotEmpty()) {
+            Log.i(TAG, "分组 $selGroup 已不存在或为空，退回全部频道")
+            selGroup = ""
+            applyGroupFilter()
+        }
+
+        Log.i(TAG, "bootstrap 完成: 频道=${allChannels.size} 待播=$pendingChannelId 待自动播放=$autoPlayPending")
+        if (autoPlayPending && channels.isNotEmpty()) {
+            autoPlayPending = false
+            // 想播的台可能不在当前分组里（比如上次在 A 组、这次恢复到了 B 组）：
+            // 这时在 channels 里找不到就退到确定性排序的第一个台，而不是 channels[0] 的偶然顺序。
+            val idx = channels.indexOfFirst { it.id == (want?.id ?: -1L) }
+            val pos = if (idx >= 0) idx else 0
+            index = pos
+            Log.i(TAG, "开始自动播放: ${channels[pos].name}（想要=${want?.id ?: 0} 命中=${idx >= 0}）")
+            // 让用户一眼看到自己的台在哪：滚动到它 + 打上"正在播"标记
+            if (channels.isNotEmpty()) panelList.scrollToPosition(pos)
+            // 注意：这里可能发生在 panelAdapter 创建之前（有本地缓存的冷启动路径），
+            // 所以必须判 initialized，否则直接 UninitializedPropertyAccessException。
+            if (::panelAdapter.isInitialized) panelAdapter.setPlayingId(channels[pos].id)
+            playChannel(channels[pos])
+        } else if (pendingRemoteChannelId > 0) {
+            // 遥控指令在 bootstrap 完成前就到了：现在补执行。
+            // 不补的话，用户开机瞬间按遥控换台会"按了没反应"。
+            val want = pendingRemoteChannelId
+            pendingRemoteChannelId = 0L
+            Log.i(TAG, "bootstrap 后补执行遥控换台: $want")
+            switchToChannelById(want)
+        }
+    }
+
+    /** 刷新左侧分类列表：全部 / 收藏 / 各分组，并带上数量。 */
+    private fun refreshCategories() {
+        if (!::grpList.isInitialized) return
+        val rows = ArrayList<GroupAdapter.Row>()
+        rows.add(GroupAdapter.Row("全部", allChannels.size))
+        // C1：收藏行**始终显示**。
+        // 以前是 if (favoriteIds.isNotEmpty()) 才加：全新设备上这一行根本不存在，
+        // 用户既看不到「收藏」这个分类，也不知道有这个功能（反馈原话"没有收藏"）。
+        rows.add(GroupAdapter.Row("收藏", favoriteIds.size))
+        allChannels.map { it.group }
+            .filter { it.isNotBlank() }
+            .distinct()
+            .forEach { g -> rows.add(GroupAdapter.Row(g, allChannels.count { it.group == g })) }
+        grpAdapter.submit(rows, if (selGroup.isEmpty()) "全部" else selGroup)
+    }
+
+    private fun applyGroupFilter() {
+        // 四列模式下，过滤交给 rebuildColumns() + applyChannelFilter()。
+        //
+        // 这里原来还有一段单列时代的分组逻辑，其中 `allChannels = channels`
+        // 会把全量列表覆盖成过滤后的结果（越点越少），
+        // 后面再用 groupLabelText() 把四列的标题盖回去。整段删掉。
+        refreshCategories()
+        if (::panelAdapter.isInitialized) {
+            applyChannelFilter()
+        }
+    }
+
+    /**
+     * 收藏行是否在分组索引里占位。
+     *
+     * C1 之后它**恒为 true**（收藏行常显）。`groupLabelText()` 与 `switchGroup()`
+     * 里的 `groupIdx - 2 / - 1` 偏移都依赖这个值，所以只能改这一处定义，
+     * 不要在别处硬编码偏移量。
+     */
+    private val hasFavGroup: Boolean get() = true
+
+    private fun groupLabelText(): String {
+        val name = when {
+            groupIdx <= 0 -> "全部"
+            hasFavGroup && groupIdx == 1 -> "收藏"
+            else -> {
+                val gi = if (hasFavGroup) groupIdx - 2 else groupIdx - 1
+                groups.getOrNull(gi) ?: "全部"
+            }
+        }
+        return "分组：$name（${channels.size}）  ←→ 切换"
+    }
+
+
+    private fun switchGroup(delta: Int) {
+        val total = groups.size + 1 + if (hasFavGroup) 1 else 0
+        groupIdx = ((groupIdx + delta) % total + total) % total
+        applyGroupFilter()
+        if (channels.isNotEmpty()) {
+            index = 0
+            panelList.scrollToPosition(0)
+        }
+    }
+
+    // ---------------------------------------------------------------- 播放
+
+    /**
+     * @param forceRebuild 强制重建播放器（跳过「缓存已起播就不要再 prepare」的短路）。
+     *
+     *   **失败重试必须传 true。** 起播时为了省一次网络往返，会先用本地缓存的地址
+     *   直接 prepare（PlayCacheStore 一小时有效）；拿到新地址后为了不打断刚出的
+     *   画面，会用 `if (!cacheUsable)` 跳过第二次 prepare。
+     *
+     *   但重试走的正是同一条路径：缓存还在 → cacheUsable 为 true → 那次
+     *   player.play() 被跳过 → **重试等于什么都没做**，画面就一直卡着。
+     *   换台反而能恢复，因为换了 channel id、缓存 miss、真的重建了播放器。
+     *
+     *   这类源的播放会话是**短时效**的（面板地址长期有效，但它 302 出去的上游
+     *   m3u8 带时间戳），卡住就是上游会话过期；只有重新 prepare（重走一次 302
+     *   换取新会话）才能恢复。
+     */
+    private fun playChannel(ch: Channel, streamId: Long = 0, forceRebuild: Boolean = false) {
+        // 取走本次的转场方向并立刻清零：只有 switchBy 会写它，
+        // 其余入口（点列表/数字键/恢复/重试）拿到的都是 0 = 只淡出。
+        slideDir = pendingSlideDir
+        pendingSlideDir = 0f
+        Log.i(TAG, "playChannel: ${ch.name} streamId=$streamId rebuild=$forceRebuild slide=$slideDir direct=${app.prefs.directMode}")
+        // 取一个换台代际号。下面的回调只有在它仍然是"最后一次换台"时才允许生效。
+        val seq = playGate.begin()
+        current = ch        // 换到别的台就重置"已试线路"记录
+        if (triedForChannel != ch.id) {
+            triedStreams.clear()
+            triedForChannel = ch.id
+            relayRetried = false
+            forceRelayOnce = false
+            // 换台 = 重新给两次静默重试的机会（不同台/不同线路的失败互不牵连）
+            directRetryLeft = DIRECT_RETRY_MAX
+            playFailedPending = false
+        }
+        triedStreams += streamId
+        currentStreamId = streamId
+        app.prefs.lastChannelId = ch.id
+        // C2：id 会随上游重建失效，把 tvg_id/名字一起存下来当兜底锚点
+        app.prefs.lastChannelTvgId = ch.tvgId
+        app.prefs.lastChannelName = ch.name
+        // 分组按**名字**存（存索引会在分组增减后整体错位）
+        app.prefs.lastGroup = ch.group
+        // 起播计时：从按下换台到出第一帧，这是用户唯一能感知的"快不快"
+        startAt = System.currentTimeMillis()
+        // QoE：换台即重置本台观看窗口，stop 尚未上报
+        watchStartAt = 0L
+        reportedStop = false
+        if (::panelAdapter.isInitialized) panelAdapter.setPlayingId(ch.id)
+
+        // 换台转场：幕布从切换方向扫进来，新画面出来后由 endCurtain 擦走。
+        //
+        // 不再尝试抓旧画面：这台电视的视频走独立硬件层，
+        // screencap / MediaProjection / PixelCopy 全都取不到帧（实测过），
+        // 抓一次要白等 100ms 超时，反而拖慢换台，还会让幕布晚 100ms 才出现。
+        startCurtain()
+
+        // 加载圈只在「确实等太久」时出现，不是一换台就转。
+        //
+        // 用户反馈过两次「还是有加载中的圈圈」。根因是这里原来 300ms 就转 ——
+        // 正常换台 1 秒内就出画面，圈还没来得及消失就先闪了一下，
+        // 观感比"黑一下"更糟。
+        // 现在改成 3 秒：绝大多数换台根本看不到圈，只有真的卡住才提示。
+        main.removeCallbacks(showLoadingRunnable)
+        main.postDelayed(showLoadingRunnable, LOADING_DELAY_MS)
+        switchTip.visibility = View.VISIBLE
+        osdName.text = osdNameText(ch)
+
+        // 走直连还是中转。
+        //
+        // 只有两种情况强制中转：设置里选了 relay，或用户刚点了「用 NAS 中转试试」。
+        // 以前还有第三个条件 `ch.id !in directBrokenChannels` —— 那等于"直连失败过的台
+        // 以后一律走中转"，正好是用户要求取消的自动行为。现在那个集合只用来改进提示文案。
+        val wantDirect = app.prefs.directMode != "relay" && !forceRelayOnce
+        player.directMode = wantDirect
+
+        // ---- 先用缓存地址起播，把 /tv/play 的往返从关键路径上摘掉 ----
+        // 低端盒子上这一趟网络往返能占到起播时间的三分之一。
+        // 只在「自动选线路 + 不是中转重试」时用，避免干扰已有的线路回退逻辑。
+        val nowSec = System.currentTimeMillis() / 1000
+        val cached = if (streamId == 0L && !forceRelayOnce) {
+            PlayCacheStore.get(
+                app.prefs, ch.id,
+                PlayCacheStore.identity(app.prefs, streamId, if (forceRelayOnce) "relay" else "auto"),
+                nowSec,
+            )
+        } else null
+        val cacheUsable = cached != null && !forceRebuild
+        if (cacheUsable) {
+            Log.i(TAG, "缓存起播 ${ch.name}，签名还剩 ${cached!!.expires - nowSec}s")
+            player.play(ch.id, app.api.absolute(cached.url), cached.headers, app.prefs.engine)
+        }
+
+        app.api.play(ch.id, streamId,
+            direct = wantDirect,
+            onOk = { info ->
+                // 过期回调整段丢弃：连按换台时旧响应可能晚到，
+                // 让它继续往下走就会把播放器切回旧台（"台名 C、画面 A"）。
+                if (!playGate.isCurrent(seq)) {
+                    Log.i(TAG, "换台回调已过期(#$seq)，忽略：${ch.name}")
+                    return@play
+                }
+                // R09：用服务端下发的整份线路头（已清洗），不再只带 UA。
+                // 要求 Referer / Origin 校验的源，只带 UA 会直接 403。
+                // 默认 UA 必须和手机端完全一致（LITV/1.0 (Android)）。
+                // 之前电视端多带了个 " TV" 后缀，很多 IPTV 服务商做 UA 白名单，
+                // 结果同一份源手机能播、电视被挡——排查了很久才发现是这个。
+                val headers = info.playHeaders("LITV/1.0 (Android)")
+                val abs = app.api.absolute(info.url)
+
+                // 时钟偏移检查：签名地址的过期时间是服务端按**自己的时钟**算的。
+                // 如果设备时间比服务器快，地址拿到手就已经过期，服务端会 403，
+                // 三个内核全部起不来——表现就是"所有播放内核都无法播放"。
+                // 这种情况换内核、换线路都没用，必须校准时间。
+                val nowSec = System.currentTimeMillis() / 1000
+                if (info.expires in 1 until nowSec) {
+                    val skewMin = (nowSec - info.expires) / 60
+                    hideLoading()
+                    switchTip.text = "设备时间比服务器快约 ${skewMin} 分钟，播放地址已过期，请校准时间"
+                    switchTip.visibility = View.VISIBLE
+                    toastTip("请在系统设置里开启自动校准时间")
+                    return@play
+                }
+                currentPlayMode = info.mode
+                // QoE 的 path 是**封装类型**（ts/hls/remux），和 direct/relay 是两个正交维度，
+                // 不能拿 currentPlayMode 冒充（那是链路，不是封装）。
+                currentPlayKind = info.kind
+                // 刷新缓存，供下次起播/换台直接命中
+                PlayCacheStore.put(app.prefs, PlayCache(
+                    // 必须和上面 get 用**同一个表达式**：identity 是请求侧身份（想要直连还是中转），
+                    // 不是服务端最后返回的 mode。两边不一致的话缓存永远命不中。
+                    identity = PlayCacheStore.identity(app.prefs, streamId, if (forceRelayOnce) "relay" else "auto"),
+                    channelId = ch.id,
+                    url = abs,
+                    headers = headers,
+                    mode = info.mode,
+                    ua = info.ua,
+                    expires = info.expires,
+                ))
+                // 播放 URL 可能含签名、设备标识或上游凭据，Release 日志不得记录。
+                Log.i(TAG, "play 返回: mode=${info.mode} kind=${info.kind} 请求头=${headers.keys}")
+                // 缓存已经起播过就不要再来一次：重复 prepare 会打断刚出的画面
+                // （表现为"换台先亮一下又黑一下"）。手机首页早就这么做了
+                // （PhoneHomeActivity 的 if (!cacheUsable)），电视端漏了。
+                //
+                // 但 forceRebuild（失败重试）时必须走到这里：否则缓存命中 →
+                // 上面那次 prepare 被跳过 → 这里也被跳过 → 重试什么也没做。
+                if (!cacheUsable || forceRebuild) {
+                    player.play(ch.id, abs, headers, app.prefs.engine)
+                }
+                refreshEpg(ch.id)
+                // 底部信息条：线路 x/y 与延迟
+                refreshLineInfo(ch.id, info.streamId)
+                renderInfoBar()
+                app.api.heartbeat(ch.id, "playing") { hb -> onChannelsVersion(hb.channelsVersion) }
+            },
+            onErr = { msg ->
+                // 过期请求的失败提示同样要丢：它会把新台的信息盖成旧台的错误。
+                if (!playGate.isCurrent(seq)) return@play
+                hideLoading()
+                switchTip.text = "无法播放：$msg"
+                main.postDelayed({ switchTip.visibility = View.GONE }, 3000)
+            })
+    }
+
+    private fun switchBy(delta: Int) {
+        if (channels.isEmpty()) return
+        val n = channels.size
+        val step = if (app.prefs.reverseChannelKeys) -delta else delta
+        // 换台方向决定转场方向：切下一个台时旧画面向上滑走，上一个则向下。
+        // 用 step 而不是 delta —— 用户开了「反转频道键」时 step 才是实际方向。
+        pendingSlideDir = if (step > 0) 1f else -1f
+        index = ((index + step) % n + n) % n
+        playChannel(channels[index])
+        showOsd()
+    }
+
+    private fun jumpByNumber() {
+        val text = numberBuffer.toString()
+        numberBuffer.setLength(0)
+        numberTip.visibility = View.GONE
+        if (text.isBlank()) return
+        val want = text.toIntOrNull() ?: return
+
+        // 先按频道号找，再退化为列表序号
+        var i = channels.indexOfFirst { it.number == want }
+        if (i < 0) i = want - 1
+        if (i in channels.indices) {
+            index = i
+            playChannel(channels[i])
+            showOsd()
+        }
+    }
+
+    // ---------------------------------------------------------------- EPG
+
+    private fun refreshEpg(channelId: Long) {
+        // 优先用**本地解析的 xmltv**（服务端只下发地址，不存节目数据）。
+        // 本地还没就绪时才回落到服务端接口——那条路在旧的灌库模式下仍然有效，
+        // 也覆盖「客户端刚装上、xmltv 还没下完」的那几秒。
+        val epgId = allChannels.firstOrNull { it.id == channelId }?.epgId
+            ?: current?.takeIf { it.id == channelId }?.epgId
+            ?: ""
+
+        val local = app.epg.programsFor(epgId)
+        if (local != null && local.isNotEmpty()) {
+            programs = local.map {
+                com.litv.tv.data.EpgProgram(
+                    startAt = it.start,
+                    endAt = it.end,
+                    title = it.title,
+                    description = it.description,
+                    category = it.category,
+                )
+            }
+            renderOsdNow()
+            if (panelVisible) refreshEpgColumn()
+            main.post { renderInfoBar() }
+            return
+        }
+
+        app.api.epg(channelId, 0, onOk = { list ->
+            programs = list
+            renderOsdNow()
+            // 节目单是浮层里常显的一列，取到数据要立刻刷上去，
+            // 否则打开浮层时看到的永远是加载圈。
+            if (panelVisible) refreshEpgColumn()
+            main.post { renderInfoBar() }
+        }, onErr = { programs = emptyList() })
+    }
+
+    private fun renderOsdNow() {
+        val now = System.currentTimeMillis() / 1000
+        val cur = programs.firstOrNull { it.startAt <= now && it.endAt > now }
+        val next = programs.firstOrNull { it.startAt > now }
+        if (cur != null) {
+            osdNow.text = "${fmt(cur.startAt)} ${cur.title}"
+            val span = (cur.endAt - cur.startAt).coerceAtLeast(1)
+            val pct = (((now - cur.startAt).toFloat() / span) * 100).toInt().coerceIn(0, 100)
+            osdProgress.progress = pct
+            osdProgress.visibility = View.VISIBLE
+        } else {
+            osdNow.text = getString(R.string.no_epg)
+            osdProgress.visibility = View.GONE
+        }
+        osdNext.text = next?.let { "下一档 ${fmt(it.startAt)} ${it.title}" } ?: ""
+        osdEngine.text = player.engineLabel()
+
+        // 台号：这个 TextView 之前从来没被赋值过，一直是空的。
+        // 用当前过滤列表里的序号，和频道面板里看到的一致，补成三位（005 这种）。
+        val pos = current?.let { c -> channels.indexOfFirst { it.id == c.id } } ?: -1
+        osdNo.text = if (pos >= 0) String.format("%03d", pos + 1) else ""
+    }
+
+    /**
+     * 刷新底部信息条：台标 / 台号+名称 / 正在播 / 下一档 / 线路 / 进度 / 时间。
+     *
+     * 参考 DIYP 与群晖电视：两个实现都在底部放这样一条信息卡，
+     * 好处是不用呼出 OSD 就能看到「这个台在播什么、还有几条线路」。
+     */
+    private fun renderInfoBar() {
+        val ch = current ?: return
+        val now = System.currentTimeMillis() / 1000
+
+        infoName.text = if (ch.number > 0) "${ch.number}  ${ch.name}" else ch.name
+        // 复用频道列表那套台标加载（内存 LRU + 降采样），不额外引图片库
+        infoLogo.setImageDrawable(null)
+        if (ch.logo.isNotBlank() && ::panelAdapter.isInitialized) {
+            panelAdapter.loadLogoFor(infoLogo, ch.logo)
+        }
+
+        val cur = programs.firstOrNull { it.startAt <= now && it.endAt > now }
+        val next = programs.firstOrNull { it.startAt > now }
+        if (cur != null) {
+            infoNow.text = "正在播放：" + cur.title
+            val span = (cur.endAt - cur.startAt).coerceAtLeast(1)
+            val pct = (((now - cur.startAt).toFloat() / span) * 100).toInt().coerceIn(0, 100)
+            infoProgress.progress = pct
+            infoProgress.visibility = View.VISIBLE
+        } else {
+            infoNow.text = "正在播放：" + getString(R.string.no_epg)
+            infoProgress.visibility = View.GONE
+        }
+        infoNext.text = if (next != null) "下一节目：" + next.title else ""
+
+        // 线路 x/y · 延迟
+        infoLine.text = if (streamTotal > 0) {
+            val base = "线路 " + streamIndex + "/" + streamTotal
+            if (streamLatency > 0) base + "  ·  " + streamLatency + "ms" else base
+        } else ""
+
+        // 时间 + 星期
+        val cal = java.util.Calendar.getInstance()
+        val days = arrayOf("周日", "周一", "周二", "周三", "周四", "周五", "周六")
+        infoTime.text = String.format("%02d:%02d %s",
+            cal.get(java.util.Calendar.HOUR_OF_DAY),
+            cal.get(java.util.Calendar.MINUTE),
+            days[cal.get(java.util.Calendar.DAY_OF_WEEK) - 1])
+    }
+
+    /** 拉一次线路列表，算出「第几条 / 共几条 / 延迟」。 */
+    private fun refreshLineInfo(channelId: Long, usedStreamId: Long) {
+        app.api.streams(channelId,
+            onOk = { list ->
+                main.post {
+                    streamTotal = list.size
+                    val idx = list.indexOfFirst { it.id == usedStreamId }
+                    streamIndex = if (idx >= 0) idx + 1 else if (list.isNotEmpty()) 1 else 0
+                    streamLatency = list.getOrNull((streamIndex - 1).coerceAtLeast(0))?.latencyMs ?: 0
+                    renderInfoBar()
+                }
+            },
+            onErr = {
+                main.post {
+                    streamTotal = 0; streamIndex = 0; streamLatency = 0
+                    renderInfoBar()
+                }
+            })
+    }
+
+    private fun fmt(ts: Long): String =
+        SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(ts * 1000))
+
+    // ---------------------------------------------------------------- OSD / 面板
+
+    // ---------------------------------------------------------------- 换台过渡
+    //
+    // 换台时的观感问题：
+    //   - 加载圈瞬间出现、瞬间消失，很突兀
+    //   - 换台本来就快的时候，圈只闪一下，反而显得卡
+    //
+    // 做法：
+    //   1. 加载圈延迟 220ms 才淡入——快换台根本不会出现
+    //   2. 淡入淡出各 150~180ms，不是硬切
+    //   3. 旧画面快照一直盖着，等第一帧真的画出来再淡出
+
+    private val showLoadingRunnable = Runnable {
+        if (!::loading.isInitialized) return@Runnable
+        if (loading.visibility == View.VISIBLE) return@Runnable
+        loading.alpha = 0f
+        loading.visibility = View.VISIBLE
+        loading.animate().alpha(1f).setDuration(180).start()
+    }
+
+    /** 起播成功/失败时调用：把加载圈淡出，而不是直接 GONE。 */
+    private fun hideLoading() {
+        if (!::loading.isInitialized) return
+        main.removeCallbacks(showLoadingRunnable)
+        if (loading.visibility != View.VISIBLE) return
+        loading.animate().alpha(0f).setDuration(150).withEndAction {
+            loading.visibility = View.GONE
+            loading.alpha = 1f
+        }.start()
+    }
+
+    private fun showOsd() {
+        // 面板打开时不显示 OSD：面板底部已经有完整信息条，
+        // 两个同时出现会叠在一起。
+        if (panelVisible) return
+        osdVisible = true
+        osd.visibility = View.VISIBLE
+        osdName.text = osdNameText(current ?: return)
+        renderOsdNow()
+        // OSD 分层：第一层只给「台号 + 台名 + 收藏态」，
+        // 线路/内核/缓冲是排障信息，不该和台名抢注意力。
+        setOsdLevel(1)
+        main.removeCallbacks(hideOsdRunnable)
+        main.postDelayed(hideOsdRunnable, 5000)
+    }
+
+    private fun hideOsd() {
+        osdVisible = false
+        osd.visibility = View.GONE
+    }
+
+    /**
+     * OSD 层级可见性。
+     *
+     * @param level 1 = 只要台号 + 台名 + 收藏态；2 = 加上节目/进度/下一档/线路/内核
+     */
+    private fun setOsdLevel(level: Int) {
+        osdLevel = level
+        val detail = level >= 2 && app.prefs.showPlayStatus
+        osdNo.visibility = View.VISIBLE
+        osdName.visibility = View.VISIBLE
+        // 节目名在第一层也给：它是"这个台在演什么"，不是排障信息
+        osdNow.visibility = View.VISIBLE
+        osdProgress.visibility = if (detail) View.VISIBLE else View.GONE
+        osdNext.visibility = if (detail) View.VISIBLE else View.GONE
+        osdEngine.visibility = if (detail) View.VISIBLE else View.GONE
+        // 底部信息条（线路 x/y、延迟、时间）同样只在第二层出现
+        infoLine.visibility = if (detail) View.VISIBLE else View.GONE
+        infoTime.visibility = if (detail) View.VISIBLE else View.GONE
+        infoProgress.visibility = if (detail) View.VISIBLE else View.GONE
+    }
+
+    /** OK 键循环：隐 → 第一层 → 第二层 → 隐。 */
+    private fun toggleOsd() {
+        when {
+            !osdVisible -> showOsd()
+            osdLevel >= 2 -> hideOsd()
+            else -> {
+                setOsdLevel(2)
+                main.removeCallbacks(hideOsdRunnable)
+                main.postDelayed(hideOsdRunnable, 8000)
+            }
+        }
+    }
+
+    private fun openPanel() {
+        panelVisible = true
+        panel.visibility = View.VISIBLE
+
+        // 列表超过 30 秒没更新就先静默拉一次。
+        //
+        // 为什么在这里做：管理员在服务端启用/新增频道后，电视端以前永远看不到
+        // （只在打开播放页时 bootstrap 一次）。而用户发现"台没出现"时，
+        // 第一个动作就是按 ← 打开频道面板 —— 在这里刷新最对症。
+        // 30 秒的窗口是防抖：连按 ← 不会每次都打服务端。
+        if (System.currentTimeMillis() - lastListRefreshAt > 30_000) {
+            Log.i(TAG, "打开面板，列表已过期，静默重载")
+            refreshChannelsSilently()
+        }
+        // 面板自己底部就有信息条，OSD 再压上来就重了——
+        // 真机上看到的是「线路 1/1 / 04:27 周五」叠在频道列表上。
+        hideOsd()
+        // 四列：源 / 分组 / 频道。这里必须走 applyChannelFilter()，
+        // 原来直接 submit(channels) 会把还没加载的空列表刷进去，频道列就是空的。
+        applyChannelFilter()
+        refreshEpgColumn()
+
+        // 把焦点放到当前频道上。
+        //
+        // 这里原来用 panelList.getChildAt(i) —— 但 getChildAt 收的是
+        // **可视区子索引**，不是适配器位置。频道在列表靠后时它返回 null，
+        // 焦点就没落到任何一项上：面板打开了，但 OK 键按下去没有任何反应，
+        // 用户看到的就是「频道页无法换台」。
+        //
+        // 正确做法：先按适配器位置滚动，再用 findViewHolderForAdapterPosition
+        // 取真正的 itemView；取不到就退回到让列表本身获得焦点。
+        val idx = channels.indexOfFirst { it.id == current?.id }
+        val pos = if (idx >= 0) idx else 0
+        if (channels.isNotEmpty()) {
+            (panelList.layoutManager as? LinearLayoutManager)?.scrollToPositionWithOffset(pos, 0)
+            panelList.post {
+                val vh = panelList.findViewHolderForAdapterPosition(pos)
+                if (vh != null) {
+                    vh.itemView.requestFocus()
+                } else {
+                    panelList.requestFocus()
+                }
+            }
+        }
+        hideOsd()
+    }
+
+    private fun closePanel() {
+        panelVisible = false
+        panel.visibility = View.GONE
+    }
+
+    /**
+     * 刷新节目单列。
+     *
+     * 参考实现里节目单是紧挨频道列表常显的第三列，不是抽屉，
+     * 所以开浮层时要跟着一起刷，切台时也要跟着换。
+     */
+    /** C4：节目单分类筛选。null 表示全部分类。 */
+    private var epgCategory: String? = null
+
+    /** 当前节目单里出现过的分类（去重，保持出现顺序）。 */
+    private fun epgCategories(): List<String> =
+        programs.map { it.category }.filter { it.isNotBlank() }.distinct()
+
+    /** 按当前分类筛选后的节目。 */
+    private fun filteredPrograms(): List<com.litv.tv.data.EpgProgram> {
+        val c = epgCategory ?: return programs
+        return programs.filter { it.category == c }
+    }
+
+    private fun epgTitleText(): String {
+        val name = current?.name ?: "节目单"
+        val cat = epgCategory
+        return if (cat == null) "$name · 全部" else "$name · $cat"
+    }
+
+    /** 依次切换：全部 → 各分类 → 全部。 */
+    private fun cycleEpgCategory() {
+        val cats = epgCategories()
+        if (cats.isEmpty()) {
+            toastTip("这个频道没有分类信息")
+            return
+        }
+        val order = listOf<String?>(null) + cats
+        val i = order.indexOf(epgCategory)
+        epgCategory = order[((if (i < 0) 0 else i) + 1) % order.size]
+        refreshEpgColumn()
+        toastTip("分类：" + (epgCategory ?: "全部"))
+    }
+
+    private fun refreshEpgColumn() {
+        epgPanel.visibility = View.VISIBLE
+        epgTitle.text = epgTitleText()
+        epgAdapter.submit(filteredPrograms())
+        val pos = epgAdapter.currentPosition()
+        if (pos >= 0) epgList.scrollToPosition(pos)
+    }
+
+    /** 呼出节目单面板（右侧）。数据是进频道时就预取的，所以这里是瞬开。 */
+    private fun openEpg() {
+        epgVisible = true
+        epgPanel.visibility = View.VISIBLE
+        epgTitle.text = epgTitleText()
+        epgAdapter.submit(filteredPrograms())
+        val pos = epgAdapter.currentPosition()
+        epgList.scrollToPosition(pos)
+        epgList.post {
+            (epgList.layoutManager as? LinearLayoutManager)
+                ?.findViewByPosition(pos)?.requestFocus()
+        }
+        hideOsd()
+    }
+
+    private fun closeEpg() {
+        // 节目单现在是浮层里常显的一列，不单独隐藏，把焦点还给频道列表即可
+        epgVisible = false
+        panelList.requestFocus()
+    }
+
+    /**
+     * 线路切换：长按 OK 呼出。
+     * 线路信息由服务端下发（只给标签和健康度，不给上游真实地址，防抓包盗链）。
+     */
+    private fun showStreamPicker() {
+        val ch = current ?: return
+        app.api.streams(ch.id,
+            onOk = { list ->
+                if (list.isEmpty()) {
+                    statusToast("这个频道只有一条线路")
+                    return@streams
+                }
+                val labels = list.map { s ->
+                    "${s.label}  ·  ${s.healthText}" + if (s.latencyMs > 0) "  ${s.latencyMs}ms" else ""
+                }
+                // 自绘深色弹框。系统 AlertDialog 的灰底压不住主题，
+                // 弹出来和整个界面是两套东西——之前截图里那块灰方块就是它。
+                PickerDialog(this, "选择线路（${ch.name}）", labels, -1) { which ->
+                    playChannel(ch, list[which].id)
+                }.show()
+            },
+            onErr = { statusToast("获取线路失败：$it") })
+    }
+
+    private fun statusToast(msg: String) {
+        switchTip.text = msg
+        switchTip.visibility = View.VISIBLE
+        main.postDelayed({
+            if (switchTip.text == msg) switchTip.visibility = View.GONE
+        }, 2500)
+    }
+
+    // ---------------------------------------------------------------- 按键
+
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        val code = event.keyCode
+        val action = event.action
+
+        // 数字键：累积跳台
+        if (code in KeyEvent.KEYCODE_0..KeyEvent.KEYCODE_9) {
+            if (action == KeyEvent.ACTION_DOWN) {
+                numberBuffer.append(code - KeyEvent.KEYCODE_0)
+                numberTip.text = numberBuffer.toString()
+                numberTip.visibility = View.VISIBLE
+                main.removeCallbacks(numberJumpRunnable)
+                main.postDelayed(numberJumpRunnable, app.prefs.numberJumpTimeoutMs.toLong())
+            }
+            return true
+        }
+
+        // 播放失败后按 OK = 直接重试。
+        //
+        // 这里**不弹任何面板**。之前失败会弹一张卡片，卡片可见时所有按键都
+        // 交给它，↑↓ 变成在按钮之间移动 —— 用户想换台却换不了，
+        // 表现就是"失败还截取我的控制焦点"。
+        // 现在失败只在底部留一行提示，OK 就地重试，其它键一律照常。
+        if (action == KeyEvent.ACTION_DOWN && playFailedPending &&
+            (code == KeyEvent.KEYCODE_DPAD_CENTER || code == KeyEvent.KEYCODE_ENTER)
+        ) {
+            playFailedPending = false
+            directRetryLeft = DIRECT_RETRY_MAX
+            switchTip.visibility = View.GONE
+            // forceRebuild：用户明确要求"再播一次"，必须真的重建播放器。
+            // 缓存命中时会跳过 prepare，那样按 OK 就成了摆设。
+            current?.let { playChannel(it, currentStreamId, forceRebuild = true) }
+            return true
+        }
+
+        // 节目单面板打开时，BACK/← 收起，其余交给列表
+        if (epgVisible) {
+            if (action == KeyEvent.ACTION_DOWN &&
+                (code == KeyEvent.KEYCODE_BACK || code == KeyEvent.KEYCODE_DPAD_LEFT)
+            ) {
+                closeEpg(); return true
+            }
+            return super.dispatchKeyEvent(event)
+        }
+
+        // 频道列表打开时：←→ 切分组，BACK 收起，↑↓ 交给列表自己
+        if (panelVisible) {
+            if (action == KeyEvent.ACTION_DOWN) {
+                when (code) {
+                    KeyEvent.KEYCODE_BACK -> {
+                        closePanel(); return true
+                    }
+                    KeyEvent.KEYCODE_DPAD_LEFT -> {
+                        movePanelFocus(-1); return true
+                    }
+                    KeyEvent.KEYCODE_DPAD_RIGHT -> {
+                        movePanelFocus(+1); return true
+                    }
+                }
+            }
+            return super.dispatchKeyEvent(event)
+        }
+
+        // 设置菜单打开时：按键全部交给菜单自己处理。
+        //
+        // 之前**没有这个分支**，于是菜单虽然显示出来了，
+        // 上下键仍然被当成换台、OK 仍然去呼出 OSD、左键去开频道页，
+        // 结果就是"右键能打开设置，但焦点选不中任何一项"。
+        if (menuVisible) {
+            if (action == KeyEvent.ACTION_DOWN && code == KeyEvent.KEYCODE_BACK) {
+                closeSettingsMenu(); return true
+            }
+            return super.dispatchKeyEvent(event)
+        }
+
+        when (code) {
+            KeyEvent.KEYCODE_DPAD_UP -> {
+                if (action == KeyEvent.ACTION_DOWN) switchBy(-1)
+                return true
+            }
+            KeyEvent.KEYCODE_DPAD_DOWN -> {
+                if (action == KeyEvent.ACTION_DOWN) switchBy(+1)
+                return true
+            }
+            KeyEvent.KEYCODE_CHANNEL_UP -> {
+                if (action == KeyEvent.ACTION_DOWN) switchBy(-1)
+                return true
+            }
+            KeyEvent.KEYCODE_CHANNEL_DOWN -> {
+                if (action == KeyEvent.ACTION_DOWN) switchBy(+1)
+                return true
+            }
+            KeyEvent.KEYCODE_DPAD_LEFT -> {
+                // 左键 = 频道页（分类 → 频道 → 节目单都在这个面板里）
+                if (action == KeyEvent.ACTION_DOWN) openPanel()
+                return true
+            }
+            KeyEvent.KEYCODE_DPAD_RIGHT -> {
+                // 右键 = 设置菜单。
+                //
+                // 原来右键打开的是独立的节目单面板，但按电视的通用习惯
+                // （也是用户明确要求）：左=频道页、右=设置、OK=OSD。
+                // 节目单不再单独占一个方向键——频道面板里已经有节目单列，
+                // 而且从那里看节目单更符合「选台→看这个台播什么」的路径。
+                if (action == KeyEvent.ACTION_DOWN) toggleSettingsMenu()
+                return true
+            }
+            KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_NUMPAD_ENTER -> {
+                if (action == KeyEvent.ACTION_DOWN) {
+                    okDownTime = System.currentTimeMillis()
+                    main.postDelayed(longPressRunnable, 800)
+                } else {
+                    main.removeCallbacks(longPressRunnable)
+                    if (System.currentTimeMillis() - okDownTime < 800) toggleOsd()
+                }
+                return true
+            }
+            KeyEvent.KEYCODE_MENU -> {
+                // 规范：Menu 键呼出/隐藏右侧设置菜单
+                if (action == KeyEvent.ACTION_DOWN) toggleSettingsMenu()
+                return true
+            }
+            KeyEvent.KEYCODE_BACK -> {
+                if (action == KeyEvent.ACTION_DOWN) {
+                    when {
+                        osdVisible -> hideOsd()
+                        menuVisible -> closeSettingsMenu()
+                        panelVisible -> closePanel()
+                        // 二次确认：直接退出太容易误触（遥控器返回键和方向键挨着）
+                        System.currentTimeMillis() - lastBackAt < 2000 -> finish()
+                        else -> {
+                            lastBackAt = System.currentTimeMillis()
+                            toastTip("再按一次返回退出")
+                        }
+                    }
+                }
+                return true
+            }
+        }
+        return super.dispatchKeyEvent(event)
+    }
+
+    /** 长按 OK：呼出线路选择（排查"这个台哪个源能播"最实用）。 */
+    private fun onLongPressOk() {
+        showStreamPicker()
+    }
+
+    // ---------------------------------------------------------------- PlayerManager 回调
+
+    override fun onEngineChanged(kind: EngineKind) {
+        osdEngine.text = kind.label
+        // 按实际选中的内核切换渲染目标。
+        //
+        // Exo 用 media3 的 PlayerView（它自己管 Surface）；
+        // VLC / mpv 用外部 Surface（TextureView / SurfaceView）。
+        // PlayerView 在布局里 z 序最高，给 VLC / mpv 时不隐藏就会盖住画面。
+        val isExo = kind == EngineKind.EXO
+        playerView.visibility = if (isExo) View.VISIBLE else View.GONE
+    }
+
+    override fun onPrepared(width: Int, height: Int) = Unit
+
+    /**
+     * 本次换台的转场方向：+1 = 旧画面向上滑走（切到下一个台），
+     * -1 = 向下滑走（上一个台），0 = 只淡出（点列表、数字键、恢复播放等没有方向感的路径）。
+     *
+     * 为什么靠「旧画面滑走」而不是「新画面滑入」：画面是 SurfaceView，
+     * 内容由播放器直接往硬件层画，**没法给它做 View 动画**。
+     * 能动的只有盖在上面的这张快照 —— 它滑走、下面已经在播的新画面露出来，
+     * 观感就是翻页。
+     */
+    private var slideDir = 0f
+
+    /**
+     * 下一次换台的转场方向，由 [switchBy] 写入、[playChannel] 在开头取走。
+     *
+     * 分两个字段是因为换台入口不止 switchBy：点列表、数字键跳台、恢复播放、
+     * 失败重试都会调 playChannel。只有 switchBy 有方向，其余都该是「只淡出」。
+     * 用一个字段的话，上一次的方向会残留到这些路径上（表现为"点个台莫名往上滑"）。
+     */
+    private var pendingSlideDir = 0f
+
+    /**
+     * 换台转场幕布：从切换方向滑进来盖住屏幕。
+     *
+     * 为什么是"幕布扫过"而不是"旧画面滑走"：这台电视的视频走独立硬件层，
+     * screencap / MediaProjection / PixelCopy 三种软件抓帧全都拿不到画面
+     * （只有厂商 screencontrol 硬件回采能拿，那要 root）。没有那一帧静止图，
+     * 就没有可动的旧画面，只能动一层叠在上面的 View。
+     *
+     * 新画面出来时由 [endCurtain] 接着朝同方向滑走，观感即"翻了一页"。
+     */
+    private fun startCurtain() {
+        if (!::curtain.isInitialized) return
+        val h = resources.displayMetrics.heightPixels.toFloat()
+        // slideDir 在 playChannel 开头已经被取走；没有方向（点列表/数字键）时按"下一个"处理
+        curtainDir = if (slideDir == 0f) 1f else slideDir
+        curtain.animate().cancel()
+        curtain.translationY = curtainDir * h
+        curtain.visibility = View.VISIBLE
+        curtain.animate()
+            .translationY(0f)
+            .setDuration(140L)
+            .setInterpolator(DecelerateInterpolator())
+            .start()
+        // 兜底：新台起播失败时不会收到 onFirstFrame，幕布会一直盖着。
+        // 到点自动撤，最多黑这么久。
+        main.removeCallbacks(curtainTimeout)
+        main.postDelayed(curtainTimeout, CURTAIN_TIMEOUT_MS)
+    }
+
+    private fun endCurtain() {
+        if (!::curtain.isInitialized || curtain.visibility != View.VISIBLE) return
+        main.removeCallbacks(curtainTimeout)
+        val h = resources.displayMetrics.heightPixels.toFloat()
+        curtain.animate().cancel()
+        curtain.animate()
+            .translationY(-curtainDir * h)
+            .setDuration(220L)
+            .setInterpolator(DecelerateInterpolator())
+            .withEndAction {
+                curtain.visibility = View.GONE
+                curtain.translationY = 0f
+            }
+            .start()
+    }
+
+    private val curtainTimeout = Runnable {
+        Log.w(TAG, "转场幕布等不到首帧，自动撤掉")
+        endCurtain()
+    }
+
+    override fun onFirstFrame() {
+        // 起播计时与观看窗口都从"真正看到画面"开始算 —— 转圈的那几十秒不算观看时长，
+        // 否则 rebuffer ratio 的分母会被拉大、显得卡顿率更低（自欺欺人）。
+        if (watchStartAt == 0L) watchStartAt = System.currentTimeMillis()
+        // 新画面已经画出来了，把转场幕布朝同方向擦走。
+        // 幕布在下面（视频之上、OSD 之下），擦走的过程就是"翻页"。
+        endCurtain()
+        // 换台方向用完即弃，别残留到下一次
+        slideDir = 0f
+    }
+
+    override fun onPlaying() {
+        hideLoading()
+        // 重试/换线路成功后必须把错误卡片收掉，否则它会一直盖在画面上。
+        playFailedPending = false
+        switchTip.visibility = View.GONE
+        // 转场幕布不在这里撤：onPlaying 时画面往往还是黑的，
+        // 等 onFirstFrame 真正画出第一帧再擦走（见 endCurtain）。
+
+        // 上报起播耗时（只报第一次出画面，重连不重复计）
+        if (startAt > 0) {
+            val ms = (System.currentTimeMillis() - startAt).toInt()
+            startAt = 0
+            current?.let { app.api.reportStats(it.id, "start", ms) }
+        }
+    }
+
+    override fun onError(message: String) {
+        hideLoading()
+
+        // 恢复顺序（真机事故后调整过）：
+        //   ① 先换同一台的下一条线路 ② 再考虑重试直连 ③ 都不行才提示
+        //
+        // 为什么把"换线路"提到最前面：源里同一个台常有多条线路
+        // （如 cctv1-MCP / cctv1-AV3A），一条坏不代表别的坏。
+        // 以前是先重试直连、重试同一条坏线路 —— 那条线路本身有问题时，
+        // 重试多少次都一样，用户看到的就是"突然失败，然后一直不播"。
+        if (tryNextStreamLine(message)) return
+
+        // 没有其它线路可换 → 才按直连失败处理（静默重试 / 底部提示）。
+        if (currentPlayMode == "direct") {
+            current?.let { directBrokenChannels += it.id }
+            Log.w(TAG, "直连失败（内核层）: $message")
+            if (handleDirectFailure(message)) return
+        }
+        // 走到这里才是真正放弃：上报 error，让服务端能区分"起播失败"与"卡顿"。
+        current?.let {
+            app.api.reportStats(
+                it.id, "error", 0, message,
+                watchMs = watchedSec(), path = currentPlayKind, engine = player.engineKey(),
+            )
+        }
+        // 不自动弹层：只在底部留一行提示，用户按 OK 才展开可操作面板。
+        //
+        // 真机反馈：「突然就弹出来」「影响观感」。盖住画面的弹层会打断观看，
+        // 而多数失败用户只想让它自己再试一次，不想被问"你要重试还是中转"。
+        switchTip.text = "播放出错 · 按 OK 重试"
+        switchTip.visibility = View.VISIBLE
+        playFailedPending = true
+    }
+
+    /**
+     * 卡顿上报（QoE）。
+     *
+     * 这是**整个 App 里唯一**的 stall 数据来源：在它之前，客户端只上报过 `start`，
+     * 服务端的 StallRate 与新增的 rebuffer_ratio 分子**恒为 0**——
+     * 管理台会大大方方地显示"卡顿率 0%"，比没有数据更误导。
+     *
+     * @param frozenMs PlayerManager 判定"画面完全没动"的时长
+     */
+    override fun onStall(frozenMs: Int) {
+        val ch = current ?: return
+        app.api.reportStats(
+            ch.id, "stall", 0, "frozen=${frozenMs}ms",
+            stallMs = frozenMs,
+            watchMs = watchedSec(),
+            // path = 封装（ts/hls/remux），engine = 内核 key（exo/vlc/mpv/avs3）
+            path = currentPlayKind,
+            engine = player.engineKey(),
+        )
+    }
+
+    /** 本台已观看的秒数（从第一帧开始算）。未起播过返回 0。 */
+    private fun watchedSec(): Int {
+        if (watchStartAt <= 0L) return 0
+        return ((System.currentTimeMillis() - watchStartAt) / 1000).toInt().coerceAtLeast(0)
+    }
+
+    /**
+     * 离开页面时上报一次 stop（带 watch_ms）。
+     *
+     * 幂等：同一段观看只报一次；没起播过（watchStartAt == 0）不报，
+     * 否则会往统计里灌一堆 0 秒的观看记录，把 rebuffer ratio 的分母拉偏。
+     */
+    private fun reportStopIfWatched() {
+        if (reportedStop) return
+        val ch = current ?: return
+        if (watchStartAt <= 0L) return
+        reportedStop = true
+        app.api.reportStats(
+            ch.id, "stop", 0, "",
+            watchMs = watchedSec(), path = currentPlayKind, engine = player.engineKey(),
+        )
+    }
+
+    /** 上一次播放实际用的模式（direct / relay），用于直连失败后改走中转 */
+    private var currentPlayMode: String = ""
+    /** 本次选台是否已经因为直连失败改走过中转 */
+    private var relayRetried = false
+    /** 这一次 play 请求强制走中转 */
+    private var forceRelayOnce = false
+
+    /**
+     * 本次运行内直连不通的频道。
+     *
+     * 直连失败几乎都是"这台电视所在网络连不上这个源站"（TLS 被中断、CDN 限 IP、
+     * DNS 不通），换内核修不好、重试也修不好，所以记住它、下次直接走中转。
+     * 只放内存：重启后重新探一次是合理的（网络可能变了）；
+     * 要跨启动记住需要落盘 + TTL，留到下一轮。
+     */
+    private val directBrokenChannels = mutableSetOf<Long>()
+
+    /**
+     * 播放失败、等用户按 OK 重试。
+     *
+     * 只是个标记，不带任何 UI：失败时底部留一行提示，按 OK 就地重试。
+     * 不用弹层——弹层会抢遥控器焦点，导致用户换不了台。
+     */
+    private var playFailedPending = false
+
+    /** 直连失败后自动静默重试的次数（换台重置）。 */
+    private val DIRECT_RETRY_MAX = 2
+
+    /**
+     * 加载圈的延迟。
+     *
+     * 原来是 300ms，正常换台 1 秒内出画面，圈还没消失就先闪一下 ——
+     * 观感比"黑一下"更糟（用户反馈过两次）。改成 3 秒：绝大多数换台
+     * 根本看不到圈，只有真的卡住才提示"在加载"。
+     */
+    private val LOADING_DELAY_MS = 3_000L
+
+    /** 转场幕布等首帧的上限。超时自动撤，避免起播失败时永久黑屏。 */
+    private val CURTAIN_TIMEOUT_MS = 8_000L
+
+    /**
+     * 把直连失败的原始异常翻成一句人话。
+     *
+     * 电视上直接弹 SDK 的异常串（ERROR_CODE_IO_NETWORK_CONNECTION_FAILED:
+     * javax.net.ssl.SSLHandshakeException ... Connection reset by peer）
+     * 用户看不懂，还挡住画面；完整原因写 logcat 就够了。
+     */
+    private fun directFailureText(raw: String): String = when {
+        raw.contains("handshake", true) || raw.contains("HandshakeException", true) ->
+            "源站中断了 TLS 握手"
+        raw.contains("reset by peer", true) -> "源站主动断开连接"
+        raw.contains("refused", true) -> "源站拒绝连接"
+        raw.contains("timeout", true) -> "源站响应超时"
+        raw.contains("UnknownHost", true) || raw.contains("No address", true) -> "解析不到源站地址"
+        else -> "连不上源站"
+    }
+
+
+    /**
+     * 直连失败的统一出口（两条路径都走这里：PlayerManager.onDirectFailed 与 onError）。
+     *
+     * 策略在 [RelayDecision] 里，默认（用户没开自动中转）**不自动切**，
+     * 而是把原因说清楚 + 给两个明确动作。
+     *
+     * @return true 表示已经接手（要么已改走中转重播，要么已弹出选择），调用方别再往下报错
+     */
+    private fun handleDirectFailure(reason: String): Boolean {
+        val ch = current ?: return false
+        hideLoading()
+
+        // ① 先自己重试，不打扰用户。
+        //
+        // 直播源的直连失败绝大多数是瞬时的：握手被打断、DNS 刚换过、
+        // 上游短暂抖动。以前第一下失败就弹一张盖住画面的卡片，
+        // 用户看的好好的突然被打断 —— 这是最烦人的体验。
+        // 现在先静默重试，只在底部用一行小字提示，画面不动。
+        if (directRetryLeft > 0) {
+            directRetryLeft--
+            Log.i(TAG, "直连失败（${directFailureText(reason)}），静默重试，还剩 $directRetryLeft 次")
+            switchTip.text = "重连中…"
+            switchTip.visibility = View.VISIBLE
+            main.postDelayed({
+                // 期间用户可能已经换台了，代际号会拦住旧的重试。
+                // forceRebuild：必须真的重建播放器，否则缓存命中会跳过 prepare，
+                // 重试等于什么都不做（画面一直卡着）。
+                current?.let { if (it.id == ch.id) playChannel(it, currentStreamId, forceRebuild = true) }
+            }, 1200)
+            return true
+        }
+
+        // ② 重试用尽：给底部提示条（不遮画面），按 OK 才展开可操作面板。
+        switchTip.text = "这条线路连不上（${directFailureText(reason)}）· 按 OK 重试"
+        switchTip.visibility = View.VISIBLE
+        playFailedPending = true
+
+        when (RelayDecision.decide(
+            autoRelay = app.prefs.autoRelay,
+            directFailed = true,
+            userTappedRelay = false,
+        )) {
+            RelayDecision.Action.USE_RELAY -> {
+                // 只有用户自己在设置里打开了「直连失败时自动改用中转」才走这里
+                relayRetried = true
+                forceRelayOnce = true
+                toastTip("直连不通（${directFailureText(reason)}），已自动改走中转")
+                playChannel(ch, currentStreamId)
+            }
+            // 默认什么都不弹：底部提示条已经说明情况，按 OK 才展开可操作面板。
+            RelayDecision.Action.SHOW_ERROR, RelayDecision.Action.RETRY_DIRECT -> Unit
+        }
+        return true
+    }
+
+    // 播放错误不再用弹层：弹层会抢遥控器焦点（用户换不了台），
+    // 也盖住画面（"影响观感"）。失败只在底部留一行提示，按 OK 就地重试。
+    // 相关代码已删除，不要加回来。
+
+
+    /**
+     * 直连失败的静默重试余额。
+     *
+     * 为什么要有：直播源直连失败绝大多数是瞬时的（握手被打断、上游抖动）。
+     * 第一下失败就弹盖住画面的卡片，用户会炸——"看的好好的突然弹出来"。
+     * 先自己重试两次，画面不中断、不弹层；两次都失败才给底部提示条。
+     */
+    private var directRetryLeft = DIRECT_RETRY_MAX
+
+    /** 服务端频道列表指纹（bootstrap 时记下，心跳里比对） */
+    private var knownChannelsVersion = ""
+
+    /** 上次拉列表的时间（毫秒）。打开面板时据此判断要不要先刷一次。 */
+    private var lastListRefreshAt = 0L
+
+    /**
+     * 心跳带回频道指纹：变了就静默重载列表。
+     *
+     * 为什么不在重载时重新走 applyBootstrap：那个函数会重新解析"上次看的台"
+     * 并可能触发自动播放，播放中调用会打断当前播放。这里只更新列表数据。
+     */
+    private fun onChannelsVersion(version: String) {
+        if (version.isBlank() || version == knownChannelsVersion) return
+        knownChannelsVersion = version
+        Log.i(TAG, "频道列表有变化（$version），静默重载")
+        refreshChannelsSilently()
+    }
+
+    /**
+     * 只更新频道列表，不碰播放状态。
+     *
+     * 服务端启用了新频道 / 改了分组之后，用户按 ← 打开面板就能看到，
+     * 不需要杀进程重进。
+     */
+    private fun refreshChannelsSilently() {
+        app.api.bootstrap(
+            onOk = { b ->
+                if (b.channelsVersion.isNotBlank()) knownChannelsVersion = b.channelsVersion
+                lastListRefreshAt = System.currentTimeMillis()
+                allChannels = b.channels
+                favoriteIds.clear()
+                favoriteIds.addAll(b.favorites)
+                groups = allChannels.map { it.group }.filter { it.isNotBlank() }.distinct()
+                // 分组可能被改名/删掉了：当前选中的分组不存在就回到"全部"
+                if (selGroup.isNotEmpty() && selGroup != "收藏" && !groups.contains(selGroup)) {
+                    selGroup = ""
+                }
+                refreshCategories()
+                applyChannelFilter()
+                // channels 被重建过，index 必须按"当前正在播的台"重新定位，
+                // 否则上下换台会跳到别的台。
+                val curId = current?.id ?: 0
+                index = channels.indexOfFirst { it.id == curId }.coerceAtLeast(0)
+            },
+            onErr = { /* 静默失败：下次心跳还会再试 */ },
+        )
+    }
+
+    /** 当前正在播的线路 id，重试时要用 */
+    private var currentStreamId: Long = 0
+
+    /** 本次选台已经试过的线路，避免来回死循环 */
+    private val triedStreams = mutableSetOf<Long>()
+    private var triedForChannel: Long = 0
+
+    /**
+     * 自动换下一条线路。
+     *
+     * 返回 true 表示"已经在换线，先别显示错误"；false 表示没有可换的线路，
+     * 让调用方照常把错误显示出来。
+     */
+    private fun tryNextStreamLine(reason: String): Boolean {
+        val ch = current ?: return false
+        app.api.streams(ch.id,
+            onOk = { list ->
+                val next = list.firstOrNull { it.id !in triedStreams }
+                if (next == null) {
+                    switchTip.text = "播放出错：$reason"
+                    switchTip.visibility = View.VISIBLE
+                    toastTip("这个台的线路都试过了，仍无法播放")
+                    return@streams
+                }
+                toastTip("换线路重试：${next.label}")
+                playChannel(ch, next.id)
+            },
+            onErr = {
+                switchTip.text = "播放出错：$reason"
+                switchTip.visibility = View.VISIBLE
+            })
+        return true
+    }
+
+    override fun onVideoSizeChanged(width: Int, height: Int) = Unit
+
+    // ---------------------------------------------------------------- 生命周期
+
+    override fun onResume() {
+        super.onResume()
+        player.resume()
+        // 接管遥控指令：手机发来的按键直接走本页原有的按键逻辑
+        app.remote.onCommand = { cmd -> main.post { RemoteKeys.handle(this, cmd) } }
+        app.remote.connect()
+    }
+
+    override fun onPause() {
+        super.onPause()
+        player.pause()
+        app.remote.onCommand = null
+        // 跨端续播：离开时记下看到哪个台，别的设备打开就能"接着看"
+        current?.let { app.api.saveProgress(it.id, 0) }
+    }
+
+    override fun onDestroy() {
+        // QoE：离开播放页时补一条 stop（带 watch_ms）。必须在清 Handler 之前调，
+        // 因为它会走一次异步网络请求。
+        reportStopIfWatched()
+        main.removeCallbacksAndMessages(null)
+        // 离开页面后到达的 /tv/play 回调一律作废，别再往已销毁的界面上写。
+        playGate.invalidate()
+        player.release()
+        super.onDestroy()
+    }
+
+    companion object {
+        const val EXTRA_CHANNEL_ID = "channel_id"
+        const val EXTRA_CHANNEL_NAME = "channel_name"
+    }
+
+    /** 分组窄竖条点击：在所有分组之间循环 */
+    /**
+     * 浮层里在列之间移动焦点：分组竖条 <-> 频道列表 <-> 节目单。
+     *
+     * 参考实现就是这么操作的。分组竖条本身可点，焦点落上去用上下切分组，
+     * 左右负责跨列，比「左右键都拿来切分组」合理。
+     */
+    private fun movePanelFocus(dir: Int) {
+        when {
+            grpList.hasFocus() && dir > 0 -> panelList.requestFocus()
+            panelList.hasFocus() && dir < 0 -> grpList.requestFocus()
+            panelList.hasFocus() && dir > 0 -> epgList.requestFocus()
+            epgList.hasFocus() && dir < 0 -> panelList.requestFocus()
+            // C1：收藏按钮是第四站，从节目单列继续往右就到它（它是面板里唯一能改收藏状态
+            // 的控件；MENU 留给设置菜单、长按 OK 留给选线路，都不抢）。
+            epgList.hasFocus() && dir > 0 -> favBtn.requestFocus()
+            favBtn.hasFocus() && dir < 0 -> epgList.requestFocus()
+            else -> if (dir > 0) panelList.requestFocus() else grpList.requestFocus()
+        }
+    }
+
+
+    /** 按当前源+分组过滤，刷到频道列表 */
+    private fun applyChannelFilter() {
+        var list = if (selSource == 0L) allChannels else allChannels.filter { it.sourceId == selSource }
+        list = when {
+            selGroup == "收藏" -> list.filter { favoriteIds.contains(it.id) }
+            selGroup.isNotEmpty() -> list.filter { it.group == selGroup }
+            else -> list
+        }
+        // 必须写回 channels：切台、自动播放、上下一台全靠它。
+        // 改成四列浮层时这里漏了赋值，导致 channels 永远为空、自动播放从不触发，
+        // 表现就是黑屏转圈、服务端收不到 /tv/play。
+        channels = list
+        panelAdapter.submit(list, nowMap)
+        panelTitle.text = buildString {
+            append(if (selSource == 0L) "全部频道" else (srcNames[selSource] ?: "频道"))
+            if (selGroup.isNotEmpty()) append(" · ").append(selGroup)
+            append("  ").append(list.size).append(" 个")
+        }
+        // C1：空列表不留白 —— 尤其是「收藏」分组，要告诉用户怎么把台加进来。
+        val emptyHint = when {
+            list.isNotEmpty() -> ""
+            selGroup == "收藏" -> "还没有收藏的频道\n选中一个台，按「☆ 收藏」加入"
+            selGroup.isNotEmpty() -> "这个分组里没有频道"
+            else -> "没有可用频道，请先在管理台导入源"
+        }
+        panelEmpty.text = emptyHint
+        panelEmpty.visibility = if (emptyHint.isEmpty()) View.GONE else View.VISIBLE
+        // 收藏按钮的文字跟当前台的收藏状态走（★ / ☆），是 TV 上唯一的状态提示。
+        updateFavButton()
+    }
+
+    /** 收藏按钮只反映"正在播 / 焦点所在"那个台的状态。 */
+    private fun updateFavButton() {
+        if (!::favBtn.isInitialized) return
+        val pos = focusedChannelPosition()
+        val ch = channels.getOrNull(pos) ?: current
+        val fav = ch != null && favoriteIds.contains(ch.id)
+        favBtn.text = if (fav) "★ 已收藏" else "☆ 收藏"
+    }
+
+    /** 焦点所在的频道位置；焦点不在频道列时退回到正在播的台。 */
+    private fun focusedChannelPosition(): Int {
+        val focus = panelList.findFocus()
+        if (focus != null) {
+            val p = panelList.getChildAdapterPosition(focus)
+            if (p != RecyclerView.NO_POSITION) return p
+        }
+        val playing = channels.indexOfFirst { it.id == current?.id }
+        return if (playing >= 0) playing else 0
+    }
+
+    /** 面板里的「☆ 收藏」按钮：对焦点所在（或正在播）的台做收藏/取消。 */
+    private fun toggleFavoriteOnFocused() {
+        val ch = channels.getOrNull(focusedChannelPosition()) ?: current ?: return
+        toggleFavorite(ch)
+    }
+
+    /** OSD 上的台名：收藏过的台带一个 ★，让用户随时知道"这个台我收了没有"。 */
+    private fun osdNameText(ch: Channel): String =
+        if (favoriteIds.contains(ch.id)) "${ch.name}  ★" else ch.name
+
+    /**
+     * 收藏 / 取消收藏。
+     *
+     * 与手机端 PhoneHomeActivity.toggleFavorite 同一形态：
+     * 成功 → 本地立即更新（不等下次 bootstrap）+ 重算分组与列表 + 提示；
+     * 失败 → **必须**有可见反馈，不能静默（用户按了没反应会以为功能坏了）。
+     */
+    private fun toggleFavorite(ch: Channel) {
+        val on = !favoriteIds.contains(ch.id)
+        app.api.favorite(ch.id, on,
+            onOk = {
+                if (on) favoriteIds.add(ch.id) else favoriteIds.remove(ch.id)
+                // 收藏分组的内容、左侧计数、列表星标都要立刻变
+                applyGroupFilter()
+                // 正在播的台还要同步 OSD 上的 ★
+                if (ch.id == current?.id) osdName.text = osdNameText(ch)
+                toastTip(if (on) "已收藏：${ch.name}" else "已取消收藏：${ch.name}")
+            },
+            onErr = { msg -> toastTip("收藏失败：$msg") })
+    }
+
+    // ---------------------------------------------------------------- 右侧设置菜单
+
+    private fun toggleSettingsMenu() {
+        if (menuVisible) closeSettingsMenu() else {
+            menuVisible = true
+            settingsMenu.visibility = android.view.View.VISIBLE
+            hideOsd()
+            // 必须 post 到下一帧：刚设成 VISIBLE 时还没布局，
+            // 立刻 requestFocus() 会失败（返回 false），焦点留在画面上。
+            settingsMenu.post {
+                settingsMenu.findViewById<TextView>(R.id.miLine)?.requestFocus()
+            }
+        }
+    }
+
+    private fun closeSettingsMenu() {
+        menuVisible = false
+        settingsMenu.visibility = android.view.View.GONE
+    }
+
+    private fun cycleOf(cur: String, all: List<String>): String {
+        val i = all.indexOf(cur)
+        return all[(i + 1).mod(all.size)]
+    }
+
+    private fun toastTip(msg: String) {
+        switchTip.text = msg
+        switchTip.visibility = android.view.View.VISIBLE
+        main.postDelayed({ switchTip.visibility = android.view.View.GONE }, 2000)
+    }
+
+    /** 线路选择：把当前频道的线路列出来，选中就切过去 */
+    private fun openLinePicker() {
+        val ch = current ?: return
+        closeSettingsMenu()
+        app.api.streams(ch.id, onOk = { list ->
+            if (list.isEmpty()) { toastTip("这个台只有一条线路"); return@streams }
+            val names = list.map { "${it.quality.ifBlank { "线路" }} ${it.latencyMs}ms" }
+            android.app.AlertDialog.Builder(this, R.style.LitvAlertDialog)
+                .setTitle("选择线路（${list.size} 条）")
+                .setItems(names.toTypedArray()) { _, i ->
+                    playChannel(ch, list[i].id)
+                }
+                .show()
+        }, onErr = { toastTip("取线路失败：$it") })
+    }
+}

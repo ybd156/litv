@@ -1,0 +1,6 @@
+央视频道,#genre#
+CCTV-1 综合,http://127.0.0.1:19999/cctv1.ts
+CCTV-2 财经,http://127.0.0.1:19999/cctv2.ts
+卫视频道,#genre#
+东方卫视,http://127.0.0.1:19999/dongfang.ts
+江苏卫视$备用,http://127.0.0.1:19999/jiangsu.ts

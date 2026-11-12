@@ -1,0 +1,132 @@
+import type { GlobalThemeOverrides } from 'naive-ui'
+
+/**
+ * 深色主题：NAS 后台 + 电视场景都吃深色。
+ * 主色取偏青的蓝（#1FA2C0 系），比纯蓝稳重，也比青绿耐看。
+ */
+export const BRAND = {
+  primary: '#1FA2C0',
+  primaryHover: '#31B6D3',
+  primaryPressed: '#188BA6',
+  primarySuppl: '#31B6D3',
+  success: '#3FBF8F',
+  warning: '#E0A94A',
+  danger: '#E4635C',
+  info: '#5C9BD6',
+}
+
+export const themeOverrides: GlobalThemeOverrides = {
+  common: {
+    primaryColor: BRAND.primary,
+    primaryColorHover: BRAND.primaryHover,
+    primaryColorPressed: BRAND.primaryPressed,
+    primaryColorSuppl: BRAND.primarySuppl,
+    successColor: BRAND.success,
+    successColorHover: '#55CEA1',
+    successColorPressed: '#339E74',
+    successColorSuppl: '#55CEA1',
+    warningColor: BRAND.warning,
+    warningColorHover: '#EFBB64',
+    warningColorPressed: '#C08E38',
+    warningColorSuppl: '#EFBB64',
+    errorColor: BRAND.danger,
+    errorColorHover: '#EE7C76',
+    errorColorPressed: '#C44F49',
+    errorColorSuppl: '#EE7C76',
+    infoColor: BRAND.info,
+    infoColorHover: '#77AFE2',
+    infoColorPressed: '#4A84BC',
+    infoColorSuppl: '#77AFE2',
+
+    bodyColor: '#0d1216',
+    cardColor: '#151d23',
+    modalColor: '#161f26',
+    popoverColor: '#1a242b',
+    tableColor: '#151d23',
+    tableColorHover: '#1b252d',
+    tableColorStriped: '#12191f',
+    inputColor: '#111a20',
+    inputColorDisabled: '#161d23',
+    actionColor: '#18222a',
+    tagColor: '#1d2831',
+    borderColor: '#243038',
+    dividerColor: '#1f2a32',
+    hoverColor: 'rgba(31, 162, 192, 0.12)',
+
+    textColorBase: '#e6edf2',
+    textColor1: '#e6edf2',
+    textColor2: '#b3c1cb',
+    textColor3: '#7f8f9b',
+    textColorDisabled: '#5b6a75',
+    placeholderColor: '#66757f',
+
+    borderRadius: '8px',
+    borderRadiusSmall: '6px',
+    fontSize: '14px',
+    fontSizeSmall: '13px',
+    fontWeightStrong: '600',
+    heightMedium: '36px',
+    heightLarge: '40px',
+    scrollbarColor: 'rgba(140, 160, 175, 0.32)',
+    scrollbarColorHover: 'rgba(160, 185, 200, 0.5)',
+  },
+  Card: {
+    color: '#151d23',
+    borderColor: '#1f2a32',
+    borderRadius: '12px',
+    titleFontWeight: '600',
+  },
+  Layout: {
+    color: '#0d1216',
+    siderColor: '#101820',
+    headerColor: '#101820',
+    siderBorderColor: '#1c262e',
+    headerBorderColor: '#1c262e',
+    colorEmbedded: '#0d1216',
+  },
+  Menu: {
+    itemColorActive: 'rgba(31, 162, 192, 0.16)',
+    itemColorActiveHover: 'rgba(31, 162, 192, 0.22)',
+    itemColorActiveCollapsed: 'rgba(31, 162, 192, 0.16)',
+    itemTextColorActive: '#5FD3EA',
+    itemTextColorActiveHover: '#7EE0F4',
+    itemIconColorActive: '#5FD3EA',
+    itemIconColorActiveHover: '#7EE0F4',
+    itemHeight: '42px',
+    borderRadius: '8px',
+  },
+  DataTable: {
+    thColor: '#131b21',
+    thColorHover: '#18222a',
+    thTextColor: '#93a5b1',
+    thFontWeight: '600',
+    tdColor: '#151d23',
+    tdColorHover: '#1b252d',
+    tdColorStriped: '#12191f',
+    borderColor: '#1f2a32',
+    borderRadius: '12px',
+    thPaddingMedium: '10px 14px',
+    tdPaddingMedium: '10px 14px',
+  },
+  Tag: {
+    borderRadius: '6px',
+  },
+  Button: {
+    fontWeight: '500',
+    borderRadiusMedium: '8px',
+  },
+  Dialog: {
+    borderRadius: '14px',
+    color: '#161f26',
+  },
+  Drawer: {
+    color: '#131b21',
+  },
+  Input: {
+    borderHover: '1px solid #2f8fa6',
+  },
+  Descriptions: {
+    thColor: '#131b21',
+    tdColor: '#151d23',
+  },
+}

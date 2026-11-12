@@ -1,0 +1,247 @@
+name: Build Check
+
+# 三端编译检查。**这是本项目的标准编译路径。**
+#
+# 为什么放在 CI 而不是本地：
+#   本地需要 Go 1.23 + JDK + Android SDK/NDK + Gradle + Node 一整套工具链，
+#   换一台机器就要重搭一遍，而且版本稍有差异就会出现"我这里能编过"的问题。
+#   iOS 更是只能在这里编（需要 Apple SDK）。
+#
+# 所以：**不要在新机器上搭本地工具链**，改完代码推上来让这里编。
+# 需要产物（APK/fpk/ipa）走 release.yml。
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      lint:
+        description: 额外跑 Android Lint（慢，默认关闭）
+        type: boolean
+        default: false
+
+# 只读仓库：编译检查不需要写权限，显式收紧。
+permissions:
+  contents: read
+
+concurrency:
+  group: build-check-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ---------------------------------------------------------------- 门禁自身
+  #
+  # 为什么第一个 job 是检查「检查器」：
+  #   tools/checks/ 里的脚本以前从来没有被任何工作流调用过，
+  #   所以它们坏了也没人知道 —— check-api-contract.py 的仓库根推导少了一级，
+  #   从放进 tools/checks/ 那天起就跑不起来，而它是绿的、没报错的「不存在」。
+  #   工作流 YAML 写坏更隐蔽：GitHub 直接 startup_failure，**不产生失败的 run**，
+  #   于是 main 上的门禁静默消失，PR 界面看起来一切正常。
+  preflight:
+    name: 工作流与一致性检查
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          # 用 setup-python 提供的解释器，不碰系统 python3：
+          # ubuntu-24.04 的系统 Python 是 externally-managed（PEP 668），
+          # 直接 pip install 会被拒，而失败信息看起来和工作流无关。
+          python-version: "3.12"
+
+      - name: 安装 PyYAML（preflight 解析工作流 YAML 用）
+        # 钉版本：这个包只用来把 YAML 解析一遍，不需要新特性，
+        # 但也不该让上游某次发布悄悄改变门禁的行为。
+        run: python3 -m pip install --quiet --disable-pip-version-check "pyyaml==6.0.2"
+
+      - name: 预检（YAML / bash -n / python 语法 / 续行注释）
+        # STRICT：CI 里缺 PyYAML 必须红。本地没装时只提示跳过，
+        # 否则会把「没装依赖」误报成「工作流 YAML 写错了」。
+        env:
+          LITV_STRICT_YAML: "1"
+        run: bash tools/checks/preflight.sh
+
+      - name: 管理台调用 ↔ 服务端路由对账
+        # 抓「前端调了一个服务端没注册的路径」——以前只能一个个页面点过去才发现 404。
+        run: python3 tools/checks/check-api-contract.py
+
+      - name: 版本号五处一致性（AGENTS.md §11）
+        # 发版前必须同步的五处，靠人记就会漏；漏了 release 会发错版本号。
+        run: python3 tools/checks/check-versions.py
+
+  server:
+    name: Go 服务端
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: "1.23"
+          cache-dependency-path: server/go.sum
+      # 为什么每一步都带 `if: always()`：
+      #
+      # 默认行为是「前面一步失败，后面的全跳过」。于是格式检查一红，
+      # 编译/vet/测试根本不会跑 —— 一次推送只能暴露一个问题，
+      # 改一行推一次，反复往返。这个坑已经真实发生过（改个测试文件，
+      # 先报 gofmt、修完再报编译、再修再报测试，三轮）。
+      #
+      # 现在每一步都会跑，一次推送就能看到**全部**问题。
+      # 任何一步失败，job 最终仍然是失败（结论不会变松）。
+      - name: 格式检查
+        if: always()
+        working-directory: server
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "❌ 以下文件没格式化（本地跑 gofmt -w）："
+            echo "$unformatted"
+            # 直接打印差异：不然只看到文件名，还得在本地重装 Go 才能知道差在哪。
+            # CI 是唯一权威的格式判定，日志里必须能直接抄。
+            echo "----- gofmt -d -----"
+            gofmt -d $unformatted
+            echo "----- end -----"
+            exit 1
+          fi
+      - name: 编译
+        if: always()
+        working-directory: server
+        run: go build ./...
+      - name: 静态检查
+        if: always()
+        working-directory: server
+        run: go vet ./...
+      - name: 单元测试
+        if: always()
+        working-directory: server
+        run: go test -race ./...
+
+  admin:
+    name: 管理台
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: admin/package-lock.json
+      - name: 安装依赖
+        working-directory: admin
+        run: npm ci
+      - name: 类型检查
+        working-directory: admin
+        run: npm run typecheck
+      - name: 构建
+        if: always()
+        working-directory: admin
+        run: npm run build
+
+  android:
+    name: Android（电视版 + 手机版）
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: 准备 JDK 17
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: 确认 Android SDK 组件
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null 2>&1 || true
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
+            "platforms;android-35" "build-tools;35.0.0" >/dev/null 2>&1 || true
+
+      - name: 安装 Gradle 8.14.6
+        uses: gradle/actions/setup-gradle@v6
+        with:
+          gradle-version: "8.14.6"
+
+      - name: 编译两个 flavor
+        # 见 server job 的说明：不让前一步失败短路后面的检查，
+        # 一次推送暴露全部问题。
+        if: always()
+        working-directory: android
+        run: |
+          # 用 setup-gradle 装的 gradle 命令。仓库里没有 gradlew wrapper——
+          # 编译统一走 CI，不需要本地 wrapper。
+          gradle --no-daemon assembleTvDebug assemblePhoneDebug
+
+      - name: 单元测试（tv + phone）
+        # 见 server job 的说明：不让前一步失败短路后面的检查，
+        # 一次推送暴露全部问题。
+        if: always()
+        working-directory: android
+        run: |
+          set -euo pipefail
+          # 两个 flavor 共用 app/src/test 源集，但测试任务按 flavor 分开，
+          # 只跑 tv 等于手机版压根没有测试通道。
+          # 注意：splits.abi 打开后测试任务名**不含 ABI**，
+          # 别写成 testTvDebugArm64UnitTest —— 那个任务不存在，会直接失败。
+          gradle --no-daemon testTvDebugUnitTest testPhoneDebugUnitTest \
+            --console=plain 2>&1 | tee /tmp/unit.log
+
+          # 「测试是绿的，但根本没测到东西」在本仓发生过两次（AGENTS.md §10）。
+          # 没有测试源码时 Gradle 会以 NO-SOURCE 结束并返回 0：
+          # 步骤是绿色的，实际零个断言跑过。这里把那两种形态显式点名。
+          echo "--- app/src/test 现状 ---"
+          if [ -d app/src/test ]; then
+            find app/src/test -type f \( -name '*.kt' -o -name '*.java' \) | sort || true
+          else
+            echo "（android/app/src/test 不存在）"
+          fi
+          if grep -qE 'test(Tv|Phone)DebugUnitTest.*NO-SOURCE' /tmp/unit.log; then
+            echo "::warning::单元测试是空跑（NO-SOURCE）：任务执行了但没有测试源码，零断言。这不等于「单元测试通过」。"
+          fi
+
+      - name: Lint（**报告模式**，不是门禁）
+        # 见 server job 的说明：不让前一步失败短路后面的检查，
+        # 一次推送暴露全部问题。
+        if: always()
+        working-directory: android
+        run: |
+          set -euo pipefail
+          # 别把这一条当门禁读它的绿灯。
+          # app/build.gradle.kts 里有 lint { abortOnError = false; checkReleaseBuilds = false }，
+          # 也就是 lint 发现问题只报告、不失败 —— 本步骤恒绿。
+          # 本轮不动那个开关（首跑会把既有告警一次性变成红，风险不可控），
+          # 所以这里能做的是两件事：把「它现在是报告模式」显式打进日志，
+          # 再把报告作为产物传上去，让 review 的人有东西可看。
+          echo "--- lint 配置现状 ---"
+          grep -n -A4 'lint {' app/build.gradle.kts || echo "（没找到 lint 块）"
+          if grep -qE 'abortOnError *= *false' app/build.gradle.kts; then
+            echo "::warning::lint 处于报告模式（abortOnError=false）：本步骤恒绿，不代表 lint 干净。lint 门禁**未达成**。"
+          fi
+          # 两个 flavor 都要跑：`lintDebug` 是歧义任务名（AGP 会报
+          # 「Task 'lintDebug' is ambiguous」，因为 tv/phone 各有自己的 debug 变体）。
+          gradle --no-daemon lintTvDebug lintPhoneDebug --console=plain
+          ls -lh app/build/reports/ 2>/dev/null || true
+
+      - name: 上传 lint 报告
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: lint-report
+          path: android/app/build/reports/lint-results-*
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: 上传模拟器用的 x86 包
+        # 给 AVD 验证界面用：模拟器是 x86，装不了 arm 包。
+        # 只上传 x86，不污染 Release。
+        uses: actions/upload-artifact@v7
+        with:
+          name: emulator-x86-debug
+          path: |
+            android/app/build/outputs/apk/tv/debug/app-tv-x86-debug.apk
+            android/app/build/outputs/apk/phone/debug/app-phone-x86-debug.apk
+          if-no-files-found: warn
+          retention-days: 7
+
+# 注：iOS 不在这里编。它有自己的 .github/workflows/ios-check.yml，
+# 只在 ios/** 变化时触发——macOS runner 按 10 倍计费，没必要每次主分支推送都跑。

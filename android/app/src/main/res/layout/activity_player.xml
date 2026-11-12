@@ -1,0 +1,474 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  播放页布局层次（从下往上）：
+    SurfaceView（视频）
+    ImageView  snapshot（换台时盖住黑屏——TVBox 的做法，成本极低）
+    ProgressBar loading
+    TextView   switchTip（"正在切换…"）
+    LinearLayout osd（底部信息条，默认隐藏）
+    LinearLayout channelPanel（左侧频道列表，默认隐藏）
+-->
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:id="@+id/root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@android:color/black">
+
+    <!-- 用 TextureView 而不是 SurfaceView：
+         老 Amlogic 盒子上 SurfaceView + MediaCodec 会出现解码器不往 Surface 写帧、
+         画面全黑（日志 DequeueBuffer time out）。TextureView 走 GPU 合成更稳。 -->
+    <!-- 两套渲染目标，按「渲染方式」设置显示其中一个：
+         TextureView 走 GPU 合成，在老 Amlogic 盒子上比 SurfaceView 稳；
+         SurfaceView 更省电、延迟更低，但个别设备会黑屏。 -->
+    <SurfaceView
+        android:id="@+id/surface"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:visibility="gone" />
+
+    <TextureView
+        android:id="@+id/surfaceTex"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:visibility="gone" />
+
+    <!-- Exo 走 PlayerView（media3-ui）：它自己管 Surface 生命周期，
+         参考实现能正常播就是用的这个。
+
+         注意 resize_mode 必须是 fit。
+         曾改成 zoom（保持比例裁切铺满），结果出现"转圈结束就黑屏"：
+         zoom 在**视频尺寸未知时**会把子视图算成 0 尺寸，
+         一旦 VideoSize 迟迟不到（硬解失败/纯音频），画面就一直是黑的。
+         需要裁切铺满时走设置里的「画面比例」，不要动这里的默认值。 -->
+    <androidx.media3.ui.PlayerView
+        android:id="@+id/playerView"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        app:use_controller="false"
+        app:resize_mode="fit"
+        app:shutter_background_color="@android:color/transparent" />
+
+    <ImageView
+        android:id="@+id/snapshot"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:contentDescription="@null"
+        android:scaleType="fitCenter"
+        android:visibility="gone" />
+
+    <!-- 换台转场幕布。
+         为什么不直接动画面：这台电视的视频走独立硬件层，screencap /
+         MediaProjection / PixelCopy 全都取不到帧，做不了「旧画面滑走」
+         （那需要先有一帧静止图）。所以改成一块幕布扫过屏幕：
+         换台时从切换方向滑进来盖住，新画面出来后继续朝同方向滑走，
+         观感就是翻了一页。成本只有一个全屏 View 的位移动画。
+         声明顺序必须在 osd 之前 —— 否则会盖住台名条。 -->
+    <View
+        android:id="@+id/curtain"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="#0B0F12"
+        android:visibility="gone" />
+
+    <ProgressBar
+        android:id="@+id/loading"
+        android:layout_width="56dp"
+        android:layout_height="56dp"
+        android:layout_gravity="center"
+        android:indeterminateTint="@color/accent" />
+
+    <TextView
+        android:id="@+id/switchTip"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="center"
+        android:layout_marginTop="96dp"
+        android:text="@string/switch_channel"
+        android:textColor="@color/text_secondary"
+        android:textSize="18sp"
+        android:visibility="gone" />
+
+    <!-- 底部信息条 -->
+    <LinearLayout
+        android:id="@+id/osd"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_gravity="bottom"
+        android:layout_marginHorizontal="28dp"
+        android:layout_marginBottom="24dp"
+        android:background="@drawable/bg_osd_card"
+        android:orientation="vertical"
+        android:paddingHorizontal="24dp"
+        android:paddingTop="16dp"
+        android:paddingBottom="16dp"
+        android:visibility="gone">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
+
+            <!-- 台标 -->
+            <ImageView
+                android:id="@+id/osdLogo"
+                android:layout_width="64dp"
+                android:layout_height="40dp"
+                android:contentDescription="@null"
+                android:scaleType="fitCenter" />
+
+            <!-- 台号 -->
+            <TextView
+                android:id="@+id/osdNo"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="12dp"
+                android:minWidth="64dp"
+                android:textColor="@color/accent"
+                android:textSize="34sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/osdName"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="10dp"
+                android:layout_weight="1"
+                android:ellipsize="end"
+                android:maxLines="1"
+                android:textColor="@color/text_primary"
+                android:textSize="24sp"
+                android:textStyle="bold" />
+
+            <!-- 标签：[FHD][立体声][IPV4][线路1/1] -->
+            <TextView
+                android:id="@+id/osdTags"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="10dp"
+                android:textColor="#CCFFFFFF"
+                android:textSize="15sp" />
+
+            <TextView
+                android:id="@+id/osdEngine"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="10dp"
+                android:textColor="@color/accent"
+                android:textSize="18sp" />
+        </LinearLayout>
+
+        <TextView
+            android:id="@+id/osdNow"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:ellipsize="end"
+            android:maxLines="1"
+            android:textColor="@color/text_secondary"
+            android:textSize="20sp" />
+
+        <ProgressBar
+            android:id="@+id/osdProgress"
+            style="?android:attr/progressBarStyleHorizontal"
+            android:layout_width="match_parent"
+            android:layout_height="4dp"
+            android:layout_marginTop="10dp"
+            android:max="100"
+            android:progressTint="@color/accent" />
+
+        <TextView
+            android:id="@+id/osdNext"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:ellipsize="end"
+            android:maxLines="1"
+            android:textColor="@color/text_secondary"
+            android:textSize="14sp" />
+
+        <TextView
+            android:id="@+id/osdHint"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="10dp"
+            android:text="↑↓ 换台 · ← 频道列表（←→切分组）· → 设置 · OK 信息 · 长按OK 切线路 · 数字键跳台"
+            android:textColor="#B3FFFFFF"
+            android:textSize="15sp" />
+    </LinearLayout>
+
+    <!-- 左侧频道列表 -->
+    <!-- 频道列表浮层：图标栏 / 源分类 / 分组 / 频道列表（对齐参考实现） -->
+    <!-- 频道浮层：分组 / 频道 / 节目单 三列 + 底部信息条，右侧露出视频。
+         结构参考 DIYP / 群晖电视：两者都是三列，底部一条信息卡。 -->
+    <LinearLayout
+        android:id="@+id/channelPanel"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="@android:color/transparent"
+        android:orientation="vertical"
+        android:paddingVertical="12dp"
+        android:visibility="gone">
+
+        <!-- 上：三列 -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1"
+            android:orientation="horizontal">
+
+            <!-- 1. 分类列表（全部 / 收藏 / 各分组）
+                 之前这里是个竖排文字的 TextView，只能点一下循环切分组，
+                 既看不出有哪些分类，也不知道当前在哪一类。
+                 现在换成真正的列表，选中项高亮。 -->
+            <LinearLayout
+                android:layout_width="170dp"
+                android:layout_height="match_parent"
+                android:background="#B80B0E11"
+                android:orientation="vertical"
+                android:paddingHorizontal="4dp"
+                android:paddingVertical="4dp">
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:paddingStart="8dp"
+                    android:paddingTop="4dp"
+                    android:paddingBottom="6dp"
+                    android:text="分类"
+                    android:textColor="@color/text_secondary"
+                    android:textSize="15sp" />
+
+                <androidx.recyclerview.widget.RecyclerView
+                    android:id="@+id/grpList"
+                    android:layout_width="match_parent"
+                    android:layout_height="0dp"
+                    android:layout_weight="1"
+                    android:scrollbars="none" />
+            </LinearLayout>
+
+            <!-- 2. 频道列表：台号框 + 台名 + 当前节目 -->
+            <LinearLayout
+                android:layout_width="0dp"
+                android:layout_height="match_parent"
+                android:layout_weight="0.44"
+                android:background="#B80B0E11"
+                android:orientation="vertical"
+                android:paddingHorizontal="8dp">
+
+                <!-- 参考布局里没有这一行标题：分组名左边已经显示了，
+                     而「收藏」在左栏本来就是一个分组，这里再放一个按钮是重复入口。
+                     整行 GONE，列表直接从顶部开始。子控件保留，代码里有引用。 -->
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal"
+                    android:visibility="gone">
+
+                    <TextView
+                        android:id="@+id/panelTitle"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:paddingBottom="6dp"
+                        android:paddingStart="4dp"
+                        android:textColor="@color/accent"
+                        android:textSize="18sp" />
+
+                    <!-- C1：收藏入口。
+                         必须是**可聚焦**控件：TV 上一切只能靠遥控器，纯装饰的
+                         文字用户永远选不中（所以之前"没有收藏"）。
+                         键位刻意不复用 MENU（已是设置菜单）与长按 OK（已是选线路）。 -->
+                    <TextView
+                        android:id="@+id/favBtn"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:background="@drawable/bg_focusable"
+                        android:clickable="true"
+                        android:focusable="true"
+                        android:paddingHorizontal="12dp"
+                        android:paddingVertical="6dp"
+                        android:text="☆ 收藏"
+                        android:textColor="@color/accent"
+                        android:textSize="16sp" />
+                </LinearLayout>
+
+                <androidx.recyclerview.widget.RecyclerView
+                    android:id="@+id/panelList"
+                    android:layout_width="match_parent"
+                    android:layout_height="0dp"
+                    android:layout_weight="1"
+                    android:scrollbars="none" />
+
+                <!-- 列表为空时的引导文案（C1）：不留学生一块空白。
+                     典型场景就是"收藏"分组里一个台都没有。 -->
+                <TextView
+                    android:id="@+id/panelEmpty"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:gravity="center"
+                    android:paddingHorizontal="8dp"
+                    android:paddingVertical="16dp"
+                    android:textColor="@color/text_secondary"
+                    android:textSize="14sp"
+                    android:visibility="gone" />
+            </LinearLayout>
+
+            <!-- 3. 节目单：时间 + 节目名 + 回看 -->
+            <LinearLayout
+                android:id="@+id/epgPanel"
+                android:layout_width="0dp"
+                android:layout_height="match_parent"
+                android:layout_weight="0.36"
+                android:background="#B80B0E11"
+                android:orientation="vertical"
+                android:paddingHorizontal="8dp">
+
+                <!-- C4：点它切换节目分类筛选 -->
+                <!-- 节目单列的标题。去掉卡片背景和描边：它是个可点击的切换入口
+                     （点一下切换"全部/分类"），但长得像按钮会抢走频道列表的注意力。
+                     参考布局里这一栏只有一行小字「节目单 »」。 -->
+                <TextView
+                    android:id="@+id/epgTitle"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:clickable="true"
+                    android:focusable="true"
+                    android:paddingBottom="6dp"
+                    android:paddingStart="8dp"
+                    android:paddingEnd="8dp"
+                    android:paddingTop="8dp"
+                    android:textColor="@color/accent"
+                    android:textSize="16sp" />
+
+                <androidx.recyclerview.widget.RecyclerView
+                    android:id="@+id/epgList"
+                    android:layout_width="match_parent"
+                    android:layout_height="0dp"
+                    android:layout_weight="1"
+                    android:scrollbars="none" />
+            </LinearLayout>
+
+            <!-- 4. 右侧留白，露出正在播的画面 -->
+            <View
+                android:layout_width="0dp"
+                android:layout_height="match_parent"
+                android:layout_weight="0.20" />
+        </LinearLayout>
+
+        <!-- 下：底部信息条（台标 / 台号名称 / 正在播 / 下一档 / 线路 / 进度 / 时间） -->
+        <!-- 频道页不放底部信息条：参考实现的频道页就是纯三列，
+             当前频道在列表里高亮、节目进度在节目单列里，不需要再来一条。
+             之前这里有一条，看着就像 OSD 没关掉。视图保留（代码还在 setText），
+             只是不显示。 -->
+        <LinearLayout
+            android:id="@+id/infoBar"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:background="#B80B0E11"
+            android:visibility="gone"
+            android:gravity="center_vertical"
+            android:orientation="horizontal"
+            android:paddingHorizontal="16dp"
+            android:paddingVertical="10dp">
+
+            <ImageView
+                android:id="@+id/infoLogo"
+                android:layout_width="56dp"
+                android:layout_height="56dp"
+                android:background="@drawable/bg_card"
+                android:contentDescription="@null"
+                android:padding="4dp"
+                android:scaleType="fitCenter" />
+
+            <LinearLayout
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="14dp"
+                android:layout_weight="1"
+                android:orientation="vertical">
+
+                <TextView
+                    android:id="@+id/infoName"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:ellipsize="end"
+                    android:maxLines="1"
+                    android:textColor="@color/text_primary"
+                    android:textSize="18sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:id="@+id/infoNow"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:ellipsize="end"
+                    android:maxLines="1"
+                    android:textColor="@color/text_secondary"
+                    android:textSize="18sp" />
+
+                <TextView
+                    android:id="@+id/infoNext"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:ellipsize="end"
+                    android:maxLines="1"
+                    android:textColor="#8B949E"
+                    android:textSize="18sp" />
+            </LinearLayout>
+
+            <LinearLayout
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:gravity="end"
+                android:minWidth="200dp"
+                android:orientation="vertical">
+
+                <TextView
+                    android:id="@+id/infoLine"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:gravity="end"
+                    android:textColor="@color/accent"
+                    android:textSize="18sp" />
+
+                <ProgressBar
+                    android:id="@+id/infoProgress"
+                    style="?android:attr/progressBarStyleHorizontal"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="4dp"
+                    android:max="100"
+                    android:progressTint="@color/accent" />
+
+                <TextView
+                    android:id="@+id/infoTime"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="2dp"
+                    android:gravity="end"
+                    android:textColor="@color/text_secondary"
+                    android:textSize="18sp" />
+            </LinearLayout>
+        </LinearLayout>
+    </LinearLayout>
+
+    <!-- 数字键跳台提示 -->
+    <TextView
+        android:id="@+id/numberTip"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="top|end"
+        android:layout_margin="32dp"
+        android:background="@color/bg_panel"
+        android:paddingHorizontal="24dp"
+        android:paddingVertical="12dp"
+        android:textColor="@color/accent"
+        android:textSize="32sp"
+        android:textStyle="bold"
+        android:visibility="gone" />
+
+    <include layout="@layout/view_settings_menu" />
+</FrameLayout>

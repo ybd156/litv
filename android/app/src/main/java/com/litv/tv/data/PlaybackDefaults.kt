@@ -1,0 +1,70 @@
+package com.litv.tv.data
+
+/**
+ * 播放参数的**唯一**默认值来源。
+ *
+ * 为什么要抽这个对象：这几个数字以前散在四处各写一遍，而且互相矛盾——
+ *   `Prefs` 默认 15000ms / `PlayerManager` 里有个从没人用的 `START_TIMEOUT_MS = 5000`
+ *   死常量 / PlayerManager 文件头注释写"默认 6s" / 设置页选项只有 3000~12000。
+ * 结果：用户在设置里看到"15 秒"，点一下那一行就变成 5 秒（选项里没有 15000，
+ * 索引静默回落到 0，再点一次是 1）。播放器于是被拖成"3 秒就判超时"。
+ *
+ * 现在默认值与选项都从这里取，并且有一条单测钉住
+ * 「默认值必须出现在选项列表里」，杜绝下次再漂。
+ */
+object PlaybackDefaults {
+
+    /** 起播超时（毫秒）。慢盒子 + HLS 握手 + 解初始化，5 秒经常不够。 */
+    const val START_TIMEOUT_MS = 15000
+
+    /**
+     * 阶段一：这么久还**没有字节**（没有 READY / 没有 onPlaying）就重试一次，再不行换内核。
+     *
+     * 它是"加速失败"而不是"调低超时"：[START_TIMEOUT_MS] 必须保持 ≥15s，
+     * 那是慢盒子上实测出来的下限（压到 3~5 秒会把本来能起播的流判死）。
+     * 无字节几乎一定是网络/封装问题，换内核比原地干等更有效。
+     */
+    const val START_NOBYTE_MS = 6000
+
+    /**
+     * 阶段二：已经有字节、但这么久还没画出第一帧 → 硬解失败，换软解。
+     *
+     * Amlogic 的 OMX.amlogic.avc.decoder.awesome 会"喂进了数据但不吐帧"，
+     * 音频照常在放、Exo 也报 playing，只有"第一帧"能证伪。
+     * 8 秒而不是 5 秒：4K/HEVC 首次解初始化 + 等一个 IDR 在 32 位盒子上确实要这么久。
+     */
+    const val START_FRAME_MS = 8000
+
+    /**
+     * 整段起播的硬预算：到点必须给用户一个明确结果，不许无限轮内核。
+     *
+     * **取值必须 ≥ 显式最坏路径**：
+     *     START_NOBYTE_MS + START_FRAME_MS + START_TIMEOUT_MS × RETRY_COUNT
+     *   = 4000 + 8000 + 15000 = 27000
+     * 所以这里取 28000（留 1s 余量给换内核之间 600ms 的解码器释放）。
+     * 这条不等式在 `PlaybackDefaultsTest` 里被断言，改任何一个常量都会立刻撞红。
+     *
+     * 现状对照：老代码 3 个内核 × (15s 超时 + 15s 重试) ≈ 105s 才报错；
+     * 28000ms 仍是同一量级的一半以下，用户感知上"等不到一分钟"。
+     */
+    const val START_BUDGET_MS = 29000
+
+    /** 超时后重试几次再换内核。网络抖动时多试几次比直接降级好。 */
+    const val RETRY_COUNT = 1
+
+    /** 网络缓冲（毫秒）。 */
+    const val BUFFER_MS = 10000
+    /** 直播延迟默认 20 秒：主动落后直播边缘，换缓冲换稳定。 */
+    const val LIVE_OFFSET_MS = 20000
+
+    /**
+     * 起播超时可选值（毫秒，**升序**）。必须包含 [START_TIMEOUT_MS]。
+     *
+     * 升序是硬要求：设置页的循环切换依赖它，顺序乱了用户体验会变成
+     * "点一下从 15 秒跳到 3 秒"。
+     */
+    val START_TIMEOUT_OPTIONS_MS = listOf(3000, 5000, 8000, 12000, START_TIMEOUT_MS)
+
+    /** 重试次数可选值（升序）。必须包含 [RETRY_COUNT]。 */
+    val RETRY_OPTIONS = listOf(0, RETRY_COUNT, 2, 3)
+}

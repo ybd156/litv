@@ -648,7 +648,12 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         }
         if (channels.isEmpty()) {
             setSplashStage("正在连接服务器…")
-            app.api.bootstrap(onOk = { b -> applyBootstrap(b) }, onErr = {})
+            app.api.bootstrap(onOk = { b ->
+                // 写缓存：不写的话下次冷启动还要等一次网络 bootstrap
+                // （实测那是启动耗时里最大的 6.8 秒）
+                runCatching { app.prefs.cachedBootstrap = Gson().toJson(b) }
+                applyBootstrap(b)
+            }, onErr = {})
         }
         panelAdapter = ChannelAdapter(
             logoMaxPx = app.tier.logoMaxPx,
@@ -1163,12 +1168,10 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
             if (panelVisible) refreshEpgColumn()
             main.post { renderInfoBar() }
 
-            // 本地 xmltv 可能只到"当前节目"就断了（缓存过期或源只给到此刻），
-            // 这时 OSD 的「下一档」永远是空的。用尽就回落到服务端接口补齐。
-            val now = System.currentTimeMillis() / 1000
-            if (programs.none { it.startAt > now }) {
-                loadEpgMultiDay(channelId, 0, mutableListOf())
-            }
+            // ★ 有本地数据就直接用，**不再按天回源**。
+            // 之前每次换台都发 1~3 个请求 + Gson 解析，纯属浪费：
+            // 节目单是启动时一次性下载的 xml/gz，换台只是换一个 channel 的切片。
+            return
             return
         }
 

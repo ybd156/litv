@@ -545,14 +545,16 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
                 }
             }
         // OK：焦点进二级；没有二级的直接执行
-        specs.forEach { (id, spec) ->
-            findViewById<TextView>(id).setOnClickListener {
-                val n = spec.labels.size
-                if (n == 0) return@setOnClickListener
-                val next = (spec.selected() + 1).mod(n)
-                spec.onPick(next)
-                // 改完立刻刷新左边的选项显示（selected 是实时算的）
-                openSubMenu(spec, findViewById(id))
+        // 左键进入左边的选项列（选项在左边，用左键最直觉）。
+        // OK 留给"在选项里确认"，不再兼做进入。
+        val enterable = specs.keys + setOf(R.id.miDisplay, R.id.miPrefs, R.id.miOther)
+        enterable.forEach { id ->
+            findViewById<TextView>(id).setOnKeyListener { _, code, ev ->
+                if (code != android.view.KeyEvent.KEYCODE_DPAD_LEFT) return@setOnKeyListener false
+                // ★ DOWN 就要执行并消费：只处理 UP 的话，DOWN 会先被 Activity
+                // 的按键分发拿走（左键=开频道面板），UP 根本到不了这里。
+                if (ev.action == android.view.KeyEvent.ACTION_DOWN) enterSub()
+                true
             }
         }
         // 线路选择要拉接口，不能跟着焦点走（每次移动都请求一次），保持点击触发
@@ -1247,6 +1249,7 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         val padV = (10 * resources.displayMetrics.density).toInt()
         spec.labels.forEachIndexed { i, label ->
             val sel = spec.selected()
+            currentSubSelected = sel
             val selected = i == sel
             val tv = TextView(this).apply {
                 // 选中项带 › ‹：表示"当前值，可左右切换"（对齐参考实现）
@@ -1259,10 +1262,17 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
                 background = getDrawable(
                     if (selected) R.drawable.bg_select_solid else R.drawable.bg_setting_row
                 )
-                // 只做显示：焦点不进来。参考实现里 OK 是"就地切值"，
-                // 让焦点在两栏之间来回跳只会把导航搞乱。
-                isFocusable = false
-                isClickable = false
+                isFocusable = false   // 默认不参与遍历，按左键进入后才激活
+                isClickable = true
+                setOnClickListener {
+                    spec.onPick(i)
+                    exitSub()
+                }
+                setOnKeyListener { _, code, ev ->
+                    if (code != android.view.KeyEvent.KEYCODE_DPAD_RIGHT) return@setOnKeyListener false
+                    if (ev.action == android.view.KeyEvent.ACTION_DOWN) exitSub()
+                    true
+                }
 
             }
             val lp = android.widget.LinearLayout.LayoutParams(
@@ -1296,13 +1306,32 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
     private var rowsOwner: TextView? = null
     private var rowsActive = false
 
-    /** 激活/停用左侧设置行的焦点。未激活时它们不参与方向键遍历，避免焦点乱飘。 */
+    /** 左键进入左边的选项列。 */
+    private fun enterSub() {
+        val row = subMenuRow ?: return
+        if (subMenu?.visibility != android.view.View.VISIBLE) return
+        setRowsFocusable(true)
+        val sel = currentSubSelected
+        row.post { row.getChildAt(sel.coerceIn(0, (row.childCount - 1).coerceAtLeast(0)))?.requestFocus() }
+    }
+
+    /** 从选项列退回一级菜单。 */
+    private fun exitSub() {
+        val owner = subMenuOwner
+        setRowsFocusable(false)
+        owner?.requestFocus()
+    }
+
+    /** 当前二级的选中下标（进入时用来定位焦点）。 */
+    private var currentSubSelected = 0
+
+    /** 激活/停用左侧设置行/选项的焦点。未激活时不参与方向键遍历，避免焦点乱飘。 */
     private fun setRowsFocusable(active: Boolean) {
         rowsActive = active
         val row = subMenuRow ?: return
         for (i in 0 until row.childCount) {
             val v = row.getChildAt(i)
-            v.isFocusable = active && v is TextView && v.text?.contains("    ") == true
+            v.isFocusable = active && v.isClickable
         }
         // 在行内按上键要回到"打开这组的那一项"，而不是菜单第一项
         if (active) {
@@ -1821,8 +1850,26 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         // 上下键仍然被当成换台、OK 仍然去呼出 OSD、左键去开频道页，
         // 结果就是"右键能打开设置，但焦点选不中任何一项"。
         if (menuVisible) {
-            if (action == KeyEvent.ACTION_DOWN && code == KeyEvent.KEYCODE_BACK) {
-                closeSettingsMenu(); return true
+            if (action == KeyEvent.ACTION_DOWN) {
+                if (com.litv.tv.BuildConfig.DEBUG) android.util.Log.i("LITV", "菜单按键 code=$code subVis=${subMenu?.visibility} rowsActive=$rowsActive")
+                when {
+                    code == KeyEvent.KEYCODE_BACK -> {
+                        // 二级开着先收二级，再收菜单
+                        if (rowsActive) { setRowsFocusable(false); subMenuOwner?.requestFocus() }
+                        else closeSettingsMenu()
+                        return true
+                    }
+                    // 左键进入左边的选项列。必须在 Activity 这一层拦：
+                    // 挂在控件上的 OnKeyListener 收不到——DOWN 会先被这里的分发拿走。
+                    code == KeyEvent.KEYCODE_DPAD_LEFT &&
+                        subMenu?.visibility == View.VISIBLE && !rowsActive -> {
+                        enterSub(); return true
+                    }
+                    // 右键从选项列退回一级菜单
+                    code == KeyEvent.KEYCODE_DPAD_RIGHT && rowsActive -> {
+                        exitSub(); return true
+                    }
+                }
             }
             return super.dispatchKeyEvent(event)
         }

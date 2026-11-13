@@ -245,7 +245,7 @@ final class SessionFixture {
     let session: Session
     private let suiteName = "C05Regression." + UUID().uuidString
 
-    init(bound: Bool = false, token: String = SessionFixture.tokenA, server: String = SessionFixture.a) {
+    init(server: String = SessionFixture.a, bound: Bool = false, token: String = SessionFixture.tokenA) {
         credentials = MemoryCredentials(token)
         defaults = UserDefaults(suiteName: suiteName)!
         defaults.set(server, forKey: "server")

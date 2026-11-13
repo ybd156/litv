@@ -1,66 +1,65 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  播放中呼出的右侧设置菜单（对齐参考实现的图3）：
+  播放中呼出的右侧设置菜单。
 
-    线路选择 / 画面比例 / 解码方式 / 超时换源 / 分类管理
-    列表配置 / 显示设置 / 偏好设置 / 其他设置
+  结构：**一个面板、左右两栏**。
+    左栏 subMenu：当前项的选项，焦点移到哪项就换成哪项的选项
+    右栏 menuColumn：一级 9 项
 
-  从右侧滑出，改完继续看，不离开画面。
+  为什么不做成"面板旁边再浮一个小面板"：
+  那样看着是两个独立控件，和参考实现差得远——参考里选项和菜单在
+  同一块深色底上，视觉上是一个整体，展开时面板整体变宽。
 -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:id="@+id/settingsMenu"
-    android:layout_width="300dp"
+    android:layout_width="wrap_content"
     android:layout_height="match_parent"
     android:layout_gravity="end"
     android:background="#E6080C10"
     android:gravity="center_vertical"
-    android:orientation="vertical"
+    android:orientation="horizontal"
     android:paddingHorizontal="20dp"
     android:visibility="gone">
 
+    <!-- 左栏：二级选项。没有选项的项（线路选择/分类管理）时整栏 GONE -->
+    <LinearLayout
+        android:id="@+id/subMenu"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginEnd="24dp"
+        android:orientation="vertical"
+        android:visibility="gone">
 
-    <TextView
-        style="@style/SettingsMenuItem"
-        android:id="@+id/miLine"
-        android:text="线路选择" />
+        <TextView
+            android:id="@+id/subMenuTitle"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:textColor="@color/text_secondary"
+            android:textSize="14sp" />
 
-    <TextView
-        style="@style/SettingsMenuItem"
-        android:id="@+id/miAspect"
-        android:text="画面比例" />
+        <LinearLayout
+            android:id="@+id/subMenuRow"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:orientation="vertical" />
+    </LinearLayout>
 
-    <TextView
-        style="@style/SettingsMenuItem"
-        android:id="@+id/miDecode"
-        android:text="解码方式" />
+    <!-- 右栏：一级菜单 -->
+    <LinearLayout
+        android:id="@+id/menuColumn"
+        android:layout_width="300dp"
+        android:layout_height="wrap_content"
+        android:orientation="vertical">
 
-    <TextView
-        style="@style/SettingsMenuItem"
-        android:id="@+id/miTimeout"
-        android:text="超时换源" />
-
-    <TextView
-        style="@style/SettingsMenuItem"
-        android:id="@+id/miCategory"
-        android:text="分类管理" />
-
-    <TextView
-        style="@style/SettingsMenuItem"
-        android:id="@+id/miList"
-        android:text="列表配置" />
-
-    <TextView
-        style="@style/SettingsMenuItem"
-        android:id="@+id/miDisplay"
-        android:text="显示设置" />
-
-    <TextView
-        style="@style/SettingsMenuItem"
-        android:id="@+id/miPrefs"
-        android:text="偏好设置" />
-
-    <TextView
-        style="@style/SettingsMenuItem"
-        android:id="@+id/miOther"
-        android:text="其他设置" />
+        <TextView style="@style/SettingsMenuItem" android:id="@+id/miLine" android:text="线路选择" />
+        <TextView style="@style/SettingsMenuItem" android:id="@+id/miAspect" android:text="画面比例" />
+        <TextView style="@style/SettingsMenuItem" android:id="@+id/miDecode" android:text="解码方式" />
+        <TextView style="@style/SettingsMenuItem" android:id="@+id/miTimeout" android:text="超时换源" />
+        <TextView style="@style/SettingsMenuItem" android:id="@+id/miCategory" android:text="分类管理" />
+        <TextView style="@style/SettingsMenuItem" android:id="@+id/miList" android:text="列表配置" />
+        <TextView style="@style/SettingsMenuItem" android:id="@+id/miDisplay" android:text="显示设置" />
+        <TextView style="@style/SettingsMenuItem" android:id="@+id/miPrefs" android:text="偏好设置" />
+        <TextView style="@style/SettingsMenuItem" android:id="@+id/miOther" android:text="其他设置" />
+    </LinearLayout>
 </LinearLayout>

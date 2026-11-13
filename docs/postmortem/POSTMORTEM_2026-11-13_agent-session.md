@@ -118,21 +118,27 @@ git bundle create ../litv-backup.bundle --all
 
 ---
 
-## 七、同一个 CI 周期踩了两次参数顺序
+## 七、C05 修了四轮才绿
 
-给 `SessionFixture` 补 `server:` 参数时，我按 `(bound:token:server:)` 排；
-测试里写的是 `SessionFixture(server: "", token: …)`。
-Swift 要求实参按**声明顺序**出现，于是：
+真正实现 C05 花了四次推送，每一轮都是可以避免的：
 
-```
-SessionIsolationTests.swift:256:44: error: argument 'token' must precede argument 'server'
-```
+| 轮次 | 提交 | CI 结果 | 原因 |
+|---|---|---|---|
+| 1 | `cbd6d2d` | iOS 测试 job 失败 | 测试目标**编译不过**：`SessionFixture` 缺 `boundB`、缺 `server:` 参数。测试是照着一个还没写的实现写的 |
+| 2 | `eb77f9f` | 仍失败 | 补了 `server:` 但排成 `(token:server:)`，而 Swift 要求实参按声明顺序——测试写的是 `(server:token:)` |
+| 3 | `122acfe` | 16 条测试跑起来了，**2 条失败** | 凭据写入失败只清了 token，没撤 `isBound`，界面仍显示已绑定 |
+| 4 | `3ce8cda` | 全绿 | `Executed 16 tests, with 0 failures` |
 
-又是一整个 CI 周期（约 10 分钟）。
+**教训**：
 
-**教训**：给已有类型加参数前，先 `grep` 全部调用点。
-这类错误本地无法编译验证（AGENTS §8 规定不在本地搭 Apple 工具链），
-但**完全可以通过读调用点避免**。
+- 第 1、2 轮是同一类错误——**加参数/加符号前没 grep 全部调用点**。
+  这类错误本地编不了（没有 Apple 工具链），但读代码完全能避免。
+- 第 3 轮暴露的是真实缺陷，不是笔误：fixture 初始 `bound: true` 才让它现形。
+  如果测试没覆盖"凭据写失败"这条路径，这个状态不一致会一直留着。
+- 四轮里只有第 3 轮算"有价值的失败"，前两轮纯粹是没读代码。
+
+**正确的做法**：改完先在本地把测试文件与实现的符号对齐（grep 函数名、参数标签），
+再推。CI 是判据，不是编译器。
 
 ---
 
@@ -140,7 +146,7 @@ SessionIsolationTests.swift:256:44: error: argument 'token' must precede argumen
 
 | 项 | 数量 |
 |---|---|
-| 因为我的返工而多跑的 CI | 3 次完整 iOS Build Check + 2 次 Build Check |
+| 因为我的返工而多跑的 CI | 4 次 iOS Build Check（其中 2 次是纯编译错误）+ 4 次 Build Check |
 | 被用户直接指出错误 | 4 次（清理不干净 / 流程糟糕 / 输出噪音 / README 太长） |
 | 差点造成不可逆损失 | 1 次（备份包为空时准备 gc） |
 | 已造成的信息损失 | 1 次（524 条 Actions 记录含当次 Build Check 结论） |

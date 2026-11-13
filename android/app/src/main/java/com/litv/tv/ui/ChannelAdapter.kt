@@ -212,6 +212,18 @@ class ChannelAdapter(
         return palette[(h and 0x7FFFFFFF) % palette.size]
     }
 
+
+    /** 台标磁盘缓存目录：cacheDir/logos。冷启动不用重新下载，断网也能显示。 */
+    private var logoDir: java.io.File? = null
+
+    private fun logoFile(ctx: android.content.Context, url: String): java.io.File {
+        val dir = logoDir ?: java.io.File(ctx.cacheDir, "logos").apply { mkdirs() }.also { logoDir = it }
+        // 用 url 的 md5 做文件名：长度固定、不含特殊字符
+        val md = java.security.MessageDigest.getInstance("MD5")
+        val hash = md.digest(url.toByteArray()).joinToString("") { "%02x".format(it) }
+        return java.io.File(dir, hash + ".img")
+    }
+
     private fun loadLogo(target: ImageView, url: String) {
         target.setImageDrawable(null)
         if (url.isBlank()) return
@@ -220,6 +232,26 @@ class ChannelAdapter(
             return
         }
         executor.execute {
+            // 先看磁盘缓存
+            val ctx = target.context.applicationContext
+            runCatching {
+                val f = logoFile(ctx, url)
+                if (f.exists() && f.length() > 0) {
+                    val cached = BitmapFactory.decodeFile(f.absolutePath)
+                    if (cached != null) {
+                        logoCache.put(url, cached)
+                        main.post {
+                            if (target.tag == url || target.tag == null) {
+                                target.setImageBitmap(cached)
+                                (target.parent as? android.view.ViewGroup)
+                                    ?.findViewById<TextView>(R.id.logoText)
+                                    ?.visibility = View.GONE
+                            }
+                        }
+                        return@execute
+                    }
+                }
+            }
             val bmp = try {
                 val conn = (URL(url).openConnection() as HttpURLConnection).apply {
                     connectTimeout = 5000
@@ -247,6 +279,11 @@ class ChannelAdapter(
             }
             if (bmp != null) {
                 logoCache.put(url, bmp)
+                runCatching {
+                    logoFile(target.context.applicationContext, url).outputStream().use {
+                        bmp.compress(android.graphics.Bitmap.CompressFormat.PNG, 90, it)
+                    }
+                }
                 main.post {
                     // 复用后可能已经滚走，做一次 URL 校验避免错图
                     if (target.tag == url || target.tag == null) {

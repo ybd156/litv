@@ -1168,25 +1168,36 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         if (day == 0) {
             if (serverEpgCacheDay != today) { serverEpgCache.clear(); serverEpgCacheDay = today }
             serverEpgCache[channelId]?.let { cached ->
-                if (cached.isNotEmpty()) { applyEpgList(cached); return }
+                if (cached.isNotEmpty()) { applyEpgList(cached, channelId); return }
             }
         }
-        if (day > 1) { applyEpgList(acc); return }   // 只补今天+明天，源里通常没有第三天
+        if (day > 1) { applyEpgList(acc, channelId); return }   // 只补今天+明天，源里通常没有第三天
         app.api.epg(channelId, day, onOk = { list ->
             if (list.isEmpty()) {
-                applyEpgList(acc)
+                applyEpgList(acc, channelId)
             } else {
                 acc.addAll(list)
                 loadEpgMultiDay(channelId, day + 1, acc)
             }
-        }, onErr = { applyEpgList(acc) })
+        }, onErr = { applyEpgList(acc, channelId) })
     }
 
     /** 合并去重后刷到界面。 */
-    private fun applyEpgList(list: List<EpgProgram>) {
-        if (list.isEmpty()) return
+    private fun applyEpgList(list: List<EpgProgram>, channelId: Long) {
+        // ★ 缓存键必须用"被请求的那个台"，不能用 current（正在播的台）——
+        // 否则 A 台的节目单会被存到 B 台名下，之后查 B 台拿到的就是 A 的数据。
+        if (list.isEmpty()) {
+            // 请求的台没有节目单：清掉旧数据，别让上一个台的节目继续挂在界面上
+            if (epgProgramsChannelId == channelId) {
+                programs = emptyList()
+                renderOsdNow()
+                if (panelVisible || epgVisible) refreshEpgColumn()
+            }
+            return
+        }
         programs = list.distinctBy { it.startAt }.sortedBy { it.startAt }
-        current?.let { serverEpgCache[it.id] = programs.toMutableList() }
+        epgProgramsChannelId = channelId
+        if (channelId > 0) serverEpgCache[channelId] = programs.toMutableList()
         renderOsdNow()
         if (panelVisible || epgVisible) refreshEpgColumn()
         main.post { renderInfoBar() }
@@ -1840,6 +1851,9 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
 
     private fun openPanel() {
         panelVisible = true
+        // 先透明显示（仍然参与布局，能落焦点），焦点放好后再淡入。
+        // 否则会看到"焦点从全部闪到当前频道"——那是落焦点的过程被看见了。
+        panel.alpha = 0f
         panel.visibility = View.VISIBLE
 
         // 列表超过 30 秒没更新就先静默拉一次。
@@ -1893,6 +1907,7 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
                 val vh = panelList.findViewHolderForAdapterPosition(pos)
                 if (vh != null) {
                     vh.itemView.requestFocus()
+                    panel.animate().alpha(1f).setDuration(120).start()
                     return
                 }
                 if (System.currentTimeMillis() < deadline) {
@@ -1900,10 +1915,13 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
                 } else if (channels.isEmpty()) {
                     Log.i(TAG, "频道列为空，焦点交给分组列")
                     grpList.post { grpList.requestFocus() }
+                    panel.animate().alpha(1f).setDuration(120).start()
                 }
             }
         }
         panelList.postDelayed(focusTick, 60)
+        // 兜底：任何分支漏掉也要让面板可见
+        main.postDelayed({ if (panelVisible) panel.animate().alpha(1f).setDuration(120).start() }, 400)
         hideOsd()
     }
 

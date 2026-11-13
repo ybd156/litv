@@ -81,6 +81,8 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
     private lateinit var osdNo: TextView
     private lateinit var osdNext: TextView
     private lateinit var osdEngine: TextView
+    /** OSD 右侧角标：线路 x/y。 */
+    private lateinit var osdTags: TextView
     private lateinit var osdProgress: ProgressBar
     private lateinit var panel: LinearLayout
     private lateinit var panelTitle: TextView
@@ -476,6 +478,7 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         osdNo = findViewById(R.id.osdNo)
         osdNext = findViewById(R.id.osdNext)
         osdEngine = findViewById(R.id.osdEngine)
+        osdTags = findViewById(R.id.osdTags)
         osdProgress = findViewById(R.id.osdProgress)
         panel = findViewById(R.id.channelPanel)
         panelTitle = findViewById(R.id.panelTitle)
@@ -1047,7 +1050,8 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         val cur = programs.firstOrNull { it.startAt <= now && it.endAt > now }
         val next = programs.firstOrNull { it.startAt > now }
         if (cur != null) {
-            osdNow.text = "${fmt(cur.startAt)} ${cur.title}"
+            // 带结束时间：只给开始时间的话，"现在播到哪儿了"还得自己算
+            osdNow.text = "${fmt(cur.startAt)}-${fmt(cur.endAt)}  ${cur.title}"
             val span = (cur.endAt - cur.startAt).coerceAtLeast(1)
             val pct = (((now - cur.startAt).toFloat() / span) * 100).toInt().coerceIn(0, 100)
             osdProgress.progress = pct
@@ -1056,8 +1060,16 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
             osdNow.text = getString(R.string.no_epg)
             osdProgress.visibility = View.GONE
         }
-        osdNext.text = next?.let { "下一档 ${fmt(it.startAt)} ${it.title}" } ?: ""
+        osdNext.text = next?.let { "${fmt(it.startAt)}-${fmt(it.endAt)}  ${it.title}" } ?: ""
         osdEngine.text = player.engineLabel()
+        // 角标：线路 x/y。这个 View 之前建了但从来没填过，一直是空的。
+        if (streamTotal > 0) {
+            osdTags.text = "线路 $streamIndex/$streamTotal"
+            osdTags.visibility = View.VISIBLE
+        } else {
+            osdTags.text = ""
+            osdTags.visibility = View.GONE
+        }
 
         // 台号：这个 TextView 之前从来没被赋值过，一直是空的。
         // 用当前过滤列表里的序号，和频道面板里看到的一致，补成三位（005 这种）。

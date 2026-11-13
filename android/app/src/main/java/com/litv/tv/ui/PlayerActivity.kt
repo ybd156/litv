@@ -109,6 +109,8 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
     private var subMenuOwner: TextView? = null
     private var menuVisible = false
     private lateinit var epgPanel: LinearLayout
+    /** 节目单收起时的竖排把手。 */
+    private lateinit var epgHandle: TextView
     private lateinit var epgTitle: TextView
     private lateinit var epgList: RecyclerView
 
@@ -579,6 +581,11 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
             setRowsFocusable(true); focusFirstRow()
         }
         epgPanel = findViewById(R.id.epgPanel)
+        epgHandle = findViewById(R.id.epgHandle)
+        // 把手：聚焦后按 OK 展开节目单（参考实现里节目单默认是收起的一列）
+        epgHandle.isFocusable = true
+        epgHandle.isClickable = true
+        epgHandle.setOnClickListener { openEpg() }
         epgTitle = findViewById(R.id.epgTitle)
         epgList = findViewById(R.id.epgList)
         infoLogo = findViewById(R.id.infoLogo)
@@ -1815,7 +1822,6 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
     }
 
     private fun refreshEpgColumn() {
-        epgPanel.visibility = View.VISIBLE
         epgTitle.text = epgTitleText()
         epgAdapter.submit(filteredPrograms())
         val pos = epgAdapter.currentPosition()
@@ -1826,6 +1832,7 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
     private fun openEpg() {
         epgVisible = true
         epgPanel.visibility = View.VISIBLE
+        epgHandle.visibility = View.GONE
         epgTitle.text = epgTitleText()
         epgAdapter.submit(filteredPrograms())
         val pos = epgAdapter.currentPosition()
@@ -1838,8 +1845,10 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
     }
 
     private fun closeEpg() {
-        // 节目单现在是浮层里常显的一列，不单独隐藏，把焦点还给频道列表即可
+        // 收起成竖排把手（参考实现：节目单默认不占宽度，露出画面）
         epgVisible = false
+        epgPanel.visibility = View.GONE
+        epgHandle.visibility = View.VISIBLE
         panelList.requestFocus()
     }
 

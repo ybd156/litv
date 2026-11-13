@@ -216,6 +216,8 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
     private var pendingAutoPlayChannel: Channel? = null
     /** 频道列里当前焦点对应的台：节目单跟着它，不跟着正在播的台。 */
     private var focusEpgChannelId: Long = 0L
+    /** programs 里装的是哪个台的节目：用来判断要不要重取。 */
+    private var epgProgramsChannelId: Long = 0L
     /** 进播放页时想播的频道 id（0 = 上次那个） */
     private var pendingChannelId = 0L
     /**
@@ -1189,6 +1191,7 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
     }
 
     private fun refreshEpg(channelId: Long) {
+        epgProgramsChannelId = channelId
         // 优先用**本地解析的 xmltv**（服务端只下发地址，不存节目数据）。
         // 本地还没就绪时才回落到服务端接口——那条路在旧的灌库模式下仍然有效，
         // 也覆盖「客户端刚装上、xmltv 还没下完」的那几秒。
@@ -2031,6 +2034,10 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         epgVisible = true
         epgPanel.visibility = View.VISIBLE
         epgHandle.visibility = View.GONE
+        // 展开时按"焦点所在的台"取节目单，而不是正在播的那个台。
+        // 之前只在 epg 已展开时（onFocus 里）才换数据，第一次展开一定是错的。
+        val targetId = if (focusEpgChannelId > 0) focusEpgChannelId else (current?.id ?: 0L)
+        if (targetId > 0 && targetId != epgProgramsChannelId) refreshEpg(targetId)
         panelRightGap.visibility = View.GONE
         epgTitle.text = epgTitleText()
         epgAdapter.submit(filteredPrograms())

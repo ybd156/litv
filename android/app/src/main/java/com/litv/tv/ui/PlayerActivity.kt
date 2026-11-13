@@ -60,6 +60,8 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
     private lateinit var surface: SurfaceView
     private lateinit var surfaceTex: android.view.TextureView
     private lateinit var playerView: androidx.media3.ui.PlayerView
+    /** 换台时冻结上一帧用的快照层（布局里一直有，但之前代码从没用过）。 */
+    private lateinit var snapshot: android.widget.ImageView
     private var videoSurface: android.view.Surface? = null
 
     /** 换台转场幕布（见 [startCurtain]）。 */
@@ -241,6 +243,7 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         }
 
         player.playerView = playerView
+        snapshot = findViewById(R.id.snapshot)
         setupRenderTarget()
 
         // 自动播放不能在这里做：没有本地缓存时 loadChannels() 走的是异步 bootstrap，
@@ -950,6 +953,8 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         pendingSlideDir = 0f
         Log.i(TAG, "playChannel: ${ch.name} streamId=$streamId rebuild=$forceRebuild slide=$slideDir direct=${app.prefs.directMode}")
         setSplashStage("正在起播…")
+        // 先把当前画面冻住：换台时用户看到的是上一帧，不是黑屏
+        freezeFrame()
         // 取一个换台代际号。下面的回调只有在它仍然是"最后一次换台"时才允许生效。
         val seq = playGate.begin()
         current = ch        // 换到别的台就重置"已试线路"记录
@@ -1375,6 +1380,8 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         // 开屏层自己就写着"正在起播…"，再叠一个转圈就是两套加载提示，
         // 观感像"转完又转"。开屏层在场时不再显示小转圈。
         if (splashOverlay?.visibility == View.VISIBLE) return@Runnable
+        // 换台时冻结帧已经盖着上一帧，再转圈就是第二套提示
+        if (::snapshot.isInitialized && snapshot.visibility == View.VISIBLE) return@Runnable
         if (loading.visibility == View.VISIBLE) return@Runnable
         loading.alpha = 0f
         loading.visibility = View.VISIBLE
@@ -1886,6 +1893,7 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         epgVisible = false
         if (::epgPanel.isInitialized) epgPanel.visibility = View.GONE
         if (::epgHandle.isInitialized) epgHandle.visibility = View.VISIBLE
+        if (::panelRightGap.isInitialized) panelRightGap.visibility = View.VISIBLE
     }
 
     /**
@@ -2006,6 +2014,7 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         epgVisible = true
         epgPanel.visibility = View.VISIBLE
         epgHandle.visibility = View.GONE
+        panelRightGap.visibility = View.GONE
         epgTitle.text = epgTitleText()
         epgAdapter.submit(filteredPrograms())
         val pos = epgAdapter.currentPosition()
@@ -2033,6 +2042,7 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         epgVisible = false
         epgPanel.visibility = View.GONE
         epgHandle.visibility = View.VISIBLE
+        panelRightGap.visibility = View.VISIBLE
         panelList.requestFocus()
     }
 
@@ -2281,6 +2291,67 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
      *
      * 新画面出来时由 [endCurtain] 接着朝同方向滑走，观感即"翻了一页"。
      */
+
+    /**
+     * 冻结当前画面，换台期间一直显示它。
+     *
+     * 之前换台是拿一块**纯色幕布**盖上去，用户看到的就是"黑一下"。
+     * 布局里其实一直有 @id/snapshot 这个 ImageView，但代码从来没往里放过东西。
+     *
+     * 两种渲染目标的取法不同：
+     *   TextureView -> getBitmap()（任意 API）
+     *   SurfaceView -> PixelCopy（API 24+，21~23 只能退回纯色幕布）
+     */
+    private fun freezeFrame() {
+        if (!::snapshot.isInitialized) return
+        try {
+            // TextureView 可以直接读
+            if (::surfaceTex.isInitialized && surfaceTex.isAvailable
+                && surfaceTex.width > 0 && surfaceTex.height > 0
+            ) {
+                val bmp = surfaceTex.getBitmap(surfaceTex.width, surfaceTex.height)
+                if (bmp != null) {
+                    snapshot.setImageBitmap(bmp)
+                    snapshot.visibility = View.VISIBLE
+                    return
+                }
+            }
+            // SurfaceView 只能 PixelCopy
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.N
+                && ::surface.isInitialized && surface.width > 0 && surface.height > 0
+            ) {
+                val bmp = android.graphics.Bitmap.createBitmap(
+                    surface.width, surface.height, android.graphics.Bitmap.Config.ARGB_8888
+                )
+                android.view.PixelCopy.request(
+                    surface, bmp,
+                    { result ->
+                        if (result == android.view.PixelCopy.SUCCESS) {
+                            main.post {
+                                snapshot.setImageBitmap(bmp)
+                                snapshot.visibility = View.VISIBLE
+                            }
+                        }
+                    },
+                    android.os.Handler(android.os.Looper.getMainLooper()),
+                )
+            }
+        } catch (t: Throwable) {
+            Log.w(TAG, "冻结当前帧失败：${t.javaClass.simpleName}")
+        }
+    }
+
+    /** 新画面出来后把冻结帧淡出。 */
+    private fun unfreezeFrame() {
+        if (!::snapshot.isInitialized) return
+        if (snapshot.visibility != View.VISIBLE) return
+        snapshot.animate().alpha(0f).setDuration(160).withEndAction {
+            snapshot.visibility = View.GONE
+            snapshot.alpha = 1f
+            snapshot.setImageDrawable(null)
+        }.start()
+    }
+
     private fun startCurtain() {
         if (!::curtain.isInitialized) return
         val h = resources.displayMetrics.heightPixels.toFloat()
@@ -2331,6 +2402,8 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         // 冷启动开屏层要等到**真的画出第一帧**才撤。
         // 之前挂在 onPlaying 上，但那一刻画面往往还是黑的，撤了就是黑屏。
         hideSplashOverlay()
+        // 新画面出来了，撤掉换台期间冻结的旧帧
+        unfreezeFrame()
         // 换台方向用完即弃，别残留到下一次
         slideDir = 0f
     }

@@ -166,8 +166,15 @@ class XmltvEpg(private val context: Context) {
     private fun parse(file: File) {
         val map = HashMap<String, MutableList<Program>>()
         var count = 0
+        // xmltv 常见是 .gz：按文件头判断，不靠扩展名（重定向后名字可能丢）
+        val raw = java.io.BufferedInputStream(file.inputStream(), 64 * 1024)
+        raw.mark(4)
+        val b0 = raw.read(); val b1 = raw.read()
+        raw.reset()
+        val input: java.io.InputStream =
+            if (b0 == 0x1f && b1 == 0x8b) java.util.zip.GZIPInputStream(raw, 64 * 1024) else raw
         val parser = XmlPullParserFactory.newInstance().newPullParser().apply {
-            setInput(file.inputStream().buffered(64 * 1024), "UTF-8")
+            setInput(input, "UTF-8")
         }
         var event = parser.eventType
         while (event != XmlPullParser.END_DOCUMENT) {

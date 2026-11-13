@@ -1841,6 +1841,7 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         // 四列：源 / 分组 / 频道。这里必须走 applyChannelFilter()，
         // 原来直接 submit(channels) 会把还没加载的空列表刷进去，频道列就是空的。
         applyChannelFilter()
+        refreshCategories()   // 分类列必须跟着刷，否则面板左侧空着
         refreshEpgColumn()
 
         // 把焦点放到当前频道上。
@@ -1852,26 +1853,29 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         //
         // 正确做法：先按适配器位置滚动，再用 findViewHolderForAdapterPosition
         // 取真正的 itemView；取不到就退回到让列表本身获得焦点。
+        // 焦点落位：优先当前频道，拿不到才退到分组列。
+        //
+        // 不能一上来就判断 channels.isEmpty() 早退——openPanel 里刚做完
+        // applyChannelFilter，列表视图还没布局完，这时 channels 可能仍是空，
+        // 早退会导致"面板打开了但焦点在分组列、频道列点不动"。
         val idx = channels.indexOfFirst { it.id == current?.id }
         val pos = if (idx >= 0) idx else 0
-        if (channels.isNotEmpty()) {
-            (panelList.layoutManager as? LinearLayoutManager)?.scrollToPositionWithOffset(pos, 0)
-            // 只 post 一次通常还不够：面板刚从 GONE 变 VISIBLE，这一帧还没完成布局，
-            // findViewHolderForAdapterPosition 会返回 null，焦点就落到 RecyclerView 本身，
-            // 表现是"打开频道页但没选中当前频道"。这里重试几帧再兜底。
-            var tries = 0
-            fun focusCurrent() {
-                val vh = panelList.findViewHolderForAdapterPosition(pos)
-                if (vh != null) {
-                    vh.itemView.requestFocus()
-                } else if (tries++ < 6) {
-                    panelList.postDelayed({ focusCurrent() }, 40)
-                } else {
-                    panelList.requestFocus()
-                }
+        (panelList.layoutManager as? LinearLayoutManager)?.scrollToPositionWithOffset(pos, 0)
+        var tries = 0
+        fun focusCurrent() {
+            val vh = panelList.findViewHolderForAdapterPosition(pos)
+            if (vh != null) {
+                vh.itemView.requestFocus()
+            } else if (tries++ < 8) {
+                panelList.postDelayed({ focusCurrent() }, 40)
+            } else {
+                // 列表确实是空的（比如空「收藏」分组）：焦点交给分组列，
+                // 否则焦点落在一个空列表上，按上下/OK 全都没反应。
+                Log.i(TAG, "焦点落不到频道列（channels=${channels.size} 分组=$selGroup），交给分组列")
+                grpList.post { grpList.requestFocus() }
             }
-            panelList.postDelayed({ focusCurrent() }, 40)
         }
+        panelList.postDelayed({ focusCurrent() }, 40)
         hideOsd()
     }
 

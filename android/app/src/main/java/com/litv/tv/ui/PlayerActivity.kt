@@ -493,55 +493,68 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         subMenu = findViewById(R.id.subMenu)
         subMenuTitle = findViewById(R.id.subMenuTitle)
         subMenuRow = findViewById(R.id.subMenuRow)
-        // 右侧设置菜单：一级 9 项保持原样，二级从左侧就地展开（见 openSubMenu）。
-        // 不用居中 Dialog：Dialog 会盖住画面，改完还得关掉才知道效果。
+        // 右侧设置菜单：一级 9 项，二级**焦点移过去就展开**（对齐参考实现）。
+        //
+        // 之前要按 OK 才展开，和参考实现不一致：光标在菜单里上下移动时，
+        // 左边应该实时显示当前项的选项，不然用户得先"点进去"才知道有什么可调。
+        val specs = mapOf(
+            R.id.miAspect to SubSpec("画面比例", listOf("自动", "16:9", "4:3", "铺满"),
+                listOf("auto", "16:9", "4:3", "fill").indexOf(app.prefs.aspect).coerceAtLeast(0)) { i ->
+                app.prefs.aspect = listOf("auto", "16:9", "4:3", "fill")[i]
+                toastTip("画面比例：" + listOf("自动", "16:9", "4:3", "铺满")[i])
+            },
+            R.id.miDecode to SubSpec("解码方式", listOf("自动", "硬件解码", "软件解码"),
+                listOf("auto", "hard", "soft").indexOf(app.prefs.decode).coerceAtLeast(0)) { i ->
+                app.prefs.decode = listOf("auto", "hard", "soft")[i]
+                toastTip("解码方式：" + listOf("自动", "硬件解码", "软件解码")[i])
+            },
+            R.id.miTimeout to SubSpec("超时换源", listOf("1 秒", "2 秒", "3 秒", "5 秒"),
+                listOf(1000, 2000, 3000, 5000).indexOf(app.prefs.bufferMs).coerceAtLeast(0)) { i ->
+                app.prefs.bufferMs = listOf(1000, 2000, 3000, 5000)[i]
+                toastTip("缓冲：" + listOf("1 秒", "2 秒", "3 秒", "5 秒")[i])
+            },
+            R.id.miList to SubSpec("列表配置",
+                com.litv.tv.data.UiScaleOptions.all.map { it.label },
+                com.litv.tv.data.UiScaleOptions.keys.indexOf(app.prefs.uiScale).coerceAtLeast(0)) { i ->
+                app.prefs.uiScale = com.litv.tv.data.UiScaleOptions.keys[i]
+                toastTip("界面缩放：" + com.litv.tv.data.UiScaleOptions.all[i].label + "（重开列表生效）")
+            },
+        )
+        // 焦点落到有选项的项上就展开；移到没有选项的项上则收起
+        listOf(R.id.miLine, R.id.miAspect, R.id.miDecode, R.id.miTimeout,
+                R.id.miCategory, R.id.miList, R.id.miDisplay, R.id.miPrefs, R.id.miOther)
+            .forEach { id ->
+                findViewById<TextView>(id).setOnFocusChangeListener { _, has ->
+                    if (!has) return@setOnFocusChangeListener
+                    // 焦点到就展开：参考实现里光标移到哪项，左边就显示哪项的选项，
+                    // 不用先按 OK 进去看。
+                    val spec = specs[id]
+                    when {
+                        spec != null -> openSubMenu(spec)
+                        id == R.id.miDisplay -> openInlineRows("play")
+                        id == R.id.miPrefs -> openInlineRows("interact")
+                        id == R.id.miOther -> openInlineRows("device")
+                        else -> closeSubMenu(keepFocus = true)   // 线路选择/分类管理 需要点击才动作
+                    }
+                }
+            }
+        // OK：焦点进二级；没有二级的直接执行
+        specs.forEach { (id, spec) ->
+            findViewById<TextView>(id).setOnClickListener { focusSubMenu(spec) }
+        }
+        // 线路选择要拉接口，不能跟着焦点走（每次移动都请求一次），保持点击触发
         findViewById<TextView>(R.id.miLine).setOnClickListener { openLinePicker() }
-
-        findViewById<TextView>(R.id.miAspect).setOnClickListener {
-            val opts = listOf("auto", "16:9", "4:3", "fill")
-            val labels = listOf("自动", "16:9", "4:3", "铺满")
-            openSubMenu("画面比例", labels, opts.indexOf(app.prefs.aspect).coerceAtLeast(0)) { i ->
-                app.prefs.aspect = opts[i]
-                toastTip("画面比例：" + labels[i])
-            }
-        }
-        findViewById<TextView>(R.id.miDecode).setOnClickListener {
-            val opts = listOf("auto", "hard", "soft")
-            val labels = listOf("自动", "硬件解码", "软件解码")
-            openSubMenu("解码方式", labels, opts.indexOf(app.prefs.decode).coerceAtLeast(0)) { i ->
-                app.prefs.decode = opts[i]
-                toastTip("解码方式：" + labels[i])
-            }
-        }
-        findViewById<TextView>(R.id.miTimeout).setOnClickListener {
-            val opts = listOf(1000, 2000, 3000, 5000)
-            val labels = listOf("1 秒", "2 秒", "3 秒", "5 秒")
-            openSubMenu("超时换源", labels, opts.indexOf(app.prefs.bufferMs).coerceAtLeast(0)) { i ->
-                app.prefs.bufferMs = opts[i]
-                toastTip("缓冲：" + labels[i])
-            }
-        }
-        // 分类管理是导航动作，不是选项，直接打开频道面板
         findViewById<TextView>(R.id.miCategory).setOnClickListener {
             closeSettingsMenu(); openPanel()
         }
-        findViewById<TextView>(R.id.miList).setOnClickListener {
-            val opts = com.litv.tv.data.UiScaleOptions.keys
-            val labels = com.litv.tv.data.UiScaleOptions.all.map { it.label }
-            openSubMenu("列表配置", labels, opts.indexOf(app.prefs.uiScale).coerceAtLeast(0)) { i ->
-                app.prefs.uiScale = opts[i]
-                toastTip("界面缩放：" + labels[i] + "（重开列表生效）")
-            }
-        }
-        // 这三项是整页设置，放不进二级面板，仍走完整弹层
         findViewById<TextView>(R.id.miDisplay).setOnClickListener {
-            closeSettingsMenu(); SettingsDialog(this, 0).show()
+            openInlineRows("play"); focusFirstRow()
         }
         findViewById<TextView>(R.id.miPrefs).setOnClickListener {
-            closeSettingsMenu(); SettingsDialog(this, 1).show()
+            openInlineRows("interact"); focusFirstRow()
         }
         findViewById<TextView>(R.id.miOther).setOnClickListener {
-            closeSettingsMenu(); SettingsDialog(this, 2).show()
+            openInlineRows("device"); focusFirstRow()
         }
         epgPanel = findViewById(R.id.epgPanel)
         epgTitle = findViewById(R.id.epgTitle)
@@ -1195,29 +1208,39 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
      * 对齐参考实现的做法：二级不弹居中 Dialog，而是贴在菜单左边展开，
      * 画面不被盖住，改完立刻能看到效果。选中即生效并收起。
      */
-    private fun openSubMenu(
-        title: String,
-        labels: List<String>,
-        selected: Int,
-        onPick: (Int) -> Unit,
-    ) {
+    /** 二级面板的内容定义。 */
+    private data class SubSpec(
+        val title: String,
+        val labels: List<String>,
+        val selected: Int,
+        val onPick: (Int) -> Unit,
+    )
+
+    /**
+     * 从一级菜单左侧展开选项面板。
+     *
+     * 对齐参考实现：焦点移到某一项就展开它的选项，不用先按 OK 进去看。
+     * 选中即生效并收起，画面不被盖住。
+     */
+    private fun openSubMenu(spec: SubSpec) {
         val row = subMenuRow ?: return
-        subMenuTitle?.text = title
+        subMenuTitle?.text = spec.title
         row.removeAllViews()
+        row.orientation = android.widget.LinearLayout.HORIZONTAL
         val padH = (16 * resources.displayMetrics.density).toInt()
         val padV = (10 * resources.displayMetrics.density).toInt()
-        labels.forEachIndexed { i, label ->
+        spec.labels.forEachIndexed { i, label ->
             val tv = TextView(this).apply {
                 text = label
                 textSize = 16f
                 gravity = android.view.Gravity.CENTER
                 setPadding(padH, padV, padH, padV)
-                setTextColor(getColor(if (i == selected) R.color.accent else R.color.text_primary))
+                setTextColor(getColor(if (i == spec.selected) R.color.accent else R.color.text_primary))
                 background = getDrawable(R.drawable.bg_setting_row)
                 isFocusable = true
                 isClickable = true
                 setOnClickListener {
-                    onPick(i)
+                    spec.onPick(i)
                     closeSubMenu()
                 }
             }
@@ -1229,15 +1252,179 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
             row.addView(tv, lp)
         }
         subMenu?.visibility = android.view.View.VISIBLE
-        row.post { row.getChildAt(selected.coerceIn(0, labels.size - 1))?.requestFocus() }
+    }
+
+    /** 按 OK：把焦点送进二级，落在当前值上。 */
+
+    // ---------------------------------------------------- 内联设置行（不弹窗、不整页）
+
+    /** 选项集合与设置页保持一致，避免两处各写一套。 */
+    private val rowEngines = listOf("auto", "exo", "vlc", "mpv", "avs3")
+    private val rowBuffers = listOf(2000, 3000, 5000, 10000, 15000)
+    private val rowOffsets = listOf(3000, 6000, 10000, 20000, 30000)
+    private val rowNumTimeouts = listOf(1500, 2000, 2500, 3000)
+
+    /**
+     * 把设置项就地铺在二级面板里，**不弹窗、不跳整页**。
+     *
+     * 参考实现的做法：所有设置都在右侧这一列里展开，画面始终可见。
+     * 弹窗和整页都会遮住画面，调画面相关的项时等于盲调。
+     * 行的交互是「OK 就地切到下一个值」，电视上最省按键。
+     */
+    private fun openInlineRows(group: String) {
+        val row = subMenuRow ?: return
+        row.removeAllViews()
+        row.orientation = android.widget.LinearLayout.VERTICAL
+        when (group) {
+            "play" -> {
+                subMenuTitle?.text = "显示设置"
+                cycleRow(row, "播放内核", rowEngines, app.prefs.engine) { v -> app.prefs.engine = v }
+                cycleRow(row, "解码方式", listOf("auto", "hard", "soft"), app.prefs.decode) { v -> app.prefs.decode = v }
+                cycleRow(row, "缓冲", rowBuffers.map { it.toString() }, app.prefs.bufferMs.toString()) { v ->
+                    app.prefs.bufferMs = v.toIntOrNull() ?: 2000
+                }
+                cycleRow(row, "直播延迟", rowOffsets.map { it.toString() }, app.prefs.liveOffsetMs.toString()) { v ->
+                    app.prefs.liveOffsetMs = v.toIntOrNull() ?: 20000
+                }
+                cycleRow(row, "画面比例", listOf("auto", "16:9", "4:3", "fill"), app.prefs.aspect) { v ->
+                    app.prefs.aspect = v
+                }
+            }
+            "interact" -> {
+                subMenuTitle?.text = "偏好设置"
+                toggleRow(row, "换台方向反转", app.prefs.reverseChannelKeys) { app.prefs.reverseChannelKeys = it }
+                cycleRow(row, "数字键跳台等待", rowNumTimeouts.map { it.toString() },
+                    app.prefs.numberJumpTimeoutMs.toString()) { v ->
+                    app.prefs.numberJumpTimeoutMs = v.toIntOrNull() ?: 2500
+                }
+                toggleRow(row, "开机自动播放上次频道", app.prefs.autoPlayLast) { app.prefs.autoPlayLast = it }
+            }
+            else -> {
+                subMenuTitle?.text = "其他设置"
+                infoRow(row, "设备名称", app.prefs.deviceName.ifBlank { "未命名" })
+                infoRow(row, "服务器", app.prefs.serverBase.ifBlank { "未配置" })
+                infoRow(row, "渲染档位", app.tier.name)
+                // 解除绑定要二次确认：遥控器上 OK 和方向键挨得近，
+                // 一次误触就得重新绑定才能看。第一次 OK 只是把行变成"再按一次确认"。
+                var armed = false
+                val unbind = TextView(this).apply {
+                    text = "解除绑定"
+                    textSize = 16f
+                    setPadding(dpRow(18), dpRow(12), dpRow(18), dpRow(12))
+                    setTextColor(getColor(R.color.text_primary))
+                    background = getDrawable(R.drawable.bg_setting_row)
+                    isFocusable = true
+                    isClickable = true
+                    setOnClickListener {
+                        if (!armed) {
+                            armed = true
+                            text = "再按一次确认解除绑定"
+                            setTextColor(getColor(R.color.accent))
+                        } else {
+                            app.prefs.clearSession()
+                            closeSettingsMenu()
+                            recreate()
+                        }
+                    }
+                    setOnFocusChangeListener { _, has -> if (!has && armed) { armed = false; text = "解除绑定"; setTextColor(getColor(R.color.text_primary)) } }
+                }
+                row.addView(unbind, rowLp())
+            }
+        }
+        subMenu?.visibility = android.view.View.VISIBLE
+        row.post { row.getChildAt(0)?.requestFocus() }
+    }
+
+    /** 按 OK 后把焦点送进内联行，落在第一行。 */
+    private fun focusFirstRow() {
+        subMenuRow?.post { subMenuRow?.getChildAt(0)?.requestFocus() }
+    }
+
+    private fun rowLp() = android.widget.LinearLayout.LayoutParams(
+        android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
+        android.widget.LinearLayout.LayoutParams.WRAP_CONTENT,
+    )
+
+    private fun dpRow(v: Int) = (v * resources.displayMetrics.density).toInt()
+
+    private fun cycleRow(
+        parent: android.widget.LinearLayout,
+        label: String,
+        options: List<String>,
+        current: String,
+        apply: (String) -> Unit,
+    ) {
+        var cur = current
+        fun render(v: String) = "$label    $v"
+        val tv = TextView(this).apply {
+            text = render(cur)
+            textSize = 16f
+            setPadding(dpRow(18), dpRow(12), dpRow(18), dpRow(12))
+            setTextColor(getColor(R.color.text_primary))
+            background = getDrawable(R.drawable.bg_setting_row)
+            isFocusable = true
+            isClickable = true
+            setOnClickListener {
+                val i = options.indexOf(cur)
+                cur = options[(i + 1).mod(options.size)]
+                apply(cur)
+                text = render(cur)
+            }
+        }
+        parent.addView(tv, rowLp())
+    }
+
+    private fun toggleRow(
+        parent: android.widget.LinearLayout,
+        label: String,
+        value: Boolean,
+        apply: (Boolean) -> Unit,
+    ) {
+        var cur = value
+        fun render(v: Boolean) = "$label    " + if (v) "开" else "关"
+        val tv = TextView(this).apply {
+            text = render(cur)
+            textSize = 16f
+            setPadding(dpRow(18), dpRow(12), dpRow(18), dpRow(12))
+            setTextColor(getColor(R.color.text_primary))
+            background = getDrawable(R.drawable.bg_setting_row)
+            isFocusable = true
+            isClickable = true
+            setOnClickListener {
+                cur = !cur
+                apply(cur)
+                text = render(cur)
+            }
+        }
+        parent.addView(tv, rowLp())
+    }
+
+    private fun infoRow(parent: android.widget.LinearLayout, label: String, value: String) {
+        val tv = TextView(this).apply {
+            text = "$label    $value"
+            textSize = 15f
+            setPadding(dpRow(18), dpRow(10), dpRow(18), dpRow(10))
+            setTextColor(getColor(R.color.text_secondary))
+            isFocusable = false
+        }
+        parent.addView(tv, rowLp())
+    }
+
+    private fun focusSubMenu(spec: SubSpec) {
+        val row = subMenuRow ?: return
+        if (subMenu?.visibility != android.view.View.VISIBLE) openSubMenu(spec)
+        row.post {
+            row.getChildAt(spec.selected.coerceIn(0, spec.labels.size - 1))?.requestFocus()
+        }
     }
 
     /** 收起二级面板，焦点还给一级菜单。 */
-    private fun closeSubMenu() {
+    private fun closeSubMenu(keepFocus: Boolean = false) {
         val m = subMenu ?: return
         if (m.visibility != android.view.View.VISIBLE) return
         m.visibility = android.view.View.GONE
-        settingsMenu.findViewById<TextView>(R.id.miAspect)?.requestFocus()
+        // 焦点已经在二级里时，收起来要把焦点还给一级，否则会掉到画面上
+        if (!keepFocus) settingsMenu.findViewById<TextView>(R.id.miAspect)?.requestFocus()
     }
 
     private fun pickAspect() {
@@ -2249,12 +2436,14 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         app.api.streams(ch.id, onOk = { list ->
             if (list.isEmpty()) { toastTip("这个台只有一条线路"); return@streams }
             val names = list.map { "${it.quality.ifBlank { "线路" }} ${it.latencyMs}ms" }
-            android.app.AlertDialog.Builder(this, R.style.LitvAlertDialog)
-                .setTitle("选择线路（${list.size} 条）")
-                .setItems(names.toTypedArray()) { _, i ->
-                    playChannel(ch, list[i].id)
-                }
-                .show()
+            // 内联展开，不用 AlertDialog：和一级菜单其它项保持一致
+            val cur = list.indexOfFirst { it.id == currentStreamId }.coerceAtLeast(0)
+            openSubMenu(SubSpec("选择线路（${list.size} 条）", names, cur) { i ->
+                playChannel(ch, list[i].id)
+            })
+            focusSubMenu(SubSpec("选择线路（${list.size} 条）", names, cur) { i ->
+                playChannel(ch, list[i].id)
+            })
         }, onErr = { toastTip("取线路失败：$it") })
     }
 }

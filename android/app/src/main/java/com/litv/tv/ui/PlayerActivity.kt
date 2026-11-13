@@ -1928,6 +1928,8 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
             }
         }
         panelList.postDelayed(focusTick, 60)
+        main.removeCallbacks(panelProgressTick)
+        main.postDelayed(panelProgressTick, 20_000)
         // 兜底：任何分支漏掉也要让面板可见
         main.postDelayed({ if (panelVisible) panel.animate().alpha(1f).setDuration(120).start() }, 400)
         hideOsd()
@@ -2091,6 +2093,7 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
             }
         }
         epgVisible = true
+        beginPanelTransition()
         epgPanel.visibility = View.VISIBLE
         epgHandle.visibility = View.GONE
         // 展开时按"焦点所在的台"取节目单，而不是正在播的那个台。
@@ -2123,6 +2126,28 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
                 ?.findViewByPosition(pos)?.requestFocus()
         }
         hideOsd()
+    }
+
+    /**
+     * 面板尺寸变化的统一过渡入口。
+     *
+     * 用 TransitionManager 而不是手写 ValueAnimator / LayoutTransition：
+     * - beginDelayedTransition 之后布局是**立即**生效的，动画只是视觉补间，
+     *   所以紧接着做的滚动还原不会被下一帧覆盖（之前正是因为这个才要 postDelayed，
+     *   而 postDelayed 又和面板淡入抢时序，导致列表跑位）。
+     * - Fade 管显隐，ChangeBounds 管宽度/位置变化。
+     */
+    private fun beginPanelTransition() {
+        val group = findViewById<android.view.ViewGroup>(R.id.panelColumns) ?: return
+        runCatching {
+            androidx.transition.TransitionManager.beginDelayedTransition(
+                group,
+                androidx.transition.TransitionSet()
+                    .addTransition(androidx.transition.ChangeBounds())
+                    .addTransition(androidx.transition.Fade())
+                    .setDuration(160),
+            )
+        }
     }
 
     /**
@@ -3025,6 +3050,15 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
     }
 
     /** 每小时查一次跨天。电视盒子常年不关，只靠 onResume 不够。 */
+    /** 面板开着时每 20 秒刷一次进度条（30~60 分钟的节目，20 秒粒度够用）。 */
+    private val panelProgressTick = object : Runnable {
+        override fun run() {
+            if (!panelVisible) return
+            if (::panelAdapter.isInitialized) panelAdapter.tickProgress(panelList)
+            main.postDelayed(this, 20_000)
+        }
+    }
+
     private val dayRolloverTick = object : Runnable {
         override fun run() {
             checkEpgDayRollover()

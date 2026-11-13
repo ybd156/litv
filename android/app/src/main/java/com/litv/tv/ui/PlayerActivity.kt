@@ -531,6 +531,9 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
                     // 焦点到就展开：参考实现里光标移到哪项，左边就显示哪项的选项，
                     // 不用先按 OK 进去看。
                     subMenuOwner = findViewById(id)
+                    // 焦点回到一级菜单，说明用户离开了设置行——立刻停用，
+                    // 否则下一次下移又会飘进左边的行里。
+                    if (rowsActive) setRowsFocusable(false)
                     val spec = specs[id]
                     when {
                         spec != null -> openSubMenu(spec, findViewById(id))
@@ -555,13 +558,16 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         // 线路选择要拉接口，不能跟着焦点走（每次移动都请求一次），保持点击触发
         findViewById<TextView>(R.id.miLine).setOnClickListener { openLinePicker() }
         findViewById<TextView>(R.id.miDisplay).setOnClickListener {
-            openInlineRows("play"); focusFirstRow()
+            openInlineRows("play", findViewById(R.id.miDisplay))
+            setRowsFocusable(true); focusFirstRow()
         }
         findViewById<TextView>(R.id.miPrefs).setOnClickListener {
-            openInlineRows("interact"); focusFirstRow()
+            openInlineRows("interact", findViewById(R.id.miPrefs))
+            setRowsFocusable(true); focusFirstRow()
         }
         findViewById<TextView>(R.id.miOther).setOnClickListener {
-            openInlineRows("device"); focusFirstRow()
+            openInlineRows("device", findViewById(R.id.miOther))
+            setRowsFocusable(true); focusFirstRow()
         }
         epgPanel = findViewById(R.id.epgPanel)
         epgTitle = findViewById(R.id.epgTitle)
@@ -1286,7 +1292,30 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
      * 弹窗和整页都会遮住画面，调画面相关的项时等于盲调。
      * 行的交互是「OK 就地切到下一个值」，电视上最省按键。
      */
-    private fun openInlineRows(group: String) {
+    /** 当前展开的设置行属于哪一项；以及是否已经"进入"（可聚焦）。 */
+    private var rowsOwner: TextView? = null
+    private var rowsActive = false
+
+    /** 激活/停用左侧设置行的焦点。未激活时它们不参与方向键遍历，避免焦点乱飘。 */
+    private fun setRowsFocusable(active: Boolean) {
+        rowsActive = active
+        val row = subMenuRow ?: return
+        for (i in 0 until row.childCount) {
+            val v = row.getChildAt(i)
+            v.isFocusable = active && v is TextView && v.text?.contains("    ") == true
+        }
+        // 在行内按上键要回到"打开这组的那一项"，而不是菜单第一项
+        if (active) {
+            val ownerId = rowsOwner?.id ?: android.view.View.NO_ID
+            for (i in 0 until row.childCount) {
+                val v = row.getChildAt(i)
+                if (v.isFocusable) { v.nextFocusUpId = ownerId; break }
+            }
+        }
+    }
+
+    private fun openInlineRows(group: String, owner: TextView? = null) {
+        if (owner != null) rowsOwner = owner
         val row = subMenuRow ?: return
         row.removeAllViews()
         row.orientation = android.widget.LinearLayout.VERTICAL
@@ -1347,7 +1376,7 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
             }
         }
         subMenu?.visibility = android.view.View.VISIBLE
-        row.post { row.getChildAt(0)?.requestFocus() }
+        setRowsFocusable(false)   // 先不参与遍历，按 OK 才进去
     }
 
     /** 按 OK 后把焦点送进内联行，落在第一行。 */

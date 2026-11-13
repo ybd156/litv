@@ -1066,6 +1066,20 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
             renderOsdNow()
             if (panelVisible) refreshEpgColumn()
             main.post { renderInfoBar() }
+
+            // 本地 xmltv 可能只到"当前节目"就断了（缓存过期或源只给到此刻），
+            // 这时 OSD 的「下一档」永远是空的。用尽就回落到服务端接口补齐。
+            val now = System.currentTimeMillis() / 1000
+            if (programs.none { it.startAt > now }) {
+                app.api.epg(channelId, 0, onOk = { list ->
+                    if (list.isNotEmpty()) {
+                        programs = list
+                        renderOsdNow()
+                        if (panelVisible) refreshEpgColumn()
+                        main.post { renderInfoBar() }
+                    }
+                }, onErr = {})
+            }
             return
         }
 

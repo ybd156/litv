@@ -670,11 +670,17 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
             onClick = { ch ->
                 closePanel()
                 val i = channels.indexOfFirst { it.id == ch.id }
-                if (i >= 0) {
-                    index = i
+                if (i >= 0) index = i
+                // ★ 选的就是正在播的台：只关面板，不重新 prepare。
+                // 之前无脑重播同一路流，反复 prepare 会让画面卡住。
+                if (ch.id == current?.id && player.isPlaying) {
+                    Log.i(TAG, "选中当前正在播的台，跳过重播：${ch.name}")
+                } else {
                     playChannel(ch)
                 }
             },
+            // 频道列长按 OK = 收藏 / 取消收藏（遥控器上最顺手的第二个动作）
+            onLongClick = { ch -> toggleFavorite(ch) },
         )
         panelList.layoutManager = LinearLayoutManager(this)
         panelList.adapter = panelAdapter
@@ -1866,7 +1872,7 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
             val vh = panelList.findViewHolderForAdapterPosition(pos)
             if (vh != null) {
                 vh.itemView.requestFocus()
-            } else if (tries++ < 8) {
+            } else if (tries++ < 25) {
                 panelList.postDelayed({ focusCurrent() }, 40)
             } else {
                 // 列表确实是空的（比如空「收藏」分组）：焦点交给分组列，

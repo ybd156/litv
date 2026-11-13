@@ -1,6 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- 频道页分区底：比面板底色再亮一档，让"分类 / 频道 / 节目单"三段各自成块。
-     之前三段同色，边界全靠内容撑，扫视时看不清哪块是哪块。 -->
+<!-- 卡内分区：透明。底色与圆角由外层 bg_panel_card 提供，分区靠分隔线区分。 -->
 <shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
-    <solid android:color="#F0141A22" />
+    <solid android:color="#00000000" />
 </shape>

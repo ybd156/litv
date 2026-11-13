@@ -150,6 +150,10 @@ final class Session: ObservableObject {
             guard mine == epoch, !Task.isCancelled else { return false }
             setToken(r.token)
             if token.isEmpty {
+                // 凭据写不进安全存储就等于没登录：连"已绑定"状态也要一起撤掉，
+                // 否则界面显示已登录、实际没有凭据，下一次请求必然 401。
+                isBound = false
+                defaults.set(false, forKey: "isBound")
                 errorText = "系统安全存储不可用，无法保存绑定凭据，请重试"
                 return false
             }

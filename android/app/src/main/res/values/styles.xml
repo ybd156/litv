@@ -148,9 +148,9 @@
         <item name="android:paddingVertical">16dp</item>
         <item name="android:paddingStart">12dp</item>
         <item name="android:paddingEnd">12dp</item>
-        <!-- 左对齐：右侧菜单如果右对齐，文字会贴着屏幕右边缘，看起来像被裁掉。
-             TVBox / Google TV 的右侧菜单都是左对齐。 -->
-        <item name="android:gravity">start|center_vertical</item>
+        <!-- 右对齐：参考实现就是右对齐（文字贴菜单右边缘）。
+             之前我按"网页菜单习惯"改成左对齐，是判断错误，已改回。 -->
+        <item name="android:gravity">end|center_vertical</item>
         <item name="android:textColor">@color/text_primary</item>
         <item name="android:textSize">19sp</item>
         <item name="android:background">@drawable/bg_setting_row</item>

@@ -1048,6 +1048,7 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         if (cacheUsable) {
             Log.i(TAG, "缓存起播 ${ch.name}，签名还剩 ${cached!!.expires - nowSec}s")
             player.play(ch.id, app.api.absolute(cached.url), cached.headers, app.prefs.engine)
+            reattachSurface()
         }
 
         app.api.play(ch.id, streamId,
@@ -1106,6 +1107,7 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
                 // 上面那次 prepare 被跳过 → 这里也被跳过 → 重试什么也没做。
                 if (!cacheUsable || forceRebuild) {
                     player.play(ch.id, abs, headers, app.prefs.engine)
+                    reattachSurface()
                 }
                 refreshEpg(ch.id)
                 // 底部信息条：线路 x/y 与延迟
@@ -2394,6 +2396,24 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
                 return
             }
             main.postDelayed(this, 150)
+        }
+    }
+
+
+    /**
+     * 换台后重新挂一次 Surface。
+     *
+     * 实测：切台瞬间会打出
+     *   SurfaceUtils: disconnecting from surface, reason disconnectFromSurface
+     * 之后新流虽然选了新的解码器，画面却一直是旧的最后一帧——因为 Surface
+     * 断了没再接上。复用了播放器实例时 surfaceCreated 不会重新触发，
+     * 所以必须在这里显式补挂。
+     */
+    private fun reattachSurface() {
+        runCatching {
+            if (::surface.isInitialized && surface.holder.surface.isValid) {
+                player.attach(surface.holder.surface, findViewById(android.R.id.content))
+            }
         }
     }
 

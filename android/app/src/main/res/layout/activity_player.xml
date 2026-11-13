@@ -78,6 +78,19 @@
         android:layout_gravity="center"
         android:indeterminateTint="@color/accent" />
 
+    <!-- 光有转圈不知道在等什么：配一行文字说明当前阶段。
+         与 loading 同步显示/隐藏（见 PlayerActivity.showLoadingRunnable）。 -->
+    <TextView
+        android:id="@+id/loadingText"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="center"
+        android:layout_marginTop="96dp"
+        android:text="正在连接…"
+        android:textColor="@color/text_secondary"
+        android:textSize="15sp"
+        android:visibility="gone" />
+
     <TextView
         android:id="@+id/switchTip"
         android:layout_width="wrap_content"
@@ -471,4 +484,41 @@
         android:visibility="gone" />
 
     <include layout="@layout/view_settings_menu" />
+
+    <!-- 冷启动开屏层：进程刚起来、还没拿到第一帧时盖在最上层。
+         没有它的时候，从点图标到起播之间是纯黑，用户不知道在等什么。
+         首帧到达后由 hideLoading() 淡出；换台时不会再出现（那时有幕布快照）。 -->
+    <LinearLayout
+        android:id="@+id/splashOverlay"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="@color/bg"
+        android:gravity="center"
+        android:orientation="vertical">
+
+        <ImageView
+            android:layout_width="96dp"
+            android:layout_height="96dp"
+            android:contentDescription="@string/app_name"
+            android:src="@drawable/ic_launcher" />
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="14dp"
+            android:letterSpacing="0.2"
+            android:text="LITV"
+            android:textColor="@color/text_primary"
+            android:textSize="30sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/splashStage"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:text="正在连接服务器…"
+            android:textColor="@color/text_secondary"
+            android:textSize="16sp" />
+    </LinearLayout>
 </FrameLayout>

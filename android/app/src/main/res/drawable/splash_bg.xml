@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  冷启动首帧：深色底 + 居中图标，替代纯黑。
+
+  为什么用 windowBackground 而不是做一个 SplashActivity：
+  窗口背景在**进程还没起来**时就由系统绘制，是唯一能覆盖「点图标到
+  Activity 首帧」这段空窗的手段。做一个 SplashActivity 反而多一次
+  Activity 跳转，黑屏时间不会变短。
+-->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:drawable="@color/bg" />
+    <item
+        android:drawable="@drawable/ic_launcher"
+        android:gravity="center" />
+</layer-list>

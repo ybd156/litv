@@ -40,6 +40,7 @@
             android:name=".ui.LauncherActivity"
             android:exported="true"
             android:launchMode="singleTask"
+            android:theme="@style/Theme.Litv.Splash"
             android:configChanges="keyboard|keyboardHidden|navigation|orientation|screenSize|screenLayout|smallestScreenSize|uiMode">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />

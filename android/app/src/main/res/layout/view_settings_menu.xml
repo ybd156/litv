@@ -15,7 +15,7 @@
     android:layout_width="wrap_content"
     android:layout_height="match_parent"
     android:layout_gravity="end"
-    android:background="#E6080C10"
+    android:background="#F00B0E11"
     android:gravity="center_vertical"
     android:orientation="horizontal"
     android:paddingHorizontal="20dp"
@@ -26,7 +26,7 @@
         android:id="@+id/subMenu"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:layout_marginEnd="24dp"
+        android:layout_marginEnd="16dp"
         android:orientation="vertical"
         android:visibility="gone">
 
@@ -48,7 +48,7 @@
     <!-- 右栏：一级菜单 -->
     <LinearLayout
         android:id="@+id/menuColumn"
-        android:layout_width="300dp"
+        android:layout_width="200dp"
         android:layout_height="wrap_content"
         android:orientation="vertical">
 

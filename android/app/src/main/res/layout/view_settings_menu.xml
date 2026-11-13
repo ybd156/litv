@@ -24,8 +24,9 @@
     <!-- 左栏：二级选项。没有选项的项（线路选择/分类管理）时整栏 GONE -->
     <LinearLayout
         android:id="@+id/subMenu"
-        android:layout_width="150dp"
+        android:layout_width="130dp"
         android:layout_height="wrap_content"
+        android:layout_gravity="center_vertical"
         android:layout_marginEnd="8dp"
         android:orientation="vertical"
         android:visibility="gone">
@@ -49,7 +50,7 @@
     <!-- 右栏：一级菜单 -->
     <LinearLayout
         android:id="@+id/menuColumn"
-        android:layout_width="200dp"
+        android:layout_width="140dp"
         android:layout_height="wrap_content"
         android:orientation="vertical">
 

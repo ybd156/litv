@@ -218,6 +218,8 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
     private var focusEpgChannelId: Long = 0L
     /** programs 里装的是哪个台的节目：用来判断要不要重取。 */
     private var epgProgramsChannelId: Long = 0L
+    /** 面板频道列里最后一次聚焦的台。回列表/展开节目单都以它为准。 */
+    private var panelLastFocusId: Long = 0L
     /** 进播放页时想播的频道 id（0 = 上次那个） */
     private var pendingChannelId = 0L
     /**
@@ -684,10 +686,9 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
             onLongClick = { ch -> toggleFavorite(ch) },
             // 焦点移到哪个台，右侧节目单就显示哪个台的节目（不是正在播的那个）
             onFocus = { ch ->
-                if (ch.id != focusEpgChannelId) {
-                    focusEpgChannelId = ch.id
-                    if (epgVisible) refreshEpg(ch.id)
-                }
+                panelLastFocusId = ch.id
+                focusEpgChannelId = ch.id
+                if (epgVisible) refreshEpg(ch.id)
             },
         )
         panelList.layoutManager = LinearLayoutManager(this)
@@ -1963,10 +1964,15 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
     }
 
     private fun epgTitleText(): String {
-        val name = current?.name ?: "节目单"
+        // ★ 标题必须跟着"节目单实际显示的那个台"，不能跟着正在播的台。
+        // 之前用 current?.name，于是焦点换到别的台、节目单也换了数据，
+        // 标题却一直写着正在播的那个台 —— 看着就像"节目单没跟着换"。
+        val shownId = if (epgProgramsChannelId > 0) epgProgramsChannelId
+                      else panelLastFocusId.takeIf { it > 0 } ?: (current?.id ?: 0L)
+        val name = allChannels.firstOrNull { it.id == shownId }?.name
+            ?: current?.name ?: "节目单"
         val day = epgDayAdapter.selectedDay()?.label ?: ""
-        val cat = epgCategory
-        val suffix = if (cat == null) "全部" else cat
+        val suffix = epgCategory ?: "全部"
         return "$name · $day · $suffix"
     }
 
@@ -2056,9 +2062,12 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         epgHandle.visibility = View.GONE
         // 展开时按"焦点所在的台"取节目单，而不是正在播的那个台。
         // 之前只在 epg 已展开时（onFocus 里）才换数据，第一次展开一定是错的。
-        val targetId = focusedPanelChannelId().takeIf { it > 0 }
+        val byChild = focusedPanelChannelId()
+        val targetId = byChild.takeIf { it > 0 }
+            ?: panelLastFocusId.takeIf { it > 0 }
             ?: focusEpgChannelId.takeIf { it > 0 }
             ?: (current?.id ?: 0L)
+        Log.i(TAG, "展开节目单: focusedChild=$byChild lastFocus=$panelLastFocusId current=${current?.id} -> 取 $targetId")
         if (targetId > 0 && targetId != epgProgramsChannelId) refreshEpg(targetId)
         panelRightGap.visibility = View.GONE
         epgTitle.text = epgTitleText()
@@ -2449,7 +2458,10 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
 
     /** 把焦点放回频道列里指定台的那一项（找不到就用当前播放的台）。 */
     private fun focusPanelChannel(channelId: Long) {
-        val id = if (channelId > 0) channelId else (current?.id ?: 0L)
+        // 优先用传入的（面板最后聚焦的台）；都没有才退回正在播的台。
+        val id = channelId.takeIf { it > 0 }
+            ?: panelLastFocusId.takeIf { it > 0 }
+            ?: (current?.id ?: 0L)
         val pos = channels.indexOfFirst { it.id == id }.let { if (it >= 0) it else 0 }
         panelList.post {
             val vh = panelList.findViewHolderForAdapterPosition(pos)
@@ -2949,7 +2961,7 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
                 expandEpgPanel()
                 focusDayList()
             }
-            epgDayList.hasFocus() && dir < 0 -> focusPanelChannel(focusEpgChannelId)
+            epgDayList.hasFocus() && dir < 0 -> focusPanelChannel(panelLastFocusId)
             epgDayList.hasFocus() && dir > 0 -> focusEpgList()
             epgList.hasFocus() && dir < 0 -> focusDayList()
             epgList.hasFocus() && dir > 0 -> favBtn.requestFocus()

@@ -12,7 +12,9 @@
 |---|---|---|
 | C05 iOS 换服务端会话隔离 | **未实现**。只有依赖注入重构，没有代际号/回滚/取消检查/会话数据清理 | [Session.swift:88](../../ios/LITVApp/Sources/Session.swift#L88) 探测前即改写 `serverBase`；[:97-100](../../ios/LITVApp/Sources/Session.swift#L97-L100) 失败不回滚；[:93](../../ios/LITVApp/Sources/Session.swift#L93) `previous` 为空时跳过清凭据 |
 | 由此产生的泄漏路径 | 打错一次地址后，旧 bearer 会随每次冷启动发往候选 origin | [LITVApp.swift](../../ios/LITVApp/Sources/LITVApp.swift) 冷启动调 `bootstrap()`；[Session.swift:142](../../ios/LITVApp/Sources/Session.swift#L142) guard 只查非空 |
-| C05 的测试 | 12 条行为测试中至少 9 条对着当前源码是红的 | [SessionIsolationTests.swift:15](../../ios/Tests/SessionIsolationTests.swift#L15) 等；**未运行**，静态推断 |
+| C05 的测试 | **测试目标编译不过**，不是跑红。3 处错误说明测试写的是尚未实现的 fixture API | `iOS Build Check #59` 的 `iOS 会话隔离行为回归` job：`SessionIsolationTests.swift:143` 引用不存在的 `SessionFixture.boundB`；`:256` 给 fixture 传 `server:`（init 只有 `bound:`/`token:`）；`:260` 由此级联的 `nil` 无上下文类型 |
+| 应用本体能否编译 | **能**。`build-ios` job 通过，说明 `Session.swift`/`Api.swift` 的改动本身是合法 Swift | `iOS Build Check #59` 的 `build-ios` job：success |
+| 服务端 / 管理台 / Android | **全绿** | `Build Check #260`：preflight、Go、管理台、Android 两 flavor 四个 job 均 success |
 | iOS token 存储 | 只进 Keychain，旧明文迁移后删除，写失败不回退明文 | `KeychainStore.swift` |
 | TLS 校验 | 两端均未发现关闭证书/主机名校验的代码 | 全仓 grep 无 `TrustManager` / `HostnameVerifier` / `serverTrust` 命中 |
 | 服务端时间口径 | 统一 Unix 秒 | [`store.Now()`](../../server/internal/store/db.go#L361) |
@@ -23,8 +25,7 @@
 
 | 项 | 卡在哪 | 怎么验 | 判据 |
 |---|---|---|---|
-| C05 的 12 条测试红/绿 | 无 Apple SDK | `iOS Build Check` 的 `test-session` job | `check-test-log.py` 输出 `all N named behavioral tests executed and passed` |
-| 测试目标能否编译 | `await fulfillment(of:timeout:)` 若标注 iOS 16+，与 `deploymentTarget: 15.0` 冲突 | 同上 | CI 首条 `error:`；报 `only available in iOS 16.0 or newer` 则换 `XCTWaiter` |
+| C05 的 12 条断言是否真的成立 | 先修 fixture 的 3 处编译错误，才有得跑 | 补 `SessionFixture.boundB` 与 `server:` 参数后重跑 `iOS Build Check` | `check-test-log.py` 输出 `all N named behavioral tests executed and passed` |
 | 服务端测试是否真测到行为 | 交接文档自述"只写了测试，没做回退验证" | 把修复临时回退，确认测试变红，再恢复 | 两次日志都留档 |
 | Android 播放器状态机 | `PlayerManager` 硬绑 `Handler(Looper.getMainLooper())`，无 `androidTest` | 抽纯类单测（仿 `PlayRequestGate` 先例），跑在现有 Build Check | release 后到点不启动 / 已排回调被丢弃 / play 后可重启 |
 | 真机播放 | 无设备 | release 构建 + 生命周期 + 快速切台 + 断网恢复 | 重试有上限，不无限重连 |

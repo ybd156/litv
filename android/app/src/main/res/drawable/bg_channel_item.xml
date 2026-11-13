@@ -14,11 +14,9 @@
 <selector xmlns:android="http://schemas.android.com/apk/res/android">
     <item android:state_focused="true">
         <shape>
-            <solid android:color="#33FFFFFF" />
-            <corners android:radius="8dp" />
-            <stroke
-                android:width="2dp"
-                android:color="@color/accent" />
+            <!-- 实心蓝：对齐参考实现，选中的频道整行是蓝底白字 -->
+            <solid android:color="@color/select_bg" />
+            <corners android:radius="6dp" />
         </shape>
     </item>
     <item>

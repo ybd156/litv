@@ -236,7 +236,7 @@
         android:id="@+id/channelPanel"
         android:layout_width="match_parent"
         android:layout_height="match_parent"
-        android:background="@android:color/transparent"
+        android:background="#F00B0E11"
         android:orientation="vertical"
         android:paddingVertical="12dp"
         android:visibility="gone">
@@ -346,11 +346,25 @@
                     android:visibility="gone" />
             </LinearLayout>
 
-            <!-- 3. 节目单：时间 + 节目名 + 回看 -->
+            <!-- 3a. 节目单把手：收起状态只有这一条竖排文字（参考实现的样子）。
+                 按右键展开成完整的节目单列。 -->
+            <!-- 竖排：每个字一行，不是整体旋转 90°（旋转后是横躺的，不是竖排） -->
+            <TextView
+                android:id="@+id/epgHandle"
+                android:layout_width="44dp"
+                android:layout_height="match_parent"
+                android:gravity="center"
+                android:lineSpacingExtra="4dp"
+                android:text="节&#10;目&#10;单&#10;»"
+                android:textColor="@color/text_primary"
+                android:textSize="16sp" />
+
+            <!-- 3. 节目单：时间 + 节目名 + 回看（默认收起，右键展开） -->
             <LinearLayout
                 android:id="@+id/epgPanel"
                 android:layout_width="0dp"
                 android:layout_height="match_parent"
+                android:visibility="gone"
                 android:layout_weight="0.36"
                 android:background="#B80B0E11"
                 android:orientation="vertical"

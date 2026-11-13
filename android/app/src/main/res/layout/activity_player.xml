@@ -238,7 +238,7 @@
         android:layout_height="match_parent"
         android:background="@android:color/transparent"
         android:orientation="vertical"
-        android:paddingVertical="12dp"
+        android:paddingVertical="36dp"
         android:visibility="gone">
 
         <!-- 上：三列 -->
@@ -253,22 +253,12 @@
                  既看不出有哪些分类，也不知道当前在哪一类。
                  现在换成真正的列表，选中项高亮。 -->
             <LinearLayout
-                android:layout_width="170dp"
+                android:layout_width="150dp"
                 android:layout_height="match_parent"
                 android:background="@drawable/bg_panel_zone"
                 android:orientation="vertical"
                 android:paddingHorizontal="4dp"
                 android:paddingVertical="4dp">
-
-                <TextView
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:paddingStart="8dp"
-                    android:paddingTop="4dp"
-                    android:paddingBottom="6dp"
-                    android:text="分类"
-                    android:textColor="@color/text_secondary"
-                    android:textSize="15sp" />
 
                 <androidx.recyclerview.widget.RecyclerView
                     android:id="@+id/grpList"
@@ -287,7 +277,7 @@
             <!-- 2. 频道列表：台号框 + 台名 + 当前节目。
                  **固定宽度**，不用 weight：节目单展开/收起时频道列不能被压缩。 -->
             <LinearLayout
-                android:layout_width="400dp"
+                android:layout_width="350dp"
                 android:layout_height="match_parent"
                 android:background="@drawable/bg_panel_zone"
                 android:orientation="vertical"

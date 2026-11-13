@@ -93,7 +93,9 @@ class ChannelAdapter(
         // 台标：先显示首字方块兜底，图真的加载成功了再盖上去。
         // （源里的台标多是外链，加载失败很常见；只在 URL 为空时才兜底是不够的）
         holder.logo.setImageDrawable(null)
-        holder.logoText.text = ch.name.take(2)
+        // 台标加载失败时的兜底字：取"有识别度的那个字"，不是前两个字母。
+        // take(2) 对 cctv5-MCP 这种名字会得到 "CC"，几十行全是 CC，等于没有信息。
+        holder.logoText.text = fallbackChar(ch.name)
         // 占位方块按频道名取色，让每行有点辨识度。
         //
         // 为什么需要：很多源的台标挂在只对特定网络开放的 CDN 上（实测
@@ -189,6 +191,16 @@ class ChannelAdapter(
      * 低饱和是刻意的——列表里几十行同时出现，高饱和会吵得没法看；
      * 这里只需要"相邻两行颜色不一样"，让人靠颜色记住位置。
      */
+    /**
+     * 兜底字：优先数字（cctv5 -> 5），其次中文（湖南卫视 -> 湖），最后首字母大写。
+     * 「台名首字」要能认出是哪个台，字母前缀在这里没有信息量。
+     */
+    private fun fallbackChar(name: String): String {
+        name.firstOrNull { it.isDigit() }?.let { return it.toString() }
+        name.firstOrNull { it.code in 0x4E00..0x9FFF }?.let { return it.toString() }
+        return name.firstOrNull()?.uppercaseChar()?.toString() ?: "?"
+    }
+
     private fun placeholderColor(name: String): Int {
         val palette = intArrayOf(
             0xFF2A3B4C.toInt(), 0xFF3B2A4C.toInt(), 0xFF2A4C3B.toInt(), 0xFF4C3B2A.toInt(),

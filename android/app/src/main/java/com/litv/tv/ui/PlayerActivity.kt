@@ -72,6 +72,11 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
     private lateinit var loading: ProgressBar
     /** 加载圈下面的说明文字；与 loading 同步显示/隐藏。 */
     private var loadingText: TextView? = null
+    /** 是否真的渲染过画面。没渲染过就冻结，冻到的可能是黑屏/转圈。 */
+    private var hasRenderedFrame = false
+    /** 复用的快照位图。每次换台新建一张 1920x1080 的位图 = 8.3MB，
+     *  实测导致每次换台都有 6MB LOS 分配、GC 最长 2 秒，播放就会顿一下。 */
+    private var snapshotBitmap: android.graphics.Bitmap? = null
     /** 冷启动开屏层；首帧到达后淡出。 */
     private var splashOverlay: View? = null
     /** 开屏层上的阶段文案。 */
@@ -84,7 +89,6 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
     private lateinit var osdNext: TextView
     private lateinit var osdLogo: ImageView
     /** 引擎标签已并入 OSD 角标，这个 View 不再存在；保留字段只为兼容旧调用点。 */
-    private var osdEngine: TextView? = null
     /** OSD 角标容器：引擎 / 线路，动态填。 */
     private lateinit var osdBadges: android.widget.LinearLayout
     /** OSD 右下角码率。 */
@@ -92,15 +96,15 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
     private lateinit var osdProgress: ProgressBar
     private lateinit var panel: LinearLayout
     private lateinit var panelTitle: TextView
+    /** 源 id -> 源名，面板标题要用。 */
+    private val srcNames = HashMap<Long, String>()
     private lateinit var panelList: RecyclerView
     private lateinit var grpList: RecyclerView
-    private val srcAdapter = GroupAdapter()
     private val grpAdapter = GroupAdapter()
     /** 当前选中的源 id，0 = 全部 */
     private var selSource = 0L
     /** 当前选中的分组，空 = 全部 */
     private var selGroup = ""
-    private var srcNames: Map<Long, String> = emptyMap()
     private lateinit var numberTip: TextView
     private lateinit var settingsMenu: android.view.View
     /** 二级面板：从一级菜单左侧展开，不遮挡画面。 */
@@ -122,6 +126,11 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
     private var epgDayEpoch: Long = 0L
     /** EPG 是在哪一天加载的（epochDay）。跨天要强制重下，否则节目单永远是昨天的。 */
     private var epgLoadedEpochDay: Long = 0L
+    /** 服务端 EPG 结果缓存（channelId -> 节目）。换台来回切时不重复请求+解析：
+     *  实测每次换台 3 个请求 + Gson 解析会产生约 18 万个小对象、GC 停顿 10ms+。 */
+    private val serverEpgCache = HashMap<Long, MutableList<EpgProgram>>()
+    /** 缓存对应的"哪一天"，跨天要失效。 */
+    private var serverEpgCacheDay: Long = 0L
     /** bootstrap 下发的 xmltv 地址，跨天重下时要用。 */
     private var lastEpgUrl: String = ""
     /** 本机已预约的节目起点，用来把「预约」就地变成「已预约」。 */
@@ -507,7 +516,6 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         osdNo = findViewById(R.id.osdNo)
         osdNext = findViewById(R.id.osdNext)
         osdLogo = findViewById(R.id.osdLogo)
-        osdEngine = findViewById(R.id.osdEngine)   // 布局里已无此 id，返回 null
         osdBadges = findViewById(R.id.osdBadges)
         osdRate = findViewById(R.id.osdRate)
         osdProgress = findViewById(R.id.osdProgress)
@@ -752,43 +760,6 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         }
     }
 
-    private fun showProgramDetails(p: com.litv.tv.data.EpgProgram) {
-        val ch = current ?: return
-        val fmt = SimpleDateFormat("MM-dd HH:mm", Locale.getDefault())
-        val now = System.currentTimeMillis() / 1000
-        val timeText = fmt.format(Date(p.startAt * 1000)) + " - " +
-            SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(p.endAt * 1000))
-
-        val lines = StringBuilder()
-        lines.append(timeText)
-        if (p.category.isNotBlank()) lines.append("  ·  ").append(p.category)
-        if (p.description.isNotBlank()) lines.append("\n\n").append(p.description)
-
-        val finished = p.endAt in 1 until now
-        val builder = android.app.AlertDialog.Builder(this, R.style.LitvAlertDialog)
-            .setTitle(p.title.ifBlank { "（无标题）" })
-            .setMessage(lines.toString())
-            .setNegativeButton("关闭", null)
-
-        if (finished) {
-            // 已播完：给回看入口
-            builder.setPositiveButton("回看") { _, _ -> openTimeshiftFor(ch) }
-        } else {
-            // 未播完：给提醒 + 预约录制
-            builder.setPositiveButton("提醒我") { _, _ ->
-                app.api.createReminder(ch.id, p.title, p.startAt,
-                    onOk = { toastTip("已设置提醒，开播时推送") },
-                    onErr = { toastTip("设置提醒失败：$it") })
-            }
-            builder.setNeutralButton("预约录制") { _, _ ->
-                val dur = (p.endAt - p.startAt).toInt().coerceIn(60, 8 * 3600)
-                app.api.createRecording(ch.id, p.title, p.startAt, dur,
-                    onOk = { toastTip("已预约录制：${p.title}") },
-                    onErr = { toastTip("预约失败：$it") })
-            }
-        }
-        builder.show()
-    }
 
     /** 存全量频道 + 分组名 + 收藏，供「列表内左右键切分组」用。 */
     private fun applyBootstrap(b: Bootstrap) {
@@ -955,7 +926,7 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         pendingSlideDir = 0f
         Log.i(TAG, "playChannel: ${ch.name} streamId=$streamId rebuild=$forceRebuild slide=$slideDir direct=${app.prefs.directMode}")
         setSplashStage("正在起播…")
-        // 先把当前画面冻住：换台时用户看到的是上一帧，不是黑屏
+        // 先把当前画面冻住：换台期间用户看到的是上一帧，不是黑屏
         freezeFrame()
         // 取一个换台代际号。下面的回调只有在它仍然是"最后一次换台"时才允许生效。
         val seq = playGate.begin()
@@ -1140,7 +1111,15 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
      * 这样源只有今天时不会白发请求，有多天时也能一次补全。
      */
     private fun loadEpgMultiDay(channelId: Long, day: Int, acc: MutableList<EpgProgram>) {
-        if (day > 2) { applyEpgList(acc); return }
+        // 命中缓存：直接刷，不发请求
+        val today = todayEpochDay()
+        if (day == 0) {
+            if (serverEpgCacheDay != today) { serverEpgCache.clear(); serverEpgCacheDay = today }
+            serverEpgCache[channelId]?.let { cached ->
+                if (cached.isNotEmpty()) { applyEpgList(cached); return }
+            }
+        }
+        if (day > 1) { applyEpgList(acc); return }   // 只补今天+明天，源里通常没有第三天
         app.api.epg(channelId, day, onOk = { list ->
             if (list.isEmpty()) {
                 applyEpgList(acc)
@@ -1155,6 +1134,7 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
     private fun applyEpgList(list: List<EpgProgram>) {
         if (list.isEmpty()) return
         programs = list.distinctBy { it.startAt }.sortedBy { it.startAt }
+        current?.let { serverEpgCache[it.id] = programs.toMutableList() }
         renderOsdNow()
         if (panelVisible || epgVisible) refreshEpgColumn()
         main.post { renderInfoBar() }
@@ -1281,7 +1261,6 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
             osdProgress.visibility = View.GONE
         }
         osdNext.text = next?.let { "${fmt(it.startAt)}-${fmt(it.endAt)}  ${it.title}" } ?: ""
-        osdEngine?.text = player.engineLabel()
         renderOsdBadges()
 
         // 台号：这个 TextView 之前从来没被赋值过，一直是空的。
@@ -1384,8 +1363,7 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         // 开屏层自己就写着"正在起播…"，再叠一个转圈就是两套加载提示，
         // 观感像"转完又转"。开屏层在场时不再显示小转圈。
         if (splashOverlay?.visibility == View.VISIBLE) return@Runnable
-        // 换台时冻结帧已经盖着上一帧，再转圈就是第二套提示
-        if (::snapshot.isInitialized && snapshot.visibility == View.VISIBLE) return@Runnable
+
         if (loading.visibility == View.VISIBLE) return@Runnable
         loading.alpha = 0f
         loading.visibility = View.VISIBLE
@@ -1487,10 +1465,6 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
     // ---------------------------------------------------- 内联设置行（不弹窗、不整页）
 
     /** 选项集合与设置页保持一致，避免两处各写一套。 */
-    private val rowEngines = listOf("auto", "exo", "vlc", "mpv", "avs3")
-    private val rowBuffers = listOf(2000, 3000, 5000, 10000, 15000)
-    private val rowOffsets = listOf(3000, 6000, 10000, 20000, 30000)
-    private val rowNumTimeouts = listOf(1500, 2000, 2500, 3000)
 
     /**
      * 把设置项就地铺在二级面板里，**不弹窗、不跳整页**。
@@ -1539,6 +1513,12 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
             }
         }
     }
+
+    // 选项集合：与设置页保持一致，避免两处各写一套
+    private val rowEngines = listOf("auto", "exo", "vlc", "mpv", "avs3")
+    private val rowBuffers = listOf(2000, 3000, 5000, 10000, 15000)
+    private val rowOffsets = listOf(3000, 6000, 10000, 20000, 30000)
+    private val rowNumTimeouts = listOf(1500, 2000, 2500, 3000)
 
     private fun openInlineRows(group: String, owner: TextView? = null) {
         if (owner != null) rowsOwner = owner
@@ -1700,46 +1680,9 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         if (!keepFocus) owner?.requestFocus()
     }
 
-    private fun pickAspect() {
-        val opts = listOf("auto", "16:9", "4:3", "fill")
-        val labels = listOf("自动", "16:9", "4:3", "铺满")
-        val idx = opts.indexOf(app.prefs.aspect).coerceAtLeast(0)
-        PickerDialog(this, "画面比例", labels, idx) { i ->
-            app.prefs.aspect = opts[i]
-            // 比例是引擎在 prepare 时读的，改完下次起播生效
-            toastTip("画面比例：" + labels[i])
-        }.show()
-    }
 
-    private fun pickUiScale() {
-        val opts = com.litv.tv.data.UiScaleOptions.keys
-        val labels = com.litv.tv.data.UiScaleOptions.all.map { it.label }
-        val idx = opts.indexOf(app.prefs.uiScale).coerceAtLeast(0)
-        PickerDialog(this, "界面缩放", labels, idx) { i ->
-            app.prefs.uiScale = opts[i]
-            toastTip("界面缩放：" + labels[i] + "（重开列表生效）")
-        }.show()
-    }
 
-    private fun pickDecode() {
-        val opts = listOf("auto", "hard", "soft")
-        val labels = listOf("自动", "硬件解码", "软件解码")
-        val idx = opts.indexOf(app.prefs.decode).coerceAtLeast(0)
-        PickerDialog(this, "解码方式", labels, idx) { i ->
-            app.prefs.decode = opts[i]
-            toastTip("解码方式：" + labels[i])
-        }.show()
-    }
 
-    private fun pickBuffer() {
-        val opts = listOf(1000, 2000, 3000, 5000)
-        val labels = listOf("1 秒（省内存）", "2 秒", "3 秒（更稳）", "5 秒（慢网）")
-        val idx = opts.indexOf(app.prefs.bufferMs).coerceAtLeast(0)
-        PickerDialog(this, "缓冲", labels, idx) { i ->
-            app.prefs.bufferMs = opts[i]
-            toastTip("缓冲：" + labels[i])
-        }.show()
-    }
 
     /**
      * 开屏层兜底：起播卡住 / 首帧一直不来时也要撤掉。
@@ -1819,7 +1762,6 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         osdNow.visibility = View.VISIBLE
         osdProgress.visibility = if (detail) View.VISIBLE else View.GONE
         osdNext.visibility = if (detail) View.VISIBLE else View.GONE
-        osdEngine?.visibility = if (detail) View.VISIBLE else View.GONE
         // 角标和码率也是排障信息，跟线路/内核一样只在第二层出现
         if (::osdBadges.isInitialized) osdBadges.visibility = if (detail) View.VISIBLE else View.GONE
         if (::osdRate.isInitialized) osdRate.visibility = if (detail) View.VISIBLE else View.GONE
@@ -2260,7 +2202,6 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
     // ---------------------------------------------------------------- PlayerManager 回调
 
     override fun onEngineChanged(kind: EngineKind) {
-        osdEngine?.text = kind.label
         // 按实际选中的内核切换渲染目标。
         //
         // Exo 用 media3 的 PlayerView（它自己管 Surface）；
@@ -2303,65 +2244,6 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
      * 新画面出来时由 [endCurtain] 接着朝同方向滑走，观感即"翻了一页"。
      */
 
-    /**
-     * 冻结当前画面，换台期间一直显示它。
-     *
-     * 之前换台是拿一块**纯色幕布**盖上去，用户看到的就是"黑一下"。
-     * 布局里其实一直有 @id/snapshot 这个 ImageView，但代码从来没往里放过东西。
-     *
-     * 两种渲染目标的取法不同：
-     *   TextureView -> getBitmap()（任意 API）
-     *   SurfaceView -> PixelCopy（API 24+，21~23 只能退回纯色幕布）
-     */
-    private fun freezeFrame() {
-        if (!::snapshot.isInitialized) return
-        try {
-            // TextureView 可以直接读
-            if (::surfaceTex.isInitialized && surfaceTex.isAvailable
-                && surfaceTex.width > 0 && surfaceTex.height > 0
-            ) {
-                val bmp = surfaceTex.getBitmap(surfaceTex.width, surfaceTex.height)
-                if (bmp != null) {
-                    snapshot.setImageBitmap(bmp)
-                    snapshot.visibility = View.VISIBLE
-                    return
-                }
-            }
-            // SurfaceView 只能 PixelCopy
-            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.N
-                && ::surface.isInitialized && surface.width > 0 && surface.height > 0
-            ) {
-                val bmp = android.graphics.Bitmap.createBitmap(
-                    surface.width, surface.height, android.graphics.Bitmap.Config.ARGB_8888
-                )
-                android.view.PixelCopy.request(
-                    surface, bmp,
-                    { result ->
-                        if (result == android.view.PixelCopy.SUCCESS) {
-                            main.post {
-                                snapshot.setImageBitmap(bmp)
-                                snapshot.visibility = View.VISIBLE
-                            }
-                        }
-                    },
-                    android.os.Handler(android.os.Looper.getMainLooper()),
-                )
-            }
-        } catch (t: Throwable) {
-            Log.w(TAG, "冻结当前帧失败：${t.javaClass.simpleName}")
-        }
-    }
-
-    /** 新画面出来后把冻结帧淡出。 */
-    private fun unfreezeFrame() {
-        if (!::snapshot.isInitialized) return
-        if (snapshot.visibility != View.VISIBLE) return
-        snapshot.animate().alpha(0f).setDuration(160).withEndAction {
-            snapshot.visibility = View.GONE
-            snapshot.alpha = 1f
-            snapshot.setImageDrawable(null)
-        }.start()
-    }
 
     private fun startCurtain() {
         if (!::curtain.isInitialized) return
@@ -2398,6 +2280,81 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
             .start()
     }
 
+
+    /** 拿一张尺寸匹配的复用位图；尺寸变了才重建。 */
+    private fun obtainSnapshotBitmap(w: Int, h: Int): android.graphics.Bitmap? {
+        val cur = snapshotBitmap
+        if (cur != null && cur.width == w && cur.height == h && !cur.isRecycled) return cur
+        cur?.recycle()
+        return runCatching {
+            android.graphics.Bitmap.createBitmap(w, h, android.graphics.Bitmap.Config.ARGB_8888)
+        }.getOrNull()?.also { snapshotBitmap = it }
+    }
+
+    private val unfreezeTimeout = Runnable {
+        Log.w(TAG, "冻结帧超时，强制解除")
+        unfreezeFrame()
+    }
+
+    /**
+     * 冻结当前画面，换台期间一直显示它。
+     *
+     * 布局里一直有 @id/snapshot 这个 ImageView，之前代码从没用过，
+     * 换台靠的是纯色幕布，用户看到的就是"黑一下"。
+     *
+     * 只在**真的渲染过画面**时才冻结：否则可能把黑屏或转圈冻下来。
+     */
+    private fun freezeFrame() {
+        if (!::snapshot.isInitialized || !hasRenderedFrame) return
+        try {
+            if (::surfaceTex.isInitialized && surfaceTex.isAvailable
+                && surfaceTex.width > 0 && surfaceTex.height > 0
+            ) {
+                val bmp = surfaceTex.getBitmap(surfaceTex.width, surfaceTex.height)
+                if (bmp != null) {
+                    snapshot.setImageBitmap(bmp)
+                    snapshot.visibility = View.VISIBLE
+                    main.removeCallbacks(unfreezeTimeout)
+                    main.postDelayed(unfreezeTimeout, 4000)
+                    return
+                }
+            }
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.N
+                && ::surface.isInitialized && surface.width > 0 && surface.height > 0
+            ) {
+                val bmp = obtainSnapshotBitmap(surface.width, surface.height) ?: return
+                android.view.PixelCopy.request(
+                    surface, bmp,
+                    { result ->
+                        if (result == android.view.PixelCopy.SUCCESS) {
+                            main.post {
+                                snapshot.setImageBitmap(bmp)
+                                snapshot.visibility = View.VISIBLE
+                                main.removeCallbacks(unfreezeTimeout)
+                                main.postDelayed(unfreezeTimeout, 4000)
+                            }
+                        }
+                    },
+                    android.os.Handler(android.os.Looper.getMainLooper()),
+                )
+            }
+        } catch (t: Throwable) {
+            Log.w(TAG, "冻结当前帧失败：${t.javaClass.simpleName}")
+        }
+    }
+
+    /** 新画面出来（或超时）后把冻结帧淡出。 */
+    private fun unfreezeFrame() {
+        main.removeCallbacks(unfreezeTimeout)
+        if (!::snapshot.isInitialized) return
+        if (snapshot.visibility != View.VISIBLE) return
+        snapshot.animate().alpha(0f).setDuration(160).withEndAction {
+            snapshot.visibility = View.GONE
+            snapshot.alpha = 1f
+            snapshot.setImageDrawable(null)
+        }.start()
+    }
+
     private val curtainTimeout = Runnable {
         Log.w(TAG, "转场幕布等不到首帧，自动撤掉")
         endCurtain()
@@ -2406,6 +2363,8 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
     override fun onFirstFrame() {
         // 起播计时与观看窗口都从"真正看到画面"开始算 —— 转圈的那几十秒不算观看时长，
         // 否则 rebuffer ratio 的分母会被拉大、显得卡顿率更低（自欺欺人）。
+        hasRenderedFrame = true
+        unfreezeFrame()
         if (watchStartAt == 0L) watchStartAt = System.currentTimeMillis()
         // 新画面已经画出来了，把转场幕布朝同方向擦走。
         // 幕布在下面（视频之上、OSD 之下），擦走的过程就是"翻页"。
@@ -2413,13 +2372,16 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         // 冷启动开屏层要等到**真的画出第一帧**才撤。
         // 之前挂在 onPlaying 上，但那一刻画面往往还是黑的，撤了就是黑屏。
         hideSplashOverlay()
-        // 新画面出来了，撤掉换台期间冻结的旧帧
-        unfreezeFrame()
+
         // 换台方向用完即弃，别残留到下一次
         slideDir = 0f
     }
 
     override fun onPlaying() {
+        hasRenderedFrame = true
+        // onPlaying 比 onFirstFrame 可靠得多（首帧回调在起播预算耗尽时会被丢掉），
+        // 这里也撤一次冻结帧，避免画面停在旧帧。
+        unfreezeFrame()
         hideLoading()
         // 重试/换线路成功后必须把错误卡片收掉，否则它会一直盖在画面上。
         playFailedPending = false
@@ -2908,10 +2870,6 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         settingsMenu.visibility = android.view.View.GONE
     }
 
-    private fun cycleOf(cur: String, all: List<String>): String {
-        val i = all.indexOf(cur)
-        return all[(i + 1).mod(all.size)]
-    }
 
     private fun toastTip(msg: String) {
         switchTip.text = msg

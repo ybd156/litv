@@ -2204,7 +2204,13 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
             if (action == KeyEvent.ACTION_DOWN &&
                 (code == KeyEvent.KEYCODE_BACK || code == KeyEvent.KEYCODE_DPAD_LEFT)
             ) {
-                closeEpg(); return true
+                // 收起节目单后必须把焦点和滚动位置还给频道列。
+                // 原来只 closeEpg()，焦点由系统随便给，列表会"划走"——
+                // 这也是 backToPanelList() 的日志从来没打印的原因：
+                // 左键在这里就被吃掉了，根本走不到那里。
+                closeEpg()
+                if (code == KeyEvent.KEYCODE_DPAD_LEFT) backToPanelList()
+                return true
             }
             return super.dispatchKeyEvent(event)
         }
@@ -3017,7 +3023,10 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
                 expandEpgPanel()
                 focusDayList()
             }
-            epgDayList.hasFocus() && dir < 0 -> backToPanelList()
+            // 节目单里不管是日期列还是节目列，按左键都直接回频道列。
+            // 原来只判 epgDayList，焦点在节目列时左键只是退到日期列，
+            // 用户以为"没回去"。
+            (epgDayList.hasFocus() || epgList.hasFocus()) && dir < 0 -> backToPanelList()
             epgDayList.hasFocus() && dir > 0 -> focusEpgList()
             epgList.hasFocus() && dir < 0 -> focusDayList()
             epgList.hasFocus() && dir > 0 -> favBtn.requestFocus()

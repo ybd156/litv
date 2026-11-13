@@ -77,6 +77,17 @@ class XmltvEpg(private val context: Context) {
      * @param url bootstrap 下发的 xmltv 地址
      * @param onReady 成功与否都会回调；失败时 loaded 仍是 false，调用方回落到服务端
      */
+    /** 强制重新下载（跨天时调用）。 */
+    fun forceRefresh(url: String, onReady: (Boolean) -> Unit) {
+        synchronized(this) {
+            loaded = false
+            loadedFrom = ""
+            loadedAtMs = 0
+            cacheFile().delete()
+        }
+        ensure(url, onReady)
+    }
+
     fun ensure(url: String, onReady: (Boolean) -> Unit) {
         if (url.isBlank()) {
             onReady(false)
@@ -114,8 +125,20 @@ class XmltvEpg(private val context: Context) {
         }, "litv-xmltv").start()
     }
 
-    private fun expired(): Boolean =
-        loadedAtMs > 0 && System.currentTimeMillis() - loadedAtMs > REFRESH_MS
+    /**
+     * 缓存是否过期。
+     *
+     * ★ 用**文件修改时间**判断，不是内存里的 loadedAtMs。
+     * 原来只看内存时间戳：进程重启后 loadedAtMs 会被设成"现在"，
+     * 于是磁盘上那份哪怕是一周前的 xmltv 也被当成刚下过，永远不刷新——
+     * 电视盒子常年不关机、但会因升级/断电重启，这个坑一定会踩到。
+     */
+    private fun expired(): Boolean {
+        val f = cacheFile()
+        if (!f.exists()) return true
+        val age = System.currentTimeMillis() - f.lastModified()
+        return age > REFRESH_MS
+    }
 
     private fun cacheFile(): File = File(context.filesDir, "epg.xml")
 

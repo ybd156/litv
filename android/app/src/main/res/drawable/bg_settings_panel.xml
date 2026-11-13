@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 设置面板：半透明深灰蓝 + 浅色描边 + 圆角（对齐参考实现）。
+     之前是接近纯黑且无边框，看着像块遮罩。 -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
+    <solid android:color="#E81B2029" />
+    <stroke android:width="1dp" android:color="#33FFFFFF" />
+    <corners android:radius="10dp" />
+</shape>

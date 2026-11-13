@@ -13,4 +13,5 @@
     <color name="text_secondary">#FF8B949E</color>
     <color name="focus_stroke">#FF2DD4BF</color>
     <color name="danger">#FFF85149</color>
+    <color name="focus_blue">#FF3D8BFD</color>
 </resources>

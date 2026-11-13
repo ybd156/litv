@@ -1224,7 +1224,7 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
      */
     private fun openSubMenu(spec: SubSpec) {
         val row = subMenuRow ?: return
-        subMenuTitle?.text = spec.title
+        subMenuTitle?.visibility = android.view.View.GONE
         row.removeAllViews()
         // 竖排：参考实现的二级是一列选项，不是横向一条
         row.orientation = android.widget.LinearLayout.VERTICAL
@@ -1283,7 +1283,7 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         row.orientation = android.widget.LinearLayout.VERTICAL
         when (group) {
             "play" -> {
-                subMenuTitle?.text = "显示设置"
+                subMenuTitle?.visibility = android.view.View.GONE
                 cycleRow(row, "播放内核", rowEngines, app.prefs.engine) { v -> app.prefs.engine = v }
                 cycleRow(row, "解码方式", listOf("auto", "hard", "soft"), app.prefs.decode) { v -> app.prefs.decode = v }
                 cycleRow(row, "缓冲", rowBuffers.map { it.toString() }, app.prefs.bufferMs.toString()) { v ->
@@ -1297,7 +1297,7 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
                 }
             }
             "interact" -> {
-                subMenuTitle?.text = "偏好设置"
+                subMenuTitle?.visibility = android.view.View.GONE
                 toggleRow(row, "换台方向反转", app.prefs.reverseChannelKeys) { app.prefs.reverseChannelKeys = it }
                 cycleRow(row, "数字键跳台等待", rowNumTimeouts.map { it.toString() },
                     app.prefs.numberJumpTimeoutMs.toString()) { v ->
@@ -1306,7 +1306,7 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
                 toggleRow(row, "开机自动播放上次频道", app.prefs.autoPlayLast) { app.prefs.autoPlayLast = it }
             }
             else -> {
-                subMenuTitle?.text = "其他设置"
+                subMenuTitle?.visibility = android.view.View.GONE
                 infoRow(row, "设备名称", app.prefs.deviceName.ifBlank { "未命名" })
                 infoRow(row, "服务器", app.prefs.serverBase.ifBlank { "未配置" })
                 infoRow(row, "渲染档位", app.tier.name)

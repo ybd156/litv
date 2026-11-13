@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 一级菜单文字：焦点项变蓝（参考实现用文字变色，不加底色块） -->
+<selector xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:state_focused="true" android:color="@color/focus_blue" />
+    <item android:color="@color/text_primary" />
+</selector>

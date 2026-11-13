@@ -1,54 +1,75 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  节目单行。对齐 mediaplayer 的 item_epg：
+  节目单行。对齐参考实现：
 
-    [时间 固定宽] [节目名 占满] [回看标记]
+    [日期 固定宽] │ [时间段 / 节目名] [回看·预约·正在播]
 
-  之前是「节目名 + 回看角标 + 简介走马灯」两行，行高翻倍、右侧栏能看到的节目太少。
-  现在一行一个节目，一屏能看到十几个。
-  正在播的那档用颜色高亮，已播完的显示「回看」。
+  - 日期不在这里：左边有独立的日期选择器，这里只显示当天节目
+  - 时间段：`00:51-01:19`，比只给开始时间有用——一眼知道这档多长
+  - 右侧动作：已播完 = 回看，未播 = 预约，正在播 = 正在播（强调色）
+  - 行间 1dp 分隔线：参考实现里每行之间的边界是清楚的
 -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
-    android:layout_marginHorizontal="2dp"
-    android:layout_marginVertical="1dp"
-    android:background="@drawable/bg_focusable"
-    android:clickable="true"
-    android:focusable="true"
-    android:gravity="center_vertical"
-    android:orientation="horizontal"
-    android:paddingHorizontal="10dp"
-    android:paddingVertical="9dp">
+    android:orientation="vertical">
 
-    <TextView
-        android:id="@+id/time"
-        android:layout_width="52dp"
+    <LinearLayout
+        android:id="@+id/rowBody"
+        android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:textColor="@color/text_secondary"
-        android:textSize="17sp" />
+        android:background="@drawable/bg_focusable"
+        android:clickable="true"
+        android:focusable="true"
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        android:paddingHorizontal="8dp"
+        android:paddingVertical="10dp">
 
-    <TextView
-        android:id="@+id/title"
-        android:layout_width="0dp"
-        android:layout_height="wrap_content"
-        android:layout_marginStart="6dp"
-        android:layout_weight="1"
-        android:ellipsize="end"
-        android:maxLines="1"
-        android:textColor="@color/text_primary"
-        android:textSize="17sp" />
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:orientation="vertical">
 
-    <TextView
-        android:id="@+id/replayBadge"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:layout_marginStart="6dp"
-        android:background="@drawable/bg_card"
-        android:paddingHorizontal="6dp"
-        android:paddingVertical="1dp"
-        android:text="回看"
-        android:textColor="@color/accent"
-        android:textSize="14sp"
-        android:visibility="gone" />
+            <TextView
+                android:id="@+id/time"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:ellipsize="end"
+                android:maxLines="1"
+                android:textColor="@color/text_secondary"
+                android:textSize="13sp" />
+
+            <TextView
+                android:id="@+id/title"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="2dp"
+                android:ellipsize="end"
+                android:maxLines="2"
+                android:textColor="@color/text_primary"
+                android:textSize="16sp" />
+        </LinearLayout>
+
+        <!-- 回看 / 预约 / 正在播 -->
+        <TextView
+            android:id="@+id/action"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="8dp"
+            android:background="@drawable/bg_osd_chip"
+            android:paddingHorizontal="8dp"
+            android:paddingVertical="3dp"
+            android:text="回看"
+            android:textColor="@color/text_primary"
+            android:textSize="13sp"
+            android:visibility="gone" />
+    </LinearLayout>
+
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="1dp"
+        android:layout_marginHorizontal="8dp"
+        android:background="#1AFFFFFF" />
 </LinearLayout>

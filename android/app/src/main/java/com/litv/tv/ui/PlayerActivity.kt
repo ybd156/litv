@@ -111,6 +111,13 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
     private lateinit var epgPanel: LinearLayout
     /** 节目单收起时的竖排把手。 */
     private lateinit var epgHandle: TextView
+    /** 节目单左侧的日期选择器。 */
+    private lateinit var epgDayList: androidx.recyclerview.widget.RecyclerView
+    private val epgDayAdapter = EpgDayAdapter()
+    /** 当前选中哪一天（默认今天）。 */
+    private var epgDayEpoch: Long = 0L
+    /** 本机已预约的节目起点，用来把「预约」就地变成「已预约」。 */
+    private val reservedStarts = mutableSetOf<Long>()
     private lateinit var epgTitle: TextView
     private lateinit var epgList: RecyclerView
 
@@ -479,6 +486,8 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         loading = findViewById(R.id.loading)
         loadingText = findViewById(R.id.loadingText)
         splashOverlay = findViewById(R.id.splashOverlay)
+        // 12 秒撤不掉就强撤：起播卡住时不能让开屏层永远盖着
+        main.postDelayed(splashTimeout, 12_000)
         splashStage = findViewById(R.id.splashStage)
         switchTip = findViewById(R.id.switchTip)
         osd = findViewById(R.id.osd)
@@ -582,6 +591,17 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         }
         epgPanel = findViewById(R.id.epgPanel)
         epgHandle = findViewById(R.id.epgHandle)
+
+        epgDayList = findViewById(R.id.epgDayList)
+        epgDayList.layoutManager = LinearLayoutManager(this)
+        epgDayList.adapter = epgDayAdapter
+        epgDayAdapter.submit(epgDayAdapter.buildDays(), selectToday = true)
+        epgDayEpoch = epgDayAdapter.selectedDay()?.epochDay ?: 0L
+        epgDayAdapter.onPick = { day ->
+            epgDayEpoch = day.epochDay
+            refreshEpgColumn()
+            epgList.requestFocus()
+        }
         // 把手：聚焦后按 OK 展开节目单（参考实现里节目单默认是收起的一列）
         epgHandle.isFocusable = true
         epgHandle.isClickable = true
@@ -642,7 +662,7 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         epgList.layoutManager = LinearLayoutManager(this)
         epgList.adapter = epgAdapter
         // C3：点节目看详情。之前这个回调根本没接线，点节目毫无反应。
-        epgAdapter.onProgramClick = { p -> showProgramDetails(p) }
+        epgAdapter.onProgramClick = { p -> onProgramAction(p) }
         // C4：点标题切换分类
         epgTitle.setOnClickListener { cycleEpgCategory() }
     }
@@ -676,6 +696,47 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
                 )
             },
             onErr = { toastTip("回看不可用：$it") })
+    }
+
+
+    /**
+     * 点节目单里的某一档：**就地执行**，不弹对话框。
+     *
+     * 原来的做法是弹一个 AlertDialog（标题 + 时间 + 简介 + 三个按钮）。
+     * 电视上弹层会整块盖住画面，用户按 OK 只是想"回看这一档"或"预约"，
+     * 却被推进一个需要再按两次返回的模态框——这就是"太突兀"的来源。
+     *
+     * 现在：正在播 -> 提示；已播完 -> 直接回看；未播 -> 直接预约（再按取消）。
+     */
+    private fun onProgramAction(p: com.litv.tv.data.EpgProgram) {
+        val ch = current ?: return
+        val now = System.currentTimeMillis() / 1000
+        when {
+            p.startAt <= now && p.endAt > now -> toastTip("正在播放：" + p.title)
+
+            p.endAt in 1 until now -> {
+                // 已播完：直接回看
+                openTimeshiftFor(ch)
+            }
+
+            else -> {
+                // 未播：预约 / 取消预约，就地切换
+                if (reservedStarts.contains(p.startAt)) {
+                    reservedStarts.remove(p.startAt)
+                    // 服务端没有删除提醒的接口，这里只做本机标记撤销，
+                    // 已经推送的提醒不受影响——如实提示，不假装已删。
+                    toastTip("已取消本机标记（服务端已排的提醒不会撤回）")
+                } else {
+                    app.api.createReminder(ch.id, p.title, p.startAt,
+                        onOk = {
+                            reservedStarts.add(p.startAt)
+                            toastTip("已预约：" + p.title)
+                            refreshEpgColumn()
+                        },
+                        onErr = { toastTip("预约失败：$it") })
+                }
+            }
+        }
     }
 
     private fun showProgramDetails(p: com.litv.tv.data.EpgProgram) {
@@ -1052,6 +1113,34 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
 
     // ---------------------------------------------------------------- EPG
 
+
+    /**
+     * 多天节目单：先取今天，再补明天/后天。
+     *
+     * 服务端 `day` 参数按天分页，某一天返回空就说明源里没有更远的数据，直接停。
+     * 这样源只有今天时不会白发请求，有多天时也能一次补全。
+     */
+    private fun loadEpgMultiDay(channelId: Long, day: Int, acc: MutableList<EpgProgram>) {
+        if (day > 2) { applyEpgList(acc); return }
+        app.api.epg(channelId, day, onOk = { list ->
+            if (list.isEmpty()) {
+                applyEpgList(acc)
+            } else {
+                acc.addAll(list)
+                loadEpgMultiDay(channelId, day + 1, acc)
+            }
+        }, onErr = { applyEpgList(acc) })
+    }
+
+    /** 合并去重后刷到界面。 */
+    private fun applyEpgList(list: List<EpgProgram>) {
+        if (list.isEmpty()) return
+        programs = list.distinctBy { it.startAt }.sortedBy { it.startAt }
+        renderOsdNow()
+        if (panelVisible || epgVisible) refreshEpgColumn()
+        main.post { renderInfoBar() }
+    }
+
     private fun refreshEpg(channelId: Long) {
         // 优先用**本地解析的 xmltv**（服务端只下发地址，不存节目数据）。
         // 本地还没就绪时才回落到服务端接口——那条路在旧的灌库模式下仍然有效，
@@ -1079,26 +1168,12 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
             // 这时 OSD 的「下一档」永远是空的。用尽就回落到服务端接口补齐。
             val now = System.currentTimeMillis() / 1000
             if (programs.none { it.startAt > now }) {
-                app.api.epg(channelId, 0, onOk = { list ->
-                    if (list.isNotEmpty()) {
-                        programs = list
-                        renderOsdNow()
-                        if (panelVisible) refreshEpgColumn()
-                        main.post { renderInfoBar() }
-                    }
-                }, onErr = {})
+                loadEpgMultiDay(channelId, 0, mutableListOf())
             }
             return
         }
 
-        app.api.epg(channelId, 0, onOk = { list ->
-            programs = list
-            renderOsdNow()
-            // 节目单是浮层里常显的一列，取到数据要立刻刷上去，
-            // 否则打开浮层时看到的永远是加载圈。
-            if (panelVisible) refreshEpgColumn()
-            main.post { renderInfoBar() }
-        }, onErr = { programs = emptyList() })
+        loadEpgMultiDay(channelId, 0, mutableListOf())
     }
 
 
@@ -1287,6 +1362,9 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
 
     private val showLoadingRunnable = Runnable {
         if (!::loading.isInitialized) return@Runnable
+        // 开屏层自己就写着"正在起播…"，再叠一个转圈就是两套加载提示，
+        // 观感像"转完又转"。开屏层在场时不再显示小转圈。
+        if (splashOverlay?.visibility == View.VISIBLE) return@Runnable
         if (loading.visibility == View.VISIBLE) return@Runnable
         loading.alpha = 0f
         loading.visibility = View.VISIBLE
@@ -1642,7 +1720,20 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         }.show()
     }
 
+    /**
+     * 开屏层兜底：起播卡住 / 首帧一直不来时也要撤掉。
+     *
+     * 没有这个兜底时，只要 first frame 到不了，开屏层就一直盖在最上层——
+     * 用户按键能操作下面的界面（面板还会展开），但看到的永远是"正在起播…"。
+     * 这个现象实测遇到过：频道面板已经展开、截图却还是开屏层。
+     */
+    private val splashTimeout = Runnable {
+        android.util.Log.w("LITV", "开屏层等不到首帧，超时撤掉")
+        hideSplashOverlay()
+    }
+
     private fun hideSplashOverlay() {
+        main.removeCallbacks(splashTimeout)
         splashOverlay?.let { v ->
             if (v.visibility != View.VISIBLE) return
             v.animate().alpha(0f).setDuration(220).withEndAction {
@@ -1780,6 +1871,11 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
     private fun closePanel() {
         panelVisible = false
         panel.visibility = View.GONE
+        // 节目单要一起收回把手：否则这次展开了，下次按 ← 打开面板时
+        // 它还是展开状态——用户看到的就是"一进来节目单就开着"。
+        epgVisible = false
+        if (::epgPanel.isInitialized) epgPanel.visibility = View.GONE
+        if (::epgHandle.isInitialized) epgHandle.visibility = View.VISIBLE
     }
 
     /**
@@ -1797,14 +1893,23 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
 
     /** 按当前分类筛选后的节目。 */
     private fun filteredPrograms(): List<com.litv.tv.data.EpgProgram> {
-        val c = epgCategory ?: return programs
-        return programs.filter { it.category == c }
+        // 先按选中的那天过滤，再按分类过滤。
+        // 日期是"选择器"不是"行标签"：左边选哪天，右边就只显示那天。
+        var list = programs
+        if (epgDayEpoch > 0L) {
+            val dayEnd = epgDayEpoch + 24 * 60 * 60 * 1000L
+            list = list.filter { it.startAt * 1000 >= epgDayEpoch && it.startAt * 1000 < dayEnd }
+        }
+        val c = epgCategory ?: return list
+        return list.filter { it.category == c }
     }
 
     private fun epgTitleText(): String {
         val name = current?.name ?: "节目单"
+        val day = epgDayAdapter.selectedDay()?.label ?: ""
         val cat = epgCategory
-        return if (cat == null) "$name · 全部" else "$name · $cat"
+        val suffix = if (cat == null) "全部" else cat
+        return "$name · $day · $suffix"
     }
 
     /** 依次切换：全部 → 各分类 → 全部。 */
@@ -1824,8 +1929,29 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
     private fun refreshEpgColumn() {
         epgTitle.text = epgTitleText()
         epgAdapter.submit(filteredPrograms())
+        epgAdapter.setReserved(reservedStarts)
         val pos = epgAdapter.currentPosition()
         if (pos >= 0) epgList.scrollToPosition(pos)
+    }
+
+
+    /** 把焦点送进日期选择器的选中项（直接 requestFocus 到 RecyclerView 会被标题抢走）。 */
+    /** 把焦点送进节目列表的当前节目。 */
+    private fun focusEpgList() {
+        epgList.post {
+            val pos = epgAdapter.currentPosition()
+            val vh = epgList.findViewHolderForAdapterPosition(pos)
+            if (vh != null) vh.itemView.requestFocus() else epgList.requestFocus()
+        }
+    }
+
+    private fun focusDayList() {
+        epgDayList.post {
+            val pos = epgDayAdapter.selectedPosition()
+            val vh = epgDayList.findViewHolderForAdapterPosition(pos)
+            if (vh != null) vh.itemView.requestFocus()
+            else epgDayList.requestFocus()
+        }
     }
 
     /** 展开节目单列并藏起竖排把手（不抢焦点，由调用方决定）。 */
@@ -1900,6 +2026,8 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
         val code = event.keyCode
         val action = event.action
+        // 用户已经在按键了，说明不需要再看开屏层——无论起播成不成功都撤掉
+        if (action == KeyEvent.ACTION_DOWN) hideSplashOverlay()
 
         // 数字键：累积跳台
         if (code in KeyEvent.KEYCODE_0..KeyEvent.KEYCODE_9) {
@@ -2510,21 +2638,26 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
      * 参考实现就是这么操作的。分组竖条本身可点，焦点落上去用上下切分组，
      * 左右负责跨列，比「左右键都拿来切分组」合理。
      */
+    /**
+     * 频道页焦点链：分类列 ↔ 频道列 ↔ 日期列 ↔ 节目列。
+     *
+     * 日期列是节目单的"选择器"，左键从节目列要回到它，不是直接跳回频道列。
+     */
     private fun movePanelFocus(dir: Int) {
         when {
             grpList.hasFocus() && dir > 0 -> panelList.requestFocus()
             panelList.hasFocus() && dir < 0 -> grpList.requestFocus()
-            // 频道列按右键 -> 展开节目单并把焦点送进去。
-            // 节目单默认是收起的，不先展开的话 requestFocus 会落空（右键像没反应）。
+            // 频道列右键：展开节目单，焦点落在日期选择器上
             panelList.hasFocus() && dir > 0 -> {
                 expandEpgPanel()
-                epgList.requestFocus()
+                focusDayList()
             }
-            epgList.hasFocus() && dir < 0 -> panelList.requestFocus()
-            // C1：收藏按钮是第四站，从节目单列继续往右就到它（它是面板里唯一能改收藏状态
-            // 的控件；MENU 留给设置菜单、长按 OK 留给选线路，都不抢）。
+            epgDayList.hasFocus() && dir < 0 -> panelList.requestFocus()
+            epgDayList.hasFocus() && dir > 0 -> focusEpgList()
+            epgList.hasFocus() && dir < 0 -> focusDayList()
             epgList.hasFocus() && dir > 0 -> favBtn.requestFocus()
             favBtn.hasFocus() && dir < 0 -> epgList.requestFocus()
+            // 兜底
             else -> if (dir > 0) panelList.requestFocus() else grpList.requestFocus()
         }
     }

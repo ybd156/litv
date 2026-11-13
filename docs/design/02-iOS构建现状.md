@@ -49,53 +49,45 @@
 ② 日志里存在 `Executed N tests, with 0 failures` 且 `N ≥ 用例数`。
 XCTSkip 显示 `skipped` 会被判失败。
 
-## 三、C05「换服务端会话隔离」——**未实现**
+## 三、C05「换服务端会话隔离」——**已修复并经 CI 验证**
 
-这是本文件最重要的一节。审计要求的语义是：
+审计要求的语义是：
 *候选探测不得改动全局会话；探测失败或取消必须原子回滚；旧代际的异步结果不得写回新会话。*
 
-**当前源码一条都没有落地**：
+实现方式：`Session` 里有两条代际号——`epoch`（会话代际，换源/解绑/重新注册都 +1）
+与 `probeEpoch`（探测代际，只有最后发起的那次能提交）。
+所有异步操作在入口记下当时的代际，`await` 回来后先比对，不一致就丢弃结果。
 
-| 要求 | 现状 | 位置 |
-|---|---|---|
-| 探测期间 `serverBase` 保持旧值 | 探测**之前**就写 `serverBase = b` | [Session.swift:88](../../ios/LITVApp/Sources/Session.swift#L88) |
-| 探测失败回滚 | catch 只写 `errorText`，不回滚 | [Session.swift:97-100](../../ios/LITVApp/Sources/Session.swift#L97-L100) |
-| 切源清会话级数据 | `dropCredentials()` 只清 token + isBound | [Session.swift:194-198](../../ios/LITVApp/Sources/Session.swift#L194-L198) |
-| 旧 origin 未知时不复用留存 token | `!previous.isEmpty && previous != b` 把空 previous 排除掉了 | [Session.swift:93](../../ios/LITVApp/Sources/Session.swift#L93) |
-| 乱序探测只允许最后一个提交 | 无代际号 | — |
-| 取消轮询不得报超时 | `try? await approvalPause()` 吞掉 `CancellationError`，循环走满 60 次 | [Session.swift:128](../../ios/LITVApp/Sources/Session.swift#L128) |
+| 要求 | 现状 |
+|---|---|
+| 探测期间 `serverBase` 保持旧值 | `probe` 只操作局部变量，健康检查显式用空 token |
+| 探测失败/取消 | 一律不提交、不改任何状态；取消时连 `errorText` 都不写 |
+| 切源清会话级数据 | `commitServerSwitch` → `dropCredentials` + `clearSessionData`（channels/groups/favorites/nowTitles/lastChannel/playRequest），保留 `deviceKey` |
+| 旧 origin 未知时不复用留存 token | `previous` 为空也走丢弃分支 |
+| 乱序探测只允许最后一个提交 | `probeEpoch` 比对 |
+| 取消轮询不得报超时 | `do/catch` 捕获取消后静默返回，且不发请求 |
 
-### 后果：一条可触发的凭据泄漏路径
+**验证**：`iOS Build Check #62` 的 `iOS 会话隔离行为回归` job 通过，
+`Executed 16 tests, with 0 failures`，`check-test-log.py` 的防空跑门放行。
 
-1. 用户在绑定页输入错误地址（或该地址指向一台非 LITV 服务）；
-2. `probe()` 先把 `serverBase` 改成候选地址，health 请求失败；
-3. 失败后 `serverBase` **停在候选地址**，`token` 仍是原服务器的；
-4. 之后每次冷启动 `LITVApp.swift` 调 `bootstrap()`，而 [`Session.swift:142`](../../ios/LITVApp/Sources/Session.swift#L142) 的 guard 只检查非空；
-5. → 原服务器的 bearer token 被发往第三方 origin。
+**尚未做的一步**：回退验证。测试现在全绿，但没人证明把它对着旧实现跑会红。
+这条记在 [评审项状态](../review/STATUS.md) 的「待验证」里。
 
-不需要并发、不需要轮询，正常操作就能触发。
+### 仍然存在的局限
 
-### 测试与实现不一致
-
-`ios/Tests/SessionIsolationTests.swift` 有 12 条行为测试，其中至少 9 条断言的正是上表缺失的能力
-（例如 [:15](../../ios/Tests/SessionIsolationTests.swift#L15) 断言探测在途时 `serverBase` 仍是旧值）。
-
-**所以当前工作区推上去，`test-session` 会失败。** 已由 CI 证实（`iOS Build Check #59`）：
-失败发生在**编译期**而非运行期——测试引用了尚未实现的 fixture API
-（`SessionFixture.boundB`、fixture 的 `server:` 参数），共 3 处错误。
-应用本体 `build-ios` 通过，说明 `Session.swift` 的改动本身是合法 Swift。
-
-也就是说：**测试是照着一个还没写的实现写的。** 先补 fixture 与状态机，再谈断言是否成立。
+`epoch` 只能保证**同一进程内**的时序正确。它不能防：
+- 服务端被同名域名换掉（DNS / 中间人）——那要靠 TLS 校验，本仓库没有关闭它
+- 用户在另一个 App 里手动清 Keychain 后本进程仍持有内存中的 token
 
 ## 四、未验证项（都是真的没验证）
 
 | 项 | 为什么没验证 | 怎么验 |
 |---|---|---|
-| Swift 能否编译 | 本地无 Apple SDK | `iOS Build Check` 首条 `error:` |
-| 12 条测试红/绿 | 同上 | 同上 + `check-test-log.py` 输出 |
-| `await fulfillment(of:timeout:)` 在 iOS 15 是否可用 | 无法离线确认可用性标注。**若它被标为 iOS 16+，测试目标会编译失败**——与 AGENTS §6 记录的 `buildIf` 同类坑 | 若 CI 报 `only available in iOS 16.0 or newer`，改用 `XCTWaiter` + continuation |
 | 真机播放 | 无设备 | release 构建 + Activity/视图生命周期 + 快速切台 + 断网恢复 |
 | `VLCPlayerView` 替身是否与真实实现一致 | 未做交叉检查 | 替身（`Tests/SessionTestSupport.swift:5-7`）与 `VLCPlayerView.swift` 的 `#else` 分支必须同签名；建议在测试里引用真实文件而非自建替身 |
+
+> 已经验过的两项（Swift 能否编译、16 条测试红/绿）已由上表移出，
+> 证据是 `iOS Build Check #62` 全绿——**能编译不等于能工作，但测试跑过且断言落在行为上，这是本仓库目前最强的证据形式**。
 
 ## 五、安全基线现状
 

@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 二级选中项：实心蓝底。对齐参考实现（TVBox 系的蓝），
+     不用主题 accent（青）——参考图里选中态就是蓝的。 -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <solid android:color="@color/select_bg" />
+    <corners android:radius="8dp" />
+</shape>

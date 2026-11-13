@@ -1226,17 +1226,22 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         val row = subMenuRow ?: return
         subMenuTitle?.text = spec.title
         row.removeAllViews()
-        row.orientation = android.widget.LinearLayout.HORIZONTAL
+        // 竖排：参考实现的二级是一列选项，不是横向一条
+        row.orientation = android.widget.LinearLayout.VERTICAL
         val padH = (16 * resources.displayMetrics.density).toInt()
         val padV = (10 * resources.displayMetrics.density).toInt()
         spec.labels.forEachIndexed { i, label ->
+            val selected = i == spec.selected
             val tv = TextView(this).apply {
-                text = label
+                // 选中项带 › ‹：表示"当前值，可左右切换"（对齐参考实现）
+                text = if (selected) "› $label ‹" else label
                 textSize = 16f
                 gravity = android.view.Gravity.CENTER
                 setPadding(padH, padV, padH, padV)
-                setTextColor(getColor(if (i == spec.selected) R.color.accent else R.color.text_primary))
-                background = getDrawable(R.drawable.bg_setting_row)
+                setTextColor(getColor(if (selected) android.R.color.white else R.color.text_primary))
+                background = getDrawable(
+                    if (selected) R.drawable.bg_select_solid else R.drawable.bg_setting_row
+                )
                 isFocusable = true
                 isClickable = true
                 setOnClickListener {
@@ -1245,10 +1250,10 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
                 }
             }
             val lp = android.widget.LinearLayout.LayoutParams(
-                android.widget.LinearLayout.LayoutParams.WRAP_CONTENT,
+                android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
                 android.widget.LinearLayout.LayoutParams.WRAP_CONTENT,
             )
-            if (i > 0) lp.marginStart = padH / 2
+            if (i > 0) lp.topMargin = padV / 2
             row.addView(tv, lp)
         }
         subMenu?.visibility = android.view.View.VISIBLE

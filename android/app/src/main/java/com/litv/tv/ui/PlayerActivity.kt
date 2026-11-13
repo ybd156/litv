@@ -2448,9 +2448,12 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
      * 这里收口成一个入口。
      */
     private fun submitPanelList(list: List<Channel>) {
-        val keep = if (panelVisible) focusedPanelChannelId().takeIf { it > 0 } else null
+        // 只有焦点本来就在频道列时才恢复；焦点在分类列（正在挑分组）就别动它，
+        // 否则每选一次分类，焦点就被搬到频道列 —— 用户看到的是"焦点乱飘"。
+        val focusInList = panelVisible && panelList.hasFocus()
+        val keep = if (focusInList) focusedPanelChannelId().takeIf { it > 0 } else null
         panelAdapter.submit(list, nowMap)
-        if (panelVisible) {
+        if (focusInList) {
             val id = keep ?: current?.id ?: 0L
             if (id > 0) main.post { focusPanelChannel(id) }
         }

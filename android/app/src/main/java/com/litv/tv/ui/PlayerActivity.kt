@@ -2038,7 +2038,9 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         epgHandle.visibility = View.GONE
         // 展开时按"焦点所在的台"取节目单，而不是正在播的那个台。
         // 之前只在 epg 已展开时（onFocus 里）才换数据，第一次展开一定是错的。
-        val targetId = if (focusEpgChannelId > 0) focusEpgChannelId else (current?.id ?: 0L)
+        val targetId = focusedPanelChannelId().takeIf { it > 0 }
+            ?: focusEpgChannelId.takeIf { it > 0 }
+            ?: (current?.id ?: 0L)
         if (targetId > 0 && targetId != epgProgramsChannelId) refreshEpg(targetId)
         panelRightGap.visibility = View.GONE
         epgTitle.text = epgTitleText()
@@ -2414,6 +2416,26 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
             if (::surface.isInitialized && surface.holder.surface.isValid) {
                 player.attach(surface.holder.surface, findViewById(android.R.id.content))
             }
+        }
+    }
+
+
+    /** 频道列里"焦点实际停在哪一项"对应的台。直接问 RecyclerView，不依赖回调是否及时。 */
+    private fun focusedPanelChannelId(): Long {
+        if (!::panelList.isInitialized) return 0L
+        val f = panelList.focusedChild ?: return 0L
+        val pos = panelList.getChildAdapterPosition(f)
+        if (pos == androidx.recyclerview.widget.RecyclerView.NO_POSITION) return 0L
+        return channels.getOrNull(pos)?.id ?: 0L
+    }
+
+    /** 把焦点放回频道列里指定台的那一项（找不到就用当前播放的台）。 */
+    private fun focusPanelChannel(channelId: Long) {
+        val id = if (channelId > 0) channelId else (current?.id ?: 0L)
+        val pos = channels.indexOfFirst { it.id == id }.let { if (it >= 0) it else 0 }
+        panelList.post {
+            val vh = panelList.findViewHolderForAdapterPosition(pos)
+            if (vh != null) vh.itemView.requestFocus() else panelList.scrollToPosition(pos)
         }
     }
 
@@ -2885,7 +2907,7 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
                 expandEpgPanel()
                 focusDayList()
             }
-            epgDayList.hasFocus() && dir < 0 -> panelList.requestFocus()
+            epgDayList.hasFocus() && dir < 0 -> focusPanelChannel(focusEpgChannelId)
             epgDayList.hasFocus() && dir > 0 -> focusEpgList()
             epgList.hasFocus() && dir < 0 -> focusDayList()
             epgList.hasFocus() && dir > 0 -> favBtn.requestFocus()

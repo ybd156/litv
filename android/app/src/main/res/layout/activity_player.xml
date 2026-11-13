@@ -483,34 +483,6 @@
         android:textStyle="bold"
         android:visibility="gone" />
 
-    <!-- 二级：从一级菜单左侧就地展开的选项面板（对齐参考实现）。
-         不用居中 Dialog：Dialog 会把画面整个盖掉，改完还得关掉才知道效果。 -->
-    <LinearLayout
-        android:id="@+id/subMenu"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:layout_gravity="end|center_vertical"
-        android:layout_marginEnd="300dp"
-        android:background="#E6080C10"
-        android:orientation="vertical"
-        android:padding="16dp"
-        android:visibility="gone">
-
-        <TextView
-            android:id="@+id/subMenuTitle"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:textColor="@color/text_secondary"
-            android:textSize="14sp" />
-
-        <LinearLayout
-            android:id="@+id/subMenuRow"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="10dp"
-            android:orientation="horizontal" />
-    </LinearLayout>
-
     <include layout="@layout/view_settings_menu" />
 
     <!-- 冷启动开屏层：进程刚起来、还没拿到第一帧时盖在最上层。

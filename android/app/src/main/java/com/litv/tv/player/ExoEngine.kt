@@ -254,14 +254,24 @@ class ExoEngine : PlayerEngine {
         decode: String,
         bufferMs: Int,
     ): ExoPlayer {
-        // 直播缓冲：起播 300ms / 重缓冲 800ms；maxBufferMs 由用户「网络缓冲」设置映射
+        // 直播缓冲。
         //
-        // 起播阈值从 500 降到 300：IPTV 是直播，用户对"多久出画面"极敏感，
-        // 而 300ms 的缓冲在局域网/中转场景已经够用。真卡了会走重缓冲，
-        // 那时用 800ms 兜住，不会因为起播抠得太狠导致频繁卡顿。
-        val maxBufferMs = bufferMs.coerceIn(2000, 60000)
+        // 参数含义（ExoPlayer 的 LoadControl）：
+        //   minBufferMs  往前**保持**缓冲多少 -> 决定抗抖动能力
+        //   maxBufferMs  缓冲上限
+        //   bufferForPlaybackMs              起播前至少要有多少 -> 决定"多久出画面"
+        //   afterRebufferMs                  欠载恢复后至少要有多少
+        //
+        // 原来 minBuffer=800ms：播放器只往前留 0.8 秒，CDN 稍微抖一下就欠载，
+        // 表现就是"播一会儿卡一下"。起播速度由 bufferForPlaybackMs 决定，
+        // 和 minBuffer 无关，所以这里把 minBuffer 放到 5 秒换取抗抖动，
+        // 起播阈值仍保持 300ms（IPTV 对出画时间敏感）。
+        // 往前保持 10 秒缓冲（用户指定）：CDN 抖一下不至于立刻欠载。
+        // 上限至少要比它大，否则 ExoPlayer 会报参数非法。
+        val minBufferMs = 10_000
+        val maxBufferMs = maxOf(bufferMs.coerceIn(2000, 60_000), minBufferMs + 2_000)
         val loadControl = DefaultLoadControl.Builder()
-            .setBufferDurationsMs(800, maxBufferMs, 300, 800)
+            .setBufferDurationsMs(minBufferMs, maxBufferMs, 300, 2000)
             .setBackBuffer(0, true)                     // 直播不回退缓冲，省内存
             .setPrioritizeTimeOverSizeThresholds(false) // 优先按字节封顶，防低端盒子 OOM
             .build()

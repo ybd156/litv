@@ -974,7 +974,7 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         pendingSlideDir = 0f
         Log.i(TAG, "playChannel: ${ch.name} streamId=$streamId rebuild=$forceRebuild slide=$slideDir direct=${app.prefs.directMode}")
         setSplashStage("正在起播…")
-        // 先把当前画面冻住：换台期间用户看到的是上一帧，不是黑屏
+        // 先把当前画面冻住：换台期间显示上一帧，不黑屏
         freezeFrame()
         // 取一个换台代际号。下面的回调只有在它仍然是"最后一次换台"时才允许生效。
         val seq = playGate.begin()
@@ -2361,6 +2361,41 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
     }
 
     /**
+     * 撤帧轮询。
+     *
+     * 为什么不用 onPlaying / onFirstFrame 就够：这两个回调在起播预算耗尽
+     * （budgetExpired）时会被直接丢掉，冻结帧就永远撤不掉，画面停住。
+     * 这里每 150ms 看一眼：播放器真的在播 -> 立刻撤；最多等 5 秒。
+     */
+    private val unfreezePoll = object : Runnable {
+        private var ticks = 0
+        override fun run() {
+            if (!::snapshot.isInitialized || snapshot.visibility != View.VISIBLE) return
+            if (player.isPlaying) {
+                unfreezeFrame()
+                return
+            }
+            // 2.5 秒还没出画（约 17 跳）：说明这路流起播慢。
+            // 冻结帧继续盖着会像"死机"，这时换成转圈，至少看得出在动。
+            if (ticks == 17) {
+                unfreezeFrame()
+                main.removeCallbacks(showLoadingRunnable)
+                main.post(showLoadingRunnable)
+            }
+            if (ticks++ > 33) {
+                unfreezeFrame()
+                return
+            }
+            main.postDelayed(this, 150)
+        }
+    }
+
+    private fun startUnfreezePoll() {
+        main.removeCallbacks(unfreezePoll)
+        main.postDelayed(unfreezePoll, 150)
+    }
+
+    /**
      * 冻结当前画面，换台期间一直显示它。
      *
      * 布局里一直有 @id/snapshot 这个 ImageView，之前代码从没用过，
@@ -2378,8 +2413,7 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
                 if (bmp != null) {
                     snapshot.setImageBitmap(bmp)
                     snapshot.visibility = View.VISIBLE
-                    main.removeCallbacks(unfreezeTimeout)
-                    main.postDelayed(unfreezeTimeout, 4000)
+                    startUnfreezePoll()
                     return
                 }
             }

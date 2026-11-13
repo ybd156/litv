@@ -256,6 +256,7 @@
                 android:layout_width="150dp"
                 android:layout_height="match_parent"
                 android:background="@drawable/bg_panel_zone"
+                android:clipToOutline="true"
                 android:orientation="vertical"
                 android:paddingHorizontal="4dp"
                 android:paddingVertical="4dp">
@@ -280,6 +281,7 @@
                 android:layout_width="350dp"
                 android:layout_height="match_parent"
                 android:background="@drawable/bg_panel_zone"
+                android:clipToOutline="true"
                 android:orientation="vertical"
                 android:paddingHorizontal="8dp">
 
@@ -356,6 +358,7 @@
                 android:layout_width="44dp"
                 android:layout_height="match_parent"
                 android:background="@drawable/bg_panel_zone"
+                android:clipToOutline="true"
                 android:gravity="center"
                 android:lineSpacingExtra="4dp"
                 android:text="节&#10;目&#10;单&#10;»"
@@ -370,6 +373,7 @@
                 android:visibility="gone"
                 android:layout_weight="1"
                 android:background="@drawable/bg_panel_zone"
+                android:clipToOutline="true"
                 android:orientation="horizontal"
                 android:paddingHorizontal="6dp">
 

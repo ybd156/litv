@@ -95,6 +95,10 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
     private var srcNames: Map<Long, String> = emptyMap()
     private lateinit var numberTip: TextView
     private lateinit var settingsMenu: android.view.View
+    /** 二级面板：从一级菜单左侧展开，不遮挡画面。 */
+    private var subMenu: android.view.View? = null
+    private var subMenuTitle: android.widget.TextView? = null
+    private var subMenuRow: android.widget.LinearLayout? = null
     private var menuVisible = false
     private lateinit var epgPanel: LinearLayout
     private lateinit var epgTitle: TextView
@@ -483,34 +487,58 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         favBtn.setOnClickListener { toggleFavoriteOnFocused() }
         numberTip = findViewById(R.id.numberTip)
         settingsMenu = findViewById(R.id.settingsMenu)
-        // 右侧设置菜单：一级 4 组，具体选项进二级。
-        //
-        // 原来 9 条平铺在一级：遥控器要按很多下才摸到目标，而且
-        // 「画面比例」和「显示设置」摆在一起，看不出是两回事。
+        subMenu = findViewById(R.id.subMenu)
+        subMenuTitle = findViewById(R.id.subMenuTitle)
+        subMenuRow = findViewById(R.id.subMenuRow)
+        // 右侧设置菜单：一级 9 项保持原样，二级从左侧就地展开（见 openSubMenu）。
+        // 不用居中 Dialog：Dialog 会盖住画面，改完还得关掉才知道效果。
         findViewById<TextView>(R.id.miLine).setOnClickListener { openLinePicker() }
 
-        findViewById<TextView>(R.id.miPicture).setOnClickListener {
-            closeSettingsMenu()
-            PickerDialog(this, "画面", listOf("画面比例", "界面缩放"), -1) { i ->
-                if (i == 0) pickAspect() else pickUiScale()
-            }.show()
+        findViewById<TextView>(R.id.miAspect).setOnClickListener {
+            val opts = listOf("auto", "16:9", "4:3", "fill")
+            val labels = listOf("自动", "16:9", "4:3", "铺满")
+            openSubMenu("画面比例", labels, opts.indexOf(app.prefs.aspect).coerceAtLeast(0)) { i ->
+                app.prefs.aspect = opts[i]
+                toastTip("画面比例：" + labels[i])
+            }
         }
-        findViewById<TextView>(R.id.miPlayback).setOnClickListener {
-            closeSettingsMenu()
-            PickerDialog(this, "播放", listOf("解码方式", "缓冲"), -1) { i ->
-                if (i == 0) pickDecode() else pickBuffer()
-            }.show()
+        findViewById<TextView>(R.id.miDecode).setOnClickListener {
+            val opts = listOf("auto", "hard", "soft")
+            val labels = listOf("自动", "硬件解码", "软件解码")
+            openSubMenu("解码方式", labels, opts.indexOf(app.prefs.decode).coerceAtLeast(0)) { i ->
+                app.prefs.decode = opts[i]
+                toastTip("解码方式：" + labels[i])
+            }
         }
-        findViewById<TextView>(R.id.miSettings).setOnClickListener {
-            closeSettingsMenu()
-            PickerDialog(this, "设置", listOf("分类管理", "显示设置", "偏好设置", "其他设置"), -1) { i ->
-                when (i) {
-                    0 -> openPanel()
-                    1 -> SettingsDialog(this, 0).show()
-                    2 -> SettingsDialog(this, 1).show()
-                    else -> SettingsDialog(this, 2).show()
-                }
-            }.show()
+        findViewById<TextView>(R.id.miTimeout).setOnClickListener {
+            val opts = listOf(1000, 2000, 3000, 5000)
+            val labels = listOf("1 秒", "2 秒", "3 秒", "5 秒")
+            openSubMenu("超时换源", labels, opts.indexOf(app.prefs.bufferMs).coerceAtLeast(0)) { i ->
+                app.prefs.bufferMs = opts[i]
+                toastTip("缓冲：" + labels[i])
+            }
+        }
+        // 分类管理是导航动作，不是选项，直接打开频道面板
+        findViewById<TextView>(R.id.miCategory).setOnClickListener {
+            closeSettingsMenu(); openPanel()
+        }
+        findViewById<TextView>(R.id.miList).setOnClickListener {
+            val opts = com.litv.tv.data.UiScaleOptions.keys
+            val labels = com.litv.tv.data.UiScaleOptions.all.map { it.label }
+            openSubMenu("列表配置", labels, opts.indexOf(app.prefs.uiScale).coerceAtLeast(0)) { i ->
+                app.prefs.uiScale = opts[i]
+                toastTip("界面缩放：" + labels[i] + "（重开列表生效）")
+            }
+        }
+        // 这三项是整页设置，放不进二级面板，仍走完整弹层
+        findViewById<TextView>(R.id.miDisplay).setOnClickListener {
+            closeSettingsMenu(); SettingsDialog(this, 0).show()
+        }
+        findViewById<TextView>(R.id.miPrefs).setOnClickListener {
+            closeSettingsMenu(); SettingsDialog(this, 1).show()
+        }
+        findViewById<TextView>(R.id.miOther).setOnClickListener {
+            closeSettingsMenu(); SettingsDialog(this, 2).show()
         }
         epgPanel = findViewById(R.id.epgPanel)
         epgTitle = findViewById(R.id.epgTitle)
@@ -1145,6 +1173,60 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
     //
     // 这些原来是直接挂在一级菜单上的，现在由「画面 / 播放」二级菜单调起。
     // 比例和解码不再「按一下循环到下一个值」——改完不知道变成了什么。
+
+
+    // ------------------------------------------------------------ 二级面板
+
+    /**
+     * 从一级菜单左侧展开选项面板。
+     *
+     * 对齐参考实现的做法：二级不弹居中 Dialog，而是贴在菜单左边展开，
+     * 画面不被盖住，改完立刻能看到效果。选中即生效并收起。
+     */
+    private fun openSubMenu(
+        title: String,
+        labels: List<String>,
+        selected: Int,
+        onPick: (Int) -> Unit,
+    ) {
+        val row = subMenuRow ?: return
+        subMenuTitle?.text = title
+        row.removeAllViews()
+        val padH = (16 * resources.displayMetrics.density).toInt()
+        val padV = (10 * resources.displayMetrics.density).toInt()
+        labels.forEachIndexed { i, label ->
+            val tv = TextView(this).apply {
+                text = label
+                textSize = 16f
+                gravity = android.view.Gravity.CENTER
+                setPadding(padH, padV, padH, padV)
+                setTextColor(getColor(if (i == selected) R.color.accent else R.color.text_primary))
+                background = getDrawable(R.drawable.bg_setting_row)
+                isFocusable = true
+                isClickable = true
+                setOnClickListener {
+                    onPick(i)
+                    closeSubMenu()
+                }
+            }
+            val lp = android.widget.LinearLayout.LayoutParams(
+                android.widget.LinearLayout.LayoutParams.WRAP_CONTENT,
+                android.widget.LinearLayout.LayoutParams.WRAP_CONTENT,
+            )
+            if (i > 0) lp.marginStart = padH / 2
+            row.addView(tv, lp)
+        }
+        subMenu?.visibility = android.view.View.VISIBLE
+        row.post { row.getChildAt(selected.coerceIn(0, labels.size - 1))?.requestFocus() }
+    }
+
+    /** 收起二级面板，焦点还给一级菜单。 */
+    private fun closeSubMenu() {
+        val m = subMenu ?: return
+        if (m.visibility != android.view.View.VISIBLE) return
+        m.visibility = android.view.View.GONE
+        settingsMenu.findViewById<TextView>(R.id.miAspect)?.requestFocus()
+    }
 
     private fun pickAspect() {
         val opts = listOf("auto", "16:9", "4:3", "fill")
@@ -2133,6 +2215,7 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
 
     private fun closeSettingsMenu() {
         menuVisible = false
+        subMenu?.visibility = android.view.View.GONE
         settingsMenu.visibility = android.view.View.GONE
     }
 

@@ -186,6 +186,31 @@ class ChannelAdapter(
     fun loadLogoFor(target: ImageView, url: String) = loadLogo(target, url)
 
     /**
+     * 只刷新可见行的节目进度条，不重绑列表。
+     *
+     * 之前进度只在 submit() 时算一次，面板开着的时候条是不动的 ——
+     * 一小时后打开面板，条还停在当时的百分比。
+     * 这里直接改可见 holder 的 ProgressBar，不触发 notify，焦点不受影响。
+     */
+    fun tickProgress(rv: androidx.recyclerview.widget.RecyclerView) {
+        val nowSec = System.currentTimeMillis() / 1000
+        for (i in 0 until rv.childCount) {
+            val holder = rv.getChildViewHolder(rv.getChildAt(i)) as? VH ?: continue
+            val pos = holder.bindingAdapterPosition
+            if (pos == androidx.recyclerview.widget.RecyclerView.NO_POSITION) continue
+            val ch = items.getOrNull(pos) ?: continue
+            val np = nowMap[ch.id] ?: continue
+            if (np.end > np.start) {
+                holder.prog.progress =
+                    (((nowSec - np.start) * 100) / (np.end - np.start)).coerceIn(0, 100).toInt()
+                holder.prog.visibility = View.VISIBLE
+            } else {
+                holder.prog.visibility = View.GONE
+            }
+        }
+    }
+
+    /**
      * 占位方块的颜色：按频道名散列到一组低饱和色。
      *
      * 低饱和是刻意的——列表里几十行同时出现，高饱和会吵得没法看；

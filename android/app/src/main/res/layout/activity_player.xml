@@ -241,8 +241,9 @@
         android:paddingVertical="36dp"
         android:visibility="gone">
 
-        <!-- 上：三列 -->
+        <!-- 上：三列。尺寸变化由 TransitionManager 统一补间 -->
         <LinearLayout
+            android:id="@+id/panelColumns"
             android:layout_width="match_parent"
             android:layout_height="0dp"
             android:layout_weight="1"

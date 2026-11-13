@@ -68,7 +68,7 @@
         android:id="@+id/curtain"
         android:layout_width="match_parent"
         android:layout_height="match_parent"
-        android:background="#0B0F12"
+        android:background="@android:color/transparent"
         android:visibility="gone" />
 
     <ProgressBar
@@ -284,11 +284,11 @@
                 android:layout_marginVertical="10dp"
                 android:background="@drawable/divider_vertical" />
 
-            <!-- 2. 频道列表：台号框 + 台名 + 当前节目 -->
+            <!-- 2. 频道列表：台号框 + 台名 + 当前节目。
+                 **固定宽度**，不用 weight：节目单展开/收起时频道列不能被压缩。 -->
             <LinearLayout
-                android:layout_width="0dp"
+                android:layout_width="400dp"
                 android:layout_height="match_parent"
-                android:layout_weight="0.34"
                 android:background="@drawable/bg_panel_zone"
                 android:orientation="vertical"
                 android:paddingHorizontal="8dp">
@@ -378,7 +378,7 @@
                 android:layout_width="0dp"
                 android:layout_height="match_parent"
                 android:visibility="gone"
-                android:layout_weight="0.42"
+                android:layout_weight="1"
                 android:background="@drawable/bg_panel_zone"
                 android:orientation="horizontal"
                 android:paddingHorizontal="6dp">
@@ -440,7 +440,7 @@
                 android:id="@+id/panelRightGap"
                 android:layout_width="0dp"
                 android:layout_height="match_parent"
-                android:layout_weight="0.32" />
+                android:layout_weight="1" />
         </LinearLayout>
 
         <!-- 下：底部信息条（台标 / 台号名称 / 正在播 / 下一档 / 线路 / 进度 / 时间） -->

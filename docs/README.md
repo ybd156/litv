@@ -29,6 +29,7 @@
 | [`design/02-iOS构建现状.md`](design/02-iOS构建现状.md) | iOS 工程结构、会话测试目标、C05 未实现的具体位置 | 现状 |
 | [`review/STATUS.md`](review/STATUS.md) | **唯一**的评审项状态源：已确认 / 待验证 / 未复核 | 现状 |
 | [`postmortem/POSTMORTEM_2026-11-12_tv-input.md`](postmortem/POSTMORTEM_2026-11-12_tv-input.md) | 电视输入事故复盘 | 历史 |
+| [`postmortem/POSTMORTEM_2026-11-13_agent-session.md`](postmortem/POSTMORTEM_2026-11-13_agent-session.md) | 文档重写与仓库重建过程中 AI 助手做错的事 | 历史 |
 | [`security/hardening-2026-11.md`](security/hardening-2026-11.md) | 安全加固记录 | 历史 |
 | [`security/uninstall-callback.md`](security/uninstall-callback.md) | 卸载链路威胁模型 | 现状 |
 | [`research/01-fnos-fpk.md`](research/01-fnos-fpk.md) | fnOS fpk 规范调研 | 历史 |

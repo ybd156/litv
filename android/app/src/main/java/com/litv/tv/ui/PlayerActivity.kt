@@ -205,6 +205,7 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         setContentView(R.layout.activity_player)
         app = application as LitvApp
+        app.api.onAuthExpired = { onAuthExpired() }
 
         bindViews()
         loadChannels()
@@ -2466,6 +2467,7 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
     }
 
     override fun onDestroy() {
+        app.api.onAuthExpired = null
         // QoE：离开播放页时补一条 stop（带 watch_ms）。必须在清 Handler 之前调，
         // 因为它会走一次异步网络请求。
         reportStopIfWatched()
@@ -2643,4 +2645,19 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
             )
         })
     }
+
+    /**
+     * 凭据失效（2003/401）：清掉本机凭据并回绑定页。
+     *
+     * 不清凭据的话，用户会卡在"频道=0"的黑屏或空列表上，
+     * 以为 App 坏了——实际是 token 被服务端换发/清掉了。
+     */
+    private fun onAuthExpired() {
+        runOnUiThread {
+            app.prefs.clearSession()
+            startActivity(android.content.Intent(this, LauncherActivity::class.java))
+            finish()
+        }
+    }
+
 }

@@ -35,6 +35,15 @@ class Api(private val prefs: Prefs) {
         .retryOnConnectionFailure(true)
         .build()
 
+    /**
+     * 凭据失效回调（服务端返回 2003 / HTTP 401）。
+     *
+     * 之前的处理是：只把 msg 丢给 onErr，界面显示一行字，然后**停在那里**——
+     * token 被服务端换发或清掉后，App 会一直卡在"频道=0"的黑屏上，
+     * 用户不知道要重新绑定。现在统一在这里上报，由 Activity 清凭据并回绑定页。
+     */
+    var onAuthExpired: (() -> Unit)? = null
+
     /** 播放用的客户端：直播是长连接，不能有 readTimeout。 */
     val streamClient: OkHttpClient = client.newBuilder()
         .readTimeout(0, TimeUnit.MILLISECONDS)
@@ -91,6 +100,7 @@ class Api(private val prefs: Prefs) {
                         val code = root.get("code")?.asInt ?: -1
                         val msg = root.get("msg")?.asString ?: ""
                         if (code != 0) {
+                            if (code == 2003) main.post { onAuthExpired?.invoke() }
                             main.post { onErr(if (msg.isNotBlank()) msg else "错误码 $code") }
                             return
                         }
@@ -138,6 +148,7 @@ class Api(private val prefs: Prefs) {
                         val root = JsonParser.parseString(text).asJsonObject
                         val code = root.get("code")?.asInt ?: -1
                         if (code != 0) {
+                            if (code == 2003) main.post { onAuthExpired?.invoke() }
                             main.post { onErr(root.get("msg")?.asString ?: "错误码 $code") }
                             return
                         }

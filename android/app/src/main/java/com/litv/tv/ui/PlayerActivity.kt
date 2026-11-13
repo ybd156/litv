@@ -2125,13 +2125,54 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         hideOsd()
     }
 
-    private fun closeEpg() {
-        // 收起成竖排把手（参考实现：节目单默认不占宽度，露出画面）
+    /**
+     * 收起节目单。
+     *
+     * 宽度用动画收到 0 再 GONE：直接 GONE 会让面板瞬间重排，
+     * RecyclerView 会自己调一次滚动位置，表现就是"返回时列表跳一下/闪一下"。
+     * 渐变过去就没有那一帧错位。
+     *
+     * @param then 收起完成后回调（回频道列时用来还原滚动位置并聚焦）
+     */
+    private fun closeEpg(then: (() -> Unit)? = null) {
+        if (!epgVisible) { then?.invoke(); return }
         epgVisible = false
-        epgPanel.visibility = View.GONE
-        epgHandle.visibility = View.VISIBLE
-        panelRightGap.visibility = View.VISIBLE
-        panelList.requestFocus()
+        val lp = epgPanel.layoutParams as? android.widget.LinearLayout.LayoutParams
+        val startWidth = epgPanel.width
+        if (lp == null || startWidth <= 0) {
+            epgPanel.visibility = View.GONE
+            epgHandle.visibility = View.VISIBLE
+            panelRightGap.visibility = View.VISIBLE
+            then?.invoke()
+            return
+        }
+        // 有 weight 时宽度不受 width 控制，先摘掉 weight 固化成像素宽度
+        lp.weight = 0f
+        lp.width = startWidth
+        epgPanel.layoutParams = lp
+        android.animation.ValueAnimator.ofInt(startWidth, 0).apply {
+            duration = 160
+            addUpdateListener { va ->
+                val w = va.animatedValue as Int
+                val cur = epgPanel.layoutParams as android.widget.LinearLayout.LayoutParams
+                cur.width = w
+                epgPanel.layoutParams = cur
+            }
+            addListener(object : android.animation.AnimatorListenerAdapter() {
+                override fun onAnimationEnd(animation: android.animation.Animator) {
+                    epgPanel.visibility = View.GONE
+                    // 还原成"可展开"的参数，下次展开还能吃到权重
+                    val reset = epgPanel.layoutParams as android.widget.LinearLayout.LayoutParams
+                    reset.width = 0
+                    reset.weight = 1f
+                    epgPanel.layoutParams = reset
+                    epgHandle.visibility = View.VISIBLE
+                    panelRightGap.visibility = View.VISIBLE
+                    then?.invoke()
+                }
+            })
+            start()
+        }
     }
 
     /**
@@ -2213,8 +2254,13 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
                 // 原来只 closeEpg()，焦点由系统随便给，列表会"划走"——
                 // 这也是 backToPanelList() 的日志从来没打印的原因：
                 // 左键在这里就被吃掉了，根本走不到那里。
-                closeEpg()
-                if (code == KeyEvent.KEYCODE_DPAD_LEFT) backToPanelList()
+                if (code == KeyEvent.KEYCODE_DPAD_LEFT) {
+                    val pos = panelFocusPosBeforeEpg
+                    val top = panelFocusedTopBeforeEpg
+                    closeEpg { restorePanelScroll(pos, top) }
+                } else {
+                    closeEpg()
+                }
                 return true
             }
             return super.dispatchKeyEvent(event)
@@ -2503,8 +2549,11 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
      * 一回去列表就被划走了。这里直接回到进节目单之前的那一项。
      */
     private fun backToPanelList() {
-        val pos = panelFocusPosBeforeEpg
-        val top = panelFocusedTopBeforeEpg
+        restorePanelScroll(panelFocusPosBeforeEpg, panelFocusedTopBeforeEpg)
+    }
+
+    /** 还原频道列的滚动位置并聚焦指定项。 */
+    private fun restorePanelScroll(pos: Int, top: Int) {
         val lm = panelList.layoutManager as? LinearLayoutManager
         // ★ 同步还原，不 post：closeEpg() 会让面板重新布局，如果还原放到下一帧，
         // 中间会有一帧是"错位"的画面 —— 看到的就是"返回时闪一下"。

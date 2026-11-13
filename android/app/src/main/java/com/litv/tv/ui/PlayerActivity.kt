@@ -1828,6 +1828,17 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         if (pos >= 0) epgList.scrollToPosition(pos)
     }
 
+    /** 展开节目单列并藏起竖排把手（不抢焦点，由调用方决定）。 */
+    private fun expandEpgPanel() {
+        epgVisible = true
+        epgPanel.visibility = View.VISIBLE
+        epgHandle.visibility = View.GONE
+        epgTitle.text = epgTitleText()
+        epgAdapter.submit(filteredPrograms())
+        val pos = epgAdapter.currentPosition()
+        if (pos >= 0) epgList.scrollToPosition(pos)
+    }
+
     /** 呼出节目单面板（右侧）。数据是进频道时就预取的，所以这里是瞬开。 */
     private fun openEpg() {
         epgVisible = true
@@ -2503,7 +2514,12 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         when {
             grpList.hasFocus() && dir > 0 -> panelList.requestFocus()
             panelList.hasFocus() && dir < 0 -> grpList.requestFocus()
-            panelList.hasFocus() && dir > 0 -> epgList.requestFocus()
+            // 频道列按右键 -> 展开节目单并把焦点送进去。
+            // 节目单默认是收起的，不先展开的话 requestFocus 会落空（右键像没反应）。
+            panelList.hasFocus() && dir > 0 -> {
+                expandEpgPanel()
+                epgList.requestFocus()
+            }
             epgList.hasFocus() && dir < 0 -> panelList.requestFocus()
             // C1：收藏按钮是第四站，从节目单列继续往右就到它（它是面板里唯一能改收藏状态
             // 的控件；MENU 留给设置菜单、长按 OK 留给选线路，都不抢）。

@@ -24,14 +24,15 @@
     <!-- 左栏：二级选项。没有选项的项（线路选择/分类管理）时整栏 GONE -->
     <LinearLayout
         android:id="@+id/subMenu"
-        android:layout_width="wrap_content"
+        android:layout_width="150dp"
         android:layout_height="wrap_content"
-        android:layout_marginEnd="16dp"
+        android:layout_marginEnd="8dp"
         android:orientation="vertical"
         android:visibility="gone">
 
         <TextView
             android:id="@+id/subMenuTitle"
+            android:layout_gravity="end"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:textColor="@color/text_secondary"

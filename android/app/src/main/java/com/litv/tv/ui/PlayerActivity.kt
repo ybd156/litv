@@ -1237,6 +1237,7 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
                 text = if (selected) "› $label ‹" else label
                 textSize = 16f
                 gravity = android.view.Gravity.CENTER
+                minHeight = (44 * resources.displayMetrics.density).toInt()
                 setPadding(padH, padV, padH, padV)
                 setTextColor(getColor(if (selected) android.R.color.white else R.color.text_primary))
                 background = getDrawable(

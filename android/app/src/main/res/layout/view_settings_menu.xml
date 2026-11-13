@@ -15,7 +15,7 @@
     android:layout_width="wrap_content"
     android:layout_height="match_parent"
     android:layout_gravity="end"
-    android:background="#F00B0E11"
+    android:background="@drawable/bg_settings_panel"
     android:gravity="center_vertical"
     android:orientation="horizontal"
     android:paddingHorizontal="20dp"
@@ -41,11 +41,17 @@
 
         <LinearLayout
             android:id="@+id/subMenuRow"
-            android:layout_width="wrap_content"
+            android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="8dp"
             android:orientation="vertical" />
     </LinearLayout>
+
+    <View
+        android:layout_width="1dp"
+        android:layout_height="match_parent"
+        android:layout_marginVertical="24dp"
+        android:background="#26FFFFFF" />
 
     <!-- 右栏：一级菜单 -->
     <LinearLayout

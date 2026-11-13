@@ -236,7 +236,7 @@
         android:id="@+id/channelPanel"
         android:layout_width="match_parent"
         android:layout_height="match_parent"
-        android:background="#F00B0E11"
+        android:background="@android:color/transparent"
         android:orientation="vertical"
         android:paddingVertical="12dp"
         android:visibility="gone">
@@ -288,7 +288,7 @@
             <LinearLayout
                 android:layout_width="0dp"
                 android:layout_height="match_parent"
-                android:layout_weight="0.40"
+                android:layout_weight="0.34"
                 android:background="@drawable/bg_panel_zone"
                 android:orientation="vertical"
                 android:paddingHorizontal="8dp">
@@ -365,6 +365,7 @@
                 android:id="@+id/epgHandle"
                 android:layout_width="44dp"
                 android:layout_height="match_parent"
+                android:background="@drawable/bg_panel_zone"
                 android:gravity="center"
                 android:lineSpacingExtra="4dp"
                 android:text="节&#10;目&#10;单&#10;»"
@@ -430,11 +431,16 @@
                 </LinearLayout>
             </LinearLayout>
 
-            <!-- 4. 右侧留白，露出正在播的画面 -->
+            <!-- 4. 右侧留白：只在节目单展开时保留，露出正在播的画面。
+                 节目单收起时这块要让出来——否则频道列和「节目单 »」把手之间
+                 会空出一大片。 -->
+            <!-- 右侧留白：**透明**，露出正在播的画面。
+                 收起节目单时也要留着——面板不该占满整屏。 -->
             <View
+                android:id="@+id/panelRightGap"
                 android:layout_width="0dp"
                 android:layout_height="match_parent"
-                android:layout_weight="0.18" />
+                android:layout_weight="0.32" />
         </LinearLayout>
 
         <!-- 下：底部信息条（台标 / 台号名称 / 正在播 / 下一档 / 线路 / 进度 / 时间） -->

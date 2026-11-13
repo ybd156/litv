@@ -111,11 +111,17 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
     private lateinit var epgPanel: LinearLayout
     /** 节目单收起时的竖排把手。 */
     private lateinit var epgHandle: TextView
+    /** 节目单收起时要把这块留白让出来，否则把手离频道列太远。 */
+    private lateinit var panelRightGap: View
     /** 节目单左侧的日期选择器。 */
     private lateinit var epgDayList: androidx.recyclerview.widget.RecyclerView
     private val epgDayAdapter = EpgDayAdapter()
     /** 当前选中哪一天（默认今天）。 */
     private var epgDayEpoch: Long = 0L
+    /** EPG 是在哪一天加载的（epochDay）。跨天要强制重下，否则节目单永远是昨天的。 */
+    private var epgLoadedEpochDay: Long = 0L
+    /** bootstrap 下发的 xmltv 地址，跨天重下时要用。 */
+    private var lastEpgUrl: String = ""
     /** 本机已预约的节目起点，用来把「预约」就地变成「已预约」。 */
     private val reservedStarts = mutableSetOf<Long>()
     private lateinit var epgTitle: TextView
@@ -488,6 +494,8 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         splashOverlay = findViewById(R.id.splashOverlay)
         // 12 秒撤不掉就强撤：起播卡住时不能让开屏层永远盖着
         main.postDelayed(splashTimeout, 12_000)
+        // 每小时查一次跨天
+        main.postDelayed(dayRolloverTick, 60 * 60 * 1000L)
         splashStage = findViewById(R.id.splashStage)
         switchTip = findViewById(R.id.switchTip)
         osd = findViewById(R.id.osd)
@@ -591,12 +599,12 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         }
         epgPanel = findViewById(R.id.epgPanel)
         epgHandle = findViewById(R.id.epgHandle)
+        panelRightGap = findViewById(R.id.panelRightGap)
 
         epgDayList = findViewById(R.id.epgDayList)
         epgDayList.layoutManager = LinearLayoutManager(this)
         epgDayList.adapter = epgDayAdapter
-        epgDayAdapter.submit(epgDayAdapter.buildDays(), selectToday = true)
-        epgDayEpoch = epgDayAdapter.selectedDay()?.epochDay ?: 0L
+        rebuildDayList()
         epgDayAdapter.onPick = { day ->
             epgDayEpoch = day.epochDay
             refreshEpgColumn()
@@ -793,6 +801,8 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         // 节目单：服务端只下发 xmltv 地址，客户端自己下载解析（不占 D1 额度）。
         // 解析在后台线程跑，完成后拿当前频道刷一次 OSD/节目单列。
         if (b.epgUrl.isNotBlank()) {
+            lastEpgUrl = b.epgUrl
+            epgLoadedEpochDay = todayEpochDay()
             app.epg.ensure(b.epgUrl) { ok ->
                 if (ok) main.post { current?.let { refreshEpg(it.id) } }
             }
@@ -1954,6 +1964,43 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         }
     }
 
+
+    /** 重建日期选择器（跨天用），默认选今天。 */
+    private fun rebuildDayList() {
+        epgDayAdapter.submit(epgDayAdapter.buildDays(), selectToday = true)
+        epgDayEpoch = epgDayAdapter.selectedDay()?.epochDay ?: 0L
+    }
+
+    private fun todayEpochDay(): Long {
+        val c = java.util.Calendar.getInstance().apply {
+            set(java.util.Calendar.HOUR_OF_DAY, 0); set(java.util.Calendar.MINUTE, 0)
+            set(java.util.Calendar.SECOND, 0); set(java.util.Calendar.MILLISECOND, 0)
+        }
+        return c.timeInMillis
+    }
+
+    /**
+     * 跨天检查：日期选择器要重建（今天/明天标签会变），EPG 也要重下。
+     *
+     * 电视盒子常年不关机，只在启动时加载一次的话，第二天看到的还是昨天的节目单。
+     * 这里在 onResume 和定时器里各查一次，成本可以忽略。
+     */
+    private fun checkEpgDayRollover() {
+        val today = todayEpochDay()
+        if (epgLoadedEpochDay == 0L) { epgLoadedEpochDay = today; return }
+        if (today == epgLoadedEpochDay) return
+
+        Log.i(TAG, "跨天：重建日期选择器并重下节目单")
+        epgLoadedEpochDay = today
+        rebuildDayList()
+        val url = lastEpgUrl
+        if (url.isNotBlank()) {
+            app.epg.forceRefresh(url) { ok ->
+                if (ok) main.post { current?.let { refreshEpg(it.id) } }
+            }
+        }
+    }
+
     /** 展开节目单列并藏起竖排把手（不抢焦点，由调用方决定）。 */
     private fun expandEpgPanel() {
         epgVisible = true
@@ -2600,6 +2647,8 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
 
     override fun onResume() {
         super.onResume()
+        // 从后台回来先看是否跨天：盒子上没人会主动重启 App
+        checkEpgDayRollover()
         player.resume()
         // 接管遥控指令：手机发来的按键直接走本页原有的按键逻辑
         app.remote.onCommand = { cmd -> main.post { RemoteKeys.handle(this, cmd) } }
@@ -2614,7 +2663,16 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         current?.let { app.api.saveProgress(it.id, 0) }
     }
 
+    /** 每小时查一次跨天。电视盒子常年不关，只靠 onResume 不够。 */
+    private val dayRolloverTick = object : Runnable {
+        override fun run() {
+            checkEpgDayRollover()
+            main.postDelayed(this, 60 * 60 * 1000L)
+        }
+    }
+
     override fun onDestroy() {
+        main.removeCallbacks(dayRolloverTick)
         app.api.onAuthExpired = null
         // QoE：离开播放页时补一条 stop（带 watch_ms）。必须在清 Handler 之前调，
         // 因为它会走一次异步网络请求。

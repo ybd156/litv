@@ -138,11 +138,20 @@ def replace_block(text, start_marker, end_marker, body):
 def main():
     check_only = "--check" in sys.argv
 
+    old = open(README, encoding="utf-8").read()
+
+    # README 的版本段与下载段已移除（2026-11-13）。没有标记块就没有要同步的东西，
+    # 直接跳过——不能因为标记缺失就让发版工作流失败。
+    has_dl = DL_START in old and DL_END in old
+    has_ver = VER_START in old and VER_END in old
+    if not has_dl and not has_ver:
+        print("README 里没有 AUTO 标记块（版本段/下载段已移除），无需同步")
+        return 0
+
     rel = api("https://api.github.com/repos/%s/releases/latest" % REPO)
     if not rel.get("assets"):
         raise SystemExit("最新 Release 没有任何产物，拒绝生成空表")
 
-    old = open(README, encoding="utf-8").read()
     new = old
 
     body, version = build_download_block(rel)

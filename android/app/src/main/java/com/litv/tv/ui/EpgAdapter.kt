@@ -93,7 +93,10 @@ class EpgAdapter : RecyclerView.Adapter<EpgAdapter.VH>() {
             }
         }
 
-        holder.itemView.setOnClickListener { onProgramClick?.invoke(p) }
+        // ★ 必须挂在 rowBody 上：聚焦的是 rowBody（isFocusable=true），
+        // 按 OK 触发的是聚焦视图的 click；挂在外层 itemView 上永远不触发——
+        // 表现就是"点预约/回看没反应"。
+        holder.rowBody.setOnClickListener { onProgramClick?.invoke(p) }
         holder.rowBody.setOnFocusChangeListener { v, hasFocus ->
             v.animate().scaleX(if (hasFocus) 1.02f else 1f)
                 .scaleY(if (hasFocus) 1.02f else 1f)

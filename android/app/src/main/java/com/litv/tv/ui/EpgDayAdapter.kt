@@ -76,8 +76,13 @@ class EpgDayAdapter : RecyclerView.Adapter<EpgDayAdapter.VH>() {
             )
         )
         holder.itemView.setOnClickListener {
+            val prev = selected
             selected = position
-            notifyDataSetChanged()
+            // 只刷这两项：notifyDataSetChanged 会重建整表，焦点被清掉后
+            // 系统会把焦点丢给"第一个可聚焦项"（频道页第一个分类"全部"），
+            // 用户看到的就是"点日期焦点闪一下到全部"。
+            if (prev in items.indices) notifyItemChanged(prev)
+            notifyItemChanged(position)
             onPick?.invoke(d)
         }
         holder.itemView.setOnFocusChangeListener { v, hasFocus ->

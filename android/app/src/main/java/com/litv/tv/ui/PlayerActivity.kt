@@ -611,7 +611,9 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         epgDayAdapter.onPick = { day ->
             epgDayEpoch = day.epochDay
             refreshEpgColumn()
-            epgList.requestFocus()
+            // 焦点留在刚点的日期上：之前这里直接 epgList.requestFocus()，
+            // 用户刚选完日期焦点就跑到右边节目列表，感觉是"乱跳"。
+            focusDayList()
         }
         // 把手：聚焦后按 OK 展开节目单（参考实现里节目单默认是收起的一列）
         epgHandle.isFocusable = true
@@ -997,7 +999,9 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         // 现在改成 3 秒：绝大多数换台根本看不到圈，只有真的卡住才提示。
         main.removeCallbacks(showLoadingRunnable)
         main.postDelayed(showLoadingRunnable, LOADING_DELAY_MS)
-        switchTip.visibility = View.VISIBLE
+        // 换台不再弹「正在切换…」：画面已经是冻结的上一帧，OSD 也换成了新台信息，
+        // 再挂一行字是第三套提示。这行现在只留给错误/提醒类文案。
+        if (switchTip.text?.startsWith("亮度") != true) switchTip.visibility = View.GONE
         osdName.text = osdNameText(ch)
 
         // 走直连还是中转。
@@ -1873,14 +1877,21 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         val pos = if (idx >= 0) idx else 0
         if (channels.isNotEmpty()) {
             (panelList.layoutManager as? LinearLayoutManager)?.scrollToPositionWithOffset(pos, 0)
-            panelList.post {
+            // 只 post 一次通常还不够：面板刚从 GONE 变 VISIBLE，这一帧还没完成布局，
+            // findViewHolderForAdapterPosition 会返回 null，焦点就落到 RecyclerView 本身，
+            // 表现是"打开频道页但没选中当前频道"。这里重试几帧再兜底。
+            var tries = 0
+            fun focusCurrent() {
                 val vh = panelList.findViewHolderForAdapterPosition(pos)
                 if (vh != null) {
                     vh.itemView.requestFocus()
+                } else if (tries++ < 6) {
+                    panelList.postDelayed({ focusCurrent() }, 40)
                 } else {
                     panelList.requestFocus()
                 }
             }
+            panelList.postDelayed({ focusCurrent() }, 40)
         }
         hideOsd()
     }

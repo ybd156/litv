@@ -1,143 +1,184 @@
 # 03 · Android 模拟器验证（两端 flavor）
 
-> 本文记录**一次真实执行过的验证**：在本机 Android 模拟器上装 x86 调试包，
-> 启动 TV 与手机两个 flavor，确认界面渲染、遥控器交互、无崩溃。
-> 每条结论都附当时的命令或输出。没做的部分单列在最后一节。
+> 本文记录**真实执行过的验证**：在本机 Android 模拟器上装 x86 调试包，
+> 跑 TV 与手机两个 flavor，确认界面渲染、输入方式、遥控器交互。
+> 每条结论都附当时的命令或输出。没做的部分单列在最后。
 
 ## 一、为什么要本地跑
 
 `AGENTS.md` §8 规定编译走 GitHub Actions，但那条规则的目的是「不要为了编译而搭工具链」，
-不是为了禁止本地验证。这次的情况是：**CI 只能告诉你编过了，不能告诉你界面长什么样**。
-模拟器能看到界面、能按方向键、能截图，这些 CI 给不了。
+不是禁止本地验证。这次的情况是：**CI 只能告诉你编过了，不能告诉你界面长什么样**。
 
-本机原本没有任何 Android 构建环境，所以先装了 JDK 与 Gradle。
+本机原本没有 Android 构建环境，所以先装了 JDK 与 Gradle（见第二节）。
 
-## 二、环境（本机实装）
+## 二、环境
 
-> 具体安装路径不写进仓库（AGENTS §8）。下面的命令一律用环境变量，
-> 换台机器只要 `JAVA_HOME` / `ANDROID_HOME` 指对就能跑。
+> 具体安装路径不写进仓库（AGENTS §8）。命令一律用环境变量。
 
 | 组件 | 版本 | 由谁提供 |
 |---|---|---|
 | JDK | Temurin **17.0.21** | `JAVA_HOME` |
 | Gradle | **8.14.6** | `PATH` 里的 `gradle` |
-| Android SDK | platform **35** / build-tools **35.0.0**（另有 34） | `ANDROID_HOME` |
+| Android SDK | platform **35** / build-tools **35.0.0** | `ANDROID_HOME` |
 | 模拟器加速 | **AEHD 2.2**（`emulator -accel-check` → `AEHD is installed and usable`） | 随 emulator 安装 |
 | AVD | `litvtv`、`litvphone`（API 28 / x86） | `emulator -list-avds` |
 
-`android/local.properties` 需要一行 `sdk.dir=<你的 SDK 路径>`。
-该文件已在 `.gitignore` 里，**不要提交**——提交了就把本机路径写死了。
+`android/local.properties` 需要一行 `sdk.dir=<SDK 路径>`，该文件在 `.gitignore` 里，不要提交。
 
-> 为什么用 API 28 的镜像：本机只装了 `system-images;android-28;android-tv;x86` 与 `android-28;default;x86`。
-> 工程 `minSdk = 21`，所以 API 28 是合法目标；但**它低于 `targetSdk = 35`**，
-> 高版本行为变更（分区存储、通知权限弹窗等）在 API 28 上不会出现——见第五节。
+## 三、两台模拟器必须先分清
 
-## 三、编译
+**踩过的坑**：`emulator -avd X` 不指定 `-port` 时端口是自动分配的，
+不能假设「先启动的是 5554」。这次就因为搞反，把手机包装到 TV 镜像上测了一轮。
+
+判断方法：
 
 ```bash
-export JAVA_HOME="<你的 JDK 17 路径>"
-export ANDROID_HOME="<你的 Android SDK 路径>"
-cd android
-gradle --no-daemon assembleTvDebug assemblePhoneDebug
+adb -s <serial> shell pm list features | grep -c leanback   # >0 才是电视
+adb -s <serial> shell wm size                               # 电视 1920x1080，手机 1080x1920
 ```
 
-结果：`BUILD SUCCESSFUL in 1m 25s`（82 tasks，61 executed / 21 cached）。
+本次实际：
 
-产物（每个 flavor 三个 ABI，x86 那份才是模拟器能装的）：
+| serial | 镜像 | 尺寸 | leanback |
+|---|---|---|---|
+| `emulator-5554` | **手机** | 1080×1920 | 0 |
+| `emulator-5556` | **电视** | 1920×1080 | 2 |
+
+## 四、编译与安装
+
+```bash
+export JAVA_HOME="<JDK 17>" ANDROID_HOME="<SDK>"
+cd android && gradle --no-daemon assembleTvDebug assemblePhoneDebug
+```
+
+`BUILD SUCCESSFUL`。x86 包：
 
 ```
 app/build/outputs/apk/tv/debug/app-tv-x86-debug.apk          58 MB
 app/build/outputs/apk/phone/debug/app-phone-x86-debug.apk    58 MB
 ```
 
-> **坑**：debug 构建的 applicationId 带 `.debug` 后缀——
-> 实际包名是 `com.litv.tv.debug` 与 `com.litv.tv.phone.debug`，不是 `com.litv.tv`。
-> 用 `aapt2 dump badging` 才能确认，别照抄文档里的正式包名。
+> **debug 包名带 `.debug` 后缀**：实际是 `com.litv.tv.debug` 与 `com.litv.tv.phone.debug`。
+> 用 `aapt2 dump badging` 确认，别照抄正式包名。
 
-## 四、跑起来
+启动 Activity 统一是 `com.litv.tv.ui.LauncherActivity`（源码包不随 applicationId 变）。
 
-```bash
-A=$ANDROID_HOME/platform-tools/adb
-$ANDROID_HOME/emulator/emulator -avd litvtv -accel on \
-  -no-window -no-audio -no-boot-anim -gpu swiftshader_indirect -no-snapshot &
-$A wait-for-device
-# 等 sys.boot_completed = 1（实测约 20 秒）
-$A install -r -t app/build/outputs/apk/tv/debug/app-tv-x86-debug.apk
-$A shell am start -W -n com.litv.tv.debug/com.litv.tv.ui.LauncherActivity
-```
+## 五、实测结果
 
-手机端同理，换 `litvphone` + `app-phone-x86-debug.apk` + `com.litv.tv.phone.debug`，
-并加 `-port 5556` 与两台并行。
-
-### 实测结果
-
-| 项 | TV（`litvtv`） | 手机（`litvphone`） |
+| 项 | 电视（`litvtv` / 5556） | 手机（`litvphone` / 5554） |
 |---|---|---|
 | 包名 | `com.litv.tv.debug` | `com.litv.tv.phone.debug` |
 | 首次启动落到 | `BindActivity` | `BindActivity` |
-| `am start -W` TotalTime | **1629 ms** | **1503 ms** |
-| 清数据后 | 仍进 `BindActivity` | 仍进 `BindActivity` |
+| `am start -W` TotalTime | 2463–2601 ms | 2632 ms |
 | 本包 `FATAL EXCEPTION` | **0** | **0** |
-| 分辨率 | 1920×1080 | 1080×1920 |
 
-两个 flavor 在**同一份代码**下落到同一个入口，说明「界面形态按 flavor 分流」这条没有开叉。
+## 六、输入方式：这次改的就是这里
 
-### 遥控器交互（TV 端）
+### 改之前：手机端没有可用输入通道
 
-TV 端没有触摸，只能靠方向键。实测：
+`TvKeyboard` 原来**无条件**套在整页所有输入框上。它是按电视 16:9 画的，
+放到 1080×1920 竖屏上被裁切，实测键盘上只剩：
 
-| 操作 | 结果 |
+```
+1 2 3 4 5 a b c d e k l m n o u v w x ‹ 上一格 删除 确定
+```
+
+**15 个字母，缺 f–j、p–t、z 和 6–0。** 后果：`tv.example.com` 里的 `i/p/t/z`
+一个都打不出来，含 6–9 的 IP 段也输不了。系统 IME 又被主动关掉了
+（`showSoftInputOnFocus=false` + 窗口级 `SOFT_INPUT_STATE_ALWAYS_HIDDEN`），
+所以手机端**根本没有任何可用的文字输入通道**。
+
+### 改之后：按设备类型分流
+
+`BindActivity` 新增 `isTv`（`DeviceType.isTV`）：
+
+| 设备 | 输入方式 |
 |---|---|
-| `DPAD_UP` ×2 + `OK` | 焦点移到「协议」并把 `HTTPS` 切成 `HTTP`——说明方向键能移焦点、OK 能触发控件 |
-| 再 `DPAD_UP` + `OK`（落在地址框） | 弹出**应用内屏幕键盘**：标题「服务器地址 · 第 1 格」，数字行 1–0、字母 a–z、`.` `-`，底部 `上一格 / 删除 / 清空 / 下一格 / 确定` |
+| 电视 | 自绘 `TvKeyboard`（系统 IME 会吃掉方向键，见 `TvKeyboard` 类注释） |
+| 手机 | 系统 IME（`SOFT_INPUT_ADJUST_RESIZE`，触摸操作不存在抢方向键的问题） |
 
-这块是历史上出过事的地方（见 [电视输入复盘](../postmortem/POSTMORTEM_2026-11-12_tv-input.md)），
-所以值得单独验一次：**分段输入 + 逐格跳转是通的**。
+**验证**（手机镜像 5554）：点地址框后 `dumpsys input_method` → `mInputShown=true`，
+`adb shell input text 'tv.example.com'` 成功写入，输入框内容为 `tv.example.com`。
 
-> 注意：那个键盘是**应用内自绘**的 View，不是系统 IME。
-> 所以 `dumpsys input_method` 里 `mInputShown=false` 属正常现象，别据此判断「键盘没弹出来」。
+> 注意：flavor 与设备类型是两件事。手机包装在电视上，`DeviceType.isTV` 仍判真，
+> 照样走自绘键盘——这是设计意图（界面形态优先级：设置 > 安装版本 > 设备特征）。
 
-## 五、没验证的部分（重要）
+### 电视键盘重做（对齐 Leanback guided step 的通行做法）
+
+| 改动 | 原因 |
+|---|---|
+| 宽度 `min(880dp, 屏宽×94%)` | 写死 dp 在窄屏上被裁切 |
+| 键位改**显式高度** | 窗口被内容撑满时，LinearLayout 会把溢出子行压成 0 高——真机表现为键盘只画到字母行、符号行与「确定」全消失，面板却还是满屏高 |
+| 字母区补 `⇧` 大小写 | 域名用小写，密码可能要大写 |
+| 新增符号行 `. - _ : / @` | 反向代理地址可能要 `:` `/` |
+| 标题显示 `n/max` | 到长度上限不再静默吞键 |
+| 「清空」移到最右 | 原来紧挨「删除」，误触会清掉整段输入 |
+| 逐键日志只在 `BuildConfig.DEBUG` 打 | Release 不带详细日志（AGENTS §6） |
+
+实测渲染（1920×1080）：标题「服务器地址」→ `1–0` → `a–j` → `k–t` → `u–z ⇧` →
+`. - _ : / @` → `‹ 上一格 / 删除 / 下一格 › / 清空` → `确定`，七行全部可见。
+触摸点键输入 `tv.example.com`，预览条实时显示，按「确定」回填表单成功。
+
+## 七、接真实服务端：两端都跑通了
+
+目标实例是一台 **edge 模式** 的实例（域名此处用 `tv.example.com` 代替，真实地址不入库），`/api/v1/health` 返回 `"version":"edge"`）。
+
+edge 模式不支持临时签发绑定码：
+
+```
+{"code":2006,"msg":"边缘模式不支持生成绑定码（边缘模式的绑定码就是 BIND_CODE，不临时签发）"}
+```
+
+所以必须先拿到这台实例的 `BIND_CODE`（固定 6 位）。拿到之后的完整链路：
+
+| 步骤 | 手机（5554） | 电视（5556） |
+|---|---|---|
+| 输入地址 | 系统 IME，`input text` 直输 ✓ | 自绘键盘点键，预览回显 ✓ |
+| 填绑定码 | 系统 IME ✓ | 自绘键盘标题显示 `6/6` ✓ |
+| 点「绑定」 | 立即绑定 | 立即绑定 |
+| 落到 | `PhoneHomeActivity` | `PlayerActivity` |
+| 结果 | **CCTV1综合 正在播**，系统硬解 Media3，直连源站 | **CCTV1综合 全屏播放** |
+| 本包 FATAL | **0** | **0** |
+
+两个 flavor 绑完落到不同页面，与 `BindActivity.goHome()` 的 `DeviceType.isTV` 分流一致：
+电视没有"首页"概念，绑完直接全屏播放，频道列表是按 ← 呼出的浮层。
+
+> 播放截图没进仓库：画面是真实广播内容且带第三方水印，不适合放在「不内置源」的公开仓库里。
+
+## 八、没验证的部分
 
 | 项 | 为什么没验 | 怎么补 |
 |---|---|---|
-| **播放链路** | 本地没有跑着的 LITV 服务端，也没有源 | 起一个服务端（或指向现有 NAS），绑定后在模拟器里实际起播 |
-| 绑定 → 批准 → 进首页 | 同上，需要服务端配合 | 同上 |
-| 高版本行为（API 29+） | 本机只有 API 28 镜像 | `sdkmanager` 装 `system-images;android-35;...` 后另建 AVD |
-| release 包 / R8 | 只编了 debug | `assembleRelease` 需要签名配置，属另一轮 |
-| TV 真实焦点流（横跨整页） | 只验了绑定页这一段 | 接上服务端后在频道页、播放页逐格走 |
+| API 29+ 行为 | 本机只有 API 28 镜像 | `sdkmanager` 装 35 的镜像另建 AVD |
+| release 包 / R8 | 只编了 debug | `assembleRelease` 需要签名配置 |
+| TV 全页焦点流 | 只走了绑定页与播放页 | 在频道浮层、设置弹层逐格走一遍 |
+| 时移 / 录制 / 投屏 | 需要在模拟器里逐条点 | 同一套设备，逐功能验证 |
+| 长时间播放 / 断网恢复 | 未做 | 播放 30 分钟观察内存与重连 |
 
-**已验的部分只覆盖「能装、能起、能画、能按、不崩」，不等于「功能可用」。**
+**已验的部分覆盖「装 → 起 → 绑 → 播」，但没覆盖时移、录制、投屏、异常恢复。**
 
-## 六、一个容易误判的现象
+## 九、一个容易误判的现象
 
-跑 TV 镜像时，`logcat` 里会出现 `com.android.tv.dvr` 的 `FATAL EXCEPTION`：
-
-```
-java.lang.RuntimeException: An error occurred while executing doInBackground()
-Caused by: android.database.sqlite.SQLiteException: no such column: failed_reason
-```
-
-那是 **Android TV 系统自带的 DVR 应用**（`com.android.tv.dvr`，进程号与我们的包无关）在
-API 28 镜像上的已知问题，不是本项目的崩溃。判断「我们的 App 有没有崩」必须按包名过滤：
+跑 TV 镜像时 `logcat` 会出现 `com.android.tv.dvr` 的 `FATAL EXCEPTION`
+（`SQLiteException: no such column: failed_reason`）。那是 **Android TV 系统自带的 DVR 应用**
+在 API 28 镜像上的已知问题，与本项目无关。判断我们的 App 有没有崩必须按包名过滤：
 
 ```bash
 adb logcat -d | grep -iE "com\.litv" | grep -iE "FATAL|Exception"
 ```
 
-## 七、复现
+## 十、复现
 
 ```bash
-export JAVA_HOME="<你的 JDK 17 路径>" ANDROID_HOME="<你的 Android SDK 路径>"
+export JAVA_HOME="<JDK 17>" ANDROID_HOME="<SDK>"
 cd android && gradle --no-daemon assembleTvDebug assemblePhoneDebug
+
 $ANDROID_HOME/emulator/emulator -avd litvtv -accel on -no-window -no-audio \
-  -no-boot-anim -gpu swiftshader_indirect -no-snapshot &
-$ANDROID_HOME/platform-tools/adb wait-for-device
-$ANDROID_HOME/platform-tools/adb install -r -t \
+  -no-boot-anim -gpu swiftshader_indirect -no-snapshot -port 5556 &
+$ANDROID_HOME/platform-tools/adb -s emulator-5556 install -r -t \
   app/build/outputs/apk/tv/debug/app-tv-x86-debug.apk
-$ANDROID_HOME/platform-tools/adb shell am start -W \
+$ANDROID_HOME/platform-tools/adb -s emulator-5556 shell am start -W \
   -n com.litv.tv.debug/com.litv.tv.ui.LauncherActivity
-$ANDROID_HOME/platform-tools/adb exec-out screencap -p > tv.png
 ```
 
-截图存于 [`docs/images/client/`](../images/client/)：`tv-bind.png`、`tv-keyboard.png`、`phone-bind.png`。
+截图见 [`docs/images/client/`](../images/client/)。

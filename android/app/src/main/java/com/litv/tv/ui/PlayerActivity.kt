@@ -222,6 +222,9 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
     private var panelLastFocusId: Long = 0L
     /** 进入节目单之前，频道列焦点所在的位置。回来时原样还给它。 */
     private var panelFocusPosBeforeEpg: Int = -1
+    /** 进入节目单时频道列的滚动状态：第一个可见位置 + 它的像素偏移。 */
+    private var panelFirstVisiblePos: Int = -1
+    private var panelFirstVisibleOffset: Int = 0
     /** 进播放页时想播的频道 id（0 = 上次那个） */
     private var pendingChannelId = 0L
     /**
@@ -2064,6 +2067,24 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
             val f = panelList.focusedChild
             if (f != null) panelList.getChildAdapterPosition(f) else -1
         }
+        // 同时记住滚动状态：回来要原样还原，否则列表会整体跳位置
+        (panelList.layoutManager as? LinearLayoutManager)?.let { lm ->
+            panelFirstVisiblePos = lm.findFirstVisibleItemPosition()
+            val v = lm.findViewByPosition(panelFirstVisiblePos)
+            panelFirstVisibleOffset = v?.top ?: 0
+        }
+        Log.i(TAG, "进节目单: focusPos=$panelFocusPosBeforeEpg firstVisible=$panelFirstVisiblePos offset=$panelFirstVisibleOffset")
+        // 节目单展开会让面板重新布局，频道列会跟着挪一格。
+        // 记下来的位置在这里立刻还原一次，避免"展开就跳"。
+        val fp = panelFirstVisiblePos
+        val fo = panelFirstVisibleOffset
+        if (fp >= 0) {
+            panelList.post {
+                (panelList.layoutManager as? LinearLayoutManager)
+                    ?.scrollToPositionWithOffset(fp, fo)
+                Log.i(TAG, "进节目单后还原滚动: firstVisible=$fp offset=$fo")
+            }
+        }
         epgVisible = true
         epgPanel.visibility = View.VISIBLE
         epgHandle.visibility = View.GONE
@@ -2471,23 +2492,23 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
      * 一回去列表就被划走了。这里直接回到进节目单之前的那一项。
      */
     private fun backToPanelList() {
+        val lmNow = panelList.layoutManager as? LinearLayoutManager
+        Log.i(TAG, "回列表前: firstVisible=${lmNow?.findFirstVisibleItemPosition()} 记录值 firstVisible=$panelFirstVisiblePos offset=$panelFirstVisibleOffset focusPos=$panelFocusPosBeforeEpg")
         val pos = panelFocusPosBeforeEpg
+        val firstPos = panelFirstVisiblePos
+        val firstOffset = panelFirstVisibleOffset
         panelList.post {
-            if (pos < 0 || pos >= channels.size) {
-                panelList.requestFocus()
-                return@post
+            val lm = panelList.layoutManager as? LinearLayoutManager
+            // 先还原滚动位置：不还原的话，聚焦一项会让 RecyclerView 把它滚进视野，
+            // 整个列表就"跳位置"了。
+            if (lm != null && firstPos >= 0) {
+                lm.scrollToPositionWithOffset(firstPos, firstOffset)
             }
-            val vh = panelList.findViewHolderForAdapterPosition(pos)
-            if (vh != null) {
-                vh.itemView.requestFocus()
-            } else {
-                // 那一项已经滚出屏幕：滚回来但不要甩到顶部，保持在屏幕中部附近
-                (panelList.layoutManager as? LinearLayoutManager)
-                    ?.scrollToPositionWithOffset(pos, panelList.height / 3)
-                panelList.postDelayed({
-                    panelList.findViewHolderForAdapterPosition(pos)?.itemView?.requestFocus()
-                        ?: panelList.requestFocus()
-                }, 60)
+            // 再聚焦原来的那一项（它已经在屏幕上了，不会再引起滚动）
+            val target = if (pos in 0 until channels.size) pos else firstPos
+            panelList.post {
+                val vh = if (target >= 0) panelList.findViewHolderForAdapterPosition(target) else null
+                if (vh != null) vh.itemView.requestFocus() else panelList.requestFocus()
             }
         }
     }

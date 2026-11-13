@@ -670,11 +670,14 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
             onClick = { ch ->
                 closePanel()
                 val i = channels.indexOfFirst { it.id == ch.id }
-                if (i >= 0) {
-                    index = i
+                if (i >= 0) index = i
+                if (ch.id == current?.id && player.isPlaying) {
+                    Log.i(TAG, "选中当前正在播的台，跳过重播：${ch.name}")
+                } else {
                     playChannel(ch)
                 }
             },
+            onLongClick = { ch -> toggleFavorite(ch) },
         )
         panelList.layoutManager = LinearLayoutManager(this)
         panelList.adapter = panelAdapter
@@ -1841,6 +1844,11 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         // 四列：源 / 分组 / 频道。这里必须走 applyChannelFilter()，
         // 原来直接 submit(channels) 会把还没加载的空列表刷进去，频道列就是空的。
         applyChannelFilter()
+        if (channels.isEmpty() && selGroup.isNotEmpty()) {
+            Log.i(TAG, "分组 $selGroup 为空，退回全部")
+            selGroup = ""
+            applyChannelFilter()
+        }
         refreshCategories()   // 分类列必须跟着刷，否则面板左侧空着
         refreshEpgColumn()
 

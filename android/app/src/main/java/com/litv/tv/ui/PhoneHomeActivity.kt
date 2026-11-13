@@ -117,6 +117,7 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
         setContentView(R.layout.activity_phone_home)
         applySystemInsets()
         app = application as LitvApp
+        app.api.onAuthExpired = { onAuthExpired() }
 
         if (app.prefs.token.isBlank()) {
             startActivity(Intent(this, BindActivity::class.java)); finish(); return
@@ -829,6 +830,7 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
     }
 
     override fun onDestroy() {
+        app.api.onAuthExpired = null
         super.onDestroy()
         // 不释放播放器：它归前台服务管，退到后台还要继续播。
         // 只断开回调和 Surface，避免持有已销毁的 Activity / Surface。
@@ -858,5 +860,20 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
     private fun phoneCacheMode(): String =
         if (app.prefs.directMode == "relay") "relay" else "auto"
 
+
+
+    /**
+     * 凭据失效（2003/401）：清掉本机凭据并回绑定页。
+     *
+     * 不清凭据的话，用户会卡在"频道=0"的黑屏或空列表上，
+     * 以为 App 坏了——实际是 token 被服务端换发/清掉了。
+     */
+    private fun onAuthExpired() {
+        runOnUiThread {
+            app.prefs.clearSession()
+            startActivity(android.content.Intent(this, LauncherActivity::class.java))
+            finish()
+        }
+    }
 
 }

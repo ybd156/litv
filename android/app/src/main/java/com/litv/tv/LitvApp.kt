@@ -53,12 +53,19 @@ class LitvApp : Application() {
         // 否则第一次取流会先用默认值（阿里）跑一轮，用户改了设置也要等下次启动才生效。
         DohDns.configure(prefs.dohEnabled(), prefs.dohProvider)
 
+        // libmpv 的可用性放到后台再查：
+        // MPVLib.available 会触发 System.loadLibrary("mpv")，在 onCreate 里同步做
+        // 会拖慢冷启动（该 ABI 没有 .so 时还要抛一次异常）。启动日志晚一行无所谓。
         Log.i(
             TAG,
-            "LITV 启动 | 渲染档=${tier.name} | libmpv=${if (MPVLib.available) "可用" else "不可用(该 ABI 无 .so)"} " +
-                "| DoH=${if (prefs.dohEnabled()) prefs.dohProvider else "off"} " +
+            "LITV 启动 | 渲染档=${tier.name} | DoH=${if (prefs.dohEnabled()) prefs.dohProvider else "off"} " +
                 "| Android ${android.os.Build.VERSION.SDK_INT} | ${android.os.Build.MODEL}"
         )
+        Thread({
+            runCatching {
+                Log.i(TAG, "libmpv=${if (MPVLib.available) "可用" else "不可用(该 ABI 无 .so)"}")
+            }
+        }, "litv-mpv-probe").start()
 
         // 未捕获异常落日志，方便用户反馈"某某台一播就崩"
         val prev = Thread.getDefaultUncaughtExceptionHandler()

@@ -211,6 +211,9 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
     private var lastBackAt = 0L
     /** 首次进入还没自动播放过 */
     private var autoPlayPending = true
+    /** 自动播放已决定、但播放器还没创建好时先存在这里，等 Surface 就绪再播。
+     *  否则 playChannel 会因为 player 未初始化而静默失效，白等 2~3 秒。 */
+    private var pendingAutoPlayChannel: Channel? = null
     /** 进播放页时想播的频道 id（0 = 上次那个） */
     private var pendingChannelId = 0L
     /**
@@ -481,7 +484,14 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
                 override fun surfaceCreated(h: android.view.SurfaceHolder) {
                     Log.i(TAG, "SurfaceView 就绪，绑定播放器")
                     player.attach(surface.holder.surface, findViewById(android.R.id.content))
-                    if (!player.isPlaying) current?.let { playChannel(it) }
+                    val pending = pendingAutoPlayChannel
+                    if (pending != null) {
+                        pendingAutoPlayChannel = null
+                        Log.i(TAG, "Surface 就绪，补播挂起的台：${pending.name}")
+                        playChannel(pending)
+                    } else if (!player.isPlaying) {
+                        current?.let { playChannel(it) }
+                    }
                 }
 
                 override fun surfaceChanged(h: android.view.SurfaceHolder, f: Int, w: Int, hh: Int) {}
@@ -784,9 +794,15 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         if (b.epgUrl.isNotBlank()) {
             lastEpgUrl = b.epgUrl
             epgLoadedEpochDay = todayEpochDay()
-            app.epg.ensure(b.epgUrl) { ok ->
-                if (ok) main.post { current?.let { refreshEpg(it.id) } }
-            }
+            // ★ 推迟解析：xmltv 有 3.7 万条，解析期间 GC 每 2 秒一次、
+            // 每次释放 17~25 万对象，会把刚开始的播放抖成幻灯片。
+            // 解析是后台线程，但 GC 是全进程的——只能错开时间。
+            // 8 秒后再拉，此时首帧早就出来了。
+            main.postDelayed({
+                app.epg.ensure(b.epgUrl) { ok ->
+                    if (ok) main.post { current?.let { refreshEpg(it.id) } }
+                }
+            }, 8_000)
         }
         groups = allChannels.map { it.group }.filter { it.isNotBlank() }.distinct()
 
@@ -822,7 +838,18 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
             applyGroupFilter()
         }
 
-        Log.i(TAG, "bootstrap 完成: 频道=${allChannels.size} 待播=$pendingChannelId 待自动播放=$autoPlayPending")
+        // 冷启动走缓存时，applyBootstrap 在 panelAdapter 创建之前执行，
+        // 过滤后的 channels 还是空的 -> 下面的自动播放分支直接跳过，
+        // 结果要等第二次（网络）bootstrap 才起播，白等好几秒。
+        // 这里直接算一遍，不依赖任何视图。
+        if (channels.isEmpty()) {
+            channels = when {
+                selGroup == "收藏" -> allChannels.filter { favoriteIds.contains(it.id) }
+                selGroup.isNotEmpty() -> allChannels.filter { it.group == selGroup }
+                else -> allChannels
+            }
+        }
+        Log.i(TAG, "bootstrap 完成: 频道=${allChannels.size} 过滤后=${channels.size} 待播=$pendingChannelId 待自动播放=$autoPlayPending")
         if (autoPlayPending && channels.isNotEmpty()) {
             autoPlayPending = false
             // 想播的台可能不在当前分组里（比如上次在 A 组、这次恢复到了 B 组）：
@@ -830,13 +857,17 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
             val idx = channels.indexOfFirst { it.id == (want?.id ?: -1L) }
             val pos = if (idx >= 0) idx else 0
             index = pos
-            Log.i(TAG, "开始自动播放: ${channels[pos].name}（想要=${want?.id ?: 0} 命中=${idx >= 0}）")
+            Log.i(TAG, "开始自动播放: ${channels[pos].name}（想要=${want?.id ?: 0} 命中=${idx >= 0} playerReady=${::player.isInitialized}）")
             // 让用户一眼看到自己的台在哪：滚动到它 + 打上"正在播"标记
             if (channels.isNotEmpty()) panelList.scrollToPosition(pos)
             // 注意：这里可能发生在 panelAdapter 创建之前（有本地缓存的冷启动路径），
             // 所以必须判 initialized，否则直接 UninitializedPropertyAccessException。
             if (::panelAdapter.isInitialized) panelAdapter.setPlayingId(channels[pos].id)
-            playChannel(channels[pos])
+            // ★ loadChannels() 在 onCreate 里先于 PlayerManager 创建执行，
+            // 这时直接 playChannel 会因为播放器不存在而失效（日志都没有）。
+            // 先挂起，等 Surface 就绪再播。
+            if (::player.isInitialized) playChannel(channels[pos])
+            else pendingAutoPlayChannel = channels[pos]
         } else if (pendingRemoteChannelId > 0) {
             // 遥控指令在 bootstrap 完成前就到了：现在补执行。
             // 不补的话，用户开机瞬间按遥控换台会"按了没反应"。
@@ -1366,6 +1397,9 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         // 开屏层自己就写着"正在起播…"，再叠一个转圈就是两套加载提示，
         // 观感像"转完又转"。开屏层在场时不再显示小转圈。
         if (splashOverlay?.visibility == View.VISIBLE) return@Runnable
+        // 首帧还没出现过 = 这是冷启动的第一次起播。开屏层就是这一阶段的加载提示，
+        // 再叠一个小转圈就成了"开屏撤掉 -> 又转圈 -> 才出画面"。
+        if (!hasRenderedFrame) return@Runnable
 
         if (loading.visibility == View.VISIBLE) return@Runnable
         loading.alpha = 0f

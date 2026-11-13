@@ -220,6 +220,8 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
     private var epgProgramsChannelId: Long = 0L
     /** 面板频道列里最后一次聚焦的台。回列表/展开节目单都以它为准。 */
     private var panelLastFocusId: Long = 0L
+    /** 进入节目单之前，频道列焦点所在的位置。回来时原样还给它。 */
+    private var panelFocusPosBeforeEpg: Int = -1
     /** 进播放页时想播的频道 id（0 = 上次那个） */
     private var pendingChannelId = 0L
     /**
@@ -2057,6 +2059,11 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
 
     /** 展开节目单列并藏起竖排把手（不抢焦点，由调用方决定）。 */
     private fun expandEpgPanel() {
+        // 记下"进节目单之前焦点在哪一项"，回来时原地返回，不重新定位
+        panelFocusPosBeforeEpg = run {
+            val f = panelList.focusedChild
+            if (f != null) panelList.getChildAdapterPosition(f) else -1
+        }
         epgVisible = true
         epgPanel.visibility = View.VISIBLE
         epgHandle.visibility = View.GONE
@@ -2457,6 +2464,34 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
     }
 
     /** 把焦点放回频道列里指定台的那一项（找不到就用当前播放的台）。 */
+    /**
+     * 从节目单回到频道列。
+     *
+     * 不重新按"正在播的台"定位——那个台可能离用户浏览的位置很远，
+     * 一回去列表就被划走了。这里直接回到进节目单之前的那一项。
+     */
+    private fun backToPanelList() {
+        val pos = panelFocusPosBeforeEpg
+        panelList.post {
+            if (pos < 0 || pos >= channels.size) {
+                panelList.requestFocus()
+                return@post
+            }
+            val vh = panelList.findViewHolderForAdapterPosition(pos)
+            if (vh != null) {
+                vh.itemView.requestFocus()
+            } else {
+                // 那一项已经滚出屏幕：滚回来但不要甩到顶部，保持在屏幕中部附近
+                (panelList.layoutManager as? LinearLayoutManager)
+                    ?.scrollToPositionWithOffset(pos, panelList.height / 3)
+                panelList.postDelayed({
+                    panelList.findViewHolderForAdapterPosition(pos)?.itemView?.requestFocus()
+                        ?: panelList.requestFocus()
+                }, 60)
+            }
+        }
+    }
+
     private fun focusPanelChannel(channelId: Long) {
         // 优先用传入的（面板最后聚焦的台）；都没有才退回正在播的台。
         val id = channelId.takeIf { it > 0 }
@@ -2961,7 +2996,7 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
                 expandEpgPanel()
                 focusDayList()
             }
-            epgDayList.hasFocus() && dir < 0 -> focusPanelChannel(panelLastFocusId)
+            epgDayList.hasFocus() && dir < 0 -> backToPanelList()
             epgDayList.hasFocus() && dir > 0 -> focusEpgList()
             epgList.hasFocus() && dir < 0 -> focusDayList()
             epgList.hasFocus() && dir > 0 -> favBtn.requestFocus()

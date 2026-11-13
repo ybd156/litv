@@ -2847,6 +2847,10 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
      */
     private fun movePanelFocus(dir: Int) {
         when {
+            // 分类列已经是最左，再按左键 = 关面板回到全屏。
+            // 之前这里是死键（落到 else 分支 requestFocus 自己），
+            // 想退出去只能按返回，很反直觉。
+            grpList.hasFocus() && dir < 0 -> closePanel()
             grpList.hasFocus() && dir > 0 -> panelList.requestFocus()
             panelList.hasFocus() && dir < 0 -> grpList.requestFocus()
             // 频道列右键：展开节目单，焦点落在日期选择器上

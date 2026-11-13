@@ -11,6 +11,7 @@ final class FixtureURLProtocol: URLProtocol {
     private static var router: RequestRouter?
     private let stateLock = NSLock()
     private var stopped = false
+    private var completed = false
 
     static func install(_ value: RequestRouter?) {
         routerLock.lock()
@@ -35,12 +36,22 @@ final class FixtureURLProtocol: URLProtocol {
     override func stopLoading() {
         stateLock.lock()
         stopped = true
+        let alreadyCompleted = completed
         stateLock.unlock()
+        // 取消时必须显式失败：否则 URLProtocol 既不回数据也不报错，
+        // 上层 await 会一直挂着，测试只能等到 job 超时。
+        if !alreadyCompleted {
+            stateLock.lock()
+            completed = true
+            stateLock.unlock()
+            client?.urlProtocol(self, didFailWithError: URLError(.cancelled))
+        }
     }
 
     func reply(_ json: String, status: Int = 200) {
         stateLock.lock()
-        let active = !stopped
+        let active = !stopped && !completed
+        if active { completed = true }
         stateLock.unlock()
         guard active, let url = request.url,
               let response = HTTPURLResponse(url: url, statusCode: status,
@@ -53,7 +64,8 @@ final class FixtureURLProtocol: URLProtocol {
 
     func fail() {
         stateLock.lock()
-        let active = !stopped
+        let active = !stopped && !completed
+        if active { completed = true }
         stateLock.unlock()
         if active { client?.urlProtocol(self, didFailWithError: URLError(.cannotConnectToHost)) }
     }
@@ -223,6 +235,7 @@ final class SessionFixture {
     static let bootstrap = #"{"code":0,"msg":"ok","data":{"channels":[{"id":7,"name":"fixture channel"}],"groups":[{"name":"fixture group","count":1}],"favorites":[7],"now":[{"channel_id":7,"title":"fixture title"}]}}"#
     static let pendingB = #"{"code":0,"msg":"ok","data":{"token":"fixture-token-b","status":"pending","hint":"pending fixture"}}"#
     static let boundA = #"{"code":0,"msg":"ok","data":{"token":"fixture-token-a","status":"bound","hint":"bound fixture"}}"#
+    static let boundB = #"{"code":0,"msg":"ok","data":{"token":"fixture-token-b","status":"bound","hint":"bound fixture"}}"#
 
     let router = RequestRouter()
     let gate = ApprovalGate()
@@ -232,10 +245,10 @@ final class SessionFixture {
     let session: Session
     private let suiteName = "C05Regression." + UUID().uuidString
 
-    init(bound: Bool = false, token: String = SessionFixture.tokenA) {
+    init(bound: Bool = false, token: String = SessionFixture.tokenA, server: String = SessionFixture.a) {
         credentials = MemoryCredentials(token)
         defaults = UserDefaults(suiteName: suiteName)!
-        defaults.set(Self.a, forKey: "server")
+        defaults.set(server, forKey: "server")
         defaults.set(bound, forKey: "isBound")
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [FixtureURLProtocol.self]

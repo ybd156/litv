@@ -80,7 +80,12 @@ XCTSkip 显示 `skipped` 会被判失败。
 `ios/Tests/SessionIsolationTests.swift` 有 12 条行为测试，其中至少 9 条断言的正是上表缺失的能力
 （例如 [:15](../../ios/Tests/SessionIsolationTests.swift#L15) 断言探测在途时 `serverBase` 仍是旧值）。
 
-**所以当前工作区如果推上去，`test-session` 会红。** 这是静态推断，未运行——只可能被 `iOS Build Check` 推翻。
+**所以当前工作区推上去，`test-session` 会失败。** 已由 CI 证实（`iOS Build Check #59`）：
+失败发生在**编译期**而非运行期——测试引用了尚未实现的 fixture API
+（`SessionFixture.boundB`、fixture 的 `server:` 参数），共 3 处错误。
+应用本体 `build-ios` 通过，说明 `Session.swift` 的改动本身是合法 Swift。
+
+也就是说：**测试是照着一个还没写的实现写的。** 先补 fixture 与状态机，再谈断言是否成立。
 
 ## 四、未验证项（都是真的没验证）
 

@@ -43,6 +43,16 @@ final class Session: ObservableObject {
     /// 保留实际任务句柄，让回归测试能等到异步回写结束。
     private(set) var bootstrapTask: Task<Void, Never>?
 
+    /// 会话代际。换服务端、解绑、重新注册都会 +1。
+    ///
+    /// 所有异步操作在入口记下当时的代际，`await` 回来后先比对；
+    /// 不一致就丢弃结果。这是「迟到的响应不得写回新会话」的唯一机制——
+    /// 没有它，慢网下连点两次绑定就能把新 token 换回旧的。
+    private var epoch = 0
+
+    /// 探测代际。乱序探测时只有最后发起的那次能提交。
+    private var probeEpoch = 0
+
     init(
         defaults: UserDefaults = .standard,
         transport: URLSession = .shared,
@@ -80,33 +90,64 @@ final class Session: ObservableObject {
     // ---------------------------------------------------------------- 绑定
 
     /// 探测地址是不是 LITV 服务端。
+    ///
+    /// **探测期间不改任何全局状态。** 候选地址只放在局部变量里，
+    /// 健康检查也显式用空 token 发出；只有确认是 LITV 之后才原子提交。
+    ///
+    /// 反过来做的后果是真实发生过的：探测失败后 `serverBase` 停在候选地址，
+    /// 而 token 还是原服务器的，下一次 bootstrap 就把旧 bearer 发给了第三方。
     func probe(_ input: String) async -> Bool {
         var b = input.trimmingCharacters(in: .whitespacesAndNewlines)
         if !b.lowercased().hasPrefix("http") { b = "http://" + b }
         b = b.hasSuffix("/") ? String(b.dropLast()) : b
+
+        probeEpoch += 1
+        let mine = probeEpoch
         let previous = serverBase
-        serverBase = b
+
         do {
+            // token 显式留空：健康检查绝不能带凭据去一个还没确认的地址。
             let h = try await ApiClient(base: b, token: "", transport: transport).health()
-            let ok = (h["code"] as? Int) == 0
-            if ok {
-                if !previous.isEmpty && previous != b { dropCredentials() }
-                defaults.set(b, forKey: "server")
-            }
-            return ok
+            // 取消，或被更晚发起的探测取代 → 不提交，也不改任何状态。
+            if Task.isCancelled || mine != probeEpoch { return false }
+            guard (h["code"] as? Int) == 0 else { return false }
+            commitServerSwitch(to: b, from: previous)
+            return true
         } catch {
+            if Task.isCancelled || mine != probeEpoch { return false }
             errorText = "连不上：\(error.localizedDescription)"
             return false
         }
     }
 
+    /// 提交换服务器：先让所有在途结果失效，再一次性改掉地址与凭据。
+    private func commitServerSwitch(to b: String, from previous: String) {
+        if b == previous {
+            defaults.set(b, forKey: "server")
+            return
+        }
+        // 先 +1：此刻起所有旧会话的异步结果都算过期。
+        epoch += 1
+        serverBase = b
+        defaults.set(b, forKey: "server")
+        // previous 为空表示「不知道原来连的是谁」，留存 token 同样不可信。
+        dropCredentials()
+        clearSessionData()
+    }
+
     /// 注册设备。返回 true 表示已直接绑定，false 表示待管理员批准。
     func register(code: String?) async -> Bool {
+        epoch += 1
+        let mine = epoch
+        // 快照本次请求的地址与凭据：await 期间 sessionBase/token 可能被改。
+        let client = api
         do {
-            let r = try await api.register(deviceKey: deviceKey,
-                                           name: deviceName.isEmpty ? "iPhone" : deviceName,
-                                           model: UIDevice.current.model,
-                                           code: code)
+            let r = try await client.register(deviceKey: deviceKey,
+                                              name: deviceName.isEmpty ? "iPhone" : deviceName,
+                                              model: UIDevice.current.model,
+                                              code: code)
+            // 迟到的响应（期间换过服务器 / 解绑过 / 又注册了一次）一律丢弃。
+            guard mine == epoch, !Task.isCancelled else { return false }
             setToken(r.token)
             if token.isEmpty {
                 errorText = "系统安全存储不可用，无法保存绑定凭据，请重试"
@@ -117,20 +158,39 @@ final class Session: ObservableObject {
             statusText = r.hint
             return isBound
         } catch {
+            guard mine == epoch else { return false }
             errorText = error.localizedDescription
             return false
         }
     }
 
     /// 待批准时轮询：能拉到 bootstrap 就说明放行了。
+    ///
+    /// 只发一次 bootstrap 并直接应用结果——先探活再取数据会多一次请求，
+    /// 而且两次之间状态可能已经变了。
     func waitForApproval() async {
         for _ in 0..<60 {
-            try? await approvalPause()
-            if (try? await api.bootstrap()) != nil {
+            do {
+                try await approvalPause()
+            } catch {
+                // 取消（用户离开绑定页 / 切 tab）不是超时，静默退出，不发请求也不报错。
+                return
+            }
+            if Task.isCancelled { return }
+
+            epoch += 1
+            let mine = epoch
+            do {
+                let b = try await api.bootstrap()
+                guard mine == epoch, !Task.isCancelled else { return }
                 isBound = true
                 defaults.set(true, forKey: "isBound")
-                bootstrap()
+                applyBootstrap(b)
                 return
+            } catch {
+                // 2003 = 还没批准，继续轮询；期间会话已变则直接放弃。
+                guard mine == epoch, !Task.isCancelled else { return }
+                continue
             }
         }
         errorText = "等待批准超时，请在管理台确认这台设备"
@@ -140,23 +200,32 @@ final class Session: ObservableObject {
 
     func bootstrap() {
         guard !token.isEmpty, !serverBase.isEmpty else { return }
+        epoch += 1
+        let mine = epoch
         loading = true
         bootstrapTask = Task {
             do {
                 let b = try await api.bootstrap()
-                channels = b.channels
-                groups = b.groups
-                favorites = Set(b.favorites)
-                var m: [Int64: String] = [:]
-                for n in b.now { m[n.channelId] = n.title }
-                nowTitles = m
-                statusText = "\(b.channels.count) 个频道"
-                errorText = nil
+                // 旧代际的返回不得覆盖新会话的数据，也不得把新的 loading 关掉。
+                guard mine == epoch else { return }
+                applyBootstrap(b)
             } catch {
+                guard mine == epoch else { return }
                 errorText = error.localizedDescription
             }
-            loading = false
+            if mine == epoch { loading = false }
         }
+    }
+
+    private func applyBootstrap(_ b: Bootstrap) {
+        channels = b.channels
+        groups = b.groups
+        favorites = Set(b.favorites)
+        var m: [Int64: String] = [:]
+        for n in b.now { m[n.channelId] = n.title }
+        nowTitles = m
+        statusText = "\(b.channels.count) 个频道"
+        errorText = nil
     }
 
     func toggleFavorite(_ ch: Channel) {
@@ -172,11 +241,11 @@ final class Session: ObservableObject {
     }
 
     func unbind() {
+        epoch += 1
         setToken("")
         isBound = false
         defaults.set(false, forKey: "isBound")
-        channels = []
-        favorites = []
+        clearSessionData()
     }
 
     // ---------------------------------------------------------------- 凭据
@@ -191,10 +260,23 @@ final class Session: ObservableObject {
         }
     }
 
+    /// 彻底丢弃本机凭据（换服务端 / 解绑时用）。
     private func dropCredentials() {
         setToken("")
         isBound = false
         defaults.set(false, forKey: "isBound")
+    }
+
+    /// 清掉所有「属于某个服务器」的数据。换源后旧频道列表必须消失，
+    /// 否则界面会显示上一个服务器的台，点进去必然失败。
+    /// `deviceKey` 不在其中：设备身份跨服务器保留。
+    private func clearSessionData() {
+        channels = []
+        groups = []
+        favorites = []
+        nowTitles = [:]
+        lastChannel = nil
+        playRequest = nil
     }
 
     func channels(in group: String?) -> [Channel] {

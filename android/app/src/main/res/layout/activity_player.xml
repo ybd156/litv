@@ -328,6 +328,8 @@
                     android:layout_width="match_parent"
                     android:layout_height="0dp"
                     android:layout_weight="1"
+                    android:clipToPadding="false"
+                    android:paddingVertical="8dp"
                     android:scrollbars="none" />
 
                 <!-- 列表为空时的引导文案（C1）：不留学生一块空白。

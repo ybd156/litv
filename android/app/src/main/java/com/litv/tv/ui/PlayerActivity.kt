@@ -214,6 +214,8 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
     /** 自动播放已决定、但播放器还没创建好时先存在这里，等 Surface 就绪再播。
      *  否则 playChannel 会因为 player 未初始化而静默失效，白等 2~3 秒。 */
     private var pendingAutoPlayChannel: Channel? = null
+    /** 频道列里当前焦点对应的台：节目单跟着它，不跟着正在播的台。 */
+    private var focusEpgChannelId: Long = 0L
     /** 进播放页时想播的频道 id（0 = 上次那个） */
     private var pendingChannelId = 0L
     /**
@@ -678,6 +680,13 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
                 }
             },
             onLongClick = { ch -> toggleFavorite(ch) },
+            // 焦点移到哪个台，右侧节目单就显示哪个台的节目（不是正在播的那个）
+            onFocus = { ch ->
+                if (ch.id != focusEpgChannelId) {
+                    focusEpgChannelId = ch.id
+                    if (epgVisible) refreshEpg(ch.id)
+                }
+            },
         )
         panelList.layoutManager = LinearLayoutManager(this)
         panelList.adapter = panelAdapter
@@ -1869,21 +1878,27 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         val idx = channels.indexOfFirst { it.id == current?.id }
         val pos = if (idx >= 0) idx else 0
         (panelList.layoutManager as? LinearLayoutManager)?.scrollToPositionWithOffset(pos, 0)
-        var tries = 0
-        fun focusCurrent() {
-            val vh = panelList.findViewHolderForAdapterPosition(pos)
-            if (vh != null) {
-                vh.itemView.requestFocus()
-            } else if (tries++ < 8) {
-                panelList.postDelayed({ focusCurrent() }, 40)
-            } else {
-                // 列表确实是空的（比如空「收藏」分组）：焦点交给分组列，
-                // 否则焦点落在一个空列表上，按上下/OK 全都没反应。
-                Log.i(TAG, "焦点落不到频道列（channels=${channels.size} 分组=$selGroup），交给分组列")
-                grpList.post { grpList.requestFocus() }
+        // 焦点必须真的落进频道列——只有那里按上下才是换台、按 OK 才是切换。
+        // 之前只重试 8 帧（320ms）就放弃，失败后焦点留在分类列，
+        // 于是"在频道页按上下"变成了切分类。这里轮询到 1.5 秒。
+        val deadline = System.currentTimeMillis() + 1_500
+        val focusTick = object : Runnable {
+            override fun run() {
+                if (panelList.hasFocus()) return
+                val vh = panelList.findViewHolderForAdapterPosition(pos)
+                if (vh != null) {
+                    vh.itemView.requestFocus()
+                    return
+                }
+                if (System.currentTimeMillis() < deadline) {
+                    panelList.postDelayed(this, 80)
+                } else if (channels.isEmpty()) {
+                    Log.i(TAG, "频道列为空，焦点交给分组列")
+                    grpList.post { grpList.requestFocus() }
+                }
             }
         }
-        panelList.postDelayed({ focusCurrent() }, 40)
+        panelList.postDelayed(focusTick, 60)
         hideOsd()
     }
 

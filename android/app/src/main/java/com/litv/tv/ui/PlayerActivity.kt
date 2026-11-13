@@ -2795,6 +2795,10 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
                 // 否则上下换台会跳到别的台。
                 val curId = current?.id ?: 0
                 index = channels.indexOfFirst { it.id == curId }.coerceAtLeast(0)
+                // 静默重载会 notifyDataSetChanged，把面板里的焦点清掉。
+                // 面板开着就把焦点放回原来的台——否则"隔很久再按左键开面板，
+                // 焦点从频道列表消失了"（落焦点只轮询 1.5 秒，早结束了）。
+                if (panelVisible) main.post { focusPanelChannel(curId) }
             },
             onErr = { /* 静默失败：下次心跳还会再试 */ },
         )

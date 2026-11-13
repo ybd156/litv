@@ -1700,6 +1700,9 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         osdProgress.visibility = if (detail) View.VISIBLE else View.GONE
         osdNext.visibility = if (detail) View.VISIBLE else View.GONE
         osdEngine?.visibility = if (detail) View.VISIBLE else View.GONE
+        // 角标和码率也是排障信息，跟线路/内核一样只在第二层出现
+        if (::osdBadges.isInitialized) osdBadges.visibility = if (detail) View.VISIBLE else View.GONE
+        if (::osdRate.isInitialized) osdRate.visibility = if (detail) View.VISIBLE else View.GONE
         // 底部信息条（线路 x/y、延迟、时间）同样只在第二层出现
         infoLine.visibility = if (detail) View.VISIBLE else View.GONE
         infoTime.visibility = if (detail) View.VISIBLE else View.GONE

@@ -705,7 +705,7 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
             index = 0
             panelList.scrollToPosition(0)
         }
-        panelAdapter.submit(channels, nowMap)
+        submitPanelList(channels)
         panelTitle.text = "频道列表（${channels.size}）"
 
         epgAdapter = EpgAdapter()
@@ -2436,6 +2436,23 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         panelList.post {
             val vh = panelList.findViewHolderForAdapterPosition(pos)
             if (vh != null) vh.itemView.requestFocus() else panelList.scrollToPosition(pos)
+        }
+    }
+
+
+    /**
+     * 统一的频道列提交：先记下"焦点停在哪一项"，提交后再放回去。
+     *
+     * 凡是面板重载/切分组都会走 notifyDataSetChanged，焦点会被系统清掉；
+     * 各自补一次很容易漏（静默重载就因为漏了导致"隔很久开面板焦点消失"）。
+     * 这里收口成一个入口。
+     */
+    private fun submitPanelList(list: List<Channel>) {
+        val keep = if (panelVisible) focusedPanelChannelId().takeIf { it > 0 } else null
+        panelAdapter.submit(list, nowMap)
+        if (panelVisible) {
+            val id = keep ?: current?.id ?: 0L
+            if (id > 0) main.post { focusPanelChannel(id) }
         }
     }
 

@@ -68,6 +68,12 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
     /** 本次转场的方向：+1 从下往上扫，-1 从上往下扫。 */
     private var curtainDir = 1f
     private lateinit var loading: ProgressBar
+    /** 加载圈下面的说明文字；与 loading 同步显示/隐藏。 */
+    private var loadingText: TextView? = null
+    /** 冷启动开屏层；首帧到达后淡出。 */
+    private var splashOverlay: View? = null
+    /** 开屏层上的阶段文案。 */
+    private var splashStage: TextView? = null
     private lateinit var switchTip: TextView
     private lateinit var osd: LinearLayout
     private lateinit var osdName: TextView
@@ -456,6 +462,9 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         playerView = findViewById(R.id.playerView)
         curtain = findViewById(R.id.curtain)
         loading = findViewById(R.id.loading)
+        loadingText = findViewById(R.id.loadingText)
+        splashOverlay = findViewById(R.id.splashOverlay)
+        splashStage = findViewById(R.id.splashStage)
         switchTip = findViewById(R.id.switchTip)
         osd = findViewById(R.id.osd)
         osdName = findViewById(R.id.osdName)
@@ -474,68 +483,34 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         favBtn.setOnClickListener { toggleFavoriteOnFocused() }
         numberTip = findViewById(R.id.numberTip)
         settingsMenu = findViewById(R.id.settingsMenu)
-        // 右侧设置菜单：能就地改的就地改，改不了的转给完整设置弹层
-        // 比例和解码不再「按一下循环到下一个值」（改完不知道变成了什么），
-        // 改成弹选择框。
-        findViewById<TextView>(R.id.miAspect).setOnClickListener {
-            val opts = listOf("auto", "16:9", "4:3", "fill")
-            val labels = listOf("自动", "16:9", "4:3", "铺满")
-            val idx = opts.indexOf(app.prefs.aspect).coerceAtLeast(0)
-            closeSettingsMenu()
-            PickerDialog(this, "画面比例", labels, idx) { i ->
-                app.prefs.aspect = opts[i]
-                // 比例是引擎在 prepare 时读的，改完下次起播生效
-                toastTip("画面比例：" + labels[i])
-            }.show()
-        }
-        findViewById<TextView>(R.id.miDecode).setOnClickListener {
-            val opts = listOf("auto", "hard", "soft")
-            val labels = listOf("自动", "硬件解码", "软件解码")
-            val idx = opts.indexOf(app.prefs.decode).coerceAtLeast(0)
-            closeSettingsMenu()
-            PickerDialog(this, "解码方式", labels, idx) { i ->
-                app.prefs.decode = opts[i]
-                toastTip("解码方式：" + labels[i])
-            }.show()
-        }
+        // 右侧设置菜单：一级 4 组，具体选项进二级。
+        //
+        // 原来 9 条平铺在一级：遥控器要按很多下才摸到目标，而且
+        // 「画面比例」和「显示设置」摆在一起，看不出是两回事。
         findViewById<TextView>(R.id.miLine).setOnClickListener { openLinePicker() }
 
-        // 缓冲：原本叫「超时换源」，但设置页里根本没有那一项——点开只是又弹
-        // 一遍设置页。改成真能调的「缓冲」，值用中文（3 秒 / 5 秒）。
-        findViewById<TextView>(R.id.miTimeout).setOnClickListener {
-            val opts = listOf(1000, 2000, 3000, 5000)
-            val labels = listOf("1 秒（省内存）", "2 秒", "3 秒（更稳）", "5 秒（慢网）")
-            val idx = opts.indexOf(app.prefs.bufferMs).coerceAtLeast(0)
+        findViewById<TextView>(R.id.miPicture).setOnClickListener {
             closeSettingsMenu()
-            PickerDialog(this, "缓冲", labels, idx) { i ->
-                app.prefs.bufferMs = opts[i]
-                toastTip("缓冲：" + labels[i])
+            PickerDialog(this, "画面", listOf("画面比例", "界面缩放"), -1) { i ->
+                if (i == 0) pickAspect() else pickUiScale()
             }.show()
         }
-        // 分类管理：频道分类确实在频道面板里，这里直接打开它是对的。
-        findViewById<TextView>(R.id.miCategory).setOnClickListener {
-            closeSettingsMenu(); openPanel()
-        }
-        // 界面缩放：原本叫「列表配置」，设置页里同样没有这一项。
-        findViewById<TextView>(R.id.miList).setOnClickListener {
-            val opts = com.litv.tv.data.UiScaleOptions.keys
-            val labels = com.litv.tv.data.UiScaleOptions.all.map { it.label }
-            val idx = opts.indexOf(app.prefs.uiScale).coerceAtLeast(0)
+        findViewById<TextView>(R.id.miPlayback).setOnClickListener {
             closeSettingsMenu()
-            PickerDialog(this, "界面缩放", labels, idx) { i ->
-                app.prefs.uiScale = opts[i]
-                toastTip("界面缩放：" + labels[i] + "（重开列表生效）")
+            PickerDialog(this, "播放", listOf("解码方式", "缓冲"), -1) { i ->
+                if (i == 0) pickDecode() else pickBuffer()
             }.show()
         }
-        // 显示 / 偏好 / 其他：分别落到设置页的三个分类，不再都是同一个默认页。
-        findViewById<TextView>(R.id.miDisplay).setOnClickListener {
-            closeSettingsMenu(); SettingsDialog(this, 0).show()
-        }
-        findViewById<TextView>(R.id.miPrefs).setOnClickListener {
-            closeSettingsMenu(); SettingsDialog(this, 1).show()
-        }
-        findViewById<TextView>(R.id.miOther).setOnClickListener {
-            closeSettingsMenu(); SettingsDialog(this, 2).show()
+        findViewById<TextView>(R.id.miSettings).setOnClickListener {
+            closeSettingsMenu()
+            PickerDialog(this, "设置", listOf("分类管理", "显示设置", "偏好设置", "其他设置"), -1) { i ->
+                when (i) {
+                    0 -> openPanel()
+                    1 -> SettingsDialog(this, 0).show()
+                    2 -> SettingsDialog(this, 1).show()
+                    else -> SettingsDialog(this, 2).show()
+                }
+            }.show()
         }
         epgPanel = findViewById(R.id.epgPanel)
         epgTitle = findViewById(R.id.epgTitle)
@@ -558,6 +533,7 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
             }
         }
         if (channels.isEmpty()) {
+            setSplashStage("正在连接服务器…")
             app.api.bootstrap(onOk = { b -> applyBootstrap(b) }, onErr = {})
         }
         panelAdapter = ChannelAdapter(
@@ -829,6 +805,7 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         slideDir = pendingSlideDir
         pendingSlideDir = 0f
         Log.i(TAG, "playChannel: ${ch.name} streamId=$streamId rebuild=$forceRebuild slide=$slideDir direct=${app.prefs.directMode}")
+        setSplashStage("正在起播…")
         // 取一个换台代际号。下面的回调只有在它仍然是"最后一次换台"时才允许生效。
         val seq = playGate.begin()
         current = ch        // 换到别的台就重置"已试线路"记录
@@ -1148,17 +1125,96 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         loading.alpha = 0f
         loading.visibility = View.VISIBLE
         loading.animate().alpha(1f).setDuration(180).start()
+        loadingText?.apply {
+            alpha = 0f
+            visibility = View.VISIBLE
+            animate().alpha(1f).setDuration(180).start()
+        }
     }
 
     /** 起播成功/失败时调用：把加载圈淡出，而不是直接 GONE。 */
+
+    /**
+     * 冷启动开屏层：首帧到达或确定失败后淡出。
+     *
+     * 文案要跟着阶段走——只放一个转圈，用户不知道在等什么，
+     * 超过十几秒就会以为卡死。见 setSplashStage。
+     */
+
+    // ------------------------------------------------------------ 二级设置项
+    //
+    // 这些原来是直接挂在一级菜单上的，现在由「画面 / 播放」二级菜单调起。
+    // 比例和解码不再「按一下循环到下一个值」——改完不知道变成了什么。
+
+    private fun pickAspect() {
+        val opts = listOf("auto", "16:9", "4:3", "fill")
+        val labels = listOf("自动", "16:9", "4:3", "铺满")
+        val idx = opts.indexOf(app.prefs.aspect).coerceAtLeast(0)
+        PickerDialog(this, "画面比例", labels, idx) { i ->
+            app.prefs.aspect = opts[i]
+            // 比例是引擎在 prepare 时读的，改完下次起播生效
+            toastTip("画面比例：" + labels[i])
+        }.show()
+    }
+
+    private fun pickUiScale() {
+        val opts = com.litv.tv.data.UiScaleOptions.keys
+        val labels = com.litv.tv.data.UiScaleOptions.all.map { it.label }
+        val idx = opts.indexOf(app.prefs.uiScale).coerceAtLeast(0)
+        PickerDialog(this, "界面缩放", labels, idx) { i ->
+            app.prefs.uiScale = opts[i]
+            toastTip("界面缩放：" + labels[i] + "（重开列表生效）")
+        }.show()
+    }
+
+    private fun pickDecode() {
+        val opts = listOf("auto", "hard", "soft")
+        val labels = listOf("自动", "硬件解码", "软件解码")
+        val idx = opts.indexOf(app.prefs.decode).coerceAtLeast(0)
+        PickerDialog(this, "解码方式", labels, idx) { i ->
+            app.prefs.decode = opts[i]
+            toastTip("解码方式：" + labels[i])
+        }.show()
+    }
+
+    private fun pickBuffer() {
+        val opts = listOf(1000, 2000, 3000, 5000)
+        val labels = listOf("1 秒（省内存）", "2 秒", "3 秒（更稳）", "5 秒（慢网）")
+        val idx = opts.indexOf(app.prefs.bufferMs).coerceAtLeast(0)
+        PickerDialog(this, "缓冲", labels, idx) { i ->
+            app.prefs.bufferMs = opts[i]
+            toastTip("缓冲：" + labels[i])
+        }.show()
+    }
+
+    private fun hideSplashOverlay() {
+        splashOverlay?.let { v ->
+            if (v.visibility != View.VISIBLE) return
+            v.animate().alpha(0f).setDuration(220).withEndAction {
+                v.visibility = View.GONE
+                v.alpha = 1f
+            }.start()
+        }
+    }
+
+    /** 更新开屏层上的阶段说明。只在主线程调用。 */
+    private fun setSplashStage(text: String) {
+        splashStage?.text = text
+    }
+
     private fun hideLoading() {
         if (!::loading.isInitialized) return
         main.removeCallbacks(showLoadingRunnable)
         if (loading.visibility != View.VISIBLE) return
+        loadingText?.animate()?.alpha(0f)?.setDuration(150)?.withEndAction {
+            loadingText?.visibility = View.GONE
+            loadingText?.alpha = 1f
+        }?.start()
         loading.animate().alpha(0f).setDuration(150).withEndAction {
             loading.visibility = View.GONE
             loading.alpha = 1f
         }.start()
+
     }
 
     private fun showOsd() {
@@ -1607,6 +1663,9 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         // 新画面已经画出来了，把转场幕布朝同方向擦走。
         // 幕布在下面（视频之上、OSD 之下），擦走的过程就是"翻页"。
         endCurtain()
+        // 冷启动开屏层要等到**真的画出第一帧**才撤。
+        // 之前挂在 onPlaying 上，但那一刻画面往往还是黑的，撤了就是黑屏。
+        hideSplashOverlay()
         // 换台方向用完即弃，别残留到下一次
         slideDir = 0f
     }
@@ -1659,6 +1718,7 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         switchTip.text = "播放出错 · 按 OK 重试"
         switchTip.visibility = View.VISIBLE
         playFailedPending = true
+            hideSplashOverlay()
     }
 
     /**
@@ -1799,6 +1859,7 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         switchTip.text = "这条线路连不上（${directFailureText(reason)}）· 按 OK 重试"
         switchTip.visibility = View.VISIBLE
         playFailedPending = true
+            hideSplashOverlay()
 
         when (RelayDecision.decide(
             autoRelay = app.prefs.autoRelay,

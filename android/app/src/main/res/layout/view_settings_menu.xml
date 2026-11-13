@@ -18,48 +18,27 @@
     android:paddingHorizontal="20dp"
     android:visibility="gone">
 
+
+    <!-- 一级只放 4 组。原来 9 条平铺：遥控器要按很多下才能摸到目标，
+         而且「画面比例」和「显示设置」看不出是两回事。
+         具体选项进二级（见 PlayerActivity 的 miPicture / miPlayback / miSettings）。 -->
     <TextView
         style="@style/SettingsMenuItem"
         android:id="@+id/miLine"
-        android:text="线路选择" />
+        android:text="线路" />
 
     <TextView
         style="@style/SettingsMenuItem"
-        android:id="@+id/miAspect"
-        android:text="画面比例" />
+        android:id="@+id/miPicture"
+        android:text="画面" />
 
     <TextView
         style="@style/SettingsMenuItem"
-        android:id="@+id/miDecode"
-        android:text="解码方式" />
+        android:id="@+id/miPlayback"
+        android:text="播放" />
 
     <TextView
         style="@style/SettingsMenuItem"
-        android:id="@+id/miTimeout"
-        android:text="缓冲" />
-
-    <TextView
-        style="@style/SettingsMenuItem"
-        android:id="@+id/miCategory"
-        android:text="分类管理" />
-
-    <TextView
-        style="@style/SettingsMenuItem"
-        android:id="@+id/miList"
-        android:text="界面缩放" />
-
-    <TextView
-        style="@style/SettingsMenuItem"
-        android:id="@+id/miDisplay"
-        android:text="显示设置" />
-
-    <TextView
-        style="@style/SettingsMenuItem"
-        android:id="@+id/miPrefs"
-        android:text="偏好设置" />
-
-    <TextView
-        style="@style/SettingsMenuItem"
-        android:id="@+id/miOther"
-        android:text="其他设置" />
+        android:id="@+id/miSettings"
+        android:text="设置" />
 </LinearLayout>

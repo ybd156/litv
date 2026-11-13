@@ -15,7 +15,7 @@
     <style name="Theme.Litv.Player" parent="Theme.Litv">
         <item name="android:windowFullscreen">true</item>
         <item name="android:windowContentOverlay">@null</item>
-        <item name="android:windowBackground">@android:color/black</item>
+        <item name="android:windowBackground">@drawable/splash_bg</item>
     </style>
 
     <!-- 播放中设置弹层用：无标题、透明底、压暗背景 -->
@@ -34,5 +34,11 @@
         <item name="android:textColorAlertDialogListItem">@color/text_primary</item>
         <item name="colorAccent">@color/accent</item>
         <item name="android:windowBackground">#FF151A21</item>
+    </style>
+
+    <!-- 冷启动主题：只换窗口背景，逻辑与 Theme.Litv 一致。
+         系统在进程启动前就画这个背景，所以点图标不会再先黑一屏。 -->
+    <style name="Theme.Litv.Splash" parent="Theme.Litv">
+        <item name="android:windowBackground">@drawable/splash_bg</item>
     </style>
 </resources>

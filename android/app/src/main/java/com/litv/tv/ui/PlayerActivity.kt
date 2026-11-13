@@ -101,6 +101,8 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
     private var subMenu: android.view.View? = null
     private var subMenuTitle: android.widget.TextView? = null
     private var subMenuRow: android.widget.LinearLayout? = null
+    /** 当前展开的二级属于哪个一级项，右键从这里退回时要用。 */
+    private var subMenuOwner: TextView? = null
     private var menuVisible = false
     private lateinit var epgPanel: LinearLayout
     private lateinit var epgTitle: TextView
@@ -499,38 +501,39 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         // 左边应该实时显示当前项的选项，不然用户得先"点进去"才知道有什么可调。
         val specs = mapOf(
             R.id.miAspect to SubSpec("画面比例", listOf("自动", "16:9", "4:3", "铺满"),
-                listOf("auto", "16:9", "4:3", "fill").indexOf(app.prefs.aspect).coerceAtLeast(0)) { i ->
+                { listOf("auto", "16:9", "4:3", "fill").indexOf(app.prefs.aspect).coerceAtLeast(0) }) { i ->
                 app.prefs.aspect = listOf("auto", "16:9", "4:3", "fill")[i]
                 toastTip("画面比例：" + listOf("自动", "16:9", "4:3", "铺满")[i])
             },
             R.id.miDecode to SubSpec("解码方式", listOf("自动", "硬件解码", "软件解码"),
-                listOf("auto", "hard", "soft").indexOf(app.prefs.decode).coerceAtLeast(0)) { i ->
+                { listOf("auto", "hard", "soft").indexOf(app.prefs.decode).coerceAtLeast(0) }) { i ->
                 app.prefs.decode = listOf("auto", "hard", "soft")[i]
                 toastTip("解码方式：" + listOf("自动", "硬件解码", "软件解码")[i])
             },
             R.id.miTimeout to SubSpec("超时换源", listOf("1 秒", "2 秒", "3 秒", "5 秒"),
-                listOf(1000, 2000, 3000, 5000).indexOf(app.prefs.bufferMs).coerceAtLeast(0)) { i ->
+                { listOf(1000, 2000, 3000, 5000).indexOf(app.prefs.bufferMs).coerceAtLeast(0) }) { i ->
                 app.prefs.bufferMs = listOf(1000, 2000, 3000, 5000)[i]
                 toastTip("缓冲：" + listOf("1 秒", "2 秒", "3 秒", "5 秒")[i])
             },
             R.id.miList to SubSpec("列表配置",
                 com.litv.tv.data.UiScaleOptions.all.map { it.label },
-                com.litv.tv.data.UiScaleOptions.keys.indexOf(app.prefs.uiScale).coerceAtLeast(0)) { i ->
+                { com.litv.tv.data.UiScaleOptions.keys.indexOf(app.prefs.uiScale).coerceAtLeast(0) }) { i ->
                 app.prefs.uiScale = com.litv.tv.data.UiScaleOptions.keys[i]
                 toastTip("界面缩放：" + com.litv.tv.data.UiScaleOptions.all[i].label + "（重开列表生效）")
             },
         )
         // 焦点落到有选项的项上就展开；移到没有选项的项上则收起
         listOf(R.id.miLine, R.id.miAspect, R.id.miDecode, R.id.miTimeout,
-                R.id.miCategory, R.id.miList, R.id.miDisplay, R.id.miPrefs, R.id.miOther)
+                R.id.miList, R.id.miDisplay, R.id.miPrefs, R.id.miOther)
             .forEach { id ->
                 findViewById<TextView>(id).setOnFocusChangeListener { _, has ->
                     if (!has) return@setOnFocusChangeListener
                     // 焦点到就展开：参考实现里光标移到哪项，左边就显示哪项的选项，
                     // 不用先按 OK 进去看。
+                    subMenuOwner = findViewById(id)
                     val spec = specs[id]
                     when {
-                        spec != null -> openSubMenu(spec)
+                        spec != null -> openSubMenu(spec, findViewById(id))
                         id == R.id.miDisplay -> openInlineRows("play")
                         id == R.id.miPrefs -> openInlineRows("interact")
                         id == R.id.miOther -> openInlineRows("device")
@@ -540,13 +543,17 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
             }
         // OK：焦点进二级；没有二级的直接执行
         specs.forEach { (id, spec) ->
-            findViewById<TextView>(id).setOnClickListener { focusSubMenu(spec) }
+            findViewById<TextView>(id).setOnClickListener {
+                val n = spec.labels.size
+                if (n == 0) return@setOnClickListener
+                val next = (spec.selected() + 1).mod(n)
+                spec.onPick(next)
+                // 改完立刻刷新左边的选项显示（selected 是实时算的）
+                openSubMenu(spec, findViewById(id))
+            }
         }
         // 线路选择要拉接口，不能跟着焦点走（每次移动都请求一次），保持点击触发
         findViewById<TextView>(R.id.miLine).setOnClickListener { openLinePicker() }
-        findViewById<TextView>(R.id.miCategory).setOnClickListener {
-            closeSettingsMenu(); openPanel()
-        }
         findViewById<TextView>(R.id.miDisplay).setOnClickListener {
             openInlineRows("play"); focusFirstRow()
         }
@@ -1212,7 +1219,8 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
     private data class SubSpec(
         val title: String,
         val labels: List<String>,
-        val selected: Int,
+        /** 实时算当前值：写成固定 Int 的话，改完之后再打开还是旧的。 */
+        val selected: () -> Int,
         val onPick: (Int) -> Unit,
     )
 
@@ -1222,7 +1230,8 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
      * 对齐参考实现：焦点移到某一项就展开它的选项，不用先按 OK 进去看。
      * 选中即生效并收起，画面不被盖住。
      */
-    private fun openSubMenu(spec: SubSpec) {
+    private fun openSubMenu(spec: SubSpec, owner: TextView? = null) {
+        if (owner != null) subMenuOwner = owner
         val row = subMenuRow ?: return
         subMenuTitle?.visibility = android.view.View.GONE
         row.removeAllViews()
@@ -1231,7 +1240,8 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         val padH = (16 * resources.displayMetrics.density).toInt()
         val padV = (10 * resources.displayMetrics.density).toInt()
         spec.labels.forEachIndexed { i, label ->
-            val selected = i == spec.selected
+            val sel = spec.selected()
+            val selected = i == sel
             val tv = TextView(this).apply {
                 // 选中项带 › ‹：表示"当前值，可左右切换"（对齐参考实现）
                 text = if (selected) "› $label ‹" else label
@@ -1243,12 +1253,11 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
                 background = getDrawable(
                     if (selected) R.drawable.bg_select_solid else R.drawable.bg_setting_row
                 )
-                isFocusable = true
-                isClickable = true
-                setOnClickListener {
-                    spec.onPick(i)
-                    closeSubMenu()
-                }
+                // 只做显示：焦点不进来。参考实现里 OK 是"就地切值"，
+                // 让焦点在两栏之间来回跳只会把导航搞乱。
+                isFocusable = false
+                isClickable = false
+
             }
             val lp = android.widget.LinearLayout.LayoutParams(
                 android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
@@ -1420,7 +1429,7 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         val row = subMenuRow ?: return
         if (subMenu?.visibility != android.view.View.VISIBLE) openSubMenu(spec)
         row.post {
-            row.getChildAt(spec.selected.coerceIn(0, spec.labels.size - 1))?.requestFocus()
+            row.getChildAt(spec.selected().coerceIn(0, spec.labels.size - 1))?.requestFocus()
         }
     }
 
@@ -1428,9 +1437,12 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
     private fun closeSubMenu(keepFocus: Boolean = false) {
         val m = subMenu ?: return
         if (m.visibility != android.view.View.VISIBLE) return
+        // ★ 先把 owner 存下来再收面板。
+        // 直接 subMenu.visibility = GONE 会让系统立刻把焦点丢给第一个可聚焦项，
+        // 那一项获得焦点时会覆盖 subMenuOwner，导致焦点回到错误的菜单项。
+        val owner = subMenuOwner
         m.visibility = android.view.View.GONE
-        // 焦点已经在二级里时，收起来要把焦点还给一级，否则会掉到画面上
-        if (!keepFocus) settingsMenu.findViewById<TextView>(R.id.miAspect)?.requestFocus()
+        if (!keepFocus) owner?.requestFocus()
     }
 
     private fun pickAspect() {
@@ -2444,12 +2456,11 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
             val names = list.map { "${it.quality.ifBlank { "线路" }} ${it.latencyMs}ms" }
             // 内联展开，不用 AlertDialog：和一级菜单其它项保持一致
             val cur = list.indexOfFirst { it.id == currentStreamId }.coerceAtLeast(0)
-            openSubMenu(SubSpec("选择线路（${list.size} 条）", names, cur) { i ->
+            val spec = SubSpec("选择线路（${list.size} 条）", names, { cur }) { i ->
                 playChannel(ch, list[i].id)
-            })
-            focusSubMenu(SubSpec("选择线路（${list.size} 条）", names, cur) { i ->
-                playChannel(ch, list[i].id)
-            })
+            }
+            openSubMenu(spec, findViewById(R.id.miLine))
+            focusSubMenu(spec)
         }, onErr = { toastTip("取线路失败：$it") })
     }
 }

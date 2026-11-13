@@ -1090,9 +1090,29 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
     private fun renderOsdBadges() {
         if (!::osdBadges.isInitialized) return
         osdBadges.removeAllViews()
+
+        val st = runCatching { player.stats() }.getOrNull()
         val items = mutableListOf<String>()
-        player.engineLabel().takeIf { it.isNotBlank() }?.let { items.add(it) }
+
+        // 分辨率：ExoPlayer / VLC / mpv 都能给到宽高，按实际值分档
+        val h = st?.height ?: 0
+        if (h > 0) {
+            items.add(
+                when {
+                    h >= 1080 -> "FHD"
+                    h >= 720 -> "HD"
+                    else -> "SD"
+                }
+            )
+        }
+        // 音频编码：拿不到声道数，就报编码格式，不硬写"立体声"
+        st?.audioCodec?.takeIf { it.isNotBlank() }?.let { items.add(friendlyAudio(it)) }
+        // 引擎：libVLC 这种英文标签换成人话
+        player.engineLabel().takeIf { it.isNotBlank() }?.let { label ->
+            items.add(label.replace("libVLC", "VLC 兜底").replace("libmpv", "mpv"))
+        }
         if (streamTotal > 0) items.add("线路 $streamIndex/$streamTotal")
+
         val padH = (8 * resources.displayMetrics.density).toInt()
         val padV = (3 * resources.displayMetrics.density).toInt()
         items.forEachIndexed { i, text ->
@@ -1110,8 +1130,23 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
             if (i > 0) lp.marginStart = padH
             osdBadges.addView(tv, lp)
         }
-        // 码率：PlayerManager 还没暴露统计，先留空而不是写死一个假数字
-        if (::osdRate.isInitialized) osdRate.text = ""
+
+        // 码率：MB/s，和机顶盒 OSD 一个口径
+        if (::osdRate.isInitialized) {
+            val kbps = st?.bitrateKbps ?: 0
+            osdRate.text = if (kbps > 0) String.format("%.2fMB/s", kbps / 8.0 / 1000.0) else ""
+        }
+    }
+
+    /** 音频编码换成人话：机顶盒 OSD 上写的是"立体声/AAC"，不是 MP4A.40.2 这种。 */
+    private fun friendlyAudio(codec: String): String = when {
+        codec.startsWith("mp4a", ignoreCase = true) -> "AAC"
+        codec.equals("ac-3", true) -> "AC3"
+        codec.equals("ec-3", true) -> "E-AC3"
+        codec.equals("ac-4", true) -> "AC4"
+        codec.contains("opus", true) -> "Opus"
+        codec.contains("av3a", true) -> "AV3A"
+        else -> codec.uppercase()
     }
 
     private fun renderOsdNow() {
@@ -1616,6 +1651,7 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
     }
 
     private fun showOsd() {
+        renderOsdBadges()
         // 面板打开时不显示 OSD：面板底部已经有完整信息条，
         // 两个同时出现会叠在一起。
         if (panelVisible) return
@@ -2567,17 +2603,27 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
     /** 线路选择：把当前频道的线路列出来，选中就切过去 */
     private fun openLinePicker() {
         val ch = current ?: return
-        closeSettingsMenu()
+        // 先就地显示"加载中"，不要先关菜单：取线路是异步的，
+        // 关掉菜单再失败，用户看到的就是"点了没反应、菜单也没了"。
+        val owner = findViewById<TextView>(R.id.miLine)
+        val loading = SubSpec("线路选择", listOf("加载中…"), { 0 }) { }
+        openSubMenu(loading, owner)
+
         app.api.streams(ch.id, onOk = { list ->
-            if (list.isEmpty()) { toastTip("这个台只有一条线路"); return@streams }
             val names = list.map { "${it.quality.ifBlank { "线路" }} ${it.latencyMs}ms" }
-            // 内联展开，不用 AlertDialog：和一级菜单其它项保持一致
+                .ifEmpty { listOf("没有可用线路") }
             val cur = list.indexOfFirst { it.id == currentStreamId }.coerceAtLeast(0)
-            val spec = SubSpec("选择线路（${list.size} 条）", names, { cur }) { i ->
-                playChannel(ch, list[i].id)
+            val spec = SubSpec("线路选择（${list.size} 条）", names, { cur }) { i ->
+                if (list.isNotEmpty()) playChannel(ch, list[i].id)
             }
-            openSubMenu(spec, findViewById(R.id.miLine))
+            openSubMenu(spec, owner)
             focusSubMenu(spec)
-        }, onErr = { toastTip("取线路失败：$it") })
+        }, onErr = { e ->
+            // 失败也留在面板里显示原因，而不是只闪一个 toast
+            openSubMenu(
+                SubSpec("线路选择", listOf("取线路失败：$e"), { 0 }) { },
+                owner,
+            )
+        })
     }
 }

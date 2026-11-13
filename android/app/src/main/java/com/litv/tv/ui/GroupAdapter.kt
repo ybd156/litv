@@ -49,8 +49,14 @@ class GroupAdapter : RecyclerView.Adapter<GroupAdapter.VH>() {
             )
         )
         holder.itemView.setOnClickListener {
+            val prev = selected
             selected = position
-            notifyDataSetChanged()
+            // 只刷这两项：notifyDataSetChanged 会重建整表，焦点被丢给第一个可聚焦项
+            // （也就是「全部」）——这就是"选其他分类焦点跑回全部"。
+            if (prev != position) {
+                if (prev in items.indices) notifyItemChanged(prev)
+                notifyItemChanged(position)
+            }
             onPick?.invoke(if (row.name == "全部") null else row.name)
         }
         holder.itemView.setOnFocusChangeListener { v, hasFocus ->

@@ -28,6 +28,13 @@ import com.litv.tv.R
 class BindActivity : AppCompatActivity() {
 
     private lateinit var app: LitvApp
+
+    /**
+     * 电视端还是手机端。决定输入方式：
+     * 电视走自绘 [TvKeyboard]，手机走系统 IME。
+     */
+    private val isTv by lazy { DeviceType.isTV(this) }
+
     private lateinit var ipBoxes: List<EditText>
     private lateinit var portInput: EditText
     private lateinit var ipRow: View
@@ -73,18 +80,27 @@ class BindActivity : AppCompatActivity() {
         qrBox = findViewById(R.id.qrBox)
         qrImage = findViewById(R.id.qrImage)
 
-        // 整页都不需要系统 IME：输入全走 TvKeyboard。
-        // 只设 showSoftInputOnFocus=false 不够——实测系统 IME 仍会冒出来，
-        // 占掉下半屏并吃掉方向键。这里在窗口层面直接要求永不自动弹出。
-        window.setSoftInputMode(
-            android.view.WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_HIDDEN
-        )
+        // 输入方式按设备类型分流：
+        //   电视 → 自绘 TvKeyboard（系统 IME 会吃掉方向键，详见 TvKeyboard 类注释）
+        //   手机 → 系统 IME（触摸操作，不存在抢方向键的问题；自绘键盘在竖屏上会被裁切）
+        if (isTv) {
+            // 只设 showSoftInputOnFocus=false 不够——实测系统 IME 仍会冒出来，
+            // 占掉下半屏并吃掉方向键。这里在窗口层面直接要求永不自动弹出。
+            window.setSoftInputMode(
+                android.view.WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_HIDDEN
+            )
+        } else {
+            // 手机端：软键盘弹出时把内容顶上去，别盖住正在填的输入框
+            window.setSoftInputMode(
+                android.view.WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE
+            )
+        }
 
         setupAddrBoxes()
-        // 遥控适配：每个输入框关掉系统 IME、按 OK 弹自绘的 TvKeyboard。
-        // 为什么不用系统软键盘：它是独立窗口，显示后方向键全被它吃掉，
-        // 挂在输入框上的 OnKeyListener 一个键都收不到（详见 TvKeyboard 类注释）。
-        (ipBoxes + listOf(portInput, domainInput, codeInput)).forEach { autoShowKeyboard(it) }
+        if (isTv) {
+            // 遥控适配：每个输入框关掉系统 IME、按 OK 弹自绘的 TvKeyboard。
+            (ipBoxes + listOf(portInput, domainInput, codeInput)).forEach { autoShowKeyboard(it) }
+        }
         btnToggleHost.setOnClickListener { setDomainMode(!usingDomain) }
         btnScheme.setOnClickListener {
             usingHttps = !usingHttps

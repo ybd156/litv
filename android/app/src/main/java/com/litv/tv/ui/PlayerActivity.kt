@@ -80,9 +80,13 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
     private lateinit var osdNow: TextView
     private lateinit var osdNo: TextView
     private lateinit var osdNext: TextView
-    private lateinit var osdEngine: TextView
-    /** OSD 右侧角标：线路 x/y。 */
-    private lateinit var osdTags: TextView
+    private lateinit var osdLogo: ImageView
+    /** 引擎标签已并入 OSD 角标，这个 View 不再存在；保留字段只为兼容旧调用点。 */
+    private var osdEngine: TextView? = null
+    /** OSD 角标容器：引擎 / 线路，动态填。 */
+    private lateinit var osdBadges: android.widget.LinearLayout
+    /** OSD 右下角码率。 */
+    private lateinit var osdRate: TextView
     private lateinit var osdProgress: ProgressBar
     private lateinit var panel: LinearLayout
     private lateinit var panelTitle: TextView
@@ -479,8 +483,10 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         osdNow = findViewById(R.id.osdNow)
         osdNo = findViewById(R.id.osdNo)
         osdNext = findViewById(R.id.osdNext)
-        osdEngine = findViewById(R.id.osdEngine)
-        osdTags = findViewById(R.id.osdTags)
+        osdLogo = findViewById(R.id.osdLogo)
+        osdEngine = findViewById(R.id.osdEngine)   // 布局里已无此 id，返回 null
+        osdBadges = findViewById(R.id.osdBadges)
+        osdRate = findViewById(R.id.osdRate)
         osdProgress = findViewById(R.id.osdProgress)
         panel = findViewById(R.id.channelPanel)
         panelTitle = findViewById(R.id.panelTitle)
@@ -1073,6 +1079,41 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         }, onErr = { programs = emptyList() })
     }
 
+
+    /**
+     * OSD 角标：只放**真的能拿到**的信息。
+     *
+     * 机顶盒 OSD 上那排 [FHD][立体声][IPV4] 需要播放器上报分辨率/声道数/连接协议，
+     * 目前 PlayerManager 只暴露了引擎标签和线路数，所以只画这两个——
+     * 编造一个 "FHD" 出来比不画更糟。
+     */
+    private fun renderOsdBadges() {
+        if (!::osdBadges.isInitialized) return
+        osdBadges.removeAllViews()
+        val items = mutableListOf<String>()
+        player.engineLabel().takeIf { it.isNotBlank() }?.let { items.add(it) }
+        if (streamTotal > 0) items.add("线路 $streamIndex/$streamTotal")
+        val padH = (8 * resources.displayMetrics.density).toInt()
+        val padV = (3 * resources.displayMetrics.density).toInt()
+        items.forEachIndexed { i, text ->
+            val tv = TextView(this).apply {
+                this.text = text
+                textSize = 13f
+                setPadding(padH, padV, padH, padV)
+                setTextColor(getColor(R.color.text_primary))
+                background = getDrawable(R.drawable.bg_osd_chip)
+            }
+            val lp = android.widget.LinearLayout.LayoutParams(
+                android.widget.LinearLayout.LayoutParams.WRAP_CONTENT,
+                android.widget.LinearLayout.LayoutParams.WRAP_CONTENT,
+            )
+            if (i > 0) lp.marginStart = padH
+            osdBadges.addView(tv, lp)
+        }
+        // 码率：PlayerManager 还没暴露统计，先留空而不是写死一个假数字
+        if (::osdRate.isInitialized) osdRate.text = ""
+    }
+
     private fun renderOsdNow() {
         val now = System.currentTimeMillis() / 1000
         val cur = programs.firstOrNull { it.startAt <= now && it.endAt > now }
@@ -1089,15 +1130,8 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
             osdProgress.visibility = View.GONE
         }
         osdNext.text = next?.let { "${fmt(it.startAt)}-${fmt(it.endAt)}  ${it.title}" } ?: ""
-        osdEngine.text = player.engineLabel()
-        // 角标：线路 x/y。这个 View 之前建了但从来没填过，一直是空的。
-        if (streamTotal > 0) {
-            osdTags.text = "线路 $streamIndex/$streamTotal"
-            osdTags.visibility = View.VISIBLE
-        } else {
-            osdTags.text = ""
-            osdTags.visibility = View.GONE
-        }
+        osdEngine?.text = player.engineLabel()
+        renderOsdBadges()
 
         // 台号：这个 TextView 之前从来没被赋值过，一直是空的。
         // 用当前过滤列表里的序号，和频道面板里看到的一致，补成三位（005 这种）。
@@ -1120,6 +1154,13 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         infoLogo.setImageDrawable(null)
         if (ch.logo.isNotBlank() && ::panelAdapter.isInitialized) {
             panelAdapter.loadLogoFor(infoLogo, ch.logo)
+        }
+        // OSD 左侧台标卡：之前漏了这一步，卡片一直是空的
+        if (::osdLogo.isInitialized) {
+            osdLogo.setImageDrawable(null)
+            if (ch.logo.isNotBlank() && ::panelAdapter.isInitialized) {
+                panelAdapter.loadLogoFor(osdLogo, ch.logo)
+            }
         }
 
         val cur = programs.firstOrNull { it.startAt <= now && it.endAt > now }
@@ -1608,7 +1649,7 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         osdNow.visibility = View.VISIBLE
         osdProgress.visibility = if (detail) View.VISIBLE else View.GONE
         osdNext.visibility = if (detail) View.VISIBLE else View.GONE
-        osdEngine.visibility = if (detail) View.VISIBLE else View.GONE
+        osdEngine?.visibility = if (detail) View.VISIBLE else View.GONE
         // 底部信息条（线路 x/y、延迟、时间）同样只在第二层出现
         infoLine.visibility = if (detail) View.VISIBLE else View.GONE
         infoTime.visibility = if (detail) View.VISIBLE else View.GONE
@@ -1949,7 +1990,7 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
     // ---------------------------------------------------------------- PlayerManager 回调
 
     override fun onEngineChanged(kind: EngineKind) {
-        osdEngine.text = kind.label
+        osdEngine?.text = kind.label
         // 按实际选中的内核切换渲染目标。
         //
         // Exo 用 media3 的 PlayerView（它自己管 Surface）；

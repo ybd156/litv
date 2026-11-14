@@ -2285,16 +2285,13 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
                 (code == KeyEvent.KEYCODE_BACK || code == KeyEvent.KEYCODE_DPAD_LEFT)
             ) {
                 // 收起节目单后必须把焦点和滚动位置还给频道列。
-                // 原来只 closeEpg()，焦点由系统随便给，列表会"划走"——
-                // 这也是 backToPanelList() 的日志从来没打印的原因：
-                // 左键在这里就被吃掉了，根本走不到那里。
-                if (code == KeyEvent.KEYCODE_DPAD_LEFT) {
-                    val pos = panelFocusPosBeforeEpg
-                    val top = panelFocusedTopBeforeEpg
-                    closeEpg { restorePanelScroll(pos, top) }
-                } else {
-                    closeEpg()
-                }
+                //
+                // 左键和返回键都要还：返回键原来只 closeEpg()、不管焦点，
+                // 焦点被系统丢给第一个可聚焦项（分类列的「全部」），
+                // 用户看到的就是"从日期按返回，跑到分类去了"。
+                val pos = panelFocusPosBeforeEpg
+                val top = panelFocusedTopBeforeEpg
+                closeEpg { restorePanelScroll(pos, top) }
                 return true
             }
             return super.dispatchKeyEvent(event)

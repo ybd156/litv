@@ -989,20 +989,28 @@ async function main() {
     failBuild("所有源都没解析出条目，拒绝生成空播放列表（线上保留上一次的数据）");
   }
 
-  // 屏蔽清单在生成期就生效：这些频道**根本不入库**，也不进 playlist.m3u。
-  // （Worker 侧还有一层同规则的过滤，点完立刻生效、不用等这一次重建。）
+  // ★ 屏蔽清单**不在生成期过滤**。
+  //
+  // 以前这里把屏蔽的频道直接丢掉，导致它们根本不入库；于是"解除屏蔽"之后
+  // 库里没有数据，必须再跑一次重建才回来 —— 用户看到的就是
+  // 解除屏蔽后屏蔽页和频道页两边都找不到它。
+  //
+  // 现在入库保留全量，屏蔽只由 Worker 在查询时过滤
+  // （/api/v1/tv/channels、/playlist.m3u 都有同一份规则）：
+  // 屏蔽和解除都是**立刻生效**，不需要重建。
   const state0 = await loadBuildState();
   const rawCount = all.length;
   const blockedG = new Set(state0.blockedGroups);
   const blockedC = new Set(state0.blockedChannels);
-  const keptEntries = all.filter(
-    (e) => !blockedG.has(e.group || "未分组") && !blockedC.has(e.name),
-  );
-  if (keptEntries.length !== all.length) {
-    console.log(`屏蔽规则挡掉 ${all.length - keptEntries.length} 条（分组 ${blockedG.size} / 频道 ${blockedC.size}）`);
+  const wouldHide = all.filter(
+    (e) => blockedG.has(e.group || "未分组") || blockedC.has(e.name),
+  ).length;
+  if (wouldHide > 0) {
+    console.log(
+      `屏蔽清单命中 ${wouldHide} 条（分组 ${blockedG.size} / 频道 ${blockedC.size}）——` +
+        `仍会入库，由 Worker 查询时过滤`,
+    );
   }
-  all.length = 0;
-  all.push(...keptEntries);
 
   // 按 key 合并：首次出现的当主线路，后面的都并成备选线路
   const byKey = new Map();

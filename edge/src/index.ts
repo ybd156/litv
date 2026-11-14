@@ -2523,6 +2523,65 @@ async function compatAdmin(
   return null;
 }
 
+// ---------------------------------------------------------------- 播放列表
+
+/**
+ * 运行时生成 playlist.m3u（不再用构建时写死的静态文件）。
+ *
+ * 为什么必须运行时生成：屏蔽规则要在查询时生效，否则"解除屏蔽"之后
+ * 静态文件里还是没有那些台，必须等一次重建 —— 而库里的频道数据是保留的
+ * （见 scripts/build.mjs），所以这里能立刻反映出来。
+ *
+ * 每台只取 priority 最小的一条线路，和静态版本一致。
+ */
+async function renderPlaylistM3U(env: Env): Promise<string> {
+  const { results } = await env.DB.prepare(
+    `SELECT COALESCE(o.name, c.name)        AS name,
+            COALESCE(o.logo, c.logo)        AS logo,
+            c.tvg_id                        AS tvg_id,
+            COALESCE(o.group_name, c."group") AS grp,
+            s.url                           AS url,
+            s.ua                            AS ua,
+            s.headers                       AS headers
+       FROM channels c
+       LEFT JOIN channel_overrides o ON o.stable_key = c.stable_key
+       JOIN streams s ON s.channel_id = c.id
+      WHERE COALESCE(o.enabled, c.enabled) = 1
+        AND COALESCE(o.group_name, c."group") NOT IN (
+              SELECT value FROM json_each(
+                CASE WHEN json_valid((SELECT v FROM kv WHERE k = 'blocked'))
+                     THEN (SELECT v FROM kv WHERE k = 'blocked') ELSE '{}' END,
+                '$.groups'))
+        AND COALESCE(o.name, c.name) NOT IN (
+              SELECT value FROM json_each(
+                CASE WHEN json_valid((SELECT v FROM kv WHERE k = 'blocked'))
+                     THEN (SELECT v FROM kv WHERE k = 'blocked') ELSE '{}' END,
+                '$.channels'))
+        AND s.priority = (SELECT MIN(s2.priority) FROM streams s2 WHERE s2.channel_id = c.id)
+      ORDER BY c.sort, c.number, c.id`,
+  ).all<{ name: string; logo: string; tvg_id: string; grp: string; url: string; ua: string; headers: string }>();
+
+  const q = (v: string) => String(v ?? "").replace(/"/g, "'");
+  const out: string[] = ["#EXTM3U"];
+  for (const r of results ?? []) {
+    const attrs: string[] = [];
+    if (r.tvg_id) attrs.push(`tvg-id="${q(r.tvg_id)}"`);
+    if (r.logo) attrs.push(`tvg-logo="${q(r.logo)}"`);
+    attrs.push(`group-title="${q(r.grp)}"`);
+    out.push(`#EXTINF:-1 ${attrs.join(" ")},${r.name}`);
+    if (r.ua) out.push(`#EXTVLCOPT:http-user-agent=${r.ua}`);
+    try {
+      const h = JSON.parse(r.headers || "{}") as Record<string, string>;
+      const ref = h.Referer || h.referer;
+      if (ref) out.push(`#EXTVLCOPT:http-referrer=${ref}`);
+    } catch {
+      /* headers 坏了就只给地址 */
+    }
+    out.push(r.url);
+  }
+  return out.join("\n") + "\n";
+}
+
 // ---------------------------------------------------------------- 路由
 
 export default {
@@ -2566,12 +2625,15 @@ export default {
       }
       // 成功时把「之前猜错的计数」清掉。没有行时 DELETE 影响 0 行，不产生写入。
       await clearFailures(env, bucket);
-      const clean = new URL(url);
-      clean.search = "";
-      const res = await env.ASSETS.fetch(new Request(clean.toString(), req));
-      const headers = new Headers(res.headers);
-      headers.set("cache-control", "no-store");
-      return new Response(res.body, { status: res.status, headers });
+      // 运行时从 D1 生成：屏蔽/解除立刻生效，不等重建
+      const body = await renderPlaylistM3U(env);
+      return new Response(body, {
+        status: 200,
+        headers: {
+          "content-type": "audio/x-mpegurl; charset=utf-8",
+          "cache-control": "no-store",
+        },
+      });
     }
 
     // ---- 其余静态文件交给 assets ----

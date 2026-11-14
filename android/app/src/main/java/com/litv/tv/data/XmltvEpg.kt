@@ -68,6 +68,17 @@ class XmltvEpg(private val context: Context) {
     /** xmltv 是否已下载并解析完。用来区分"还没加载"和"这个台确实没有节目单"。 */
     val ready: Boolean get() = loaded
 
+    /**
+     * 是否已有可用的解析结果缓存。
+     *
+     * 有缓存时加载只要几百毫秒，可以很早就开始；
+     * 没缓存时要解析 3.7 万条 XML（几秒 + 大量 GC），必须错开播放起播。
+     */
+    fun hasParsedCache(): Boolean {
+        val xml = cacheFile()
+        return xml.exists() && !expired() && binUsable(xml)
+    }
+
     fun programsFor(epgId: String): List<Program>? {
         if (!loaded) return null
         if (epgId.isBlank()) return emptyList()
@@ -114,8 +125,16 @@ class XmltvEpg(private val context: Context) {
                 val file = cacheFile()
                 if (!file.exists() || file.length() < 1024 || expired()) {
                     download(url, file)
+                    // xml 换了，旧的解析结果作废
+                    binFile().delete()
                 }
-                parse(file)
+                // ★ 先试解析结果缓存：xmltv 有 3.7 万条，解析一次要好几秒
+                //   （模拟器上量到 25 秒，含下载）。二进制缓存读起来是百毫秒级。
+                val fromBin = if (binUsable(file)) loadBinary(binFile()) else false
+                if (!fromBin) {
+                    parse(file)
+                    saveBinary(binFile())
+                }
                 loadedFrom = url
                 loadedAtMs = System.currentTimeMillis()
                 true
@@ -141,6 +160,96 @@ class XmltvEpg(private val context: Context) {
         if (!f.exists()) return true
         val age = System.currentTimeMillis() - f.lastModified()
         return age > REFRESH_MS
+    }
+
+
+    /**
+     * 解析结果缓存文件。
+     *
+     * xmltv 是 7 MB 的 XML、3.7 万条节目，每次启动重新解析要好几秒
+     * （模拟器上含下载共 25 秒）。解析结果落成一个紧凑二进制，
+     * 下次启动直接读，几百毫秒。
+     */
+    private fun binFile(): File = File(context.filesDir, "epg.bin")
+
+    /** 二进制缓存是否比 xml 新（xml 重新下过就作废）。 */
+    private fun binUsable(xml: File): Boolean {
+        val bin = binFile()
+        return bin.exists() && bin.length() > 1024 &&
+            bin.lastModified() >= xml.lastModified()
+    }
+
+    private fun saveBinary(target: File) {
+        val tmp = File(target.absolutePath + ".tmp")
+        try {
+            java.io.DataOutputStream(
+                java.io.BufferedOutputStream(tmp.outputStream(), 64 * 1024)
+            ).use { out ->
+                out.writeInt(MAGIC)
+                out.writeInt(byChannel.size)
+                for ((id, list) in byChannel) {
+                    out.writeUTF(id)
+                    out.writeInt(list.size)
+                    for (p in list) {
+                        out.writeLong(p.start)
+                        out.writeLong(p.end)
+                        out.writeUTF(p.title)
+                        out.writeUTF(p.description)
+                        out.writeUTF(p.category)
+                    }
+                }
+            }
+            if (!tmp.renameTo(target)) {
+                tmp.copyTo(target, overwrite = true)
+                tmp.delete()
+            }
+            Log.i(TAG, "节目单解析结果已缓存：${target.length() / 1024} KB")
+        } catch (t: Throwable) {
+            Log.w(TAG, "写解析缓存失败：${t.javaClass.simpleName}")
+            tmp.delete()
+        }
+    }
+
+    /** 读二进制缓存。成功返回 true；任何异常都返回 false，让调用方回退到解析 XML。 */
+    private fun loadBinary(src: File): Boolean {
+        return try {
+            java.io.DataInputStream(
+                java.io.BufferedInputStream(src.inputStream(), 64 * 1024)
+            ).use { input ->
+                if (input.readInt() != MAGIC) return false
+                val channels = input.readInt()
+                if (channels <= 0 || channels > 100_000) return false
+                val map = HashMap<String, MutableList<Program>>(channels * 2)
+                var count = 0
+                repeat(channels) {
+                    val id = input.readUTF()
+                    val n = input.readInt()
+                    val list = ArrayList<Program>(n)
+                    repeat(n) {
+                        list.add(
+                            Program(
+                                start = input.readLong(),
+                                end = input.readLong(),
+                                title = input.readUTF(),
+                                description = input.readUTF(),
+                                category = input.readUTF(),
+                            )
+                        )
+                    }
+                    map[id] = list
+                    count += n
+                }
+                byChannel.clear()
+                byChannel.putAll(map)
+                programCount = count
+                loaded = byChannel.isNotEmpty()
+                Log.i(TAG, "节目单读自缓存：${byChannel.size} 个频道 / $count 条")
+                true
+            }
+        } catch (t: Throwable) {
+            Log.w(TAG, "读解析缓存失败，回退解析 XML：${t.javaClass.simpleName}")
+            false
+        }
     }
 
     private fun cacheFile(): File = File(context.filesDir, "epg.xml")
@@ -249,5 +358,7 @@ class XmltvEpg(private val context: Context) {
         const val TAG = "LITV"
         /** 缓存有效期：节目单一天一变，24 小时足够 */
         const val REFRESH_MS = 24 * 60 * 60 * 1000L
+        /** 二进制缓存文件头。改格式就换这个值，旧缓存自动作废。 */
+        const val MAGIC = 0x4C495456  // "LITV"
     }
 }

@@ -25,6 +25,7 @@ import com.litv.tv.data.Bootstrap
 import com.litv.tv.data.Channel
 import com.litv.tv.data.EpgProgram
 import com.litv.tv.data.LastChannelResolver
+import com.litv.tv.data.LineProbe
 import com.litv.tv.data.PlayCache
 import com.litv.tv.data.PlaybackErrorCard
 import com.litv.tv.data.PlayCacheStore
@@ -1569,7 +1570,20 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         if (subMenu?.visibility != android.view.View.VISIBLE) return
         setRowsFocusable(true)
         val sel = currentSubSelected
-        row.post { row.getChildAt(sel.coerceIn(0, (row.childCount - 1).coerceAtLeast(0)))?.requestFocus() }
+        row.post {
+            if (row.childCount == 0) return@post
+            // 从 sel 开始找第一个**可聚焦**的子项。
+            // 原来直接 getChildAt(sel)：像「其他设置」这种面板前几行是纯信息
+            // （设备名称/服务器/渲染档位，isClickable=false 所以不可聚焦），
+            // requestFocus 会静默失败，焦点留在右边一级菜单上，
+            // 表现就是"最下面那项按左键进不去子菜单"。
+            val start = sel.coerceIn(0, row.childCount - 1)
+            for (i in 0 until row.childCount) {
+                val v = row.getChildAt((start + i) % row.childCount)
+                if (v.isFocusable) { v.requestFocus(); return@post }
+            }
+            row.getChildAt(start)?.requestFocus()
+        }
     }
 
     /** 从选项列退回一级菜单。 */
@@ -3250,11 +3264,19 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
     /** 线路列表缓存（channelId -> 线路）。聚焦就会展开，没有缓存每次移动都请求一次。 */
     private val lineCache = HashMap<Long, List<TvStream>>()
 
+    /** 客户端自测结果（streamId -> 结果）。5 分钟内复用，避免每次聚焦都打网络。 */
+    private val lineProbeCache = HashMap<Long, LineProbe.Result>()
+    private var lineProbeAt = 0L
+    private val LINE_PROBE_TTL_MS = 5 * 60 * 1000L
+    /** 正在探测中的 streamId，防止重复起任务 */
+    private val lineProbing = HashSet<Long>()
+
     private fun openLinePicker() {
         val ch = current ?: return
         // 有缓存直接出，不发请求
         lineCache[ch.id]?.let { list ->
             openSubMenu(buildLineSpec(ch, list), findViewById(R.id.miLine))
+            probeLines(ch, list)
             return
         }
         // 先就地显示"加载中"，不要先关菜单：取线路是异步的，
@@ -3268,6 +3290,7 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
             val spec = buildLineSpec(ch, list)
             openSubMenu(spec, owner)
             focusSubMenu(spec)
+            probeLines(ch, list)
         }, onErr = { e ->
             // 失败也留在面板里显示原因，而不是只闪一个 toast
             openSubMenu(
@@ -3277,6 +3300,47 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         })
     }
 
+    private fun isLineProbeFresh(): Boolean =
+        System.currentTimeMillis() - lineProbeAt < LINE_PROBE_TTL_MS
+
+    /**
+     * 客户端自己测线路连通性。
+     *
+     * 对每条线路：先向 /tv/play 要签名地址，再发一个只取首字节的请求量耗时。
+     * 全部测完（或超时）后重绘面板。
+     */
+    private fun probeLines(ch: Channel, list: List<TvStream>) {
+        if (isLineProbeFresh()) return
+        val todo = list.filter { it.id !in lineProbing }
+        if (todo.isEmpty()) return
+        lineProbing.addAll(todo.map { it.id })
+        Thread({
+            val results = HashMap<Long, LineProbe.Result>()
+            todo.forEach { st ->
+                val info = java.util.concurrent.CountDownLatch(1)
+                var url = ""
+                var ua = ""
+                app.api.play(ch.id, st.id, onOk = { p ->
+                    url = p.url; ua = p.ua; info.countDown()
+                }, onErr = { info.countDown() })
+                // 等签名地址最多 3 秒
+                info.await(3, java.util.concurrent.TimeUnit.SECONDS)
+                results[st.id] = if (url.isBlank()) LineProbe.Result(null)
+                                 else LineProbe.measure(url, ua)
+            }
+            main.post {
+                lineProbeCache.putAll(results)
+                lineProbeAt = System.currentTimeMillis()
+                lineProbing.removeAll(todo.map { it.id }.toSet())
+                if (menuVisible && subMenu?.visibility == android.view.View.VISIBLE) {
+                    // 面板还开着才重绘，避免用户已经切走还弹回来
+                    val spec = buildLineSpec(ch, list)
+                    openSubMenu(spec, findViewById(R.id.miLine))
+                }
+            }
+        }, "litv-line-probe").start()
+    }
+
     /**
      * 线路选项文案。
      *
@@ -3284,10 +3348,17 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
      * latency_ms 是 0，拼出来就是「线路 0ms」——看着像没数据。
      */
     private fun buildLineSpec(ch: Channel, list: List<TvStream>): SubSpec {
-        // 紧凑写法：选项框只有 130dp，带空格的「线路 1 · 未检测」会折成两行
+        // 文案用**客户端自测**的结果，不用服务端下发的 health——
+        // 服务端几乎不跑探测任务，health 恒为 -1，界面上就是没信息量的「未检测」。
+        // 紧凑写法：选项框只有 130dp，带空格的「线路 1 · 120ms」会折成两行。
         val names = list.map { s ->
-            s.label.ifBlank { "线路" } + "·" + s.healthText +
-                if (s.latencyMs > 0) " ${s.latencyMs}ms" else ""
+            val label = s.label.ifBlank { "线路" }
+            val probe = if (isLineProbeFresh()) lineProbeCache[s.id] else null
+            when {
+                probe == null -> "$label …"
+                probe.ok -> "$label ${probe.latencyMs}ms"
+                else -> "$label 失效"
+            }
         }.ifEmpty { listOf("没有可用线路") }
         val cur = list.indexOfFirst { it.id == currentStreamId }.coerceAtLeast(0)
         return SubSpec("线路选择（${list.size} 条）", names, { cur }) { i ->

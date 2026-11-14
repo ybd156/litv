@@ -253,8 +253,10 @@
                  之前这里是个竖排文字的 TextView，只能点一下循环切分组，
                  既看不出有哪些分类，也不知道当前在哪一类。
                  现在换成真正的列表，选中项高亮。 -->
+            <!-- 四列全部按权重：屏幕多宽比例都不变，不针对某台机器的像素调。 -->
             <LinearLayout
-                android:layout_width="150dp"
+                android:layout_width="0dp"
+                android:layout_weight="260"
                 android:layout_height="match_parent"
                 android:background="@drawable/bg_panel_zone"
                 android:clipToOutline="true"
@@ -279,7 +281,8 @@
             <!-- 2. 频道列表：台号框 + 台名 + 当前节目。
                  **固定宽度**，不用 weight：节目单展开/收起时频道列不能被压缩。 -->
             <LinearLayout
-                android:layout_width="350dp"
+                android:layout_width="0dp"
+                android:layout_weight="320"
                 android:layout_height="match_parent"
                 android:background="@drawable/bg_panel_zone"
                 android:clipToOutline="true"
@@ -358,7 +361,8 @@
             <!-- 竖排：每个字一行，不是整体旋转 90°（旋转后是横躺的，不是竖排） -->
             <TextView
                 android:id="@+id/epgHandle"
-                android:layout_width="44dp"
+                android:layout_width="0dp"
+                android:layout_weight="44"
                 android:layout_height="match_parent"
                 android:background="@drawable/bg_panel_zone"
                 android:clipToOutline="true"
@@ -374,7 +378,7 @@
                 android:layout_width="0dp"
                 android:layout_height="match_parent"
                 android:visibility="gone"
-                android:layout_weight="1"
+                android:layout_weight="456"
                 android:background="@drawable/bg_panel_zone"
                 android:clipToOutline="true"
                 android:orientation="horizontal"
@@ -388,7 +392,8 @@
                      选哪天，右边就显示哪天的节目——参考实现就是这个模型。 -->
                 <androidx.recyclerview.widget.RecyclerView
                     android:id="@+id/epgDayList"
-                    android:layout_width="84dp"
+                    android:layout_width="0dp"
+                    android:layout_weight="96"
                     android:layout_height="match_parent"
                     android:scrollbars="none" />
 
@@ -401,7 +406,7 @@
                 <LinearLayout
                     android:layout_width="0dp"
                     android:layout_height="match_parent"
-                    android:layout_weight="1"
+                    android:layout_weight="360"
                     android:orientation="vertical"
                     android:paddingStart="4dp">
 
@@ -437,7 +442,7 @@
                 android:id="@+id/panelRightGap"
                 android:layout_width="0dp"
                 android:layout_height="match_parent"
-                android:layout_weight="1" />
+                android:layout_weight="796" />
         </LinearLayout>
 
         <!-- 下：底部信息条（台标 / 台号名称 / 正在播 / 下一档 / 线路 / 进度 / 时间） -->

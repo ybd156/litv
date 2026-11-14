@@ -192,14 +192,23 @@ class ChannelAdapter(
      * 一小时后打开面板，条还停在当时的百分比。
      * 这里直接改可见 holder 的 ProgressBar，不触发 notify，焦点不受影响。
      */
-    fun tickProgress(rv: androidx.recyclerview.widget.RecyclerView) {
+    fun tickProgress(
+        rv: androidx.recyclerview.widget.RecyclerView,
+        now: Map<Long, com.litv.tv.data.NowPlaying> = nowMap,
+    ) {
         val nowSec = System.currentTimeMillis() / 1000
         for (i in 0 until rv.childCount) {
             val holder = rv.getChildViewHolder(rv.getChildAt(i)) as? VH ?: continue
             val pos = holder.bindingAdapterPosition
             if (pos == androidx.recyclerview.widget.RecyclerView.NO_POSITION) continue
             val ch = items.getOrNull(pos) ?: continue
-            val np = nowMap[ch.id] ?: continue
+            val np = now[ch.id] ?: continue
+            // 标题也要跟着刷：节目换场时进度条还在，但名字已经不对了
+            val title = np.title
+            if (holder.now.text?.toString() != title) {
+                holder.now.text = title
+                holder.now.visibility = if (title.isBlank()) View.GONE else View.VISIBLE
+            }
             if (np.end > np.start) {
                 holder.prog.progress =
                     (((nowSec - np.start) * 100) / (np.end - np.start)).coerceIn(0, 100).toInt()

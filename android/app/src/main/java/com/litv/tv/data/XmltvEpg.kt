@@ -142,7 +142,14 @@ class XmltvEpg(private val context: Context) {
                 Log.w(TAG, "节目单解析失败：${t.javaClass.simpleName}")
                 false
             }
-            synchronized(this) { loading = false }
+            // ★ 这里以前只清了 loading，**从没把 loaded 置成 true**。
+            // 于是 ready 永远 false、programsFor() 永远返回 null ——
+            // "用本地节目单"这条路根本没生效过（列表里的节目名一直是服务端的 now，
+            // 服务端一空，整列节目名和进度条就一起消失）。
+            synchronized(this) {
+                loading = false
+                loaded = ok
+            }
             onReady(ok)
         }, "litv-xmltv").start()
     }

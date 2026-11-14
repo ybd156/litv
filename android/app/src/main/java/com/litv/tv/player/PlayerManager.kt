@@ -29,6 +29,12 @@ class PlayerManager(
         fun onPrepared(width: Int, height: Int)
         fun onPlaying()
         fun onError(message: String)
+        /**
+         * 视频输出卡住（播放列表原地打转导致的重载循环）。
+         * 实现方应当强制重新起播当前台。
+         */
+        fun onVideoStuck() = Unit
+
         fun onVideoSizeChanged(width: Int, height: Int, frameRate: Float = -1f)
 
         /** 第一帧真正画到屏幕上（换台快照要等这一帧再撤）。 */
@@ -118,6 +124,9 @@ class PlayerManager(
     //
     // 唯一可靠的判断依据是播放位置：每隔几秒读一次，位置不前进就认为卡住了。
     private var lastPosMs = -1L
+    /** 位置回落计数：连续回落说明源侧播放列表在原地打转。 */
+    private var posRegressions = 0
+    private var regressWindowStart = 0L
     /**
      * 最后一次「播放位置发生变化」的时刻（SystemClock.elapsedRealtime）。
      *
@@ -162,6 +171,24 @@ class PlayerManager(
             if (pos != lastPosMs) {
                 if (lastPosMs >= 0 && pos < lastPosMs) {
                     Log.i(TAG, "位置回落 ${lastPosMs}ms -> ${pos}ms（HLS 重载，正常）")
+                    // 偶尔回退是 HLS 直播正常现象；**连续**回退说明源侧播放列表
+                    // 在原地打转：播放器不停重载、视频输出停住，而音频还在跑
+                    // （真机实测：黑屏但有声，position 每 12 秒掉一次）。
+                    // 这种情况"位置一直在变"，下面的无变化看门狗永远不会触发，
+                    // 所以必须单独计数。
+                    posRegressions++
+                    if (regressWindowStart == 0L) regressWindowStart = now
+                    if (now - regressWindowStart > REGRESS_WINDOW_MS) {
+                        posRegressions = 0
+                        regressWindowStart = now
+                    }
+                    if (posRegressions >= REGRESS_LIMIT) {
+                        posRegressions = 0
+                        regressWindowStart = 0L
+                        Log.w(TAG, "位置连续回落 ${REGRESS_LIMIT} 次，判定播放列表打转，强制重载")
+                        callback?.onVideoStuck()
+                        return@Runnable
+                    }
                 }
                 lastPosMs = pos
                 lastPosChangeAt = now
@@ -830,6 +857,15 @@ class PlayerManager(
 
         /** 卡顿检测间隔。4 秒读一次播放位置，对 CPU 几乎没有开销。 */
         const val STALL_CHECK_MS = 4000L
+
+        /**
+         * 位置回落的判定：窗口内连续回落这么多次，就认为源侧播放列表在原地打转。
+         *
+         * 取 3 次 / 2 分钟：HLS 直播偶尔回退一次是正常的（切片边界、重连），
+         * 但真机实测黑屏那次是每 12 秒退一次、连着退，3 次足够区分。
+         */
+        const val REGRESS_LIMIT = 3
+        const val REGRESS_WINDOW_MS = 120_000L
 
         /**
          * 播放位置完全不变多久算卡死。

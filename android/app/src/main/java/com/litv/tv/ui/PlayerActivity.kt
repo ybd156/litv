@@ -2222,7 +2222,14 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
             ?: (current?.id ?: 0L)
         Log.i(TAG, "展开节目单: focusedChild=$byChild lastFocus=$panelLastFocusId current=${current?.id} -> 取 $targetId")
         if (targetId > 0 && targetId != epgProgramsChannelId) refreshEpg(targetId)
-        panelRightGap.visibility = View.GONE
+        // 节目单和右侧留白**共用同一格宽度**：
+        // 展开时留白按权重让出 456 给节目单，总权重不变 ——
+        // 否则节目单一出现总权重变大，分类列和频道列就会被按比例压窄
+        // （用户看到的"一打开节目单分类就自动压缩"）。
+        (panelRightGap.layoutParams as? android.widget.LinearLayout.LayoutParams)?.let {
+            it.weight = GAP_WEIGHT_EXPANDED
+            panelRightGap.layoutParams = it
+        }
         epgTitle.text = epgTitleText()
         epgAdapter.submit(filteredPrograms())
         val pos = epgAdapter.currentPosition()
@@ -2286,7 +2293,11 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         if (lp == null || startWidth <= 0) {
             epgPanel.visibility = View.GONE
             epgHandle.visibility = View.VISIBLE
-            panelRightGap.visibility = View.VISIBLE
+            // 留白恢复成"收起态"的权重，把让出去的那一格拿回来
+            (panelRightGap.layoutParams as? android.widget.LinearLayout.LayoutParams)?.let {
+                it.weight = GAP_WEIGHT_COLLAPSED
+                panelRightGap.layoutParams = it
+            }
             then?.invoke()
             return
         }
@@ -2308,7 +2319,9 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
                     // 还原成"可展开"的参数，下次展开还能吃到权重
                     val reset = epgPanel.layoutParams as android.widget.LinearLayout.LayoutParams
                     reset.width = 0
-                    reset.weight = 1f
+                    // 与 XML 里的权重保持一致：节目单面板按比例占位，
+                    // 写死 1f 会让它重新展开时吃掉所有剩余宽度。
+                    reset.weight = EPG_PANEL_WEIGHT
                     epgPanel.layoutParams = reset
                     epgHandle.visibility = View.VISIBLE
                     panelRightGap.visibility = View.VISIBLE
@@ -2528,6 +2541,19 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
     override fun onPrepared(width: Int, height: Int) = Unit
 
     /**
+     * 播放列表原地打转（位置连续回落）→ 强制重新起播当前台。
+     *
+     * 真机现象：黑屏但仍有声音，日志里 position 每 12 秒掉一次、伴随重缓冲。
+     * 原因不是网络也不是解码，是源侧 HLS 播放列表窗口在回退，播放器一直重载。
+     * 重新 prepare 会重新拉一份播放列表，通常就恢复正常。
+     */
+    override fun onVideoStuck() {
+        val ch = current ?: return
+        Log.w(TAG, "视频输出卡住，强制重载：${ch.name}")
+        playChannel(ch, currentStreamId, forceRebuild = true)
+    }
+
+    /**
      * 本次换台的转场方向：+1 = 旧画面向上滑走（切到下一个台），
      * -1 = 向下滑走（上一个台），0 = 只淡出（点列表、数字键、恢复播放等没有方向感的路径）。
      *
@@ -2711,11 +2737,41 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
      * 各自补一次很容易漏（静默重载就因为漏了导致"隔很久开面板焦点消失"）。
      * 这里收口成一个入口。
      */
+    /**
+     * 用**本地节目单**重算列表行的「正在播什么 + 进度条」。
+     *
+     * 节目单是客户端自己下载 xmltv 并解析缓存的（服务端只下发地址），
+     * 所以列表里的节目信息不该依赖服务端的 `now` 字段 —— 那个字段一空，
+     * 整列就会既没有节目名也没有进度条（真机上就是这么丢的）。
+     * 服务端数据只在本地节目单还没解析好时兜底。
+     */
+    private fun rebuildNowMap() {
+        if (!app.epg.ready) return
+        val nowSec = System.currentTimeMillis() / 1000
+        val fresh = HashMap<Long, com.litv.tv.data.NowPlaying>()
+        for (ch in allChannels) {
+            val epgId = ch.epgId ?: continue
+            val props = app.epg.programsFor(epgId) ?: continue
+            val cur = props.firstOrNull { nowSec >= it.start && nowSec < it.end } ?: continue
+            fresh[ch.id] = com.litv.tv.data.NowPlaying(
+                channelId = ch.id,
+                title = cur.title,
+                start = cur.start,
+                end = cur.end,
+            )
+        }
+        if (fresh.isEmpty()) return
+        nowMap.clear()
+        nowMap.putAll(fresh)
+        // 按频道号对齐后同步给适配器（它拿的是同一份 Map 引用，这里只需重算）
+    }
+
     private fun submitPanelList(list: List<Channel>) {
         // 只有焦点本来就在频道列时才恢复；焦点在分类列（正在挑分组）就别动它，
         // 否则每选一次分类，焦点就被搬到频道列 —— 用户看到的是"焦点乱飘"。
         val focusInList = panelVisible && panelList.hasFocus()
         val keep = if (focusInList) focusedPanelChannelId().takeIf { it > 0 } else null
+        rebuildNowMap()
         panelAdapter.submit(list, nowMap)
         if (focusInList) {
             val id = keep ?: current?.id ?: 0L
@@ -3199,7 +3255,9 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
     private val panelProgressTick = object : Runnable {
         override fun run() {
             if (!panelVisible) return
-            if (::panelAdapter.isInitialized) panelAdapter.tickProgress(panelList)
+            // 先按本地节目单重算（节目可能已经换了），再刷新可见行的进度/标题
+            rebuildNowMap()
+            if (::panelAdapter.isInitialized) panelAdapter.tickProgress(panelList, nowMap)
             main.postDelayed(this, 20_000)
         }
     }
@@ -3225,6 +3283,12 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
     }
 
     companion object {
+        /** 节目单面板在四列中的权重，必须与 activity_player.xml 的 layout_weight 相同。 */
+        const val EPG_PANEL_WEIGHT = 456f
+        /** 右侧留白：收起态独占总宽（和节目单同格的 796 = 340 + 456），展开态只留 340。 */
+        const val GAP_WEIGHT_COLLAPSED = 796f
+        const val GAP_WEIGHT_EXPANDED = 340f
+
         const val EXTRA_CHANNEL_ID = "channel_id"
         const val EXTRA_CHANNEL_NAME = "channel_name"
     }
@@ -3241,14 +3305,36 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
      *
      * 日期列是节目单的"选择器"，左键从节目列要回到它，不是直接跳回频道列。
      */
+    /** 把焦点放到当前选中的分类行上（而不是列表第一项）。 */
+    private fun focusSelectedGroup() {
+        grpList.post {
+            val pos = grpAdapter.selectedPosition()
+            val vh = grpList.findViewHolderForAdapterPosition(pos)
+            if (vh != null) vh.itemView.requestFocus() else grpList.requestFocus()
+        }
+    }
+
     private fun movePanelFocus(dir: Int) {
         when {
             // 分类列已经是最左，再按左键 = 关面板回到全屏。
             // 之前这里是死键（落到 else 分支 requestFocus 自己），
             // 想退出去只能按返回，很反直觉。
             grpList.hasFocus() && dir < 0 -> closePanel()
-            grpList.hasFocus() && dir > 0 -> panelList.requestFocus()
-            panelList.hasFocus() && dir < 0 -> grpList.requestFocus()
+            // 分类列右键：进频道列，并落在**当前正在播的那个台**上
+            // （不在本分类里就落在第一项）。直接 requestFocus() 只会给列表首项，
+            // 用户选完分类按右键会跑到第一个台，跟"进到这个分类"的预期不符。
+            grpList.hasFocus() && dir > 0 -> {
+                val id = current?.id ?: 0L
+                if (id > 0 && channels.any { it.id == id }) focusPanelChannel(id)
+                else {
+                    val vh = panelList.findViewHolderForAdapterPosition(0)
+                    if (vh != null) vh.itemView.requestFocus() else panelList.requestFocus()
+                }
+            }
+            // 回分类列时聚焦"当前选中的那个分类"，不是第一个。
+            // 直接 grpList.requestFocus() 会让 RecyclerView 把焦点给第一个子项，
+            // 看起来就像"返回分类时又回到全部了"。
+            panelList.hasFocus() && dir < 0 -> focusSelectedGroup()
             // 频道列右键：展开节目单，焦点落在日期选择器上
             panelList.hasFocus() && dir > 0 -> {
                 expandEpgPanel()
@@ -3280,6 +3366,10 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         // 改成四列浮层时这里漏了赋值，导致 channels 永远为空、自动播放从不触发，
         // 表现就是黑屏转圈、服务端收不到 /tv/play。
         channels = list
+        // 列表每次重刷都要按本地节目单重算「正在播 + 进度条」。
+        // 这里原先直接 submit，绕过了重算 —— 打开面板走的就是这条路，
+        // 所以列表里从来没有节目名和进度条。
+        rebuildNowMap()
         panelAdapter.submit(list, nowMap)
         panelTitle.text = buildString {
             append(if (selSource == 0L) "全部频道" else (srcNames[selSource] ?: "频道"))

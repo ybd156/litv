@@ -1185,16 +1185,20 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         // 单次按下的代价是多等 250ms，但有了相邻台预取，总耗时仍远低于改之前。
         pendingSwitchTarget = channels[index]
         main.removeCallbacks(switchDebounceRunnable)
-        main.postDelayed(switchDebounceRunnable, 250)
-        showOsd()
+        main.postDelayed(switchDebounceRunnable, 150)
+        // ⚠ 这里**不能** showOsd()。
+        // showOsd 渲染的是 channels[index]，而 index 已经指向了"还没播的"目标台。
+        // 连按时 OSD 一直在变、画面却停在旧台，看起来就是卡死。
+        // 真正的切换和 OSD 都放到 switchDebounceRunnable 里，等真的开始了再显示。
     }
 
-    /** 连按换台的合并：250ms 内只对最后一个目标发起播放。 */
+    /** 连按换台的合并：150ms 内只对最后一个目标发起播放。 */
     private var pendingSwitchTarget: Channel? = null
     private val switchDebounceRunnable = Runnable {
         val target = pendingSwitchTarget ?: return@Runnable
         pendingSwitchTarget = null
         playChannel(target)
+        showOsd()
     }
 
     private fun jumpByNumber() {

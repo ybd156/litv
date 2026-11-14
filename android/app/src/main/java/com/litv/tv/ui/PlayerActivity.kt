@@ -2325,6 +2325,13 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
                     epgPanel.layoutParams = reset
                     epgHandle.visibility = View.VISIBLE
                     panelRightGap.visibility = View.VISIBLE
+                    // 留白权重必须在这里也恢复：正常收起走的是这条动画路径，
+                    // 之前只有"宽度为 0 提前返回"那条分支恢复过，
+                    // 于是从节目单返回后留白仍占展开态的 340，分类和频道被拉宽。
+                    (panelRightGap.layoutParams as? android.widget.LinearLayout.LayoutParams)?.let {
+                        it.weight = GAP_WEIGHT_COLLAPSED
+                        panelRightGap.layoutParams = it
+                    }
                     then?.invoke()
                 }
             })
@@ -3284,7 +3291,7 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
 
     companion object {
         /** 节目单面板在四列中的权重，必须与 activity_player.xml 的 layout_weight 相同。 */
-        const val EPG_PANEL_WEIGHT = 456f
+        const val EPG_PANEL_WEIGHT = 464f
         /** 右侧留白：收起态独占总宽（和节目单同格的 796 = 340 + 456），展开态只留 340。 */
         const val GAP_WEIGHT_COLLAPSED = 796f
         const val GAP_WEIGHT_EXPANDED = 340f

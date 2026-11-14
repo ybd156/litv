@@ -1843,7 +1843,13 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
 
     }
 
-    private fun showOsd() {
+    /**
+     * 显示 OSD。
+     *
+     * @param level 默认 2 = 完整信息（台号/台名/当前节目/下一档/徽标/码率）。
+     *              原来默认 1、再按一次 OK 才到 2，用户要按两次才看到想看的东西。
+     */
+    private fun showOsd(level: Int = 2) {
         renderOsdBadges()
         // 面板/设置菜单打开时不显示 OSD：面板底部已经有完整信息条，
         // 两个同时出现会叠在一起（截图里就是 OSD 压在设置菜单下面）。
@@ -1852,9 +1858,7 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         osd.visibility = View.VISIBLE
         osdName.text = osdNameText(current ?: return)
         renderOsdNow()
-        // OSD 分层：第一层只给「台号 + 台名 + 收藏态」，
-        // 线路/内核/缓冲是排障信息，不该和台名抢注意力。
-        setOsdLevel(1)
+        setOsdLevel(level)
         main.removeCallbacks(hideOsdRunnable)
         main.postDelayed(hideOsdRunnable, 5000)
     }
@@ -1889,15 +1893,9 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
 
     /** OK 键循环：隐 → 第一层 → 第二层 → 隐。 */
     private fun toggleOsd() {
-        when {
-            !osdVisible -> showOsd()
-            osdLevel >= 2 -> hideOsd()
-            else -> {
-                setOsdLevel(2)
-                main.removeCallbacks(hideOsdRunnable)
-                main.postDelayed(hideOsdRunnable, 8000)
-            }
-        }
+        // 两态：隐藏 <-> 完整信息。原来中间还有一档"精简"，要按两次 OK 才看到
+        // 当前节目/下一档，用户反馈多余。
+        if (osdVisible) hideOsd() else showOsd()
     }
 
     /** 放开焦点限制并把面板淡入。落焦点前不能放开，否则「全部」会先抢到焦点。 */

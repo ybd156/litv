@@ -347,7 +347,7 @@ class PhonePlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         tip("播放出错：$message")
     }
 
-    override fun onVideoSizeChanged(width: Int, height: Int) = Unit
+    override fun onVideoSizeChanged(width: Int, height: Int, frameRate: Float) = Unit
 
     override fun onPause() { super.onPause(); player.pause() }
     override fun onResume() { super.onResume(); player.resume() }

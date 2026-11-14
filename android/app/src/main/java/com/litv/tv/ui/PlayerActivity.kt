@@ -3129,7 +3129,56 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         return true
     }
 
-    override fun onVideoSizeChanged(width: Int, height: Int) = Unit
+    override fun onVideoSizeChanged(width: Int, height: Int, frameRate: Float) {
+        applyContentFrameRate(frameRate)
+    }
+
+    /**
+     * 让屏幕刷新率跟随内容（帧率匹配）。
+     *
+     * 为什么需要：国内 IPTV 是 25fps（PAL）。25fps 在 60Hz 屏幕上必须做 2:3 pulldown
+     * （有的帧显示 2 次、有的 3 次），节奏天然不匀 —— 实测合成层帧间隔有 45% 超过 45ms、
+     * 最长 133ms，肉眼看就是"一顿一顿"。把屏幕切到 50Hz 后 25→50 是整数倍，每帧均匀显示 2 次，
+     * 卡顿从原理上消失，而且**不增加任何解码/渲染开销**，对低端盒子最友好。
+     *
+     * 只在有对应模式时才切；没有 50Hz 的机器保持原样（什么都不做）。
+     */
+    private fun applyContentFrameRate(contentFps: Float) {
+        if (android.os.Build.VERSION.SDK_INT < 23) return
+        if (!app.prefs.frameRateMatch) return
+        // HLS 常常不带帧率（-1）。国内 IPTV 以 25fps 为主，按 PAL 处理。
+        val fps = if (contentFps > 1f) contentFps else 25f
+        val target = when {
+            fps in 23f..27f -> 50f
+            fps in 45f..52f -> 50f
+            fps in 28f..32f -> 60f
+            fps in 56f..62f -> 60f
+            else -> return
+        }
+        val wm = getSystemService(android.content.Context.WINDOW_SERVICE)
+            as? android.view.WindowManager ?: return
+        val display = wm.defaultDisplay ?: return
+        val cur = display.mode ?: return
+        if (android.os.Build.VERSION.SDK_INT < 23) return
+        val candidates = display.supportedModes.filter {
+            it.physicalWidth == cur.physicalWidth && it.physicalHeight == cur.physicalHeight
+        }
+        val best = candidates.minByOrNull { kotlin.math.abs(it.refreshRate - target) } ?: return
+        if (kotlin.math.abs(best.refreshRate - target) > 1f) {
+            Log.i(TAG, "帧率匹配: 没有 ${target.toInt()}Hz 模式，保持 ${cur.refreshRate.toInt()}Hz")
+            return
+        }
+        if (best.modeId == cur.modeId) {
+            Log.i(TAG, "帧率匹配: 已在 ${cur.refreshRate.toInt()}Hz（内容 ${fps}fps）")
+            return
+        }
+        runCatching {
+            val attrs = window.attributes
+            attrs.preferredDisplayModeId = best.modeId
+            window.attributes = attrs
+            Log.i(TAG, "帧率匹配: ${cur.refreshRate.toInt()}Hz -> ${best.refreshRate.toInt()}Hz（内容 ${fps}fps）")
+        }.onFailure { Log.w(TAG, "帧率匹配失败: ${it.javaClass.simpleName}") }
+    }
 
     // ---------------------------------------------------------------- 生命周期
 

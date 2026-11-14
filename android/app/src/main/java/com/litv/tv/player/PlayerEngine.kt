@@ -23,7 +23,7 @@ interface PlayerEngine {
         fun onPrepared(durationMs: Long)
         fun onPlaying()
         fun onError(message: String)
-        fun onVideoSizeChanged(width: Int, height: Int)
+        fun onVideoSizeChanged(width: Int, height: Int, frameRate: Float = -1f)
         fun onEnded()
 
         /**

@@ -302,8 +302,11 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         gestureDetector = android.view.GestureDetector(this,
             object : android.view.GestureDetector.SimpleOnGestureListener() {
                 override fun onSingleTapConfirmed(e: android.view.MotionEvent): Boolean {
-                    // 面板开着时点画面交给面板自己处理
-                    if (panelVisible) return false
+                    // 面板/设置菜单开着时，点空白处什么也不该发生。
+                    // 原来只判了 panelVisible，漏了 menuVisible ——
+                    // 设置开着的时候点一下空白（比如二级面板右侧那片），
+                    // 触摸穿透到 root，直接把 OSD 呼出来了。
+                    if (panelVisible || menuVisible) return false
                     if (osdVisible) hideOsd() else showOsd()
                     return true
                 }
@@ -1839,9 +1842,9 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
 
     private fun showOsd() {
         renderOsdBadges()
-        // 面板打开时不显示 OSD：面板底部已经有完整信息条，
-        // 两个同时出现会叠在一起。
-        if (panelVisible) return
+        // 面板/设置菜单打开时不显示 OSD：面板底部已经有完整信息条，
+        // 两个同时出现会叠在一起（截图里就是 OSD 压在设置菜单下面）。
+        if (panelVisible || menuVisible) return
         osdVisible = true
         osd.visibility = View.VISIBLE
         osdName.text = osdNameText(current ?: return)
@@ -1904,6 +1907,9 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
     }
 
     private fun openPanel() {
+        // 三个浮层互斥：频道面板 / 设置菜单 / OSD 同时只允许一个存在。
+        if (menuVisible) closeSettingsMenu()
+        hideOsd()
         panelVisible = true
         // 面板一变 VISIBLE，系统会立刻把焦点给第一个可聚焦项（分类列的「全部」），
         // 然后我们再挪到当前频道——中间那一帧用户就看见"焦点先跑到全部再闪回来"。
@@ -3262,6 +3268,8 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
 
     private fun toggleSettingsMenu() {
         if (menuVisible) closeSettingsMenu() else {
+            // 互斥：开设置就先收频道面板
+            if (panelVisible) closePanel()
             menuVisible = true
             settingsMenu.visibility = android.view.View.VISIBLE
             hideOsd()

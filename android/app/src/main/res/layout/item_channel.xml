@@ -20,7 +20,7 @@
     android:focusable="true"
     android:gravity="center_vertical"
     android:orientation="horizontal"
-    android:paddingHorizontal="10dp"
+    android:paddingHorizontal="6dp"
     android:paddingVertical="7dp">
 
     <!-- 选中/正在播指示条（mediaplayer 的做法） -->
@@ -37,7 +37,7 @@
          和右边的台标连成一组。 -->
     <TextView
         android:id="@+id/tvNo"
-        android:layout_width="40dp"
+        android:layout_width="28dp"
         android:layout_height="30dp"
         android:layout_gravity="center_vertical"
         android:background="@drawable/bg_no_chip"
@@ -72,7 +72,7 @@
     <LinearLayout
         android:layout_width="0dp"
         android:layout_height="wrap_content"
-        android:layout_marginStart="10dp"
+        android:layout_marginStart="6dp"
         android:layout_weight="1"
         android:orientation="vertical">
 

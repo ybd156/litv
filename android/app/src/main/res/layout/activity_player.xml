@@ -259,7 +259,7 @@
                 android:background="@drawable/bg_panel_zone"
                 android:clipToOutline="true"
                 android:orientation="vertical"
-                android:paddingHorizontal="4dp"
+                android:paddingHorizontal="0dp"
                 android:paddingVertical="4dp">
 
                 <androidx.recyclerview.widget.RecyclerView
@@ -284,7 +284,7 @@
                 android:background="@drawable/bg_panel_zone"
                 android:clipToOutline="true"
                 android:orientation="vertical"
-                android:paddingHorizontal="8dp">
+                android:paddingHorizontal="2dp">
 
                 <!-- 参考布局里没有这一行标题：分组名左边已经显示了，
                      而「收藏」在左栏本来就是一个分组，这里再放一个按钮是重复入口。
@@ -378,7 +378,7 @@
                 android:background="@drawable/bg_panel_zone"
                 android:clipToOutline="true"
                 android:orientation="horizontal"
-                android:paddingHorizontal="6dp">
+                android:paddingHorizontal="2dp">
 
                 <!-- C4：点它切换节目分类筛选 -->
                 <!-- 节目单列的标题。去掉卡片背景和描边：它是个可点击的切换入口

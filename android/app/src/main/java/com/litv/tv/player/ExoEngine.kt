@@ -369,6 +369,47 @@ class ExoEngine : PlayerEngine {
                 Log.i(TAG, "视频首帧已渲染")
                 listener?.onFirstFrame()
             }
+
+            // 下面四项是"随机卡顿"的唯一可量化证据。
+            // 之前日志里只有首帧和报错，卡的时候什么线索都没有，只能靠猜。
+
+            override fun onDroppedVideoFrames(
+                eventTime: androidx.media3.exoplayer.analytics.AnalyticsListener.EventTime,
+                droppedFrames: Int,
+                elapsedMs: Long,
+            ) {
+                Log.w(TAG, "丢帧 ${droppedFrames} 帧 / ${elapsedMs}ms")
+            }
+
+            override fun onAudioUnderrun(
+                eventTime: androidx.media3.exoplayer.analytics.AnalyticsListener.EventTime,
+                bufferSize: Int,
+                bufferSizeMs: Long,
+                elapsedSinceLastFeedMs: Long,
+            ) {
+                Log.w(TAG, "音频欠载：缓冲 ${bufferSizeMs}ms，距上次喂数据 ${elapsedSinceLastFeedMs}ms")
+            }
+
+            override fun onBandwidthEstimate(
+                eventTime: androidx.media3.exoplayer.analytics.AnalyticsListener.EventTime,
+                totalLoadTimeMs: Int,
+                totalBytesLoaded: Long,
+                bitrateEstimate: Long,
+            ) {
+                if (bitrateEstimate > 0) {
+                    Log.i(TAG, "带宽估算 ${bitrateEstimate / 1000} kbps")
+                }
+            }
+
+            override fun onPlaybackStateChanged(
+                eventTime: androidx.media3.exoplayer.analytics.AnalyticsListener.EventTime,
+                playbackState: Int,
+            ) {
+                // 已经在播却退回 BUFFERING = 重缓冲（网络或解码跟不上）
+                if (playbackState == Player.STATE_BUFFERING && exoFirstFrameRendered) {
+                    Log.w(TAG, "重缓冲：播放中回到 BUFFERING")
+                }
+            }
         })
 
         player?.setVideoSurface(videoSurface)

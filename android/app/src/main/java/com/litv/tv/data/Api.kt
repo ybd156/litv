@@ -283,6 +283,20 @@ class Api(private val prefs: Prefs) {
             }, onErr = onErr)
     }
 
+    /**
+     * 预取某个频道的播放地址，只为填缓存。
+     *
+     * 换台耗时实测 1.1~2.8 秒，其中 `playChannel -> play 返回` 这段
+     * （向服务端要签名地址）占 0.8~1.4 秒。提前把相邻台的地址要回来，
+     * 按 ↑↓ 换台时这一步就是内存命中，直接省掉。
+     */
+    fun prefetchPlay(channelId: Long) {
+        if (channelId <= 0) return
+        val hit = playCache[channelId]
+        if (hit != null && System.currentTimeMillis() - hit.second < 5 * 60_000) return
+        play(channelId, onOk = { }, onErr = { })
+    }
+
     /** 线路列表（手动切线路用）。 */
     fun streams(channelId: Long, onOk: (List<TvStream>) -> Unit, onErr: (String) -> Unit) {
         callList("/api/v1/tv/streams/$channelId", TvStream::class.java, onOk, onErr)

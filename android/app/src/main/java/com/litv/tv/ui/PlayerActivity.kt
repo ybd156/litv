@@ -705,6 +705,9 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
                 } else {
                     playChannel(ch)
                 }
+                // 面板里换台也要给一次 OSD 反馈：↑↓ 换台和数字键跳台都会 showOsd()，
+                // 只有这条路漏了——面板一关就什么都不显示，用户不知道切到了哪个台。
+                showOsd()
             },
             onLongClick = { ch -> toggleFavorite(ch) },
             // 焦点移到哪个台，右侧节目单就显示哪个台的节目（不是正在播的那个）

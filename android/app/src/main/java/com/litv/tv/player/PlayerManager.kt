@@ -29,7 +29,7 @@ class PlayerManager(
         fun onPrepared(width: Int, height: Int)
         fun onPlaying()
         fun onError(message: String)
-        fun onVideoSizeChanged(width: Int, height: Int)
+        fun onVideoSizeChanged(width: Int, height: Int, frameRate: Float = -1f)
 
         /** 第一帧真正画到屏幕上（换台快照要等这一帧再撤）。 */
         fun onFirstFrame() = Unit
@@ -670,8 +670,8 @@ class PlayerManager(
                 }
             }
 
-            override fun onVideoSizeChanged(width: Int, height: Int) {
-                main.post { callback?.onVideoSizeChanged(width, height) }
+            override fun onVideoSizeChanged(width: Int, height: Int, frameRate: Float) {
+                main.post { callback?.onVideoSizeChanged(width, height, frameRate) }
             }
 
             override fun onEnded() = Unit

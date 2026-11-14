@@ -808,7 +808,7 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
         playHint.text = message
     }
 
-    override fun onVideoSizeChanged(width: Int, height: Int) = Unit
+    override fun onVideoSizeChanged(width: Int, height: Int, frameRate: Float) = Unit
 
     // ---------------------------------------------------------------- 生命周期
 

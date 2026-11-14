@@ -262,6 +262,17 @@ class Prefs(ctx: Context) {
         set(v) = sp.edit().putBoolean(K_AUTOPLAY, v).apply()
 
     /**
+     * 帧率匹配：把屏幕刷新率切到内容的整数倍（25fps→50Hz）。
+     *
+     * 25fps 内容在 60Hz 上要做 2:3 pulldown，节奏不匀，看着"一顿一顿"。
+     * 切到 50Hz 后每帧均匀显示 2 次，从原理上消除抖动，且不增加解码开销。
+     * 少数机型切模式会黑一下，所以给开关；默认开（电视端的通行做法）。
+     */
+    var frameRateMatch: Boolean
+        get() = sp.getBoolean("frame_rate_match", true)
+        set(v) = sp.edit().putBoolean("frame_rate_match", v).apply()
+
+    /**
      * 播放方式：auto（默认，能直连就直连）/ direct（强制直连）/ relay（强制走服务端）。
      *
      * 直连 = 客户端自己连源站，省掉 NAS 的带宽和 CPU，起播更快；

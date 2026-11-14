@@ -1870,10 +1870,21 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         }
     }
 
+    /** 放开焦点限制并把面板淡入。落焦点前不能放开，否则「全部」会先抢到焦点。 */
+    private fun revealPanel() {
+        if (!panelVisible) return
+        if (panel.descendantFocusability != android.view.ViewGroup.FOCUS_AFTER_DESCENDANTS) {
+            panel.descendantFocusability = android.view.ViewGroup.FOCUS_AFTER_DESCENDANTS
+        }
+        if (panel.alpha < 1f) panel.animate().alpha(1f).setDuration(120).start()
+    }
+
     private fun openPanel() {
         panelVisible = true
-        // 先透明显示（仍然参与布局，能落焦点），焦点放好后再淡入。
-        // 否则会看到"焦点从全部闪到当前频道"——那是落焦点的过程被看见了。
+        // 面板一变 VISIBLE，系统会立刻把焦点给第一个可聚焦项（分类列的「全部」），
+        // 然后我们再挪到当前频道——中间那一帧用户就看见"焦点先跑到全部再闪回来"。
+        // 所以显示前先禁止子视图抢焦点，等定位好再放开。
+        panel.descendantFocusability = android.view.ViewGroup.FOCUS_BLOCK_DESCENDANTS
         panel.alpha = 0f
         panel.visibility = View.VISIBLE
 
@@ -1927,24 +1938,28 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
                 if (panelList.hasFocus()) return
                 val vh = panelList.findViewHolderForAdapterPosition(pos)
                 if (vh != null) {
+                    revealPanel()
                     vh.itemView.requestFocus()
-                    panel.animate().alpha(1f).setDuration(120).start()
                     return
                 }
                 if (System.currentTimeMillis() < deadline) {
                     panelList.postDelayed(this, 80)
-                } else if (channels.isEmpty()) {
-                    Log.i(TAG, "频道列为空，焦点交给分组列")
-                    grpList.post { grpList.requestFocus() }
-                    panel.animate().alpha(1f).setDuration(120).start()
+                } else {
+                    // 拿不到目标项（列表为空/未布局完）：放开焦点限制再淡入，
+                    // 至少让面板可用，不再无限等。
+                    if (channels.isEmpty()) Log.i(TAG, "频道列为空，焦点交给分组列")
+                    revealPanel()
+                    if (channels.isEmpty()) grpList.post { grpList.requestFocus() }
                 }
             }
         }
         panelList.postDelayed(focusTick, 60)
         main.removeCallbacks(panelProgressTick)
         main.postDelayed(panelProgressTick, 20_000)
-        // 兜底：任何分支漏掉也要让面板可见
-        main.postDelayed({ if (panelVisible) panel.animate().alpha(1f).setDuration(120).start() }, 400)
+        // 兜底：极端情况（比如列表一直没布局）也别让面板永远透明。
+        // 1.2s 比落焦点的 1.5s 上限短，但比正常落位（~60-200ms）长得多，
+        // 不会在落焦点途中抢先把面板显出来。
+        main.postDelayed({ if (panelVisible && panel.alpha < 1f) revealPanel() }, 1_200)
         hideOsd()
     }
 

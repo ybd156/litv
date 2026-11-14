@@ -65,6 +65,9 @@ class XmltvEpg(private val context: Context) {
      * 取某个频道的节目。返回 null 表示「还没准备好」，调用方该回落到服务端。
      * 返回空列表表示「确实没有这个频道的节目」。
      */
+    /** xmltv 是否已下载并解析完。用来区分"还没加载"和"这个台确实没有节目单"。 */
+    val ready: Boolean get() = loaded
+
     fun programsFor(epgId: String): List<Program>? {
         if (!loaded) return null
         if (epgId.isBlank()) return emptyList()

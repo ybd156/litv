@@ -1356,7 +1356,10 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
             osdProgress.progress = pct
             osdProgress.visibility = View.VISIBLE
         } else {
-            osdNow.text = getString(R.string.no_epg)
+            // 区分两种"没有节目"：xmltv 还没下载解析完 vs 这个台确实没数据。
+            // 之前一律写"暂无节目单"，而实测 xmltv 在模拟器上要 25 秒才就绪，
+            // 这段时间用户看到的是误导性的"暂无节目单"。
+            osdNow.text = if (app.epg.ready) getString(R.string.no_epg) else "节目单加载中…"
             osdProgress.visibility = View.GONE
         }
         osdNext.text = next?.let { "${fmt(it.startAt)}-${fmt(it.endAt)}  ${it.title}" } ?: ""

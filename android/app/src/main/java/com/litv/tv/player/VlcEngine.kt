@@ -30,6 +30,9 @@ class VlcEngine : PlayerEngine {
     private var videoSurface: android.view.Surface? = null
     private var appCtx: android.content.Context? = null
     /** 承载画面的容器，用来取真实窗口尺寸 */
+    /** 已经挂给 libVLC 的 Surface，用来避免重复 attach。 */
+    private var attachedSurface: android.view.Surface? = null
+
     private var hostView: android.view.View? = null
     private var videoW = 0
     private var videoH = 0
@@ -53,9 +56,14 @@ class VlcEngine : PlayerEngine {
         // isValid 必须查：SurfaceView 销毁后 holder.surface 对象还在，
         // 但已经无效。传给 libVLC 会在它的 Handler 线程里抛异常并崩溃。
         if (mp != null && surface != null && surface.isValid) {
+            // 同一个 Surface 已经挂过就别再挂：libVLC 会抛
+            // IllegalStateException: Can't set view when already attached
+            // （PlayerActivity 换台后会补挂一次 Surface，VLC 走不到这里就报错）
+            if (surface === attachedSurface) return
             try {
                 mp.vlcVout.setVideoSurface(surface, null)
                 mp.vlcVout.attachViews()
+                attachedSurface = surface
                 Log.i(TAG, "Surface 晚到，已补挂 VLC 画面")
                 syncWindowSize(mp)
             } catch (t: Throwable) {

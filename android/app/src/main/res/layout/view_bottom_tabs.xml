@@ -10,7 +10,7 @@
     android:layout_height="wrap_content"
     android:background="@color/bg_panel"
     android:orientation="horizontal"
-    android:paddingVertical="10dp">
+    android:paddingVertical="8dp">
 
     <TextView
         android:id="@+id/tabPlay"

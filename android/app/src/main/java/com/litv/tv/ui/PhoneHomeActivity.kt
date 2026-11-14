@@ -112,7 +112,7 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         // 播放中保持屏幕常亮：看直播时屏幕自己灭掉是很烦的事。
-        window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        // 主页不需要常亮（只有播放页需要）
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_phone_home)
         applySystemInsets()

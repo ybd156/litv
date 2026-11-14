@@ -88,7 +88,7 @@
         android:layout_marginTop="96dp"
         android:text="正在连接…"
         android:textColor="@color/text_secondary"
-        android:textSize="15sp"
+        android:textSize="16sp"
         android:visibility="gone" />
 
     <TextView
@@ -99,7 +99,7 @@
         android:layout_marginTop="96dp"
         android:text="@string/switch_channel"
         android:textColor="@color/text_secondary"
-        android:textSize="18sp"
+        android:textSize="16sp"
         android:visibility="gone" />
 
     <!-- 底部信息条 -->
@@ -157,7 +157,7 @@
                 <View
                     android:layout_width="1dp"
                     android:layout_height="22dp"
-                    android:layout_marginHorizontal="10dp"
+                    android:layout_marginHorizontal="8dp"
                     android:background="#40FFFFFF" />
 
                 <TextView
@@ -168,7 +168,7 @@
                     android:ellipsize="end"
                     android:maxLines="1"
                     android:textColor="@color/text_primary"
-                    android:textSize="22sp"
+                    android:textSize="21sp"
                     android:textStyle="bold" />
 
                 <!-- 角标：引擎 / 线路，运行时动态填充 -->
@@ -185,18 +185,18 @@
                     android:layout_height="wrap_content"
                     android:layout_marginStart="12dp"
                     android:textColor="#B3FFFFFF"
-                    android:textSize="14sp" />
+                    android:textSize="13sp" />
             </LinearLayout>
 
             <TextView
                 android:id="@+id/osdNow"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="6dp"
+                android:layout_marginTop="4dp"
                 android:ellipsize="end"
                 android:maxLines="1"
                 android:textColor="@color/text_secondary"
-                android:textSize="19sp" />
+                android:textSize="21sp" />
 
             <ProgressBar
                 android:id="@+id/osdProgress"
@@ -211,11 +211,11 @@
                 android:id="@+id/osdNext"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="6dp"
+                android:layout_marginTop="4dp"
                 android:ellipsize="end"
                 android:maxLines="1"
                 android:textColor="@color/text_secondary"
-                android:textSize="14sp" />
+                android:textSize="13sp" />
 
             <TextView
                 android:id="@+id/osdHint"
@@ -275,7 +275,7 @@
             <View
                 android:layout_width="1dp"
                 android:layout_height="match_parent"
-                android:layout_marginVertical="10dp"
+                android:layout_marginVertical="8dp"
                 android:background="@drawable/divider_vertical" />
 
             <!-- 2. 频道列表：台号框 + 台名 + 当前节目。
@@ -285,7 +285,8 @@
                 android:layout_weight="340"
                 android:layout_height="match_parent"
                 android:background="@drawable/bg_panel_zone"
-                android:clipToOutline="true"
+                android:clipChildren="false"
+                android:clipToOutline="false"
                 android:orientation="vertical"
                 android:paddingHorizontal="2dp">
 
@@ -304,10 +305,10 @@
                         android:layout_width="0dp"
                         android:layout_height="wrap_content"
                         android:layout_weight="1"
-                        android:paddingBottom="6dp"
+                        android:paddingBottom="4dp"
                         android:paddingStart="4dp"
                         android:textColor="@color/accent"
-                        android:textSize="18sp" />
+                        android:textSize="16sp" />
 
                     <!-- C1：收藏入口。
                          必须是**可聚焦**控件：TV 上一切只能靠遥控器，纯装饰的
@@ -321,7 +322,7 @@
                         android:clickable="true"
                         android:focusable="true"
                         android:paddingHorizontal="12dp"
-                        android:paddingVertical="6dp"
+                        android:paddingVertical="4dp"
                         android:text="☆ 收藏"
                         android:textColor="@color/accent"
                         android:textSize="16sp" />
@@ -346,14 +347,14 @@
                     android:paddingHorizontal="8dp"
                     android:paddingVertical="16dp"
                     android:textColor="@color/text_secondary"
-                    android:textSize="14sp"
+                    android:textSize="13sp"
                     android:visibility="gone" />
             </LinearLayout>
 
             <View
                 android:layout_width="1dp"
                 android:layout_height="match_parent"
-                android:layout_marginVertical="10dp"
+                android:layout_marginVertical="8dp"
                 android:background="@drawable/divider_vertical" />
 
             <!-- 3a. 节目单把手：收起状态只有这一条竖排文字（参考实现的样子）。
@@ -416,7 +417,7 @@
                         android:layout_height="wrap_content"
                         android:clickable="true"
                         android:focusable="true"
-                        android:paddingBottom="6dp"
+                        android:paddingBottom="4dp"
                         android:paddingStart="8dp"
                         android:paddingEnd="8dp"
                         android:paddingTop="8dp"
@@ -459,7 +460,7 @@
             android:gravity="center_vertical"
             android:orientation="horizontal"
             android:paddingHorizontal="16dp"
-            android:paddingVertical="10dp">
+            android:paddingVertical="8dp">
 
             <ImageView
                 android:id="@+id/infoLogo"
@@ -473,7 +474,7 @@
             <LinearLayout
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
-                android:layout_marginStart="14dp"
+                android:layout_marginStart="16dp"
                 android:layout_weight="1"
                 android:orientation="vertical">
 
@@ -484,7 +485,7 @@
                     android:ellipsize="end"
                     android:maxLines="1"
                     android:textColor="@color/text_primary"
-                    android:textSize="18sp"
+                    android:textSize="16sp"
                     android:textStyle="bold" />
 
                 <TextView
@@ -494,7 +495,7 @@
                     android:ellipsize="end"
                     android:maxLines="1"
                     android:textColor="@color/text_secondary"
-                    android:textSize="18sp" />
+                    android:textSize="16sp" />
 
                 <TextView
                     android:id="@+id/infoNext"
@@ -503,7 +504,7 @@
                     android:ellipsize="end"
                     android:maxLines="1"
                     android:textColor="#8B949E"
-                    android:textSize="18sp" />
+                    android:textSize="16sp" />
             </LinearLayout>
 
             <LinearLayout
@@ -519,7 +520,7 @@
                     android:layout_height="wrap_content"
                     android:gravity="end"
                     android:textColor="@color/accent"
-                    android:textSize="18sp" />
+                    android:textSize="16sp" />
 
                 <ProgressBar
                     android:id="@+id/infoProgress"
@@ -537,7 +538,7 @@
                     android:layout_marginTop="2dp"
                     android:gravity="end"
                     android:textColor="@color/text_secondary"
-                    android:textSize="18sp" />
+                    android:textSize="16sp" />
             </LinearLayout>
         </LinearLayout>
     </LinearLayout>
@@ -553,7 +554,7 @@
         android:paddingHorizontal="24dp"
         android:paddingVertical="12dp"
         android:textColor="@color/accent"
-        android:textSize="32sp"
+        android:textSize="30sp"
         android:textStyle="bold"
         android:visibility="gone" />
 
@@ -579,7 +580,7 @@
         <TextView
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_marginTop="14dp"
+            android:layout_marginTop="16dp"
             android:letterSpacing="0.2"
             android:text="LITV"
             android:textColor="@color/text_primary"

@@ -109,6 +109,19 @@ class ChannelAdapter(
         // 不能只依赖 holder.name.isSelected —— 那是给走马灯的，
         // 子 View 的 selected 不会往上传染给行容器。
         holder.itemView.isSelected = ch.id == playingId
+        // 焦点态用"轻微抬升"表达，而不是只靠描边：
+        // 200ms ease-out 放大到 1.02，移开时回到 1.0。
+        holder.itemView.setOnFocusChangeListener { v, hasFocus ->
+            v.animate()
+                .scaleX(if (hasFocus) 1.02f else 1f)
+                .scaleY(if (hasFocus) 1.02f else 1f)
+                .setDuration(200)
+                .setInterpolator(
+                    android.view.animation.PathInterpolator(0.2f, 0f, 0f, 1f),
+                )
+                .start()
+        }
+
         // 走马灯必须 isSelected=true 才会滚（TV 上长台名不会截断）
         holder.name.isSelected = true
         holder.now.isSelected = true

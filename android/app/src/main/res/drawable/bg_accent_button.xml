@@ -2,5 +2,5 @@
 <!-- 主按钮：主题色底 + 黑字，和设置页/登录页的按钮一致 -->
 <shape xmlns:android="http://schemas.android.com/apk/res/android">
     <solid android:color="@color/accent" />
-    <corners android:radius="10dp" />
+    <corners android:radius="8dp" />
 </shape>

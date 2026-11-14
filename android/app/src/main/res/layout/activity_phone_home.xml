@@ -46,7 +46,7 @@
                     android:maxLines="1"
                     android:text="还没选频道"
                     android:textColor="@color/text_primary"
-                    android:textSize="19sp"
+                    android:textSize="21sp"
                     android:textStyle="bold" />
 
                 <TextView
@@ -83,10 +83,10 @@
                     android:layout_height="wrap_content"
                     android:layout_gravity="center"
                     android:background="#CC151A21"
-                    android:paddingHorizontal="18dp"
-                    android:paddingVertical="10dp"
+                    android:paddingHorizontal="16dp"
+                    android:paddingVertical="8dp"
                     android:textColor="@color/text_primary"
-                    android:textSize="15sp"
+                    android:textSize="16sp"
                     android:visibility="gone" />
 
                 <TextView
@@ -109,7 +109,7 @@
                     android:gravity="center_vertical"
                     android:orientation="horizontal"
                     android:paddingHorizontal="8dp"
-                    android:paddingVertical="6dp"
+                    android:paddingVertical="4dp"
                     android:visibility="gone">
 
                     <TextView
@@ -151,9 +151,9 @@
                 android:ellipsize="end"
                 android:maxLines="1"
                 android:paddingHorizontal="16dp"
-                android:paddingTop="10dp"
+                android:paddingTop="8dp"
                 android:textColor="@color/text_secondary"
-                android:textSize="12sp" />
+                android:textSize="11sp" />
 
             <!-- 播放链路：直连/中转 + 实际用的 UA，方便排查源站校验 -->
             <TextView
@@ -163,7 +163,7 @@
                 android:ellipsize="end"
                 android:maxLines="1"
                 android:paddingHorizontal="16dp"
-                android:paddingTop="3dp"
+                android:paddingTop="4dp"
                 android:textColor="#66FFFFFF"
                 android:textSize="11sp" />
 
@@ -199,7 +199,7 @@
                 android:paddingHorizontal="16dp"
                 android:paddingTop="16dp"
                 android:textColor="@color/text_secondary"
-                android:textSize="12sp" />
+                android:textSize="11sp" />
 
             <EditText
                 android:id="@+id/searchInput"
@@ -213,18 +213,18 @@
                 android:imeOptions="actionSearch"
                 android:inputType="text"
                 android:maxLines="1"
-                android:paddingHorizontal="14dp"
-                android:paddingVertical="9dp"
+                android:paddingHorizontal="16dp"
+                android:paddingVertical="8dp"
                 android:singleLine="true"
                 android:textColor="@color/text_primary"
                 android:textColorHint="@color/text_secondary"
-                android:textSize="14sp" />
+                android:textSize="13sp" />
 
             <HorizontalScrollView
                 android:id="@+id/groupBar"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="6dp"
+                android:layout_marginTop="4dp"
                 android:paddingHorizontal="12dp"
                 android:scrollbars="none">
 
@@ -266,7 +266,7 @@
         android:layout_height="wrap_content"
         android:background="@color/bg_panel"
         android:orientation="horizontal"
-        android:paddingVertical="10dp">
+        android:paddingVertical="8dp">
 
         <TextView
             android:id="@+id/tabPlay"

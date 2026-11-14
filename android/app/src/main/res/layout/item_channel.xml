@@ -20,7 +20,7 @@
     android:focusable="true"
     android:gravity="center_vertical"
     android:orientation="horizontal"
-    android:paddingHorizontal="6dp"
+    android:paddingHorizontal="4dp"
     android:paddingVertical="7dp">
 
     <!-- 选中/正在播指示条（mediaplayer 的做法） -->
@@ -37,13 +37,14 @@
          和右边的台标连成一组。 -->
     <TextView
         android:id="@+id/tvNo"
+        android:fontFeatureSettings="tnum"
         android:layout_width="28dp"
         android:layout_height="30dp"
         android:layout_gravity="center_vertical"
         android:background="@drawable/bg_no_chip"
         android:gravity="center"
         android:textColor="@color/text_secondary"
-        android:textSize="15sp" />
+        android:textSize="16sp" />
 
     <!-- 台标：有图显示图，没图显示首字方块（不然一行只剩中间一串字，很空） -->
     <FrameLayout
@@ -58,7 +59,7 @@
             android:gravity="center"
             android:maxLines="1"
             android:textColor="@color/text_secondary"
-            android:textSize="18sp" />
+            android:textSize="16sp" />
 
         <ImageView
             android:id="@+id/logo"
@@ -72,12 +73,14 @@
     <LinearLayout
         android:layout_width="0dp"
         android:layout_height="wrap_content"
-        android:layout_marginStart="6dp"
+        android:layout_marginStart="4dp"
         android:layout_weight="1"
         android:orientation="vertical">
 
         <TextView
             android:id="@+id/name"
+        android:requiresFadingEdge="horizontal"
+        android:fadingEdgeLength="24dp"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:ellipsize="marquee"
@@ -86,10 +89,12 @@
             android:scrollHorizontally="true"
             android:singleLine="true"
             android:textColor="@color/text_primary"
-            android:textSize="22sp" />
+            android:textSize="21sp" />
 
         <TextView
             android:id="@+id/now"
+        android:requiresFadingEdge="horizontal"
+        android:fadingEdgeLength="24dp"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:ellipsize="marquee"
@@ -100,16 +105,16 @@
             android:textColor="@color/text_secondary"
             android:textSize="16sp" />
 
-        <!-- 当前节目进度：2dp 细条，不占地方但能看出还剩多少 -->
+        <!-- 当前节目进度：3dp 圆角细条 -->
         <ProgressBar
             android:id="@+id/prog"
             style="?android:attr/progressBarStyleHorizontal"
             android:layout_width="match_parent"
-            android:layout_height="2dp"
-            android:layout_marginTop="3dp"
+            android:layout_height="3dp"
+            android:layout_marginTop="4dp"
             android:max="100"
             android:progress="0"
-            android:progressTint="@color/accent"
+            android:progressDrawable="@drawable/progress_hairline"
             android:visibility="gone" />
     </LinearLayout>
 
@@ -118,8 +123,8 @@
         android:id="@+id/badge"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:layout_marginStart="6dp"
+        android:layout_marginStart="4dp"
         android:textColor="@color/accent"
-        android:textSize="15sp"
+        android:textSize="16sp"
         android:visibility="gone" />
 </LinearLayout>

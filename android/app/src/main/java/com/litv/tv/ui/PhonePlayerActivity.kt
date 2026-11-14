@@ -93,6 +93,7 @@ class PhonePlayerActivity : AppCompatActivity(), PlayerManager.Callback {
     @SuppressLint("ClickableViewAccessibility")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // 播放中常亮；切到后台由 onPause 解除（见下）
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         setContentView(R.layout.activity_phone_player)
         app = application as LitvApp

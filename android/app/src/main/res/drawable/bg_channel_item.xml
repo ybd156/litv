@@ -16,7 +16,7 @@
         <shape>
             <!-- 实心蓝：对齐参考实现，选中的频道整行是蓝底白字 -->
             <solid android:color="@color/select_bg" />
-            <corners android:radius="6dp" />
+            <corners android:radius="8dp" />
         </shape>
     </item>
     <item>

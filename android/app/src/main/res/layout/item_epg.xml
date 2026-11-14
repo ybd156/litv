@@ -24,7 +24,7 @@
         android:gravity="center_vertical"
         android:orientation="horizontal"
         android:paddingHorizontal="4dp"
-        android:paddingVertical="10dp">
+        android:paddingVertical="8dp">
 
         <LinearLayout
             android:layout_width="0dp"
@@ -34,6 +34,7 @@
 
             <TextView
                 android:id="@+id/time"
+        android:fontFeatureSettings="tnum"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:ellipsize="end"
@@ -60,7 +61,7 @@
             android:layout_marginStart="8dp"
             android:background="@drawable/bg_osd_chip"
             android:paddingHorizontal="8dp"
-            android:paddingVertical="3dp"
+            android:paddingVertical="4dp"
             android:text="回看"
             android:textColor="@color/text_primary"
             android:textSize="13sp"

@@ -49,7 +49,7 @@
             android:id="@+id/ipRow"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="10dp"
+            android:layout_marginTop="8dp"
             android:gravity="center_vertical"
             android:orientation="horizontal">
 
@@ -108,7 +108,7 @@
             android:layout_marginTop="8dp"
             android:text="端口默认 28027。若服务端提示端口被占用，用管理台概览页显示的实际端口。"
             android:textColor="#66FFFFFF"
-            android:textSize="17sp" />
+            android:textSize="16sp" />
 
         <!-- 域名模式：DDNS / 反向代理进来的必须能填域名，分框只收数字 -->
         <EditText
@@ -118,18 +118,18 @@
             android:minHeight="48dp"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="10dp"
+            android:layout_marginTop="8dp"
             android:autofillHints="none"
             android:background="@drawable/bg_card"
             android:hint="tv.example.com 或 tv.example.com:28027"
             android:inputType="textUri"
-            android:paddingHorizontal="14dp"
+            android:paddingHorizontal="16dp"
             android:paddingVertical="12dp"
             android:singleLine="true"
             android:nextFocusDown="@+id/codeInput"
             android:imeOptions="actionNext"
             android:textColor="@color/text_primary"
-            android:textSize="17sp"
+            android:textSize="16sp"
             android:visibility="gone" />
 
                 <TextView
@@ -150,7 +150,7 @@
             android:paddingVertical="4dp"
             android:text="用域名访问"
             android:textColor="@color/accent"
-            android:textSize="14sp" />
+            android:textSize="13sp" />
     </LinearLayout>
 
     <LinearLayout
@@ -186,7 +186,7 @@
             android:nextFocusUp="@+id/domainInput"
             android:imeOptions="actionDone"
             android:textColor="@color/text_primary"
-            android:textSize="18sp"
+            android:textSize="16sp"
             android:autofillHints="none" />
     </LinearLayout>
 
@@ -198,10 +198,10 @@
         android:nextFocusUp="@+id/codeInput"
         android:background="@drawable/bg_focusable"
         android:paddingHorizontal="48dp"
-        android:paddingVertical="14dp"
+        android:paddingVertical="16dp"
         android:text="@string/bind_action"
         android:textColor="@color/text_primary"
-        android:textSize="18sp" />
+        android:textSize="16sp" />
 
     <!-- 遥控操作提示。
          电视上没有鼠标，第一次用的人不知道方向键能走、OK 能弹键盘，
@@ -210,10 +210,10 @@
         android:id="@+id/remoteHint"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:layout_marginTop="14dp"
+        android:layout_marginTop="16dp"
         android:text="遥控：方向键移动 · OK 弹出键盘 · 输完按「确定」"
         android:textColor="@color/text_secondary"
-        android:textSize="15sp" />
+        android:textSize="16sp" />
 
     <TextView
         android:id="@+id/status"
@@ -221,14 +221,14 @@
         android:layout_height="wrap_content"
         android:layout_marginTop="20dp"
         android:textColor="@color/accent"
-        android:textSize="17sp" />
+        android:textSize="16sp" />
 
     <!-- 手机扫码区：扫这个码直接打开管理台，省去在电视上输入地址 -->
     <LinearLayout
         android:id="@+id/qrBox"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:layout_marginTop="18dp"
+        android:layout_marginTop="16dp"
         android:gravity="center_horizontal"
         android:orientation="vertical"
         android:visibility="gone">
@@ -239,7 +239,7 @@
             android:layout_height="150dp"
             android:background="@android:color/white"
             android:contentDescription="管理台二维码"
-            android:padding="6dp"
+            android:padding="4dp"
             android:scaleType="fitCenter" />
 
         <TextView
@@ -249,7 +249,7 @@
             android:layout_marginTop="8dp"
             android:text="手机扫码 → 管理台「终端设备」→ 批准这台电视"
             android:textColor="@color/text_secondary"
-            android:textSize="17sp" />
+            android:textSize="16sp" />
     </LinearLayout>
 </LinearLayout>
 </ScrollView>

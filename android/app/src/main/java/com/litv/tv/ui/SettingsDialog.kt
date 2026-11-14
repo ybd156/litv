@@ -104,6 +104,12 @@ class SettingsDialog(
      * 那是给写代码的人看的——家人看到「缓冲 3000」既不知道单位，
      * 也不知道改大改小会怎样。显示层换成中文，**存储仍然用原值**。
      */
+    private fun uiModeLabel(v: String) = when (v) {
+        "tv" -> "电视"
+        "phone" -> "手机"
+        else -> "自动"
+    }
+
     private fun engineLabel(v: String) = when (v) {
         "auto" -> "自动（推荐）"
         "exo" -> "ExoPlayer"
@@ -147,6 +153,17 @@ class SettingsDialog(
     }
 
     private fun buildPlay() {
+        // 界面模式：auto 跟设备，tv / phone 是强制。
+        // 以前这个偏好**只有 LauncherActivity 读，界面里没有任何入口** ——
+        // 在手机上装电视版就永远切不到电视界面（反之亦然）。
+        addCycle("界面模式", listOf("auto", "tv", "phone"), app.prefs.uiMode, ::uiModeLabel) { v ->
+            app.prefs.uiMode = v
+            android.widget.Toast.makeText(
+                getContext(),
+                "界面模式：" + uiModeLabel(v) + "（重开应用生效）",
+                android.widget.Toast.LENGTH_SHORT,
+            ).show()
+        }
         addCycle("播放内核", engines, app.prefs.engine, ::engineLabel) { v ->
             app.prefs.engine = v
         }
@@ -162,6 +179,28 @@ class SettingsDialog(
         }
         addCycle("画面比例", aspects, app.prefs.aspect, ::aspectLabel) { v ->
             app.prefs.aspect = v
+        }
+        // 起播超时：多久没有数据就换源。TV 设置里叫「超时换源」，
+        // 手机端以前根本没有这一项。
+        val startTimeouts = listOf(8000, 12000, 16000, 20000)
+        addCycle("起播超时", startTimeouts.map { it.toString() },
+            app.prefs.startTimeoutMs.toString()) { v ->
+            app.prefs.startTimeoutMs = v.toIntOrNull() ?: 12000
+        }
+        // 界面缩放：小/中/大/特小。手机上看电视界面时最有用。
+        addCycle(
+            "界面缩放",
+            com.litv.tv.data.UiScaleOptions.keys,
+            app.prefs.uiScale,
+        ) { v ->
+            app.prefs.uiScale = v
+        }
+        // 渲染方式：SurfaceView / TextureView，部分盒子只有其中一个能出画面
+        addCycle("渲染方式", listOf("auto", "texture"), app.prefs.renderView) { v ->
+            app.prefs.renderView = v
+        }
+        addToggle("帧率匹配", app.prefs.frameRateMatch) { on ->
+            app.prefs.frameRateMatch = on
         }
     }
 

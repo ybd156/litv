@@ -246,9 +246,24 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
     private val hideOsdRunnable = Runnable { hideOsd() }
     private val numberJumpRunnable = Runnable { jumpByNumber() }
 
+    /**
+     * 电视界面在手机上按屏宽等比例缩放（见 TvUiScaler）。
+     * 真电视不动：它本来就是设计基准。
+     */
+    override fun attachBaseContext(newBase: android.content.Context) {
+        // 这个 Activity **本身就是电视界面**，所以只看"是不是真电视"：
+        // 不在电视上就按屏宽等比缩放。之前还要求 ui_mode == "tv"，
+        // 而手机默认是 auto，条件永远不成立 —— 缩放根本没跑过，
+        // 面板和 OSD 都还是 960dp 的原始尺寸（用户看到的就是"偏大、OSD 没缩放"）。
+        super.attachBaseContext(
+            if (DeviceType.isTV(newBase)) newBase else TvUiScaler.wrap(newBase),
+        )
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        // 常亮不在这里加：改为跟随播放状态，在 onResume/onPause 里动态开关。
+        // 播放中常亮是必须的（不能看着看着黑屏）；切走/暂停后允许系统休眠。
         setContentView(R.layout.activity_player)
         app = application as LitvApp
         app.api.onAuthExpired = { onAuthExpired() }
@@ -577,12 +592,16 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
                 app.prefs.decode = listOf("auto", "hard", "soft")[i]
                 toastTip("解码方式：" + listOf("自动", "硬件解码", "软件解码")[i])
             },
-            R.id.miTimeout to SubSpec("超时换源", listOf("1 秒", "2 秒", "3 秒", "5 秒"),
-                { listOf(1000, 2000, 3000, 5000).indexOf(app.prefs.bufferMs).coerceAtLeast(0) }) { i ->
-                app.prefs.bufferMs = listOf(1000, 2000, 3000, 5000)[i]
-                toastTip("缓冲：" + listOf("1 秒", "2 秒", "3 秒", "5 秒")[i])
+            // ★ 这里以前写的是 bufferMs ——「超时换源」改的是缓冲，不是超时，
+            // 而且 toast 还写着"缓冲"，等于这一项完全没接线。
+            // 真正该改的是「多久没数据就换源」= startTimeoutMs。
+            R.id.miTimeout to SubSpec("超时换源", listOf("8 秒", "12 秒", "16 秒", "20 秒"),
+                { listOf(8000, 12000, 16000, 20000).indexOf(app.prefs.startTimeoutMs).coerceAtLeast(0) }) { i ->
+                app.prefs.startTimeoutMs = listOf(8000, 12000, 16000, 20000)[i]
+                toastTip("无数据超过 " + listOf("8 秒", "12 秒", "16 秒", "20 秒")[i] + " 就换源")
             },
-            R.id.miList to SubSpec("列表配置",
+            // 这一项实际改的是界面缩放，标题写「列表配置」对不上，容易以为没接线
+            R.id.miList to SubSpec("界面缩放",
                 com.litv.tv.data.UiScaleOptions.all.map { it.label },
                 { com.litv.tv.data.UiScaleOptions.keys.indexOf(app.prefs.uiScale).coerceAtLeast(0) }) { i ->
                 app.prefs.uiScale = com.litv.tv.data.UiScaleOptions.keys[i]
@@ -1404,7 +1423,7 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
             c.number > 0 -> c.number
             else -> channels.indexOfFirst { it.id == c.id } + 1
         }
-        osdNo.text = if (no > 0) String.format("%03d", no) else ""
+        osdNo.text = if (no > 0) no.toString() else ""
     }
 
     /**
@@ -3240,6 +3259,8 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
     // ---------------------------------------------------------------- 生命周期
 
     override fun onResume() {
+        // 前台播放中：保持常亮
+        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         super.onResume()
         // 从后台回来先看是否跨天：盒子上没人会主动重启 App
         checkEpgDayRollover()
@@ -3251,6 +3272,8 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
 
     override fun onPause() {
         super.onPause()
+        // 离开前台：解除常亮，允许系统息屏；同时暂停播放（下面一行）
+        window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         player.pause()
         app.remote.onCommand = null
         // 跨端续播：离开时记下看到哪个台，别的设备打开就能"接着看"

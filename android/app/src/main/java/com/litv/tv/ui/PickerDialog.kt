@@ -174,6 +174,16 @@ class PickerDialog(
         ) {
             return true
         }
+        // 返回键：必须在这里显式收。
+        // 交给 super 的话走的是 Dialog.onKeyUp -> 只有 event.isTracking() 为真才 dismiss，
+        // 而这个弹框挂在 AppCompat 主题上、DOWN 事件没被 KeyDispatcherState 跟踪到，
+        // isTracking() 恒为 false —— 实测按多少次返回都关不掉。
+        if (event.keyCode == android.view.KeyEvent.KEYCODE_BACK) {
+            if (event.action == android.view.KeyEvent.ACTION_UP) {
+                cancel()   // 走 cancel 而不是 dismiss：cancel 会触发 onCancel，能清掉引用
+            }
+            return true
+        }
         return super.dispatchKeyEvent(event)
     }
 

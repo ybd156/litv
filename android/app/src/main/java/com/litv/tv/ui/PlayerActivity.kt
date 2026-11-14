@@ -587,6 +587,14 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
                 app.prefs.aspect = listOf("auto", "16:9", "4:3", "fill")[i]
                 toastTip("画面比例：" + listOf("自动", "16:9", "4:3", "铺满")[i])
             },
+            // 界面模式：auto / 电视 / 手机。
+            // 手机设置页早就有这一项，但**电视设置菜单里没有**——
+            // 在手机上跑电视界面时，用户只能看到这个菜单，所以等于没有入口。
+            R.id.miUiMode to SubSpec("界面模式", listOf("自动", "电视", "手机"),
+                { listOf("auto", "tv", "phone").indexOf(app.prefs.uiMode).coerceAtLeast(0) }) { i ->
+                app.prefs.uiMode = listOf("auto", "tv", "phone")[i]
+                toastTip("界面模式：" + listOf("自动", "电视", "手机")[i] + "（重开应用生效）")
+            },
             R.id.miDecode to SubSpec("解码方式", listOf("自动", "硬件解码", "软件解码"),
                 { listOf("auto", "hard", "soft").indexOf(app.prefs.decode).coerceAtLeast(0) }) { i ->
                 app.prefs.decode = listOf("auto", "hard", "soft")[i]
@@ -610,7 +618,7 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         )
         // 焦点落到有选项的项上就展开；移到没有选项的项上则收起
         listOf(R.id.miLine, R.id.miAspect, R.id.miDecode, R.id.miTimeout,
-                R.id.miList, R.id.miDisplay, R.id.miPrefs, R.id.miOther)
+                R.id.miList, R.id.miUiMode, R.id.miDisplay, R.id.miPrefs, R.id.miOther)
             .forEach { id ->
                 findViewById<TextView>(id).setOnFocusChangeListener { _, has ->
                     if (!has) return@setOnFocusChangeListener

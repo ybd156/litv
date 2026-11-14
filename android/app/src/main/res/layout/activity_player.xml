@@ -222,7 +222,7 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="8dp"
-                android:text="↑↓ 换台 · ← 频道列表（←→切分组）· → 设置 · OK 信息 · 长按OK 切线路 · 数字键跳台"
+                android:text="↑↓ 换台 · ← 频道列表（←→切分组）· → 设置 · OK 信息 · 数字键跳台"
                 android:textColor="#99FFFFFF"
                 android:textSize="13sp" />
         </LinearLayout>

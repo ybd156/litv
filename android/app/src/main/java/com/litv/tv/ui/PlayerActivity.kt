@@ -29,6 +29,7 @@ import com.litv.tv.data.PlayCache
 import com.litv.tv.data.PlaybackErrorCard
 import com.litv.tv.data.PlayCacheStore
 import com.litv.tv.data.RelayDecision
+import com.litv.tv.data.TvStream
 import com.litv.tv.player.EngineKind
 import com.litv.tv.player.PlayRequestGate
 import com.litv.tv.player.PlayerManager
@@ -600,14 +601,15 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
                         id == R.id.miDisplay -> openInlineRows("play")
                         id == R.id.miPrefs -> openInlineRows("interact")
                         id == R.id.miOther -> openInlineRows("device")
-                        else -> closeSubMenu(keepFocus = true)   // 线路选择/分类管理 需要点击才动作
+                        id == R.id.miLine -> openLinePicker()    // 和别的项一致：聚焦就展开
+                        else -> closeSubMenu(keepFocus = true)
                     }
                 }
             }
         // OK：焦点进二级；没有二级的直接执行
         // 左键进入左边的选项列（选项在左边，用左键最直觉）。
         // OK 留给"在选项里确认"，不再兼做进入。
-        val enterable = specs.keys + setOf(R.id.miDisplay, R.id.miPrefs, R.id.miOther)
+        val enterable = specs.keys + setOf(R.id.miDisplay, R.id.miPrefs, R.id.miOther, R.id.miLine)
         enterable.forEach { id ->
             findViewById<TextView>(id).setOnKeyListener { _, code, ev ->
                 if (code != android.view.KeyEvent.KEYCODE_DPAD_LEFT) return@setOnKeyListener false
@@ -1502,7 +1504,8 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
             val tv = TextView(this).apply {
                 // 选中项带 › ‹：表示"当前值，可左右切换"（对齐参考实现）
                 text = if (selected) "› $label ‹" else label
-                textSize = 16f
+                // 13sp：选项框固定 130dp，「› 线路 1·未检测 ‹」14sp 仍会把右侧箭头挤到第二行
+                textSize = 13f
                 gravity = android.view.Gravity.CENTER
                 minHeight = (44 * resources.displayMetrics.density).toInt()
                 setPadding(padH, padV, padH, padV)
@@ -2204,25 +2207,6 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
      * 线路切换：长按 OK 呼出。
      * 线路信息由服务端下发（只给标签和健康度，不给上游真实地址，防抓包盗链）。
      */
-    private fun showStreamPicker() {
-        val ch = current ?: return
-        app.api.streams(ch.id,
-            onOk = { list ->
-                if (list.isEmpty()) {
-                    statusToast("这个频道只有一条线路")
-                    return@streams
-                }
-                val labels = list.map { s ->
-                    "${s.label}  ·  ${s.healthText}" + if (s.latencyMs > 0) "  ${s.latencyMs}ms" else ""
-                }
-                // 自绘深色弹框。系统 AlertDialog 的灰底压不住主题，
-                // 弹出来和整个界面是两套东西——之前截图里那块灰方块就是它。
-                PickerDialog(this, "选择线路（${ch.name}）", labels, -1) { which ->
-                    playChannel(ch, list[which].id)
-                }.show()
-            },
-            onErr = { statusToast("获取线路失败：$it") })
-    }
 
     private fun statusToast(msg: String) {
         switchTip.text = msg
@@ -2406,10 +2390,14 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         return super.dispatchKeyEvent(event)
     }
 
-    /** 长按 OK：呼出线路选择（排查"这个台哪个源能播"最实用）。 */
-    private fun onLongPressOk() {
-        showStreamPicker()
-    }
+    /**
+     * 长按 OK。
+     *
+     * 原来这里弹一个独立的「选择线路」弹窗，但设置菜单第一项已经是「线路选择」
+     * （openLinePicker，内嵌子面板）——同一件事两套实现，长按这个还关不掉。
+     * 现在统一走设置菜单那条，这里不再重复。
+     */
+    private fun onLongPressOk() = Unit
 
     // ---------------------------------------------------------------- PlayerManager 回调
 
@@ -3234,8 +3222,16 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
     }
 
     /** 线路选择：把当前频道的线路列出来，选中就切过去 */
+    /** 线路列表缓存（channelId -> 线路）。聚焦就会展开，没有缓存每次移动都请求一次。 */
+    private val lineCache = HashMap<Long, List<TvStream>>()
+
     private fun openLinePicker() {
         val ch = current ?: return
+        // 有缓存直接出，不发请求
+        lineCache[ch.id]?.let { list ->
+            openSubMenu(buildLineSpec(ch, list), findViewById(R.id.miLine))
+            return
+        }
         // 先就地显示"加载中"，不要先关菜单：取线路是异步的，
         // 关掉菜单再失败，用户看到的就是"点了没反应、菜单也没了"。
         val owner = findViewById<TextView>(R.id.miLine)
@@ -3243,12 +3239,8 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         openSubMenu(loading, owner)
 
         app.api.streams(ch.id, onOk = { list ->
-            val names = list.map { "${it.quality.ifBlank { "线路" }} ${it.latencyMs}ms" }
-                .ifEmpty { listOf("没有可用线路") }
-            val cur = list.indexOfFirst { it.id == currentStreamId }.coerceAtLeast(0)
-            val spec = SubSpec("线路选择（${list.size} 条）", names, { cur }) { i ->
-                if (list.isNotEmpty()) playChannel(ch, list[i].id)
-            }
+            lineCache[ch.id] = list
+            val spec = buildLineSpec(ch, list)
             openSubMenu(spec, owner)
             focusSubMenu(spec)
         }, onErr = { e ->
@@ -3258,6 +3250,24 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
                 owner,
             )
         })
+    }
+
+    /**
+     * 线路选项文案。
+     *
+     * 用 label + healthText，不用 quality：实测服务端下发的 quality 是空的、
+     * latency_ms 是 0，拼出来就是「线路 0ms」——看着像没数据。
+     */
+    private fun buildLineSpec(ch: Channel, list: List<TvStream>): SubSpec {
+        // 紧凑写法：选项框只有 130dp，带空格的「线路 1 · 未检测」会折成两行
+        val names = list.map { s ->
+            s.label.ifBlank { "线路" } + "·" + s.healthText +
+                if (s.latencyMs > 0) " ${s.latencyMs}ms" else ""
+        }.ifEmpty { listOf("没有可用线路") }
+        val cur = list.indexOfFirst { it.id == currentStreamId }.coerceAtLeast(0)
+        return SubSpec("线路选择（${list.size} 条）", names, { cur }) { i ->
+            if (list.isNotEmpty()) playChannel(ch, list[i].id)
+        }
     }
 
     /**

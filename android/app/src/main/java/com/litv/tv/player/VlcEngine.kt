@@ -56,10 +56,15 @@ class VlcEngine : PlayerEngine {
         // isValid 必须查：SurfaceView 销毁后 holder.surface 对象还在，
         // 但已经无效。传给 libVLC 会在它的 Handler 线程里抛异常并崩溃。
         if (mp != null && surface != null && surface.isValid) {
-            // 同一个 Surface 已经挂过就别再挂：libVLC 会抛
-            // IllegalStateException: Can't set view when already attached
-            // （PlayerActivity 换台后会补挂一次 Surface，VLC 走不到这里就报错）
-            if (surface === attachedSurface) return
+            // 已经挂过就别再 setVideoSurface：libVLC 会抛
+            // IllegalStateException: Can't set view when already attached，
+            // 把 vout 状态搞坏后画面会撕裂/冻住（实测真机就是这样）。
+            // prepare 里已经挂过一次，这里必须靠 areViewsAttached() 判断，
+            // 光比 attachedSurface 不够 —— 首次挂载走的是另一条路径。
+            if (mp.vlcVout.areViewsAttached()) {
+                if (surface === attachedSurface) return
+                runCatching { mp.vlcVout.detachViews() }
+            }
             try {
                 mp.vlcVout.setVideoSurface(surface, null)
                 mp.vlcVout.attachViews()

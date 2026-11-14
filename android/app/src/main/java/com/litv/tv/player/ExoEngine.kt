@@ -93,6 +93,39 @@ class ExoEngine : PlayerEngine {
      * 所以不能在 build 时把 headers 写死——必须在每次 createDataSource()
      * 时读当前的 curUa / curHeaders。
      */
+    /**
+     * 源站返回 HTML 错误页时不重试。
+     *
+     * 实测快速连按换台，源站会回一个 HTML 错误页：
+     *   ProtocolException: Unexpected status line: <html>
+     * ExoPlayer 默认按指数退避一直重试，日志里出现「加载慢 9857ms」，
+     * 用户看到的就是最后那个台转圈十几秒。
+     * 这类错误重试多少次结果都一样，立刻失败让用户换台更合适。
+     */
+    private val noRetryOnHtml =
+        object : androidx.media3.exoplayer.upstream.DefaultLoadErrorHandlingPolicy() {
+            override fun getRetryDelayMsFor(
+                loadErrorInfo: androidx.media3.exoplayer.upstream.LoadErrorHandlingPolicy.LoadErrorInfo,
+            ): Long {
+                var cause: Throwable? = loadErrorInfo.exception
+                while (cause != null) {
+                    val msg = cause.message ?: ""
+                    if (cause is java.net.ProtocolException ||
+                        msg.contains("Unexpected status line", true) ||
+                        msg.contains("<html>", true)
+                    ) {
+                        Log.w(TAG, "源站返回非媒体内容（HTML/协议错误），不再重试")
+                        return androidx.media3.common.C.TIME_UNSET
+                    }
+                    cause = cause.cause
+                }
+                return super.getRetryDelayMsFor(loadErrorInfo)
+            }
+        }
+
+    /** 加载失败回调：让 PlayerManager 立刻换内核，不必等满无数据看门狗。 */
+    var onLoadFailure: (() -> Unit)? = null
+
     private val dynamicHttpFactory: androidx.media3.datasource.HttpDataSource.Factory =
         object : androidx.media3.datasource.HttpDataSource.Factory {
             override fun createDataSource(): androidx.media3.datasource.HttpDataSource {
@@ -347,14 +380,6 @@ class ExoEngine : PlayerEngine {
         val p = ExoPlayer.Builder(ctx, renderers)
             .setTrackSelector(trackSelector)
             .setLoadControl(loadControl)
-            // 媒体源工厂：
-            // 只有真正加载到 AV3A 解码库时才换成我们的实现（它给 HLS 挂上
-            // 自定义解析器）；**没有库时用官方 DefaultMediaSourceFactory**。
-            //
-            // 为什么不在没库时也用自己的：官方那个还负责 DASH / RTSP / DRM /
-            // 错误重试策略等一堆东西，我的简化版只认 HLS 和渐进式。
-            // 之前无条件替换，等于把所有非 HLS 频道和一堆边缘逻辑都关了，
-            // 直连播放因此拿不到轨道——这类回归在 CI 里永远发现不了。
             .setMediaSourceFactory(
                 if (Av3aLoader.available(ctx)) {
                     LitvMediaSourceFactory(dsFactory, true)
@@ -421,6 +446,8 @@ class ExoEngine : PlayerEngine {
             ) {
                 if (wasCanceled) return
                 Log.w(TAG, "加载失败 ${error.javaClass.simpleName}: ${error.message}")
+                // 告诉 PlayerManager：这个内核拿不到数据，别再等 12 秒看门狗了。
+                onLoadFailure?.invoke()
             }
 
             override fun onBandwidthEstimate(

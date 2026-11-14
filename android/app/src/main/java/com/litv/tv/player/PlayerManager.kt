@@ -454,6 +454,22 @@ class PlayerManager(
      * "4 秒无数据 -> 换内核"，把新台直接判死。
      * 实测：playChannel 之后 179ms 就打出「内核 vlc 4 秒无数据」。
      */
+    /**
+     * 内核报告加载失败（源站返回 HTML 错误页 / 协议错误等）。
+     *
+     * 这类错误重试也不会好，而且没必要等满 12 秒的"无数据"看门狗 ——
+     * 实测快速连按换台时源站会回 HTML，日志里能看到 10 秒的空转。
+     * 收到就立刻换下一个内核。
+     */
+    fun notifyLoadFailed(reason: String) {
+        if (prepared || budgetExpired || released) return
+        main.removeCallbacks(noDataWatchdog)
+        failLog += "${currentKind?.key ?: "?"}: $reason"
+        Log.w(TAG, "内核 ${currentKind?.key} 加载失败（$reason），立即换下一个")
+        retried = 0
+        tryNext(reason)
+    }
+
     fun cancelPendingStart() {
         removeStartTimers()
         budgetExpired = true
@@ -736,7 +752,11 @@ class PlayerManager(
     }
 
     private fun create(kind: EngineKind): PlayerEngine? = when (kind) {
-        EngineKind.EXO -> ExoEngine().also { it.playerView = playerView }
+        EngineKind.EXO -> ExoEngine().also {
+            it.playerView = playerView
+            // 加载失败（源站回 HTML / 协议错误）立刻换内核，不等 12 秒看门狗
+            it.onLoadFailure = { main.post { notifyLoadFailed("加载失败") } }
+        }
         EngineKind.VLC -> VlcEngine()
         EngineKind.MPV -> MpvEngine(avs3Mode = false)
         EngineKind.AVS3 -> MpvEngine(avs3Mode = true)

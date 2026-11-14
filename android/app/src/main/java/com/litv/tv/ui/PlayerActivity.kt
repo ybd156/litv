@@ -1020,6 +1020,7 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         // 立刻停掉上一次的起播计时器：下面要等签名地址（0.8~1.4 秒），
         // 这段时间上一次的"4 秒无数据"看门狗会把还没开始的新台判死。
         if (::player.isInitialized) player.cancelPendingStart()
+        main.removeCallbacks(prefetchRunnable)
         // 先把当前画面冻住：换台期间显示上一帧，不黑屏
         freezeFrame()
         // 取一个换台代际号。下面的回调只有在它仍然是"最后一次换台"时才允许生效。
@@ -1176,8 +1177,24 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         // 用 step 而不是 delta —— 用户开了「反转频道键」时 step 才是实际方向。
         pendingSlideDir = if (step > 0) 1f else -1f
         index = ((index + step) % n + n) % n
-        playChannel(channels[index])
+        // 合并连按。
+        //
+        // /tv/play 是瓶颈：实测连按 5 次换台，最后一个台等了 14 秒才拿到签名地址
+        // （5 个并发请求打到边缘服务端，排队）。所以这里不在按键瞬间发请求，
+        // 而是 250ms 内只保留最后一次目标 —— 连按 5 次只发 1 个请求。
+        // 单次按下的代价是多等 250ms，但有了相邻台预取，总耗时仍远低于改之前。
+        pendingSwitchTarget = channels[index]
+        main.removeCallbacks(switchDebounceRunnable)
+        main.postDelayed(switchDebounceRunnable, 250)
         showOsd()
+    }
+
+    /** 连按换台的合并：250ms 内只对最后一个目标发起播放。 */
+    private var pendingSwitchTarget: Channel? = null
+    private val switchDebounceRunnable = Runnable {
+        val target = pendingSwitchTarget ?: return@Runnable
+        pendingSwitchTarget = null
+        playChannel(target)
     }
 
     private fun jumpByNumber() {
@@ -3277,8 +3294,21 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
      * 结果进 Api 的内存缓存，按 ↑↓ 换台时省掉一次网络往返。
      */
     private fun prefetchNeighbours() {
+        // 必须延后 + 可取消。
+        // 实测快速连按 ↓ 时，每次 onPlaying 都去预取两个相邻台，
+        // 五连按就是十来个小请求同时打同一个 host，把 OkHttp 的
+        // maxRequestsPerHost 占满，真正要播的那个 /tv/play 反而排在后面——
+        // 表现为"连按几下之后最后那个台要 12 秒才出画面"。
+        // 所以：停稳 2 秒后再预取；期间再换台就取消。
+        main.removeCallbacks(prefetchRunnable)
+        main.postDelayed(prefetchRunnable, 2_000)
+    }
+
+    private val prefetchRunnable = Runnable {
         val n = channels.size
-        if (n < 2 || index !in channels.indices) return
+        if (n < 2 || index !in channels.indices) return@Runnable
+        // 只在真的在播的时候预取
+        if (!player.isPlaying) return@Runnable
         for (d in intArrayOf(1, -1)) {
             val k = ((index + d) % n + n) % n
             channels.getOrNull(k)?.let { app.api.prefetchPlay(it.id) }

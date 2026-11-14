@@ -849,11 +849,15 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
             // 每次释放 17~25 万对象，会把刚开始的播放抖成幻灯片。
             // 解析是后台线程，但 GC 是全进程的——只能错开时间。
             // 8 秒后再拉，此时首帧早就出来了。
+            // 有解析缓存时读盘只要几百毫秒，不必等 8 秒；
+            // 没缓存要解析 3.7 万条 XML，解析期间的 GC 会把起播抖成幻灯片，
+            // 所以错开到首帧之后再拉。
+            val epgDelay = if (app.epg.hasParsedCache()) 1_500L else 8_000L
             main.postDelayed({
                 app.epg.ensure(b.epgUrl) { ok ->
                     if (ok) main.post { current?.let { refreshEpg(it.id) } }
                 }
-            }, 8_000)
+            }, epgDelay)
         }
         groups = allChannels.map { it.group }.filter { it.isNotBlank() }.distinct()
 

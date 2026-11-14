@@ -1486,10 +1486,21 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         loading.visibility = View.VISIBLE
         loading.animate().alpha(1f).setDuration(180).start()
         loadingText?.apply {
+            text = "正在起播…"
             alpha = 0f
             visibility = View.VISIBLE
             animate().alpha(1f).setDuration(180).start()
         }
+        // 起播总预算 29 秒。这么长时间只转圈不说话，用户会以为死机了。
+        // 8 秒还没起来就换成明确的"慢"提示。
+        main.removeCallbacks(loadingSlowRunnable)
+        main.postDelayed(loadingSlowRunnable, 8_000)
+    }
+
+    /** 转圈超过 8 秒时换文案，让人知道还在等而不是卡死。 */
+    private val loadingSlowRunnable = Runnable {
+        if (!::loading.isInitialized || loading.visibility != View.VISIBLE) return@Runnable
+        loadingText?.text = "起播较慢，正在重试…（按返回可取消）"
     }
 
     /** 起播成功/失败时调用：把加载圈淡出，而不是直接 GONE。 */
@@ -1598,6 +1609,13 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
     /** 左键进入左边的选项列。 */
     private fun enterSub() {
         val row = subMenuRow ?: return
+        // 线路探测会真的去拉流测速，和正在播的流抢带宽。
+        // 之前绑在"聚焦即展开"上，于是每次打开设置菜单（第一项就是线路选择）
+        // 都会在后台发起 3 次请求 + N 次 Range 探测，播放就随机变卡。
+        // 现在只在用户明确按左键进入线路选项时才测。
+        if (subMenuOwner?.id == R.id.miLine) {
+            current?.let { ch -> lineCache[ch.id]?.let { list -> probeLines(ch, list) } }
+        }
         if (subMenu?.visibility != android.view.View.VISIBLE) return
         setRowsFocusable(true)
         val sel = currentSubSelected
@@ -1846,6 +1864,7 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
     private fun hideLoading() {
         if (!::loading.isInitialized) return
         main.removeCallbacks(showLoadingRunnable)
+        main.removeCallbacks(loadingSlowRunnable)
         if (loading.visibility != View.VISIBLE) return
         loadingText?.animate()?.alpha(0f)?.setDuration(150)?.withEndAction {
             loadingText?.visibility = View.GONE
@@ -3326,7 +3345,6 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         // 有缓存直接出，不发请求
         lineCache[ch.id]?.let { list ->
             openSubMenu(buildLineSpec(ch, list), findViewById(R.id.miLine))
-            probeLines(ch, list)
             return
         }
         // 先就地显示"加载中"，不要先关菜单：取线路是异步的，
@@ -3340,7 +3358,6 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
             val spec = buildLineSpec(ch, list)
             openSubMenu(spec, owner)
             focusSubMenu(spec)
-            probeLines(ch, list)
         }, onErr = { e ->
             // 失败也留在面板里显示原因，而不是只闪一个 toast
             openSubMenu(

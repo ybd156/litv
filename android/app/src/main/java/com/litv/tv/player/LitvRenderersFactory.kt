@@ -19,6 +19,38 @@ import java.util.ArrayList
  */
 class LitvRenderersFactory(context: Context) : DefaultRenderersFactory(context) {
 
+    /**
+     * 加大音频输出缓冲。
+     *
+     * 实测模拟器上反复出现
+     *   audio_hw_generic: Hardware backing HAL too slow, could only write 0 of 720 frames
+     * 音频 HAL 喂不进数据就会欠载，听感是断续 + 电音。
+     * ExoPlayer 默认给 AudioTrack 的缓冲偏小（几十毫秒级），
+     * 这里把最小缓冲抬到 250ms，让 HAL 有更多余量吸收抖动。
+     *
+     * 代价：音画同步的容忍度略微变宽（首帧音频延迟几十毫秒），
+     * 对直播可接受，换来的是不再欠载。
+     */
+    override fun buildAudioSink(
+        context: Context,
+        enableFloatOutput: Boolean,
+        enableAudioTrackPlaybackParams: Boolean,
+    ): androidx.media3.exoplayer.audio.AudioSink? {
+        return runCatching {
+            androidx.media3.exoplayer.audio.DefaultAudioSink.Builder(context)
+                .setAudioTrackBufferSizeProvider(
+                    androidx.media3.exoplayer.audio.DefaultAudioTrackBufferSizeProvider.Builder()
+                        .setMinPcmBufferDurationUs(250_000)
+                        .setMaxPcmBufferDurationUs(750_000)
+                        .setPassthroughBufferDurationUs(250_000)
+                        .build()
+                )
+                .setEnableFloatOutput(enableFloatOutput)
+                .setEnableAudioTrackPlaybackParams(enableAudioTrackPlaybackParams)
+                .build()
+        }.getOrNull()
+    }
+
     override fun buildAudioRenderers(
         context: Context,
         extensionRendererMode: Int,

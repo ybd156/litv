@@ -2154,6 +2154,14 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         beginPanelTransition()
         epgPanel.visibility = View.VISIBLE
         epgHandle.visibility = View.GONE
+        // 过渡动画期间设的 GONE 不一定会留在终态：实测展开后 epgHandle 仍占着
+        // 44dp 的布局宽度（uiautomator 里能查到它的 bounds），日期列和节目列之间
+        // 就空出 88px。动画结束后再钉一次。
+        main.postDelayed({
+            if (epgVisible && epgHandle.visibility != View.GONE) {
+                epgHandle.visibility = View.GONE
+            }
+        }, 220)
         // 展开时按"焦点所在的台"取节目单，而不是正在播的那个台。
         // 之前只在 epg 已展开时（onFocus 里）才换数据，第一次展开一定是错的。
         val byChild = focusedPanelChannelId()

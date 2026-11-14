@@ -442,6 +442,17 @@ jobs:
 
           TAG_REF_SHA="$(gh api "repos/${REPO_SLUG}/git/ref/tags/${TAG}" \
                           --jq '.object.sha // ""' 2>/dev/null || true)"
+          TAG_REF_TYPE="$(gh api "repos/${REPO_SLUG}/git/ref/tags/${TAG}" \
+                          --jq '.object.type // ""' 2>/dev/null || true)"
+          # annotated tag（AGENTS §12 要求的 `git tag -a`）里 .object.sha 是
+          # **tag 对象**的 sha，不是 commit 的 sha。不往下解一层，后面拿它和
+          # RELEASE_SHA（commit）比较永远不相等，会误报
+          # 「tag 已指向 XXX，与本次构建 YYY 不一致」并拒绝发布 —— 0.1.20 就死在这。
+          # 轻量 tag 的 type 是 commit，不用解。
+          if [ "${TAG_REF_TYPE}" = "tag" ] && [ -n "${TAG_REF_SHA}" ]; then
+            TAG_REF_SHA="$(gh api "repos/${REPO_SLUG}/git/tags/${TAG_REF_SHA}" \
+                            --jq '.object.sha // ""' 2>/dev/null || true)"
+          fi
 
           if [ -n "${TAG_REF_SHA}" ]; then
             if [ "${TAG_REF_SHA}" != "${RELEASE_SHA}" ]; then

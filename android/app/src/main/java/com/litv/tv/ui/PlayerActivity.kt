@@ -771,6 +771,12 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
     private fun onProgramAction(p: com.litv.tv.data.EpgProgram) {
         val ch = current ?: return
         val now = System.currentTimeMillis() / 1000
+        // 记下当前焦点在节目列的位置：预约后要重新提交列表（星标/已预约要刷新），
+        // 提交会清掉焦点，不还回去的话焦点会跳出节目列、落到日期列上。
+        val keepPos = run {
+            val f = epgList.focusedChild
+            if (f != null) epgList.getChildAdapterPosition(f) else epgAdapter.currentPosition()
+        }
         when {
             p.startAt <= now && p.endAt > now -> toastTip("正在播放：" + p.title)
 
@@ -792,6 +798,10 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
                             reservedStarts.add(p.startAt)
                             toastTip("已预约：" + p.title)
                             refreshEpgColumn()
+                            epgList.post {
+                                val vh = epgList.findViewHolderForAdapterPosition(keepPos)
+                                if (vh != null) vh.itemView.requestFocus() else epgList.requestFocus()
+                            }
                         },
                         onErr = { toastTip("预约失败：$it") })
                 }
@@ -3186,6 +3196,9 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
                 if (on) favoriteIds.add(ch.id) else favoriteIds.remove(ch.id)
                 // 收藏分组的内容、左侧计数、列表星标都要立刻变
                 applyGroupFilter()
+                // 重提交会清掉焦点，长按完必须把焦点还给同一个台，
+                // 否则用户按完收藏，列表里没有任何高亮，接着按上下不知道会跳哪。
+                main.post { focusPanelChannel(ch.id) }
                 // 正在播的台还要同步 OSD 上的 ★
                 if (ch.id == current?.id) osdName.text = osdNameText(ch)
                 toastTip(if (on) "已收藏：${ch.name}" else "已取消收藏：${ch.name}")

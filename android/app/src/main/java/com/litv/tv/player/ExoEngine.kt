@@ -270,8 +270,12 @@ class ExoEngine : PlayerEngine {
         // 上限至少要比它大，否则 ExoPlayer 会报参数非法。
         val minBufferMs = 10_000
         val maxBufferMs = maxOf(bufferMs.coerceIn(2000, 60_000), minBufferMs + 2_000)
+        // bufferForPlayback 从 300 提到 800：
+        // 实测音频 HAL 的欠载告警全部集中在起播那 4 秒（19 条在 20:42:49~53，
+        // 之后 55 秒安静）。300ms 就开播时管线还没填满，第一秒最容易破音。
+        // 起播慢 0.5 秒，换掉开头那一段电音。
         val loadControl = DefaultLoadControl.Builder()
-            .setBufferDurationsMs(minBufferMs, maxBufferMs, 300, 2000)
+            .setBufferDurationsMs(minBufferMs, maxBufferMs, 800, 2000)
             .setBackBuffer(0, true)                     // 直播不回退缓冲，省内存
             .setPrioritizeTimeOverSizeThresholds(false) // 优先按字节封顶，防低端盒子 OOM
             .build()

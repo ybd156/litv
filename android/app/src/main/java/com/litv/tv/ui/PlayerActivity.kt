@@ -620,6 +620,16 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
                 true
             }
         }
+        // 触摸支持：spec 类项（画面比例/解码方式/超时换源/列表配置）的二级面板
+        // 原来只在**聚焦**时展开，而触摸模式下点击不会让 View 获得焦点，
+        // 于是手指点上去毫无反应——这就是"触摸没接上"。
+        specs.forEach { (id, spec) ->
+            findViewById<TextView>(id).setOnClickListener {
+                subMenuOwner = findViewById(id)
+                openSubMenu(spec, findViewById(id))
+                enterSub()
+            }
+        }
         // 线路选择要拉接口，不能跟着焦点走（每次移动都请求一次），保持点击触发
         findViewById<TextView>(R.id.miLine).setOnClickListener { openLinePicker() }
         findViewById<TextView>(R.id.miDisplay).setOnClickListener {
@@ -2155,14 +2165,16 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
     }
 
     /** 呼出节目单面板（右侧）。数据是进频道时就预取的，所以这里是瞬开。 */
+    /**
+     * 触摸/点击「节目单 »」把手展开。
+     *
+     * 原来这里是 expandEpgPanel() 的一份复制，但漏了
+     * `panelRightGap.visibility = GONE` —— 右侧留白不收起来，节目单就被挤成
+     * 很窄的一条，文字全折行。现在统一走 expandEpgPanel()，只多一步把焦点送进节目列。
+     */
     private fun openEpg() {
-        epgVisible = true
-        epgPanel.visibility = View.VISIBLE
-        epgHandle.visibility = View.GONE
-        epgTitle.text = epgTitleText()
-        epgAdapter.submit(filteredPrograms())
+        expandEpgPanel()
         val pos = epgAdapter.currentPosition()
-        epgList.scrollToPosition(pos)
         epgList.post {
             (epgList.layoutManager as? LinearLayoutManager)
                 ?.findViewByPosition(pos)?.requestFocus()
@@ -2584,7 +2596,7 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
     /** 频道列里"焦点实际停在哪一项"对应的台。直接问 RecyclerView，不依赖回调是否及时。 */
     private fun focusedPanelChannelId(): Long {
         if (!::panelList.isInitialized) return 0L
-        val f = panelList.focusedChild ?: return 0L
+        val f = recyclerChildOf(panelList, panelList.focusedChild) ?: return 0L
         val pos = panelList.getChildAdapterPosition(f)
         if (pos == androidx.recyclerview.widget.RecyclerView.NO_POSITION) return 0L
         return channels.getOrNull(pos)?.id ?: 0L
@@ -3187,11 +3199,25 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         favBtn.text = if (fav) "★ 已收藏" else "☆ 收藏"
     }
 
+    /**
+     * 把任意焦点视图归到 RecyclerView 的直接子视图。
+     *
+     * findFocus() 返回的是**最深**的焦点视图（往往是行内的 TextView / LinearLayout），
+     * 直接传给 getChildAdapterPosition 会抛
+     * `ClassCastException: LinearLayout$LayoutParams cannot be cast to RecyclerView$LayoutParams`
+     * ——实测点一下分类列就崩。
+     */
+    private fun recyclerChildOf(rv: RecyclerView, v: android.view.View?): android.view.View? {
+        var cur = v
+        while (cur != null && cur.parent !== rv) cur = cur.parent as? android.view.View
+        return cur
+    }
+
     /** 焦点所在的频道位置；焦点不在频道列时退回到正在播的台。 */
     private fun focusedChannelPosition(): Int {
-        val focus = panelList.findFocus()
-        if (focus != null) {
-            val p = panelList.getChildAdapterPosition(focus)
+        val child = recyclerChildOf(panelList, panelList.findFocus())
+        if (child != null) {
+            val p = panelList.getChildAdapterPosition(child)
             if (p != RecyclerView.NO_POSITION) return p
         }
         val playing = channels.indexOfFirst { it.id == current?.id }

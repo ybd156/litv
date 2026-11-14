@@ -175,12 +175,21 @@ class ExoEngine : PlayerEngine {
         appContext = context.applicationContext
         videoSurface = surface
         player?.let { p ->
-            // 无论走 playerView 还是裸 SurfaceView，都必须显式设置 surface。
-            // 之前只有 playerView == null 时才 setVideoSurface，
-            // 结果传 null 解绑时旧 Surface 一直留在渲染器里，
-            // Surface 被系统销毁后就抛 "The surface has been released"。
-            runCatching { p.setVideoSurface(surface) }
-            playerView?.player = p
+            // ⚠ PlayerView 在场时**只能**把播放器交给它，不能再 setVideoSurface。
+            //
+            // 两个都设的后果（真机实测）：PlayerView 会用自己内部的 SurfaceView
+            // 覆盖掉我们显式设置的那个，被顶掉的 Surface 随即销毁，于是
+            //   Surface 销毁 -> onSurfaceCreated -> attach（又设一次）-> 再被顶掉
+            // 循环往复；息屏唤醒后画面落在一个没人显示的表面 -> 全黑。
+            //
+            // 只有没有 PlayerView（VLC / mpv 或裸 SurfaceView 模式）时才自己设 surface。
+            if (playerView != null) {
+                playerView!!.player = p
+            } else {
+                // 传 null 也要设：否则旧 Surface 留在渲染器里，
+                // 被系统销毁后抛 "The surface has been released"。
+                runCatching { p.setVideoSurface(surface) }
+            }
         }
     }
 

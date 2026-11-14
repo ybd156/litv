@@ -211,6 +211,8 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
     private var okDownTime = 0L
     /** 上一次按返回的时间，用于「再按一次退出」 */
     private var lastBackAt = 0L
+    /** 当前实际在用的内核（VLC/mpv 与 Exo 的 Surface 管理方式不同）。 */
+    private var activeEngine: EngineKind = EngineKind.EXO
     /** 首次进入还没自动播放过 */
     private var autoPlayPending = true
     /** 自动播放已决定、但播放器还没创建好时先存在这里，等 Surface 就绪再播。
@@ -1093,7 +1095,6 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         if (cacheUsable) {
             Log.i(TAG, "缓存起播 ${ch.name}，签名还剩 ${cached!!.expires - nowSec}s")
             player.play(ch.id, app.api.absolute(cached.url), cached.headers, app.prefs.engine)
-            reattachSurface()
         }
 
         app.api.play(ch.id, streamId,
@@ -1152,7 +1153,6 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
                 // 上面那次 prepare 被跳过 → 这里也被跳过 → 重试什么也没做。
                 if (!cacheUsable || forceRebuild) {
                     player.play(ch.id, abs, headers, app.prefs.engine)
-                    reattachSurface()
                 }
                 refreshEpg(ch.id)
                 // 底部信息条：线路 x/y 与延迟
@@ -2521,6 +2521,7 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         // VLC / mpv 用外部 Surface（TextureView / SurfaceView）。
         // PlayerView 在布局里 z 序最高，给 VLC / mpv 时不隐藏就会盖住画面。
         val isExo = kind == EngineKind.EXO
+        activeEngine = kind
         playerView.visibility = if (isExo) View.VISIBLE else View.GONE
     }
 
@@ -2649,13 +2650,6 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
      * 断了没再接上。复用了播放器实例时 surfaceCreated 不会重新触发，
      * 所以必须在这里显式补挂。
      */
-    private fun reattachSurface() {
-        runCatching {
-            if (::surface.isInitialized && surface.holder.surface.isValid) {
-                player.attach(surface.holder.surface, findViewById(android.R.id.content))
-            }
-        }
-    }
 
 
     /** 频道列里"焦点实际停在哪一项"对应的台。直接问 RecyclerView，不依赖回调是否及时。 */

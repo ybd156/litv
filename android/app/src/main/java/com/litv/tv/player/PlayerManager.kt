@@ -445,6 +445,20 @@ class PlayerManager(
         startCurrent()
     }
 
+    /**
+     * 换台一开始就停掉上一次的起播计时器。
+     *
+     * 必须由 Activity 在**发起换台的那一刻**调，不能等 play() 里再清：
+     * playChannel 要先向服务端要签名地址（实测 0.8~1.4 秒），
+     * 这段时间里上一次的 noDataWatchdog 还在跑，会对着还没开始的新台触发
+     * "4 秒无数据 -> 换内核"，把新台直接判死。
+     * 实测：playChannel 之后 179ms 就打出「内核 vlc 4 秒无数据」。
+     */
+    fun cancelPendingStart() {
+        removeStartTimers()
+        budgetExpired = true
+    }
+
     private fun startCurrent() {
         main.removeCallbacks(startTimeout)
 

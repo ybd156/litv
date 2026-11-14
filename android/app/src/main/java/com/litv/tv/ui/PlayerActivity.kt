@@ -1017,6 +1017,9 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         pendingSlideDir = 0f
         Log.i(TAG, "playChannel: ${ch.name} streamId=$streamId rebuild=$forceRebuild slide=$slideDir direct=${app.prefs.directMode}")
         setSplashStage("正在起播…")
+        // 立刻停掉上一次的起播计时器：下面要等签名地址（0.8~1.4 秒），
+        // 这段时间上一次的"4 秒无数据"看门狗会把还没开始的新台判死。
+        if (::player.isInitialized) player.cancelPendingStart()
         // 先把当前画面冻住：换台期间显示上一帧，不黑屏
         freezeFrame()
         // 取一个换台代际号。下面的回调只有在它仍然是"最后一次换台"时才允许生效。
@@ -2792,6 +2795,7 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
 
     override fun onPlaying() {
         hasRenderedFrame = true
+        prefetchNeighbours()
         // onPlaying 比 onFirstFrame 可靠得多（首帧回调在起播预算耗尽时会被丢掉），
         // 这里也撤一次冻结帧，避免画面停在旧帧。
         unfreezeFrame()
@@ -3266,6 +3270,21 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
     }
 
     /** 面板里的「☆ 收藏」按钮：对焦点所在（或正在播）的台做收藏/取消。 */
+    /**
+     * 预取上下相邻频道的播放地址。
+     *
+     * 只请求签名地址（一个小 JSON），不拉流，不占带宽。
+     * 结果进 Api 的内存缓存，按 ↑↓ 换台时省掉一次网络往返。
+     */
+    private fun prefetchNeighbours() {
+        val n = channels.size
+        if (n < 2 || index !in channels.indices) return
+        for (d in intArrayOf(1, -1)) {
+            val k = ((index + d) % n + n) % n
+            channels.getOrNull(k)?.let { app.api.prefetchPlay(it.id) }
+        }
+    }
+
     private fun toggleFavoriteOnFocused() {
         val ch = channels.getOrNull(focusedChannelPosition()) ?: current ?: return
         toggleFavorite(ch)

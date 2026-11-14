@@ -489,6 +489,8 @@ class ExoEngine : PlayerEngine {
             override fun onVideoSizeChanged(size: VideoSize) {
                 videoW = size.width
                 videoH = size.height
+                // 源帧率：区分"源本来 20fps（正常）"和"解码器只能出 20fps（卡顿）"。
+                Log.i(TAG, "视频规格 ${size.width}x${size.height} @ ${p.videoFormat?.frameRate}fps")
                 listener?.onVideoSizeChanged(size.width, size.height)
             }
 

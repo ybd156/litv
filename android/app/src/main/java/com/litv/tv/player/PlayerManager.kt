@@ -272,7 +272,7 @@ class PlayerManager(
         if (prepared) return@Runnable
         if (retried < prefs.retryCount) {
             retried++
-            Log.w(TAG, "内核 ${currentKind?.key} 4 秒无数据，重试第 $retried 次（上限 ${prefs.retryCount}）")
+            Log.w(TAG, "内核 ${currentKind?.key} ${PlaybackDefaults.START_NOBYTE_MS / 1000} 秒无数据，重试第 $retried 次（上限 ${prefs.retryCount}）")
             startCurrent()
             return@Runnable
         }
@@ -281,9 +281,9 @@ class PlayerManager(
             Log.i(TAG, "屏幕已熄灭，跳过无数据判定")
             return@Runnable
         }
-        failLog += "${currentKind?.key ?: "?"}: 4 秒无数据"
-        Log.w(TAG, "内核 ${currentKind?.key} 4 秒无数据，换下一个内核")
-        tryNext("4 秒无数据")
+        failLog += "${currentKind?.key ?: "?"}: ${PlaybackDefaults.START_NOBYTE_MS / 1000} 秒无数据"
+        Log.w(TAG, "内核 ${currentKind?.key} ${PlaybackDefaults.START_NOBYTE_MS / 1000} 秒无数据，换下一个内核")
+        tryNext("${PlaybackDefaults.START_NOBYTE_MS / 1000} 秒无数据")
     }
 
     /**

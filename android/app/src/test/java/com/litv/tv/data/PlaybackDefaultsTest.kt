@@ -48,7 +48,7 @@ class PlaybackDefaultsTest {
     @Test
     fun `总预算不小于显式最坏路径之和`() {
         // 最坏路径 = 无字节阶段 + 有字节无帧阶段 + 一次完整超时重试
-        //          = 6000 + 8000 + 15000 × 1 = 29000
+        //          = 12000 + 8000 + 15000 × 1 = 35000
         // 预算若小于它，就意味着"某一层窗口还没走完就先被总预算掐掉"——
         // 那等于其中某个阶段是永远不会生效的死代码。
         val worstPath =
@@ -65,9 +65,13 @@ class PlaybackDefaultsTest {
     @Test
     fun `总预算必须远小于旧的两分钟`() {
         // 老代码 3 内核 ×(15s 超时 + 15s 重试) ≈ 105s。这条防止有人把预算又调回去。
+        //
+        // 上界从 30s 放到 40s：START_NOBYTE_MS 提到 12s 之后，最坏路径是 35s，
+        // 预算必须 ≥35s（上面那条断言），所以 <30s 这个上界和它直接冲突。
+        // 40s 仍然远小于旧代码的 105s，防"调回两分钟"的意图不变。
         assertTrue(
-            "START_BUDGET_MS=${PlaybackDefaults.START_BUDGET_MS} 应 < 30000",
-            PlaybackDefaults.START_BUDGET_MS < 30_000,
+            "START_BUDGET_MS=${PlaybackDefaults.START_BUDGET_MS} 应 < 40000",
+            PlaybackDefaults.START_BUDGET_MS < 40_000,
         )
     }
 

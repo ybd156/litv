@@ -1369,10 +1369,18 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         osdNext.text = next?.let { "${fmt(it.startAt)}-${fmt(it.endAt)}  ${it.title}" } ?: ""
         renderOsdBadges()
 
-        // 台号：这个 TextView 之前从来没被赋值过，一直是空的。
-        // 用当前过滤列表里的序号，和频道面板里看到的一致，补成三位（005 这种）。
-        val pos = current?.let { c -> channels.indexOfFirst { it.id == c.id } } ?: -1
-        osdNo.text = if (pos >= 0) String.format("%03d", pos + 1) else ""
+        // 台号必须和频道面板里显示的**同一个号**。
+        //
+        // 面板用的是 ch.number（真实频道号），这里原来用的是"当前过滤列表里的序号"，
+        // 于是同一个台：面板显示 36，OSD 显示 034 —— 两个号对不上。
+        // 现在同样优先 ch.number，没有编号时才退回序号；仍补成三位（036 这种）。
+        val c = current
+        val no = when {
+            c == null -> 0
+            c.number > 0 -> c.number
+            else -> channels.indexOfFirst { it.id == c.id } + 1
+        }
+        osdNo.text = if (no > 0) String.format("%03d", no) else ""
     }
 
     /**

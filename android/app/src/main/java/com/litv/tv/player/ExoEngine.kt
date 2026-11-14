@@ -269,7 +269,13 @@ class ExoEngine : PlayerEngine {
         // 往前保持 10 秒缓冲（用户指定）：CDN 抖一下不至于立刻欠载。
         // 上限至少要比它大，否则 ExoPlayer 会报参数非法。
         val minBufferMs = 10_000
-        val maxBufferMs = maxOf(bufferMs.coerceIn(2000, 60_000), minBufferMs + 2_000)
+        // 上限原来只有 max(缓冲设置, 12s)。实测 cctv17 这类源：
+        // 播放列表（1KB）每次要 880~1450ms、分片（2~3MB）要 870~1213ms，
+        // 两分钟里"加载慢"出现 29 次、重缓冲 2 次 —— 12 秒的池子太薄，
+        // 连续两次慢请求就见底。上限放到"缓冲设置 × 3"（下限 20s、上限 60s），
+        // 让 ExoPlayer 有空间提前囤货。
+        val maxBufferMs = (bufferMs.coerceIn(2000, 60_000) * 3)
+            .coerceIn(minBufferMs + 10_000, 60_000)
         // bufferForPlayback 从 300 提到 800：
         // 实测音频 HAL 的欠载告警全部集中在起播那 4 秒（19 条在 20:42:49~53，
         // 之后 55 秒安静）。300ms 就开播时管线还没填满，第一秒最容易破音。
@@ -388,6 +394,33 @@ class ExoEngine : PlayerEngine {
                 elapsedSinceLastFeedMs: Long,
             ) {
                 Log.w(TAG, "音频欠载：缓冲 ${bufferSizeMs}ms，距上次喂数据 ${elapsedSinceLastFeedMs}ms")
+            }
+
+            // 分片加载耗时：重缓冲的直接原因就是"这一片拉得比播得慢"。
+            // 只记耗时和字节数，不记 URI —— 地址里带签名参数，不能进日志。
+            override fun onLoadCompleted(
+                eventTime: androidx.media3.exoplayer.analytics.AnalyticsListener.EventTime,
+                loadEventInfo: androidx.media3.exoplayer.source.LoadEventInfo,
+                mediaLoadData: androidx.media3.exoplayer.source.MediaLoadData,
+            ) {
+                val ms = loadEventInfo.loadDurationMs
+                if (ms >= 800) {
+                    Log.w(
+                        TAG,
+                        "加载慢 ${ms}ms / ${loadEventInfo.bytesLoaded / 1024}KB（${mediaLoadData.trackType}）",
+                    )
+                }
+            }
+
+            override fun onLoadError(
+                eventTime: androidx.media3.exoplayer.analytics.AnalyticsListener.EventTime,
+                loadEventInfo: androidx.media3.exoplayer.source.LoadEventInfo,
+                mediaLoadData: androidx.media3.exoplayer.source.MediaLoadData,
+                error: java.io.IOException,
+                wasCanceled: Boolean,
+            ) {
+                if (wasCanceled) return
+                Log.w(TAG, "加载失败 ${error.javaClass.simpleName}: ${error.message}")
             }
 
             override fun onBandwidthEstimate(

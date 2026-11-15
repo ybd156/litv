@@ -279,6 +279,23 @@ struct ApiClient {
         _ = try await send(req, as: EmptyResponse.self)
     }
 
+    /// 取「源 m3u 地址 + 显示规则」的信封（原始 JSON）。
+    /// 用字典而不是实体：信封可能是明文（v=0）也可能是密文（v=1），形状随版本变。
+    func channelSrc() async throws -> [String: Any] {
+        guard let req = request("/api/v1/tv/channel-src", method: "GET", body: nil) else {
+            throw ApiError(message: "地址无效")
+        }
+        let (data, _) = try await URLSession.shared.data(for: req)
+        guard let root = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw ApiError(message: "响应不是 JSON")
+        }
+        let code = (root["code"] as? NSNumber)?.intValue ?? -1
+        guard code == 0, let d = root["data"] as? [String: Any] else {
+            throw ApiError(message: root["msg"] as? String ?? "请求失败")
+        }
+        return d
+    }
+
     func timeshift(channelId: Int64) async throws -> TimeshiftInfo {
         guard let req = request("/api/v1/tv/timeshift/\(channelId)", method: "GET", body: nil) else {
             throw ApiError(message: "地址无效")

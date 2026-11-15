@@ -278,10 +278,15 @@ struct Bootstrap: Codable {
     /// xmltv 节目单地址：服务端只下发地址，客户端自己下载解析并本地缓存
     /// （与 Android 端 XmltvEpg 一致）。
     var epgUrl: String = ""
+    /// 服务端处于「客户端解析」模式（0/1，SQLite 没有布尔类型）。
+    /// 注意别声明成 Bool：Gson/JSONDecoder 遇到数字会直接整份解析失败，
+    /// Android 端就是这么踩过一次。
+    var clientParse: Int = 0
 
     enum CodingKeys: String, CodingKey {
         case server, device, groups, channels, favorites, now
         case epgUrl = "epg_url"
+        case clientParse = "client_parse"
     }
 }
 

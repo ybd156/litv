@@ -223,9 +223,13 @@ final class Session: ObservableObject {
 
     /// 服务端下发的 xmltv 地址（客户端自己下载解析，本地缓存）
     private(set) var epgUrl: String = ""
+    /// 服务端是否客户端解析模式（bootstrap 的 client_parse，0/1）
+    private(set) var clientParse: Bool = false
 
     private func applyBootstrap(_ b: Bootstrap) {
         epgUrl = b.epgUrl
+        // 客户端解析模式：频道列表由客户端自己拉源解析（服务端 D1 不存频道表）
+        clientParse = b.clientParse != 0
         // 拿到地址就后台拉一次：不阻塞界面，解析完本地就有节目单了
         EpgStore.shared.ensure(url: b.epgUrl)
         channels = b.channels
@@ -235,6 +239,15 @@ final class Session: ObservableObject {
         for n in b.now { m[n.channelId] = n.title }
         nowTitles = m
         statusText = "\(b.channels.count) 个频道"
+        // 客户端解析模式：用自己的解析结果替换服务端给的（可能为空的）频道表。
+        // iOS 目前没有设备级 dl_key，服务端会下发明文信封（v=0），decrypt 直接返回。
+        if clientParse {
+            ChannelStore.shared.load(session: self, dlKey: "") { [weak self] parsed in
+                guard let self, let p = parsed else { return }
+                self.channels = p.channels
+                self.statusText = "客户端解析 \(p.channels.count) 个频道"
+            }
+        }
         errorText = nil
     }
 

@@ -3,7 +3,7 @@ name: Device APK
 # 出一个 arm 正式包，作为 artifact 下载，用来装到真机上验证。
 #
 # 和 Release 的区别：**不创建任何 GitHub Release、不打 tag**。
-# 只是把 assembleTvRelease / assemblePhoneRelease 的产物传上来，
+# 只是把 assembleRelease 的产物传上来，
 # 方便在真机上测一个还没发版的改动。
 #
 # 为什么需要它：build-check 只传 x86 调试包（模拟器用），
@@ -53,9 +53,7 @@ jobs:
         working-directory: android
         run: |
           case "${{ inputs.flavor }}" in
-            phone) gradle --no-daemon assemblePhoneRelease ;;
-            both)  gradle --no-daemon assembleTvRelease assemblePhoneRelease ;;
-            *)     gradle --no-daemon assembleTvRelease ;;
+            *)     gradle --no-daemon assembleRelease ;;
           esac
 
       - name: 列出产物

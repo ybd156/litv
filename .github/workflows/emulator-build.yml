@@ -51,7 +51,7 @@ jobs:
 
       - name: 编译 x86 调试包
         working-directory: android
-        run: gradle --no-daemon assembleTvDebug assemblePhoneDebug
+        run: gradle --no-daemon assembleDebug
 
       - name: 挑出 x86 产物
         run: |

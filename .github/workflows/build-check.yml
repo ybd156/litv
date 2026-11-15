@@ -170,7 +170,7 @@ jobs:
         run: |
           # 用 setup-gradle 装的 gradle 命令。仓库里没有 gradlew wrapper——
           # 编译统一走 CI，不需要本地 wrapper。
-          gradle --no-daemon assembleTvDebug assemblePhoneDebug
+          gradle --no-daemon assembleDebug
 
       - name: 单元测试（tv + phone）
         # 见 server job 的说明：不让前一步失败短路后面的检查，
@@ -182,8 +182,7 @@ jobs:
           # 两个 flavor 共用 app/src/test 源集，但测试任务按 flavor 分开，
           # 只跑 tv 等于手机版压根没有测试通道。
           # 注意：splits.abi 打开后测试任务名**不含 ABI**，
-          # 别写成 testTvDebugArm64UnitTest —— 那个任务不存在，会直接失败。
-          gradle --no-daemon testTvDebugUnitTest testPhoneDebugUnitTest \
+          gradle --no-daemon testDebugUnitTest \
             --console=plain 2>&1 | tee /tmp/unit.log
 
           # 「测试是绿的，但根本没测到东西」在本仓发生过两次（AGENTS.md §10）。
@@ -219,7 +218,7 @@ jobs:
           fi
           # 两个 flavor 都要跑：`lintDebug` 是歧义任务名（AGP 会报
           # 「Task 'lintDebug' is ambiguous」，因为 tv/phone 各有自己的 debug 变体）。
-          gradle --no-daemon lintTvDebug lintPhoneDebug --console=plain
+          gradle --no-daemon lintDebug --console=plain
           ls -lh app/build/reports/ 2>/dev/null || true
 
       - name: 上传 lint 报告
@@ -238,8 +237,7 @@ jobs:
         with:
           name: emulator-x86-debug
           path: |
-            android/app/build/outputs/apk/tv/debug/app-tv-x86-debug.apk
-            android/app/build/outputs/apk/phone/debug/app-phone-x86-debug.apk
+            android/app/build/outputs/apk/debug/app-x86-debug.apk
           if-no-files-found: warn
           retention-days: 7
 

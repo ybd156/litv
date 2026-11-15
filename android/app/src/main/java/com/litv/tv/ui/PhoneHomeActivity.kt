@@ -274,7 +274,6 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
     }
 
     private fun setupControls() {
-
         btnPlayPause.setOnClickListener {
             if (currentChannel == null) { switchTab(TAB_CHANNEL); return@setOnClickListener }
             if (paused) {
@@ -287,10 +286,30 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
         btnMute.setOnClickListener {
             muted = !muted
             player.setVolume(if (muted) 0f else 1f)
-            btnMute.text = if (muted) "🔇" else "🔊"
+            btnMute.text = if (muted) "✕" else "♪"
         }
 
         findViewById<TextView>(R.id.btnFullscreen).setOnClickListener { toggleOrientation() }
+
+        // 全屏工具：比例 / 内核 / 解码，点一次切下一档。
+        // ★ 这三个监听器在改控件布局时被整块替换掉了 —— 按钮能收到点击却没有反应，
+        //   日志里只有触摸、没有"全屏工具"就是这个问题。
+        findViewById<TextView>(R.id.fsAspect)?.setOnClickListener {
+            val order = listOf("auto", "16:9", "4:3", "fill")
+            app.prefs.aspect = order[(order.indexOf(app.prefs.aspect).coerceAtLeast(0) + 1) % order.size]
+            syncFsTools()
+            applyVideoRatio()
+        }
+        findViewById<TextView>(R.id.fsEngine)?.setOnClickListener {
+            val order = listOf("auto", "exo", "vlc", "mpv")
+            app.prefs.engine = order[(order.indexOf(app.prefs.engine).coerceAtLeast(0) + 1) % order.size]
+            syncFsTools()
+        }
+        findViewById<TextView>(R.id.fsDecode)?.setOnClickListener {
+            val order = listOf("auto", "hard", "soft")
+            app.prefs.decode = order[(order.indexOf(app.prefs.decode).coerceAtLeast(0) + 1) % order.size]
+            syncFsTools()
+        }
 
         // 投屏：发现由服务端做（iOS 拿不到多播权限，安卓也统一走服务端）
         findViewById<TextView>(R.id.btnCast).setOnClickListener { openCastPicker() }
@@ -1255,7 +1274,39 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
 
     // ---------------------------------------------------------------- 生命周期
 
+    private var fsBound = false
+
+    /** 全屏工具监听器：在 onResume 里挂（确保视图已就位），只挂一次。 */
+    private fun bindFsTools() {
+        if (fsBound) return
+        val a = findViewById<TextView>(R.id.fsAspect)
+        val e = findViewById<TextView>(R.id.fsEngine)
+        val d = findViewById<TextView>(R.id.fsDecode)
+        android.util.Log.i(TAG, "bindFsTools: aspect=${a != null} engine=${e != null} decode=${d != null}")
+        if (a == null || e == null || d == null) return
+        a.setOnClickListener {
+            android.util.Log.i(TAG, "全屏工具：比例 点击")
+            val order = listOf("auto", "16:9", "4:3", "fill")
+            app.prefs.aspect = order[(order.indexOf(app.prefs.aspect).coerceAtLeast(0) + 1) % order.size]
+            syncFsTools(); applyVideoRatio()
+        }
+        e.setOnClickListener {
+            android.util.Log.i(TAG, "全屏工具：内核 点击")
+            val order = listOf("auto", "exo", "vlc", "mpv")
+            app.prefs.engine = order[(order.indexOf(app.prefs.engine).coerceAtLeast(0) + 1) % order.size]
+            syncFsTools()
+        }
+        d.setOnClickListener {
+            android.util.Log.i(TAG, "全屏工具：解码 点击")
+            val order = listOf("auto", "hard", "soft")
+            app.prefs.decode = order[(order.indexOf(app.prefs.decode).coerceAtLeast(0) + 1) % order.size]
+            syncFsTools()
+        }
+        fsBound = true
+    }
+
     override fun onResume() {
+        bindFsTools()
         // 从设置页回来：继续播（上面 onPause 被跳过了）
         if (::player.isInitialized && currentChannel?.id == player.playingChannelId) {
             runCatching { player.resume() }

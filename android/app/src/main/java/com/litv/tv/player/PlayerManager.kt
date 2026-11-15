@@ -74,6 +74,9 @@ class PlayerManager(
     /** 本次内核已经重试过几次 */
     private var retried = 0
 
+    /** 网络类失败（DNS/连接）的重试次数：换台时清零。 */
+    private var netRetry = 0
+
     private val startTimeout = Runnable {
         if (prepared) return@Runnable
         // 还没到重试上限就再来一次：网络抖动/慢设备上，重试比直接降级管用
@@ -93,6 +96,7 @@ class PlayerManager(
         if (currentKind == EngineKind.EXO && !exoForceSoftwareDecode) {
             exoForceSoftwareDecode = true
             retried = 0
+        netRetry = 0
             Log.w(TAG, "exo 起播超时，改用软解重试")
             startCurrent()
             return@Runnable
@@ -498,6 +502,34 @@ class PlayerManager(
     fun notifyLoadFailed(reason: String) {
         if (prepared || budgetExpired || released) return
         main.removeCallbacks(noDataWatchdog)
+
+        // 网络类失败（DNS 解析不到 / 连接异常）先**重试同一个内核**。
+        //
+        // 实测：源域名的解析会偶发失败一次（`UnknownHostException: Unable to
+        // resolve host`），几十秒后就正常。以前一律当成"内核失败 → 换下一个"，
+        // 而 VLC / mpv 在多数手机上都不可用，等于一次抖动就把可用内核全烧掉，
+        // 用户看到的就是"突然播不了"。
+        val netErr = reason.contains("无法解析") || reason.contains("UnknownHost") ||
+            reason.contains("IOException")
+        // ★ 网络问题归网络、内核问题归内核。
+        //
+        // DNS/连接类失败只在**当前内核**上重试（5 次 × 2 秒）；
+        // 耗尽后报网络错误，**不换内核** —— 换内核解决不了域名解析不了的问题，
+        // 反而把可用的内核一个个烧掉，最后变成"所有内核均失败"。
+        if (netErr) {
+            if (netRetry < NET_RETRY_MAX) {
+                netRetry++
+                Log.w(TAG, "网络类加载失败（$reason），第 $netRetry/$NET_RETRY_MAX 次重试同一内核")
+                main.postDelayed({
+                    if (!released && !budgetExpired && !prepared) startCurrent()
+                }, NET_RETRY_DELAY_MS)
+            } else {
+                Log.e(TAG, "网络类失败已重试 $NET_RETRY_MAX 次，判定为网络问题，不换内核")
+                callback?.onError("网络异常：视频源域名解析失败（已重试 $NET_RETRY_MAX 次）")
+            }
+            return
+        }
+
         failLog += "${currentKind?.key ?: "?"}: $reason"
         Log.w(TAG, "内核 ${currentKind?.key} 加载失败（$reason），立即换下一个")
         retried = 0
@@ -875,6 +907,10 @@ class PlayerManager(
 
         /** 自动恢复的次数上限。超过就不再重启，直接报错。 */
         const val MAX_STALL_RECOVER = 3
+
+        /** 网络类失败（DNS/连接）最多重试几次、每次间隔多久。 */
+        const val NET_RETRY_MAX = 5
+        const val NET_RETRY_DELAY_MS = 2_000L
 
         /** 卡死放弃后多久自动再试一次（毫秒）。 */
         const val GIVE_UP_RETRY_MS = 60_000L

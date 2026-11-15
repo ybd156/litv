@@ -280,9 +280,9 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
         btnPlayPause.setOnClickListener {
             if (currentChannel == null) { switchTab(TAB_CHANNEL); return@setOnClickListener }
             if (paused) {
-                player.resume(); paused = false; btnPlayPause.text = "⏸\n暂停"
+                player.resume(); paused = false; btnPlayPause.text = "⏸"
             } else {
-                player.pause(); paused = true; btnPlayPause.text = "▶\n播放"
+                player.pause(); paused = true; btnPlayPause.text = "▶"
             }
         }
 
@@ -596,7 +596,7 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
                 playName.text = last.name
                 loading.visibility = View.GONE
                 paused = false
-        btnPlayPause.text = "⏸\n暂停"
+        btnPlayPause.text = "⏸"
             } else {
                 playChannel(last)
             }
@@ -671,7 +671,7 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
         playHint.visibility = View.GONE
         loading.visibility = View.VISIBLE
         paused = false
-        btnPlayPause.text = "⏸\n暂停"
+        btnPlayPause.text = "⏸"
 
         // ---- 先用缓存地址起播，把 /tv/play 的网络往返从关键路径上摘掉 ----
         //

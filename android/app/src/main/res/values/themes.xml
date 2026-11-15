@@ -18,6 +18,17 @@
         <item name="android:windowBackground">@drawable/splash_bg</item>
     </style>
 
+    <!-- 覆盖在播放页之上的整页（如设置）：半透明。
+         不透明 Activity 会把播放页压到后台，SurfaceView 被销毁 → 画面直接断掉，
+         用户看到的就是"点设置就停播"。半透明则保留底层 Activity 与 Surface。 -->
+    <style name="Theme.Litv.Overlay" parent="Theme.Litv">
+        <item name="android:windowIsTranslucent">true</item>
+        <item name="android:windowBackground">#F2000000</item>
+        <item name="android:windowNoTitle">true</item>
+        <item name="android:backgroundDimEnabled">false</item>
+        <item name="android:windowAnimationStyle">@null</item>
+    </style>
+
     <!-- 播放中设置弹层用：无标题、透明底、压暗背景 -->
     <style name="LitvDialog" parent="Theme.AppCompat.Dialog">
         <item name="android:windowBackground">@android:color/transparent</item>

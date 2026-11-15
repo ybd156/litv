@@ -175,7 +175,14 @@ object EngineChain {
 
     /** 用户强制指定内核时，仍然允许它失败后回退到通用链。 */
     fun chainFor(preferred: String?, remembered: String?): List<EngineKind> {
-        val forced = EngineKind.from(remembered) ?: EngineKind.from(preferred)
+        // ★ 用户显式选了内核（设置里"播放内核"不是 auto）时，**以它为准**。
+        //
+        // 以前是 `remembered ?: preferred` —— 按频道记忆优先，
+        // 而每个台播过一次就会记下当时的内核，于是设置里怎么改都没用
+        // （用户反馈"切换播放器没有作用"就是这个）。
+        // 记忆只在 auto 时才有意义：那是"这个台哪个内核能播"的经验值。
+        val pref = EngineKind.from(preferred)
+        val forced = if (pref != null) pref else EngineKind.from(remembered)
         val base = when (forced) {
             null, EngineKind.EXO -> DEFAULT
             else -> listOf(forced) + DEFAULT.filter { it != forced }

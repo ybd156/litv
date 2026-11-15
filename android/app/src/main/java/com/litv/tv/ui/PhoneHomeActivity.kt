@@ -246,6 +246,9 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
             noTransition()
         }
         findViewById<TextView>(R.id.tabSettings).setOnClickListener {
+            // 打开设置时不要停播：设置是覆盖在本页之上的同一应用页面，
+            // 播到一半点设置就断流，用户会以为"点了设置就卡了"。
+            suppressPauseForSettings = true
             startActivity(Intent(this, SettingsActivity::class.java))
             noTransition()
         }
@@ -1039,6 +1042,10 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
     // ---------------------------------------------------------------- 生命周期
 
     override fun onResume() {
+        // 从设置页回来：继续播（上面 onPause 被跳过了）
+        if (::player.isInitialized && currentChannel?.id == player.playingChannelId) {
+            runCatching { player.resume() }
+        }
         super.onResume()
         // 从遥控器/设置返回时重新应用一次当前 Tab，
         // 避免两个面板的可见性因为重建而错乱
@@ -1049,10 +1056,18 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
         if (::adapter.isInitialized && all.isNotEmpty()) load()
     }
 
+    /** 正在打开设置页：此时 onPause 不该停播。 */
+    private var suppressPauseForSettings = false
+
     override fun onPause() {
         super.onPause()
         // 离开前台：解除常亮，允许系统息屏
         window.clearFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        if (suppressPauseForSettings) {
+            // 只是打开了设置/其它本应用页面：继续播，回来时画面还在
+            suppressPauseForSettings = false
+            return
+        }
         // 只暂停，不改 paused —— 那是用户的意图，回来还要按它恢复
         player.pause()
     }

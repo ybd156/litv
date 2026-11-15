@@ -410,14 +410,6 @@ class PlayerManager(
     /** 进出全屏后让引擎重新对齐输出尺寸（VLC 必须，否则画面卡在旧尺寸） */
     private var lastResyncAt = 0L
 
-    /** VLC 专用输出视图（由界面提供，引擎创建时注入） */
-    private var vlcTexture: android.view.TextureView? = null
-
-    fun setVlcTexture(tv: android.view.TextureView?) {
-        vlcTexture = tv
-        (current as? VlcEngine)?.attachTexture(tv)
-    }
-
     fun resyncWindow() {
         val v = current as? VlcEngine ?: return
         // 布局会连着触发多次（宽度/高度各一次），每次都重建等于连两次重连，
@@ -427,24 +419,9 @@ class PlayerManager(
         lastResyncAt = now
         // VLC 不接受"事后改窗口尺寸 + 重挂 vout"（会报 already attached，画面定格）。
         // 全屏/旋转后让它按新尺寸重新初始化一次（等价换台重连，约 1 秒）。
-        // 有 TextureView 时：它不销毁 SurfaceTexture，只需把新尺寸告诉 vout 即可，
-        // 不用重建播放器 → 无缝。
-        if (vlcTexture != null) {
-            main.postDelayed({
-                if (released) return@postDelayed
-                val tv = vlcTexture ?: return@postDelayed
-                val w = tv.width.coerceAtLeast(1)
-                val h = tv.height.coerceAtLeast(1)
-                val mp = runCatching { v.playerForResize() }.getOrNull()
-                if (mp != null) {
-                    runCatching {
-                        mp.vlcVout.setWindowSize(w, h)
-                        Log.i(TAG, "resync: 仅调整 VLC 窗口 ${w}x${h}（不重建）")
-                    }
-                }
-            }, 300)
-            return
-        }
+        // 原地重排（detach→size→surface→attach）在真机验证过：attach 成功但视频输出
+        // 已死，pause/play 唤不回来 → 画面定格。可靠性优先，改为重建一次
+        // （约 1 秒黑屏，但两个方向都能恢复）。800ms 去抖避免连重建两次。
         main.postDelayed({
             if (released) return@postDelayed
             Log.i(TAG, "resync: 用新尺寸重建 VLC")

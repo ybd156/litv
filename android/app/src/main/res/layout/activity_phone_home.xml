@@ -69,14 +69,6 @@
                     android:layout_width="match_parent"
                     android:layout_height="match_parent" />
 
-                <!-- VLC 的输出层：TextureView 在布局变化时不销毁 SurfaceTexture，
-                     VLC 可以连续渲染 —— 换全屏不需要重建播放器（无缝）。 -->
-                <TextureView
-                    android:id="@+id/vlcTexture"
-                    android:layout_width="match_parent"
-                    android:layout_height="match_parent"
-                    android:visibility="gone" />
-
                 <ProgressBar
                     android:id="@+id/loading"
                     android:layout_width="38dp"

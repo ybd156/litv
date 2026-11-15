@@ -1271,14 +1271,6 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
 
     override fun onEngineChanged(kind: EngineKind) {
         playEngine.text = kind.label
-        // VLC 用 TextureView 输出（可无缝换全屏），Exo 用 SurfaceView。
-        // 两个视图都在 videoBox 里，按当前内核切换可见性，避免互相盖住。
-        val isVlc = kind == EngineKind.VLC
-        findViewById<android.view.TextureView>(R.id.vlcTexture)?.visibility =
-            if (isVlc) android.view.View.VISIBLE else android.view.View.GONE
-        findViewById<android.view.SurfaceView>(R.id.surface)?.visibility =
-            if (isVlc) android.view.View.GONE else android.view.View.VISIBLE
-        if (isVlc) player.setVlcTexture(findViewById(R.id.vlcTexture))
     }
 
     override fun onPrepared(width: Int, height: Int) = Unit

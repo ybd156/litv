@@ -346,7 +346,109 @@ async function deviceRegister(req: Request, env: Env): Promise<Response> {
     deviceId = Number(res.meta.last_row_id);
   }
 
+  // 客户端上报了 dl_key 就包一层存起来（用于给 /tv/channel-src 下发加密信封）。
+  // 没上报也照常绑定，只是那条通道回落到明文。
+  const dlKey = String(body.dl_key ?? "");
+  if (dlKey) await saveDeviceKey(env, deviceId, dlKey);
+
   return ok({ device_id: deviceId, token, status: "bound", hint: "" });
+}
+
+// ---------------------------------------------------------------- 设备级加密信封
+//
+// 源地址不能明文下发（抓包/日志泄漏都会把源泄露出去）。做法：
+//   · 客户端首次绑定时生成随机 32B 的 dl_key，随 register 上报
+//   · 服务端用它自己的主密钥把 dl_key 加密后存进 kv（不存明文）
+//   · /tv/channel-src 用 dl_key 把「源地址 + 显示规则」整体加密，
+//     再带上 60 秒有效期下发
+// 效果：网络上只有密文；密文与那台设备绑定，换设备/重装都解不开；
+//       交换窗口过期即失效。**本机仍可解**——客户端要拉 m3u 就必须能解，
+//       这是这类设计的硬边界，不是实现缺陷。
+
+const TE = new TextEncoder();
+
+/** 信封有效期（秒）：抓到的密文过了这个窗口就废。 */
+const ENVELOPE_TTL_SEC = 60;
+
+function b64(buf: ArrayBuffer | Uint8Array): string {
+  const b = buf instanceof Uint8Array ? buf : new Uint8Array(buf);
+  let out = "";
+  for (const x of b) out += String.fromCharCode(x);
+  return btoa(out);
+}
+
+function unb64(s: string): Uint8Array {
+  const raw = atob(s);
+  const out = new Uint8Array(raw.length);
+  for (let i = 0; i < raw.length; i++) out[i] = raw.charCodeAt(i);
+  return out;
+}
+
+/** 服务端主密钥：由部署者自己的 BIND_CODE 派生（HKDF-SHA256），不额外要求配置。 */
+async function envelopeMaster(env: Env): Promise<CryptoKey> {
+  const ikm = TE.encode(`${env.BIND_CODE || "litv"}|litv-dlkey-v1`);
+  const base = await crypto.subtle.importKey("raw", ikm, "HKDF", false, ["deriveKey"]);
+  return crypto.subtle.deriveKey(
+    { name: "HKDF", hash: "SHA-256", salt: TE.encode("litv-dlkey-salt"), info: TE.encode("v1") },
+    base,
+    { name: "AES-GCM", length: 256 },
+    false,
+    ["encrypt", "decrypt"],
+  );
+}
+
+async function aesEncrypt(key: CryptoKey, plain: Uint8Array): Promise<{ iv: string; enc: string }> {
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const ct = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, plain);
+  return { iv: b64(iv), enc: b64(ct) };
+}
+
+async function aesDecrypt(key: CryptoKey, ivB64: string, encB64: string): Promise<Uint8Array> {
+  const iv = unb64(ivB64);
+  const ct = unb64(encB64);
+  const pt = await crypto.subtle.decrypt({ name: "AES-GCM", iv }, key, ct);
+  return new Uint8Array(pt);
+}
+
+/** dl_key 的存储键（按设备 id，一台一行） */
+const dlKeyKv = (deviceId: number) => `dlkey:${deviceId}`;
+
+/** 把客户端上报的 dl_key 用主密钥包一层存起来。 */
+async function saveDeviceKey(env: Env, deviceId: number, dlKeyB64: string): Promise<boolean> {
+  try {
+    const raw = unb64(dlKeyB64);
+    if (raw.length !== 32) return false;
+    const master = await envelopeMaster(env);
+    const { iv, enc } = await aesEncrypt(master, raw);
+    await env.DB.prepare(
+      "INSERT INTO kv (k, v) VALUES (?, ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v",
+    )
+      .bind(dlKeyKv(deviceId), `${iv}:${enc}`)
+      .run();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** 取回该设备的 dl_key；没有/坏了返回 null（调用方回落到明文）。 */
+async function loadDeviceKey(env: Env, deviceId: number): Promise<CryptoKey | null> {
+  try {
+    const row = await env.DB.prepare("SELECT v FROM kv WHERE k = ?")
+      .bind(dlKeyKv(deviceId))
+      .first<{ v: string }>();
+    if (!row?.v) return null;
+    const [iv, enc] = row.v.split(":");
+    if (!iv || !enc) return null;
+    const master = await envelopeMaster(env);
+    const raw = await aesDecrypt(master, iv, enc);
+    return await crypto.subtle.importKey("raw", raw, { name: "AES-GCM", length: 256 }, false, [
+      "encrypt",
+      "decrypt",
+    ]);
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -359,7 +461,7 @@ async function deviceRegister(req: Request, env: Env): Promise<Response> {
  * 版本号沿用 channels_version：管理台改源、改屏蔽都会 bump，
  * 客户端发现版本变了才重下 m3u —— 所以"服务端换源，客户端自动跟上"。
  */
-async function tvChannelSrc(env: Env): Promise<Response> {
+async function tvChannelSrc(env: Env, device: DeviceRow): Promise<Response> {
   const [{ results }, blockedRow, hiddenRow, verRow] = await Promise.all([
     env.DB.prepare(
       `SELECT id, name, url, ua, referer FROM sources WHERE enabled = 1 ORDER BY sort, id`,
@@ -381,14 +483,13 @@ async function tvChannelSrc(env: Env): Promise<Response> {
     if (Array.isArray(o.groups)) groupsHidden = o.groups.map(String);
     if (Array.isArray(o.channels)) channelsHidden = o.channels.map(String);
   } catch {
-    /* 存坏了就当没屏蔽，别让整页崩 */
+    /* 存坏了就当没屏蔽 */
   }
-  // 管理台里"隐藏"的频道也算隐藏（去重）
   for (const r of hiddenRow.results ?? []) {
     if (r.name && !channelsHidden.includes(r.name)) channelsHidden.push(r.name);
   }
 
-  return ok({
+  const payload = {
     version: verRow?.v ?? "0",
     urls: (results ?? []).map((r) => ({
       id: r.id,
@@ -398,7 +499,16 @@ async function tvChannelSrc(env: Env): Promise<Response> {
       referer: r.referer || "",
     })),
     policy: { groups_hidden: groupsHidden, channels_hidden: channelsHidden },
-  });
+  };
+
+  // 有 dl_key 就发密文信封（源地址不出明文），没有就回落明文——
+  // 回落是为了老版本客户端仍然能用；新客户端第一次 register 时会上报 dl_key。
+  const key = await loadDeviceKey(env, device.id);
+  if (key) {
+    const { iv, enc } = await aesEncrypt(key, TE.encode(JSON.stringify(payload)));
+    return ok({ v: 1, iv, enc, exp: nowSec() + ENVELOPE_TTL_SEC });
+  }
+  return ok({ v: 0, ...payload });
 }
 
 async function tvBootstrap(env: Env, device: DeviceRow): Promise<Response> {
@@ -2778,7 +2888,7 @@ export default {
     if (!device) return fail(2003, "设备未绑定或会话已失效，请重新绑定");
 
     if (path === "/api/v1/tv/bootstrap") return tvBootstrap(env, device);
-    if (path === "/api/v1/tv/channel-src") return tvChannelSrc(env);
+    if (path === "/api/v1/tv/channel-src") return tvChannelSrc(env, device);
     if (path === "/api/v1/tv/channels") return tvChannels(env, url);
     if (path === "/api/v1/tv/heartbeat") return tvHeartbeat(req, env, device);
     if (path === "/api/v1/tv/resume") return tvResume(env, device);

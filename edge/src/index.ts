@@ -1211,6 +1211,164 @@ async function adminStats(env: Env): Promise<Response> {
   return ok(row ?? {});
 }
 
+// ---------------------------------------------------------------- 管理台的"现拉现解析"
+//
+// CHANNELS_MODE=client 时 D1 里没有频道表，管理台原来读 /admin/channels 会空。
+// 浏览器又**不能**直接拉源 m3u（源站不给 CORS 头），所以由 Worker 现拉现解析、
+// 只把结果 JSON 返回：D1 一行不写，代价是每次打开多一个请求。
+
+function parseExtinfAttrs(head: string): Record<string, string> {
+  const out: Record<string, string> = {};
+  const re = /([A-Za-z0-9_-]+)="([^"]*)"/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(head)) !== null) out[m[1].toLowerCase()] = m[2];
+  return out;
+}
+
+/** #EXTINF 的属性段与频道名之间用逗号分隔，但属性值里也可能有逗号 */
+function splitExtinfLine(line: string): [string, string] {
+  let inQuote = false;
+  for (let i = 0; i < line.length; i++) {
+    const c = line[i];
+    if (c === '"') inQuote = !inQuote;
+    else if (c === "," && !inQuote) return [line.slice(0, i), line.slice(i + 1)];
+  }
+  return [line, ""];
+}
+
+function normalizeName(name: string): string {
+  // 与 build.mjs 的 normalizeName 等价：去掉空白与 - _ . · | / 反斜杠。
+  // 这里不用正则，避免反斜杠在多层转义里被吃掉（踩过一次）。
+  let out = "";
+  for (const ch of name.toLowerCase()) {
+    const c = ch.charCodeAt(0);
+    if (c <= 32) continue;                       // 空白 / 控制符
+    if (c === 92) continue;                      // 反斜杠
+    if (c === 47 || c === 124) continue;         // / |
+    if (c === 183) continue;                     // ·
+    if (ch === "-" || ch === "_" || ch === ".") continue;
+    out += ch;
+  }
+  return out;
+}
+
+function dedupeKeyOf(tvgId: string, name: string): string {
+  return tvgId ? `id:${tvgId}` : `name:${normalizeName(name)}`;
+}
+
+type LiveChannel = {
+  stable_key: string;
+  name: string;
+  group: string;
+  logo: string;
+  tvg_id: string;
+  epg_id: string;
+  streams: number;
+};
+
+function parseM3uChannels(text: string): Map<string, LiveChannel> {
+  const out = new Map<string, LiveChannel>();
+  let cur: { name: string; tvgId: string; logo: string; group: string } | null = null;
+  // 不用正则拆行：反斜杠在多层转义里会被吃掉，用字符码更稳
+  const LF = String.fromCharCode(10);
+  const CR = String.fromCharCode(13);
+  for (const chunk of text.split(LF)) {
+    const line = chunk.split(CR).join("").trim();
+    if (!line || line.startsWith("#EXTM3U")) continue;
+    if (line.startsWith("#EXTINF")) {
+      const [head, name] = splitExtinfLine(line);
+      const a = parseExtinfAttrs(head);
+      cur = {
+        name: name.trim(),
+        tvgId: a["tvg-id"] || "",
+        logo: a["tvg-logo"] || "",
+        group: a["group-title"] || "",
+      };
+      continue;
+    }
+    if (line.startsWith("#EXTGRP:")) {
+      if (cur && !cur.group) cur.group = line.slice(8).trim();
+      continue;
+    }
+    if (line.startsWith("#")) continue;
+    if (!cur) continue;
+    const key = dedupeKeyOf(cur.tvgId, cur.name);
+    const prev = out.get(key);
+    if (prev) prev.streams += 1;
+    else
+      out.set(key, {
+        stable_key: key,
+        name: cur.name,
+        group: cur.group,
+        logo: cur.logo,
+        tvg_id: cur.tvgId,
+        epg_id: cur.tvgId,
+        streams: 1,
+      });
+    cur = null;
+  }
+  return out;
+}
+
+async function adminChannelsLive(env: Env): Promise<Response> {
+  // 非 client 模式：D1 里有表，走原来的查询（带屏蔽过滤与分页）
+  const mode = await env.DB.prepare(
+    "SELECT json_extract(v, '$.channels_mode') AS m FROM kv WHERE k = 'last_build'",
+  ).first<{ m: string }>();
+  if ((mode?.m || "").toLowerCase() !== "client") return fail(2009, "当前是服务端下发模式，请用 /admin/channels");
+
+  const [{ results }, blockedRow, overrides] = await Promise.all([
+    env.DB.prepare(`SELECT url, ua, referer FROM sources WHERE enabled = 1 ORDER BY sort, id`).all<{
+      url: string; ua: string; referer: string;
+    }>(),
+    env.DB.prepare("SELECT v FROM kv WHERE k = 'blocked'").first<{ v: string }>(),
+    env.DB.prepare(
+      "SELECT stable_key, name, group_name, enabled FROM channel_overrides",
+    ).all<{ stable_key: string; name: string; group_name: string; enabled: number }>(),
+  ]);
+
+  let groupsHidden: string[] = [];
+  let channelsHidden: string[] = [];
+  try {
+    const o = JSON.parse(blockedRow?.v || "{}") as { groups?: unknown; channels?: unknown };
+    if (Array.isArray(o.groups)) groupsHidden = o.groups.map(String);
+    if (Array.isArray(o.channels)) channelsHidden = o.channels.map(String);
+  } catch { /* 存坏了当没屏蔽 */ }
+
+  const merged = new Map<string, LiveChannel>();
+  for (const src of results ?? []) {
+    try {
+      const res = await fetch(src.url, {
+        headers: {
+          ...(src.ua ? { "User-Agent": src.ua } : {}),
+          ...(src.referer ? { Referer: src.referer } : {}),
+        },
+      });
+      if (!res.ok) continue;
+      const text = await res.text();
+      for (const [k, v] of parseM3uChannels(text)) {
+        const prev = merged.get(k);
+        if (prev) prev.streams += v.streams;
+        else merged.set(k, v);
+      }
+    } catch { /* 单个源失败不影响其它 */ }
+  }
+
+  const ov = new Map((overrides.results ?? []).map((o) => [o.stable_key, o]));
+  const channels: LiveChannel[] = [];
+  for (const ch of merged.values()) {
+    const o = ov.get(ch.stable_key);
+    if (o && o.enabled === 0) continue;                    // 管理台"隐藏"
+    const name = o?.name || ch.name;
+    const group = o?.group_name || ch.group;
+    if (groupsHidden.includes(group)) continue;            // 屏蔽分类
+    if (channelsHidden.includes(name)) continue;           // 屏蔽频道
+    channels.push({ ...ch, name, group });
+  }
+
+  return ok({ client_parse: true, channels, policy: { groups_hidden: groupsHidden, channels_hidden: channelsHidden } });
+}
+
 async function adminChannels(env: Env, url: URL): Promise<Response> {
   const q = (url.searchParams.get("q") || "").trim();
   const group = (url.searchParams.get("group") || "").trim();
@@ -2832,6 +2990,7 @@ export default {
         return adminBlockedInfo(env);
       }
       if (path === "/api/v1/admin/channels") return adminChannels(env, url);
+      if (path === "/api/v1/admin/channels-live") return adminChannelsLive(env);
       if (path === "/api/v1/admin/streams") return adminStreams(env, url);
       if (path === "/api/v1/admin/devices") return adminDevices(env);
 

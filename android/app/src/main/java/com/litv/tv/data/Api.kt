@@ -30,8 +30,12 @@ class Api(private val prefs: Prefs) {
 
     private val client = OkHttpClient.Builder()
         .connectTimeout(8, TimeUnit.SECONDS)
-        .readTimeout(15, TimeUnit.SECONDS)
-        .writeTimeout(15, TimeUnit.SECONDS)
+        .readTimeout(12, TimeUnit.SECONDS)
+        .writeTimeout(12, TimeUnit.SECONDS)
+        // ★ 整体超时：只有分项超时的话，"连上了但对端不回"这种（edge 正在重新部署、
+        //   Worker 冷启动）会一直挂到 readTimeout 才失败，再叠加播放侧的网络重试，
+        //   用户看到的就是"卡住很久不回复"。给一次调用一个硬上限。
+        .callTimeout(10, TimeUnit.SECONDS)
         .retryOnConnectionFailure(true)
         .build()
 

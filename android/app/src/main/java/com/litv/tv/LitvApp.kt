@@ -51,6 +51,7 @@ class LitvApp : Application() {
 
         // 加密 DNS 的开关与端点来自本地偏好：进程一启动就同步给解析器，
         // 否则第一次取流会先用默认值（阿里）跑一轮，用户改了设置也要等下次启动才生效。
+        com.litv.tv.data.NetState.start(this)
         DohDns.attach(this)
         DohDns.configure(prefs.dohEnabled(), prefs.dohProvider)
 

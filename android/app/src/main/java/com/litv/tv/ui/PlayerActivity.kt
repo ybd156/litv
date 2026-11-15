@@ -1040,6 +1040,47 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
      *   m3u8 带时间戳），卡住就是上游会话过期；只有重新 prepare（重走一次 302
      *   换取新会话）才能恢复。
      */
+    /**
+     * 等外部网络恢复再重试取地址。
+     *
+     * 用 [com.litv.tv.data.NetState] 的**持续监听**：网络一旦变成"已验证可上网"
+     * 就立刻重试，不靠定时轮询去猜。重试本身仍是 5 次 × 5 秒。
+     * 用户中途换台就放弃这条等待，不复活旧台。
+     */
+    private fun waitNetworkThenRetry(ch: Channel, streamId: Long, forceRebuild: Boolean) {
+        if (addrListener != null) return
+        switchTip.text = "网络未就绪，等待恢复…"
+        switchTip.visibility = View.VISIBLE
+
+        val listener: (Boolean) -> Unit = { ok ->
+            main.post {
+                if (isFinishing || current?.id != ch.id) {
+                    com.litv.tv.data.NetState.removeListener(addrListener!!)
+                    addrListener = null
+                    return@post
+                }
+                if (!ok) return@post
+                com.litv.tv.data.NetState.removeListener(addrListener!!)
+                addrListener = null
+                if (addrRetry >= ADDR_RETRY_MAX) {
+                    switchTip.text = "无法连接服务器（已重试 ${ADDR_RETRY_MAX} 次）"
+                    switchTip.visibility = View.VISIBLE
+                    return@post
+                }
+                addrRetry++
+                Log.i(TAG, "网络已恢复，重试取地址第 $addrRetry/${ADDR_RETRY_MAX} 次")
+                switchTip.text = "正在重新连接…（第 $addrRetry/${ADDR_RETRY_MAX} 次）"
+                switchTip.visibility = View.VISIBLE
+                // 重试之间隔 5 秒，避免服务端还没准备好就被连打
+                main.postDelayed({
+                    if (!isFinishing && current?.id == ch.id) playChannel(ch, streamId, forceRebuild)
+                }, ADDR_RETRY_INTERVAL_MS)
+            }
+        }
+        addrListener = listener
+        com.litv.tv.data.NetState.addListener(listener)
+    }
+
     private fun playChannel(ch: Channel, streamId: Long = 0, forceRebuild: Boolean = false) {
         // 取走本次的转场方向并立刻清零：只有 switchBy 会写它，
         // 其余入口（点列表/数字键/恢复/重试）拿到的都是 0 = 只淡出。
@@ -1064,6 +1105,8 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
             // 换台 = 重新给两次静默重试的机会（不同台/不同线路的失败互不牵连）
             directRetryLeft = DIRECT_RETRY_MAX
             playFailedPending = false
+            // 换了台就重新给满取地址的重试额度（同一个台的重试不清零）
+            addrRetry = 0
         }
         triedStreams += streamId
         currentStreamId = streamId
@@ -1191,9 +1234,11 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
             onErr = { msg ->
                 // 过期请求的失败提示同样要丢：它会把新台的信息盖成旧台的错误。
                 if (!playGate.isCurrent(seq)) return@play
+                // 唤醒/切网瞬间取不到地址是常态：先等**外部网络恢复**再重试，
+                // 别拿无效的重试把额度耗光（那样只会黑屏 + 一句「无法播放」）。
+                Log.w(TAG, "取播放地址失败（$msg），进入等待网络恢复")
                 hideLoading()
-                switchTip.text = "无法播放：$msg"
-                main.postDelayed({ switchTip.visibility = View.GONE }, 3000)
+                waitNetworkThenRetry(ch, streamId, forceRebuild)
             })
     }
 
@@ -3173,6 +3218,18 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
     /** 当前正在播的线路 id，重试时要用 */
     private var currentStreamId: Long = 0
 
+    /**
+     * 取播放地址失败的重试计数。
+     *
+     * 唤醒/切网瞬间网络往往还没起来，`/tv/play` 会失败；以前直接弹「无法播放」
+     * 然后黑屏。这里按 3 次 × 3 秒重试，期间显示「正在重新连接…」。
+     */
+    private var addrRetry = 0
+
+    /** 正在等待网络恢复的回调（同一时刻只允许一个）。 */
+    private var addrListener: ((Boolean) -> Unit)? = null
+
+
     /** 本次选台已经试过的线路，避免来回死循环 */
     private val triedStreams = mutableSetOf<Long>()
     private var triedForChannel: Long = 0
@@ -3325,6 +3382,16 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         super.onResume()
         // 从后台回来先看是否跨天：盒子上没人会主动重启 App
         checkEpgDayRollover()
+        // 每次回到前台都重新交一次 Surface。
+        // surfaceCreated 只在 Surface 真正重建时才回调；如果它已经回调过、
+        // 而 PlayerManager 手里的 surface 被 onSurfaceDestroyed 清空过，
+        // 起播就会一直挂在「等 Surface 到来」上（电视上就是黑屏不动）。
+        if (::surface.isInitialized) {
+            val sv = surface.holder.surface
+            if (sv != null && sv.isValid) {
+                player.attach(sv, findViewById(android.R.id.content))
+            }
+        }
         resumeOrRebuildAfterBackground()
         // 接管遥控指令：手机发来的按键直接走本页原有的按键逻辑
         app.remote.onCommand = { cmd -> main.post { RemoteKeys.handle(this, cmd) } }
@@ -3375,6 +3442,10 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
     }
 
     companion object {
+        /** 取地址失败：网络恢复后最多重试几次、每次间隔多久。 */
+        private const val ADDR_RETRY_MAX = 5
+        private const val ADDR_RETRY_INTERVAL_MS = 5_000L
+
         /** 节目单面板在四列中的权重，必须与 activity_player.xml 的 layout_weight 相同。 */
         const val EPG_PANEL_WEIGHT = 464f
         /** 右侧留白：收起态独占总宽（和节目单同格的 796 = 340 + 456），展开态只留 340。 */

@@ -494,6 +494,9 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
             lp.height = if (videoHeight169 > 0) videoHeight169
                          else ViewGroup.LayoutParams.WRAP_CONTENT
             box.layoutParams = lp
+        // 视频区尺寸变了：VLC 必须重新同步窗口，否则画面卡在旧尺寸（全屏后卡死）
+        // 布局还没量完时取到的是旧尺寸，延后一拍再同步（全屏后画面才会铺满）
+        box.postDelayed({ runCatching { if (::player.isInitialized) player.resyncWindow() } }, 150)
             (parent as? LinearLayout)?.gravity = android.view.Gravity.TOP or android.view.Gravity.CENTER_HORIZONTAL
             return
         }
@@ -533,6 +536,9 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
                 else -> android.view.Gravity.TOP or android.view.Gravity.CENTER_HORIZONTAL
             }
         }
+        // ★ 所有分支最后都要同步一次：之前只在 fill 那一支里加了，
+        //   16:9/4:3 分支走不到，全屏后 VLC 还按竖屏尺寸渲染。
+        box.postDelayed({ runCatching { if (::player.isInitialized) player.resyncWindow() } }, 150)
     }
 
     override fun onConfigurationChanged(newConfig: android.content.res.Configuration) {

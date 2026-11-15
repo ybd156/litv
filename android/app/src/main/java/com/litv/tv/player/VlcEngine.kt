@@ -262,6 +262,25 @@ class VlcEngine : PlayerEngine {
         android.util.Log.i(TAG, "VLC play() 已调用 url=" + url.take(60) + " holder=" + (surfaceHolder != null))
     }
 
+    /** 布局变化（进出全屏/旋转）后重新同步 VLC 窗口尺寸 */
+    fun resyncWindow() {
+        val p = player
+        val v = hostView
+        android.util.Log.i(
+            TAG,
+            "resync: player=${p != null} view=${v != null} w=${v?.width ?: -1} h=${v?.height ?: -1}",
+        )
+        if (p == null) return
+        syncWindowSize(p)
+        // 只改尺寸 vout 不会自己重排，画面会停在最后一帧。
+        // 重挂一次输出层（会闪一下黑，属正常）。
+        runCatching {
+            p.vlcVout.detachViews()
+            p.vlcVout.attachViews()
+            android.util.Log.i(TAG, "resync: vout 已重挂")
+        }.onFailure { android.util.Log.w(TAG, "resync: vout 重挂失败 ${it.message}") }
+    }
+
     override var aspect: String = "auto"
 
     override fun play() { player?.play() }

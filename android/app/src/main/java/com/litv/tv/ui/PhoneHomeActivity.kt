@@ -304,15 +304,22 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
             val order = listOf("auto", "exo", "vlc", "mpv")
             app.prefs.engine = order[(order.indexOf(app.prefs.engine).coerceAtLeast(0) + 1) % order.size]
             syncFsTools()
-            // 改了内核要立刻用新内核重起，否则要等下次换台才生效
-            currentChannel?.let { playChannel(it) }
+            // 改了内核要**真正重建**：同台直接 playChannel 会命中"复用引擎实例"，
+            // 等于什么都没做。先 stop() 拆掉当前引擎再起。
+            currentChannel?.let {
+                player.stop()
+                playChannel(it)
+            }
         }
         findViewById<TextView>(R.id.fsDecode)?.setOnClickListener {
             val order = listOf("auto", "hard", "soft")
             app.prefs.decode = order[(order.indexOf(app.prefs.decode).coerceAtLeast(0) + 1) % order.size]
             syncFsTools()
-            // 软/硬解切换同样要重起当前台
-            currentChannel?.let { playChannel(it) }
+            // 解码方式同理：prepare() 只在重建时才带新参数，复用时会沿用旧的
+            currentChannel?.let {
+                player.stop()
+                playChannel(it)
+            }
         }
 
         // 投屏：发现由服务端做（iOS 拿不到多播权限，安卓也统一走服务端）
@@ -485,6 +492,18 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
                      else resources.displayMetrics.widthPixels
         val availH = if (parent != null && parent.height > 0) parent.height
                      else resources.displayMetrics.heightPixels
+
+        // 竖屏：保持原样（宽度铺满、高度按 16:9）。比例档位只影响全屏，
+        // 之前把宽度也改成计算值、还改了父容器 gravity，竖屏布局直接被搞乱。
+        if (!landscape) {
+            lp.width = ViewGroup.LayoutParams.MATCH_PARENT
+            if (box.width > 0) videoHeight169 = box.width * 9 / 16
+            lp.height = if (videoHeight169 > 0) videoHeight169
+                         else ViewGroup.LayoutParams.WRAP_CONTENT
+            box.layoutParams = lp
+            (parent as? LinearLayout)?.gravity = android.view.Gravity.TOP or android.view.Gravity.CENTER_HORIZONTAL
+            return
+        }
 
         // 画面比例：auto/16:9 走 16:9，4:3 走 4:3，fill 铺满可用空间。
         // 以前这里写死 16:9，所以点「比例」只改标签、画面纹丝不动。
@@ -840,6 +859,17 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
             // 客户端模式：地址只能来自本地解析。
             // 解析还没完成就**等**——绝不能退回服务端签名地址，
             // 否则同一个版本里两套地址混用，用户看到"一会儿服务端一会儿客户端"。
+            // 解析结果已经有了、只是这个 id 对不上（比如 currentChannel 还是服务端那份），
+            // 就按名字在解析结果里重新找一次；找不到再等，避免"停在正在解析"再也起不来。
+            val parsed = com.litv.tv.data.M3uClient.current
+            if (parsed != null && parsed.channels.isNotEmpty()) {
+                val alt = parsed.channels.firstOrNull { it.name == ch.name }
+                if (alt != null && com.litv.tv.data.M3uClient.urlOf(alt.id) != null) {
+                    currentChannel = alt
+                    playChannel(alt)
+                    return
+                }
+            }
             waitingForParse = true
             // 这个 ch 来自**缓存的服务端频道**，它的 id 在客户端解析结果里不存在，
             // 拿它去重播会永远等下去（用户看到的就是"一直解析"）。

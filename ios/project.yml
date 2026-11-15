@@ -64,6 +64,9 @@ targets:
       - path: LITVApp/Sources/Api.swift
       - path: LITVApp/Sources/Models.swift
       - path: LITVApp/Sources/KeychainStore.swift
+      # Session 用到了 EpgStore（本地节目单），测试 target 只挑文件编译，
+      # 这里必须一起列上，否则报 cannot find 'EpgStore' in scope
+      - path: LITVApp/Sources/EpgStore.swift
       - path: Tests
         excludes:
           - "*.py"

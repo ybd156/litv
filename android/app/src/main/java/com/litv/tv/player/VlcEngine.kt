@@ -96,6 +96,10 @@ class VlcEngine : PlayerEngine {
     /** VLC 专用输出（TextureView）：布局变化不销毁 SurfaceTexture，可无缝换全屏 */
     private var videoTexture: android.view.TextureView? = null
 
+    /** 是否真的把输出接到了 TextureView（用于界面决定隐藏哪一层） */
+    @Volatile var usedTexture = false
+        private set
+
     fun attachTexture(tv: android.view.TextureView?) { videoTexture = tv }
 
     /** 供上层在布局变化时只调 setWindowSize（不重建） */
@@ -277,6 +281,7 @@ class VlcEngine : PlayerEngine {
                     texture.height.coerceAtLeast(1),
                 )
                 mp.vlcVout.attachViews()
+                usedTexture = true
                 android.util.Log.i(TAG, "VLC 输出接到 TextureView ${texture.width}x${texture.height}")
             }
         } else

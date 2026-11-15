@@ -648,6 +648,12 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
             com.litv.tv.data.M3uClient.load(this, app.api, app.prefs.dlKey) { parsed ->
                 if (parsed != null && parsed.channels.isNotEmpty()) {
                     all = parsed.channels
+                    if (waitingForParse) {
+                        waitingForParse = false
+                        val target = all.firstOrNull { it.name == pendingChannelName }
+                            ?: all.firstOrNull()
+                        if (target != null) playChannel(target)
+                    }
                     groups = all.map { it.group }.filter { it.isNotBlank() }.distinct()
                     status.text = "客户端解析 ${all.size} 个频道"
                     renderChips()
@@ -744,7 +750,18 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
         return if (ua.isBlank()) "" else " · UA: " + ua.take(30)
     }
 
+    /** 是否客户端解析模式（服务端 D1 已不存频道表，服务端播放路径只是残留） */
+    private fun clientMode(): Boolean =
+        app.prefs.clientParseSeen || app.prefs.channelSource == "client"
+
+    /** 等客户端解析完成后再起播 */
+    private var waitingForParse = false
+
+    /** 等待解析时记下想播的台名，解析完成后按名字找回 */
+    private var pendingChannelName: String = ""
+
     private fun playChannel(ch: Channel) {
+        controlsFlashedForChannel = false
         playingTimeshift = false
         renderLiveBadge()
         // 「同一台又播了一次」= 几乎一定是卡住/失败后的重播。
@@ -766,6 +783,23 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
         btnPlayPause.setImageResource(R.drawable.ic_pause)
 
         // ---- 客户端解析模式：地址就在本地，直接播，不请求 /tv/play ----
+        if (clientMode() && com.litv.tv.data.M3uClient.urlOf(ch.id) == null) {
+            // 客户端模式：地址只能来自本地解析。
+            // 解析还没完成就**等**——绝不能退回服务端签名地址，
+            // 否则同一个版本里两套地址混用，用户看到"一会儿服务端一会儿客户端"。
+            waitingForParse = true
+            // 这个 ch 来自**缓存的服务端频道**，它的 id 在客户端解析结果里不存在，
+            // 拿它去重播会永远等下去（用户看到的就是"一直解析"）。
+            // 记下名字，解析完成后按名字重新定位。
+            pendingChannelName = ch.name
+            currentChannel = null
+            playRoute.text = "正在解析频道…"
+            loading.visibility = View.VISIBLE
+            playHint.text = "正在解析频道地址…"
+            playHint.visibility = View.VISIBLE
+            return
+        }
+
         val directUrl = com.litv.tv.data.M3uClient.urlOf(ch.id)
         if (directUrl != null) {
             // 地址是客户端自己从源 m3u 里解析出来的
@@ -785,7 +819,7 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
             PlayCacheStore.identity(app.prefs, 0, phoneCacheMode()),
             nowSec,
         )
-        val cacheUsable = cached != null && !replayingSameChannel   // 留 60 秒余量，避免刚好卡在过期边界
+        val cacheUsable = !clientMode() && cached != null && !replayingSameChannel   // 留 60 秒余量，避免刚好卡在过期边界
 
         if (cacheUsable) {
             android.util.Log.i(TAG, "缓存起播 ${ch.name}，签名还剩 ${cached!!.expires - nowSec}s")
@@ -1119,14 +1153,22 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
         reservedStarts.addAll(com.litv.tv.data.ReminderStore.reservedStarts(this))
     }
 
+    /** 本次选台是否已经"闪"过一次控件（避免卡顿/重连时反复弹出） */
+    private var controlsFlashedForChannel = false
+
     override fun onPlaying() {
         // 播放页在这个 Activity 里（底部「播放」标签），不是 PhonePlayerActivity，
         // 所以常亮必须在这里加，否则看着看着就黑屏。
         window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         loading.visibility = View.GONE
         playHint.visibility = View.GONE
-        // 出画面时闪一下控件，让用户知道点画面能呼出操作条
-        showControls()
+        // 只在**这个台第一次出画面**时闪一下控件。
+        // 以前每次进 playing 都闪：缓冲卡一下、重连一次就冒出一条控件，
+        // 看着像界面在抽搐。
+        if (!controlsFlashedForChannel) {
+            controlsFlashedForChannel = true
+            showControls()
+        }
         prefetchNeighbors()
     }
 

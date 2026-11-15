@@ -64,10 +64,26 @@
                 android:layout_height="wrap_content"
                 android:background="@android:color/black">
 
+                <org.videolan.libvlc.util.VLCVideoLayout
+                    android:id="@+id/vlcLayout"
+                    android:layout_width="match_parent"
+                    android:layout_height="match_parent"
+                    android:visibility="gone" />
+
+                <!-- Exo 官方视图：内部 AspectRatioFrameLayout + SurfaceView，
+                     自己处理尺寸/比例变化，全屏不需要重建播放器 -->
+                <androidx.media3.ui.PlayerView
+                    android:id="@+id/exoView"
+                    android:layout_width="match_parent"
+                    android:layout_height="match_parent"
+                    />
+
+                <!-- mpv 用的裸 SurfaceView（当前不可用，保留） -->
                 <SurfaceView
                     android:id="@+id/surface"
                     android:layout_width="match_parent"
-                    android:layout_height="match_parent" />
+                    android:layout_height="match_parent"
+                    android:visibility="gone" />
 
                 <ProgressBar
                     android:id="@+id/loading"

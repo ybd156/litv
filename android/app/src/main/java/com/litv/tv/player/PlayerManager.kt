@@ -410,8 +410,16 @@ class PlayerManager(
     /** 进出全屏后让引擎重新对齐输出尺寸（VLC 必须，否则画面卡在旧尺寸） */
     private var lastResyncAt = 0L
 
+    private var vlcLayout: org.videolan.libvlc.util.VLCVideoLayout? = null
+
+    fun setVlcLayout(l: org.videolan.libvlc.util.VLCVideoLayout?) {
+        vlcLayout = l
+        (current as? VlcEngine)?.attachVideoLayout(l)
+    }
+
     fun resyncWindow() {
         val v = current as? VlcEngine ?: return
+        if (vlcLayout != null) return   // 官方 helper 自己处理布局变化
         // 布局会连着触发多次（宽度/高度各一次），每次都重建等于连两次重连，
         // 用户看到的就是"全屏后要等很久"。800ms 内只认第一次。
         val now = android.os.SystemClock.elapsedRealtime()

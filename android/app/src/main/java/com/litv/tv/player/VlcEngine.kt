@@ -93,6 +93,9 @@ class VlcEngine : PlayerEngine {
     var surfaceHolder: android.view.SurfaceHolder? = null
         private set
 
+    private var videoLayout: org.videolan.libvlc.util.VLCVideoLayout? = null
+    fun attachVideoLayout(l: org.videolan.libvlc.util.VLCVideoLayout?) { videoLayout = l }
+
     fun setHolder(h: android.view.SurfaceHolder?) { surfaceHolder = h }
 
     override fun attach(context: Context, surface: android.view.Surface?, container: ViewGroup?) {
@@ -259,6 +262,51 @@ class VlcEngine : PlayerEngine {
             }
         }
 
+        // 官方做法（见 VLC for Android 的 VideoPlayerActivity）：
+        // attachViews(layout, displayManager, subtitles=true, useTextureView=false)
+        // 且调用时 layout 必须可见，否则 helper 算出 0x0 → 画面小/不动。
+        val vlay = videoLayout
+        if (vlay != null) {
+            if (vlay.visibility != android.view.View.VISIBLE) vlay.visibility = android.view.View.VISIBLE
+            // 官方时序：attachViews 必须在布局测量完成之后。
+            // 尺寸为 0 时（刚切内核/刚创建视图）helper 会算出 0x0 → 画面小且不动。
+            val doAttach = {
+                if (vlay.width > 0 && vlay.height > 0) {
+                    runCatching {
+                        mp.attachViews(vlay, null, true, false)
+                        // 画面比例交给官方的 videoScale（对应「比例」设置），
+                        // 之前用 BEST_FIT 会缩成小窗。
+                        mp.videoScale = when (aspect) {
+                            "fill" -> MediaPlayer.ScaleType.SURFACE_FILL
+                            "16:9", "4:3" -> MediaPlayer.ScaleType.SURFACE_FIT_SCREEN
+                            else -> MediaPlayer.ScaleType.SURFACE_FIT_SCREEN
+                        }
+                        android.util.Log.i(TAG, "attachViews ok ${vlay.width}x${vlay.height}")
+                    }.onFailure { android.util.Log.w(TAG, "attachViews 失败：${it.message}") }
+                } else {
+                    android.util.Log.w(TAG, "layout 还没测量（${vlay.width}x${vlay.height}），等布局完成再挂")
+                    vlay.addOnLayoutChangeListener(object : android.view.View.OnLayoutChangeListener {
+                        override fun onLayoutChange(
+                            v: android.view.View, l: Int, t: Int, r: Int, b: Int,
+                            ol: Int, ot: Int, or_: Int, ob: Int,
+                        ) {
+                            if (v.width > 0 && v.height > 0) {
+                                v.removeOnLayoutChangeListener(this)
+                                runCatching {
+                                    mp.attachViews(vlay, null, true, false)
+                                    mp.videoScale = when (aspect) {
+                                        "fill" -> MediaPlayer.ScaleType.SURFACE_FILL
+                                        else -> MediaPlayer.ScaleType.SURFACE_FIT_SCREEN
+                                    }
+                                    android.util.Log.i(TAG, "attachViews ok(延迟) ${v.width}x${v.height}")
+                                }
+                            }
+                        }
+                    })
+                }
+            }
+            doAttach()
+        } else
         // 同 attach：只挂**有效**的 Surface。
         videoSurface?.takeIf { it.isValid }?.let {
             // 有 holder 必须一起传：只传 Surface 时 libVLC 拿不到缓冲区格式，会黑屏不报错

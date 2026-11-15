@@ -197,6 +197,9 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
         // Activity 重建、退到后台再回来都不重建播放器，缓冲也还在。
         com.litv.tv.player.PlaybackService.ensureRunning(this)
         player = app.player.also { it.callback = this }
+        // Exo 走官方 PlayerView（和电视端一致）：尺寸/比例由它自己处理，
+        // 全屏切换不需要重建播放器。之前手机端用裸 SurfaceView，才有了那一堆补丁。
+        player.playerView = findViewById(R.id.exoView)
 
         // 必须监听 Surface 生命周期，不能只在 onCreate 里 attach 一次。
         // SurfaceView 被设为 GONE（切 Tab）或 Activity 被覆盖（去设置页）时，
@@ -1271,6 +1274,13 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
 
     override fun onEngineChanged(kind: EngineKind) {
         playEngine.text = kind.label
+        val isVlc = kind == EngineKind.VLC
+        // 两个官方视图各管一摊：Exo→PlayerView，VLC→VLCVideoLayout
+        findViewById<androidx.media3.ui.PlayerView>(R.id.exoView)?.visibility =
+            if (isVlc) android.view.View.GONE else android.view.View.VISIBLE
+        findViewById<org.videolan.libvlc.util.VLCVideoLayout>(R.id.vlcLayout)?.visibility =
+            if (isVlc) android.view.View.VISIBLE else android.view.View.GONE
+        if (isVlc) player.setVlcLayout(findViewById(R.id.vlcLayout))
     }
 
     override fun onPrepared(width: Int, height: Int) = Unit

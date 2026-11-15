@@ -177,7 +177,9 @@ jobs:
           #       或 client（D1 不写频道/线路/节目单，客户端自己拉源解析，
           #       省掉重建时几千行写入 —— D1 免费额度的大头）。
           # 同样用 Variable 而不是 Secret：不是机密，值看得见才好排查。
-          CHANNELS_MODE: ${{ vars.CHANNELS_MODE || 'server' }}
+          # vars 和 secrets 都认：有人习惯放 Variable（值可见，便于排查），
+          # 有人习惯放 Secret。两处都读，避免"我明明设了却不生效"。
+          CHANNELS_MODE: ${{ vars.CHANNELS_MODE || secrets.CHANNELS_MODE || 'server' }}
         # pipefail：不加的话 `| tee` 会把退出码变成 tee 的 0，
         # 生成失败也显示成功——那比失败更糟。
         run: |

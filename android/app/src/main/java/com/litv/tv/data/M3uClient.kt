@@ -180,7 +180,11 @@ object M3uClient {
                 Log.w(TAG, "源拉取失败：" + u.optString("name"))
                 continue
             }
-            mergeInto(text, merged, urlById, headersById)
+            mergeInto(
+                text, merged, urlById, headersById,
+                defaultUa = u.optString("ua"),
+                defaultReferer = u.optString("referer"),
+            )
         }
 
         val kept = merged.values.filter { it.group !in hiddenGroups && it.name !in hiddenChannels }
@@ -242,6 +246,8 @@ object M3uClient {
         merged: MutableMap<String, Channel>,
         urlById: MutableMap<Long, String>,
         headersById: MutableMap<Long, Map<String, String>>,
+        defaultUa: String = "",
+        defaultReferer: String = "",
     ) {
         var name = ""
         var tvgId = ""
@@ -299,10 +305,15 @@ object M3uClient {
                     enabled = true,
                 )
                 urlById[id] = line
-                if (ua.isNotEmpty() || referer.isNotEmpty()) {
+                // 频道自己没写 #EXTVLCOPT 时，用**源级别**的 UA/Referer 兜底。
+                // 源的 UA 配在管理台的 sources 里，只用在"拉 m3u"上一次是不够的：
+                // 播放同样要带，否则源站校验不通过 —— 用户看到的就是"手动选台 UA 没了"。
+                val effUa = ua.ifEmpty { defaultUa }
+                val effReferer = referer.ifEmpty { defaultReferer }
+                if (effUa.isNotEmpty() || effReferer.isNotEmpty()) {
                     val h = HashMap<String, String>()
-                    if (ua.isNotEmpty()) h["User-Agent"] = ua
-                    if (referer.isNotEmpty()) h["Referer"] = referer
+                    if (effUa.isNotEmpty()) h["User-Agent"] = effUa
+                    if (effReferer.isNotEmpty()) h["Referer"] = effReferer
                     headersById[id] = h
                 }
             }

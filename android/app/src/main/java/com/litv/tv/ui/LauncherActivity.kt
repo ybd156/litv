@@ -30,11 +30,11 @@ class LauncherActivity : AppCompatActivity() {
         val isTV = when (app.prefs.uiMode) {
             "tv" -> true
             "phone" -> false
-            else -> when (com.litv.tv.BuildConfig.UI_MODE) {
-                "tv" -> true
-                "phone" -> false
-                else -> fromLeanback || DeviceType.isTV(this)
-            }
+            // auto：**以设备特征为准**。
+            // 以前这里是 flavor 优先（电视版包 → 一律电视界面），
+            // 于是手机上装电视版、界面模式选"自动"，进去还是电视界面 —— 用户反馈的
+            // "auto 但手机打开变 TV 界面"就是这个。flavor 只在设备判定不明确时兜底。
+            else -> fromLeanback || DeviceType.isTV(this)
         }
         // 把判定依据打出来：用户反馈"电视上跑成了手机界面"时，
         // 一眼就能看出是哪个信号判错了。

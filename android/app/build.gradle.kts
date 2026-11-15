@@ -108,17 +108,11 @@ android {
     //   1) 默认界面形态（电视走全屏播放+浮层，手机走竖屏列表）
     //   2) 包名：手机版加 .phone 后缀，这样电视版和手机版可以同时装在一台机器上
     // 用户仍可在设置里用「界面模式」覆盖。
-    flavorDimensions += "form"
-    productFlavors {
-        create("tv") {
-            dimension = "form"
-            buildConfigField("String", "UI_MODE", "\"tv\"")
-        }
-        create("phone") {
-            dimension = "form"
-            applicationIdSuffix = ".phone"
-            buildConfigField("String", "UI_MODE", "\"phone\"")
-        }
+    // 不再分电视/手机两个 flavor：一个包装到哪台设备上，由界面模式（默认 auto）
+    // 自己判断。原来分包是为了"电视版包在电视上一定跑电视界面"，
+    // 代价是同一个功能要维护两份产物、CI 任务翻倍，而且手机上装电视版会误判。
+    defaultConfig {
+        buildConfigField("String", "UI_MODE", "\"auto\"")
     }
 
     buildTypes {

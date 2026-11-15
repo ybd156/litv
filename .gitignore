@@ -122,3 +122,13 @@ __pycache__/
 .dl*.cjs
 .emu*.log
 *.xcresult
+
+# ---- 本地诊断产物（抓的日志/截图/dump）----
+# 只忽略仓库根目录下的，避免误伤 docs/ 里要保留的图片
+/*.log
+/*.txt
+/*.png
+/*.jpg
+/*.jpeg
+/*.csv
+/*.json

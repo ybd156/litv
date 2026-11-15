@@ -207,7 +207,7 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
                 // 首次创建：正常 attach，等上层 playChannel
                 if (!surfaceReadyOnce) {
                     surfaceReadyOnce = true
-                    player.attachWithHolder(h.surface, h, findViewById(android.R.id.content))
+                    player.attachWithHolder(h.surface, h, findViewById(R.id.videoBox))
                     return
                 }
                 // 重建（切 Tab / 从设置页回来 / 退后台再进）
@@ -226,7 +226,7 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
                     // 播放器一直活着（Service 保活），缓冲也在：
                     // 只把新 Surface 接上去并确保继续播，不重新拉流。
                     android.util.Log.i(TAG, "Surface 重建，播放器仍持有该台，只接 Surface")
-                    player.attachWithHolder(h.surface, h, findViewById(android.R.id.content))
+                    player.attachWithHolder(h.surface, h, findViewById(R.id.videoBox))
                     runCatching { player.resume() }
                     return
                 }
@@ -237,7 +237,7 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
             }
 
             override fun surfaceChanged(h: android.view.SurfaceHolder, format: Int, width: Int, height: Int) {
-                player.attach(h.surface, findViewById(android.R.id.content))
+                player.attach(h.surface, findViewById(R.id.videoBox))
             }
 
             override fun surfaceDestroyed(h: android.view.SurfaceHolder) {
@@ -251,7 +251,7 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
             }
         })
 
-        player.attach(surface.holder.surface, findViewById(android.R.id.content))
+        player.attach(surface.holder.surface, findViewById(R.id.videoBox))
     }
 
     private fun setupTabs() {
@@ -601,7 +601,7 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
             val h = surface.holder
             val sv = h.surface
             if (sv != null && sv.isValid) {
-                player.attach(sv, findViewById(android.R.id.content))
+                player.attach(sv, findViewById(R.id.videoBox))
                 // resume() 才是「继续播」；play() 是「换台播放」，签名不同
                 if (!paused) player.resume()
             }

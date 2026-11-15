@@ -151,7 +151,9 @@ android {
             )
         }
         // libmpv / libvlc 都是 .so，不要压缩（否则启动时要解压，慢且占双份空间）
-        jniLibs { useLegacyPackaging = false }
+        // 必须释放到 nativeLibraryDir：libvlc/libmpv 依赖 libc++_shared 等
+        // 同目录库，打包成 APK 内未压缩且不释放时 System.loadLibrary 会失败
+        jniLibs { useLegacyPackaging = true }
     }
 
     lint {

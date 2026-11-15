@@ -55,7 +55,7 @@ class VlcEngine : PlayerEngine {
             System.loadLibrary("vlcjni")
             true
         } catch (t: Throwable) {
-            Log.w(TAG, "VLC 原生库不可用：" + t.javaClass.simpleName)
+            Log.w(TAG, "VLC 原生库不可用：" + t.javaClass.simpleName + " / " + t.message, t)
             false
         }
         probeResult = ok

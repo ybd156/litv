@@ -217,14 +217,17 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
                 // 所以换 Surface 时清掉该标记，让重试仍从硬解开始。
                 player.resetSoftDecodeFlag()
                 val ch = currentChannel
-                val sameChannelPlaying = ch != null &&
-                    player.playingChannelId == ch.id && player.isPlaying
+                // 判据是"**播放器还持有这个台**"，不是"此刻正在播"。
+                // 切走的瞬间经常正处在缓冲/重连状态，isPlaying 为 false，
+                // 用它会误判成"播放器已停"→ 重新拉流，用户看到的就是"回来要重播"。
+                val sameChannel = ch != null && player.playingChannelId == ch.id
 
-                if (sameChannelPlaying) {
-                    // 播放器一直活着（Service 保活），缓冲也没断——
-                    // 只要把新 Surface 接上去就行，不要重新拉流。
-                    android.util.Log.i(TAG, "Surface 重建，播放器仍在播，只接 Surface")
+                if (sameChannel) {
+                    // 播放器一直活着（Service 保活），缓冲也在：
+                    // 只把新 Surface 接上去并确保继续播，不重新拉流。
+                    android.util.Log.i(TAG, "Surface 重建，播放器仍持有该台，只接 Surface")
                     player.attach(h.surface, findViewById(android.R.id.content))
+                    runCatching { player.resume() }
                     return
                 }
 
@@ -247,13 +250,16 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
         findViewById<TextView>(R.id.tabPlay).setOnClickListener { switchTab(TAB_PLAY) }
         findViewById<TextView>(R.id.tabChannel).setOnClickListener { switchTab(TAB_CHANNEL) }
         findViewById<TextView>(R.id.tabRemote).setOnClickListener {
+            // 和设置页同理：遥控器是应用内页面，不该把播放停掉。
+            // 停了就要重新拉流，用户看到的就是"点遥控器回来要重播"。
+            suppressPauseForInternalPage = true
             startActivity(Intent(this, RemoteActivity::class.java))
             noTransition()
         }
         findViewById<TextView>(R.id.tabSettings).setOnClickListener {
             // 打开设置时不要停播：设置是覆盖在本页之上的同一应用页面，
             // 播到一半点设置就断流，用户会以为"点了设置就卡了"。
-            suppressPauseForSettings = true
+            suppressPauseForInternalPage = true
             startActivity(Intent(this, SettingsActivity::class.java))
             noTransition()
         }
@@ -1061,16 +1067,16 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
         if (::adapter.isInitialized && all.isNotEmpty()) load()
     }
 
-    /** 正在打开设置页：此时 onPause 不该停播。 */
-    private var suppressPauseForSettings = false
+    /** 正在打开应用内页面（设置/遥控器）：此时 onPause 不该停播。 */
+    private var suppressPauseForInternalPage = false
 
     override fun onPause() {
         super.onPause()
         // 离开前台：解除常亮，允许系统息屏
         window.clearFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-        if (suppressPauseForSettings) {
+        if (suppressPauseForInternalPage) {
             // 只是打开了设置/其它本应用页面：继续播，回来时画面还在
-            suppressPauseForSettings = false
+            suppressPauseForInternalPage = false
             return
         }
         // 只暂停，不改 paused —— 那是用户的意图，回来还要按它恢复

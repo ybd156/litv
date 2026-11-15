@@ -108,6 +108,18 @@
         <item name="android:focusable">true</item>
     </style>
 
+    <!-- 画面中间的播放/暂停：无实心底，半透明白色大图标（现代播放器做法） -->
+    <style name="PhoneCtlGhost">
+        <item name="android:layout_width">76dp</item>
+        <item name="android:layout_height">76dp</item>
+        <item name="android:background">@android:color/transparent</item>
+        <item name="android:gravity">center</item>
+        <item name="android:textColor">#D9FFFFFF</item>
+        <item name="android:textSize">30sp</item>
+        <item name="android:clickable">true</item>
+        <item name="android:focusable">true</item>
+    </style>
+
     <style name="PhoneCtlPill">
         <item name="android:layout_width">wrap_content</item>
         <item name="android:layout_height">30dp</item>

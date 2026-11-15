@@ -62,7 +62,7 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
     private lateinit var playHint: TextView
     private lateinit var epgList: LinearLayout
     private lateinit var gestureTip: TextView
-    private lateinit var btnPlayPause: TextView
+    private lateinit var btnPlayPause: android.widget.ImageView
     private lateinit var btnMute: TextView
 
     // 频道页
@@ -278,9 +278,9 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
         btnPlayPause.setOnClickListener {
             if (currentChannel == null) { switchTab(TAB_CHANNEL); return@setOnClickListener }
             if (paused) {
-                player.resume(); paused = false; btnPlayPause.text = "⏸"
+                player.resume(); paused = false; btnPlayPause.setImageResource(R.drawable.ic_pause)
             } else {
-                player.pause(); paused = true; btnPlayPause.text = "▶"
+                player.pause(); paused = true; btnPlayPause.setImageResource(R.drawable.ic_play)
             }
         }
 
@@ -449,17 +449,34 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
     private fun applyVideoRatio() {
         val box = findViewById<View>(R.id.videoBox) ?: return
         val lp = box.layoutParams ?: return
-        // 原生 SurfaceView 会把内容拉满自己的尺寸 —— 给多大就拉成多大。
-        // 所以竖屏、横屏都必须按源比例算高度，否则全屏就是"被拉伸"。
-        if (box.width > 0) videoHeight169 = box.width * 9 / 16
-        lp.height = if (videoHeight169 > 0) videoHeight169
-        else ViewGroup.LayoutParams.WRAP_CONTENT
-        // 横屏时多出来的空间上下均分，画面居中
-        (box.parent as? android.view.ViewGroup)?.let { p ->
-            (p as? LinearLayout)?.gravity = if (landscape) android.view.Gravity.CENTER_VERTICAL
-                                            else android.view.Gravity.TOP
+        val parent = box.parent as? android.view.ViewGroup
+
+        // 可用空间：父容器的宽高（横屏全屏时就是整屏）
+        val availW = if (parent != null && parent.width > 0) parent.width
+                     else resources.displayMetrics.widthPixels
+        val availH = if (parent != null && parent.height > 0) parent.height
+                     else resources.displayMetrics.heightPixels
+
+        // 按 16:9 **同时受宽高约束**：
+        // 只按宽度算的话，横屏 2712×9/16=1526 > 屏高 1220，画面会比屏幕还高，
+        // 控件被顶到可视区外 —— 就是"全屏控件不见了、画面放大到看不见"。
+        var w = availW
+        var h = (availW * 9 / 16)
+        if (h > availH) {
+            h = availH
+            w = (availH * 16 / 9)
         }
+
+        lp.width = w
+        lp.height = h
         box.layoutParams = lp
+
+        (parent as? LinearLayout)?.let {
+            it.gravity = when {
+                landscape -> android.view.Gravity.CENTER
+                else -> android.view.Gravity.TOP or android.view.Gravity.CENTER_HORIZONTAL
+            }
+        }
     }
 
     override fun onConfigurationChanged(newConfig: android.content.res.Configuration) {
@@ -619,7 +636,7 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
                 playName.text = last.name
                 loading.visibility = View.GONE
                 paused = false
-        btnPlayPause.text = "⏸"
+        btnPlayPause.setImageResource(R.drawable.ic_pause)
             } else {
                 playChannel(last)
             }
@@ -696,7 +713,7 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
         playHint.visibility = View.GONE
         loading.visibility = View.VISIBLE
         paused = false
-        btnPlayPause.text = "⏸"
+        btnPlayPause.setImageResource(R.drawable.ic_pause)
 
         // ---- 先用缓存地址起播，把 /tv/play 的网络往返从关键路径上摘掉 ----
         //

@@ -51,7 +51,58 @@ class LitvApp : Application() {
 
         // 加密 DNS 的开关与端点来自本地偏好：进程一启动就同步给解析器，
         // 否则第一次取流会先用默认值（阿里）跑一轮，用户改了设置也要等下次启动才生效。
+        DohDns.attach(this)
         DohDns.configure(prefs.dohEnabled(), prefs.dohProvider)
+
+        // 整个应用退到后台就停播。
+        //
+        // 为什么不能只靠 Activity 的 onPause：打开设置/遥控器时 PhoneHomeActivity
+        // 会**故意**跳过暂停（否则点设置就断流）；但用户从设置页直接按 HOME，
+        // PhoneHomeActivity 不会再收到一次 onPause，播放器就一直响——
+        // 「退后台声音还在播」就是这么来的。
+        //
+        // 这里按「所有 Activity 都不在前台」判定，并延迟 600ms 执行：
+        // 应用内切页（首页→设置）会在窗口内重新 onResume，把这次暂停取消掉。
+        registerActivityLifecycleCallbacks(object : android.app.Application.ActivityLifecycleCallbacks {
+            private var resumed = 0
+            /** 是否已经真的进过一次前台。启动瞬间 LauncherActivity 起来又 finish，
+             *  计数会短暂归零——那不算「退到后台」，不能因此停播。 */
+            private var everResumed = false
+            private val h = android.os.Handler(android.os.Looper.getMainLooper())
+            private val pauseAll = Runnable {
+                if (everResumed && resumed <= 0) {
+                    Log.i(TAG, "应用退到后台，暂停播放")
+                    runCatching { player.pause() }
+                }
+            }
+
+            override fun onActivityResumed(a: android.app.Activity) {
+                resumed++
+                everResumed = true
+                h.removeCallbacks(pauseAll)
+            }
+
+            // 应用内切页时，新 Activity 的 onStart 会先于 onResume 到来。
+            // 这里也取消一次，避免「首页 finish → 播放页 onStart」之间那段空档
+            // 被误判成退到后台（电视上就是启动即停播、Surface 被释放）。
+            override fun onActivityStarted(a: android.app.Activity) {
+                h.removeCallbacks(pauseAll)
+            }
+
+            override fun onActivityPaused(a: android.app.Activity) {
+                resumed--
+                if (resumed <= 0) {
+                    resumed = 0
+                    h.removeCallbacks(pauseAll)
+                    h.postDelayed(pauseAll, 1500)
+                }
+            }
+
+            override fun onActivityCreated(a: android.app.Activity, b: android.os.Bundle?) {}
+            override fun onActivityStopped(a: android.app.Activity) {}
+            override fun onActivitySaveInstanceState(a: android.app.Activity, b: android.os.Bundle) {}
+            override fun onActivityDestroyed(a: android.app.Activity) {}
+        })
 
         // libmpv 的可用性放到后台再查：
         // MPVLib.available 会触发 System.loadLibrary("mpv")，在 onCreate 里同步做

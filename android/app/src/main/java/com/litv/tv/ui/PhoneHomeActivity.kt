@@ -197,9 +197,10 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
         // Activity 重建、退到后台再回来都不重建播放器，缓冲也还在。
         com.litv.tv.player.PlaybackService.ensureRunning(this)
         player = app.player.also { it.callback = this }
-        // Exo 走官方 PlayerView（和电视端一致）：尺寸/比例由它自己处理，
-        // 全屏切换不需要重建播放器。之前手机端用裸 SurfaceView，才有了那一堆补丁。
-        player.playerView = findViewById(R.id.exoView)
+        // 视频输出统一交给 PlayerManager：Exo / VLC / mpv 都往同一个 Surface 上画。
+        // 不再用 media3 的 PlayerView——它和裸 SurfaceView 并存时，
+        // 「同一个播放器再绑一次」是空操作，新 Surface 应用不上，
+        // 表现就是「退出去再进黑屏、声音还在」。
 
         // 必须监听 Surface 生命周期，不能只在 onCreate 里 attach 一次。
         // SurfaceView 被设为 GONE（切 Tab）或 Activity 被覆盖（去设置页）时，
@@ -1279,8 +1280,9 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
     override fun onEngineChanged(kind: EngineKind) {
         playEngine.text = kind.label
         val isVlc = kind == EngineKind.VLC
-        // 两个官方视图各管一摊：Exo→PlayerView，VLC→VLCVideoLayout
-        findViewById<androidx.media3.ui.PlayerView>(R.id.exoView)?.visibility =
+        // 视频输出只有一个 SurfaceView（Exo / mpv 都往它上面画）；
+        // VLC 自己需要一块 VLCVideoLayout，所以在 VLC 时把 SurfaceView 让出来。
+        findViewById<android.view.View>(R.id.videoAspect)?.visibility =
             if (isVlc) android.view.View.GONE else android.view.View.VISIBLE
         findViewById<org.videolan.libvlc.util.VLCVideoLayout>(R.id.vlcLayout)?.visibility =
             if (isVlc) android.view.View.VISIBLE else android.view.View.GONE
@@ -1375,7 +1377,24 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
         playHint.text = message
     }
 
-    override fun onVideoSizeChanged(width: Int, height: Int, frameRate: Float) = Unit
+    override fun onVideoSizeChanged(width: Int, height: Int, frameRate: Float) {
+        // 画面比例：PlayerView 拿掉之后由这里负责。
+        // auto 用实际视频比例（未知时不动，避免 0 尺寸把画面算没），
+        // 16:9 / 4:3 强制比例，fill 拉伸、zoom 裁切、其余留黑边。
+        val box = findViewById<androidx.media3.ui.AspectRatioFrameLayout>(R.id.videoAspect) ?: return
+        val mode = app.prefs.aspect
+        val ratio = when (mode) {
+            "16:9" -> 16f / 9f
+            "4:3" -> 4f / 3f
+            else -> if (width > 0 && height > 0) width.toFloat() / height.toFloat() else 0f
+        }
+        if (ratio > 0f) box.setAspectRatio(ratio)
+        box.resizeMode = when (mode) {
+            "fill" -> androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_FILL
+            "zoom" -> androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_ZOOM
+            else -> androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_FIT
+        }
+    }
 
     // ---------------------------------------------------------------- 生命周期
 
@@ -1438,10 +1457,7 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
 
     override fun onResume() {
         bindFsTools()
-        // 从设置页回来：继续播（上面 onPause 被跳过了）
-        if (::player.isInitialized && currentChannel?.id == player.playingChannelId) {
-            runCatching { player.resume() }
-        }
+        resumeOrRebuildAfterBackground()
         super.onResume()
         // 从遥控器/设置返回时重新应用一次当前 Tab，
         // 避免两个面板的可见性因为重建而错乱
@@ -1455,6 +1471,62 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
     /** 正在打开应用内页面（设置/遥控器）：此时 onPause 不该停播。 */
     private var suppressPauseForInternalPage = false
 
+    /**
+     * 退后台超过这个秒数就不再续播，直接重建播放器。
+     *
+     * 为什么只有 2 秒：pause() 之后这台设备的硬件解码器经常**再也出不了帧**——
+     * 回来 resume() 是"已起播、无画面"，要等 5 秒无帧看门狗把硬解换成软解
+     * 才能看。用户看到的就是「退后台一会再打开黑屏，一会儿自己换解码器才用」。
+     * 重建一次约 1 秒（播放器实例还会复用），比黑 5 秒等降级快得多。
+     *
+     * 打开设置/遥控器不会走到这里：那种情况 onPause 被跳过，没记后台起点。
+     */
+    private val resumeMaxBgSec = 2L
+
+    /** 上一次**真正**暂停的时刻（ms）；0 = 没有在后台暂停过。 */
+    private var pausedAtMs = 0L
+
+    /**
+     * 从后台回来：极短（<2s）续播，其余一律重建播放器。
+     *
+     * 另有一层保险：后台超过 60 秒时，客户端解析模式下上游 token 可能已经轮换，
+     * 先重新解析一次 m3u 再起播。
+     */
+    private fun resumeOrRebuildAfterBackground() {
+        if (!::player.isInitialized) {
+            android.util.Log.i(TAG, "onResume: 播放器未初始化，跳过")
+            return
+        }
+        val pausedAt = pausedAtMs
+        pausedAtMs = 0L
+        val bgSec = if (pausedAt == 0L) 0L else (System.currentTimeMillis() - pausedAt) / 1000
+        val ch = currentChannel
+        android.util.Log.i(
+            TAG,
+            "onResume: bg=${bgSec}s ch=${ch?.id} playingId=${player.playingChannelId} paused=$paused",
+        )
+        if (ch == null) return
+        // 用户自己按的暂停：回来不能自己响
+        if (paused) return
+        if (bgSec < resumeMaxBgSec) {
+            if (ch.id == player.playingChannelId) runCatching { player.resume() }
+            return
+        }
+        android.util.Log.i(TAG, "后台 ${bgSec}s 回来，重建播放器（解码器已不可用）")
+        if (bgSec >= 60 && clientMode()) {
+            // 久到上游 token 可能已经轮换：重新解析 m3u 再起播
+            com.litv.tv.data.M3uClient.load(this, app.api, app.prefs.dlKey, app.epg) { parsed ->
+                main.post {
+                    if (isFinishing || isDestroyed) return@post
+                    val target = parsed?.channels?.firstOrNull { it.name == ch.name } ?: ch
+                    playChannel(target)
+                }
+            }
+        } else {
+            playChannel(ch)
+        }
+    }
+
     override fun onPause() {
         super.onPause()
         // 离开前台：解除常亮，允许系统息屏
@@ -1465,6 +1537,8 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
             return
         }
         // 只暂停，不改 paused —— 那是用户的意图，回来还要按它恢复
+        pausedAtMs = System.currentTimeMillis()
+        android.util.Log.i(TAG, "onPause: 记录后台起点")
         player.pause()
     }
 

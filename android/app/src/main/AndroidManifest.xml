@@ -53,6 +53,7 @@
         <activity
             android:name=".ui.PhoneHomeActivity"
             android:exported="false"
+            android:launchMode="singleTask"
             android:configChanges="keyboard|keyboardHidden|orientation|screenSize|screenLayout|smallestScreenSize|uiMode" />
 
         <!-- 手机播放页（手势） -->

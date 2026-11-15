@@ -176,6 +176,47 @@ object DohDns : Dns {
 
     private val cache = ConcurrentHashMap<String, CacheEntry>()
 
+    /** 落盘的上次成功解析结果：DoH 与系统 DNS 同时失败时用它兜底。 */
+    private val stale = ConcurrentHashMap<String, List<InetAddress>>()
+    @Volatile private var staleLoaded = false
+    @Volatile private var appCtx: android.content.Context? = null
+
+    /**
+     * 由 LitvApp 调用一次，给"解析结果落盘"用。
+     *
+     * 为什么需要落盘：电视/盒子的 DNS 会整体抖（连厂商自己的服务都解析不了）。
+     * 以前 DoH 失败退系统 DNS，系统 DNS 也失败就只能抛 UnknownHostException，
+     * 播放器一路换内核，最后黑屏。有了上次的 IP，DNS 抖一下还能直连继续播。
+     */
+    fun attach(ctx: android.content.Context) {
+        appCtx = ctx.applicationContext
+    }
+
+    private fun store() = appCtx?.getSharedPreferences("litv_dns", android.content.Context.MODE_PRIVATE)
+
+    private fun loadStale() {
+        if (staleLoaded) return
+        staleLoaded = true
+        val sp = store() ?: return
+        runCatching {
+            for ((host, v) in sp.all) {
+                val ips = (v as? String)?.split(',')?.mapNotNull { s ->
+                    runCatching { InetAddress.getByName(s.trim()) }.getOrNull()
+                }
+                if (!ips.isNullOrEmpty()) stale[host] = ips
+            }
+        }
+    }
+
+    private fun remember(hostname: String, ips: List<InetAddress>) {
+        if (ips.isEmpty()) return
+        stale[hostname] = ips
+        val sp = store() ?: return
+        runCatching {
+            sp.edit().putString(hostname, ips.joinToString(",") { it.hostAddress ?: "" }).apply()
+        }
+    }
+
     @Volatile private var enabled = true
     @Volatile private var provider = Provider.ALI
 
@@ -243,16 +284,34 @@ object DohDns : Dns {
         // 内网名 / 字面 IP：不改变原有行为（NAS 地址不能拿去问公网 DNS）
         if (DohPolicy.preferSystemDns(hostname)) return Dns.SYSTEM.lookup(hostname)
 
+        loadStale()
         val now = System.currentTimeMillis()
         cache[hostname]?.let { if (it.expireAtMs > now) return it.ips }
 
         val resolved = queryDoh(hostname)
-        if (resolved == null) {
-            // DoH 失败/超时/非 200/Status!=0 —— 一律回落系统 DNS（用户口径）
-            return Dns.SYSTEM.lookup(hostname)
+        if (resolved != null) {
+            cache[hostname] = CacheEntry(resolved.first, now + resolved.second * 1000L)
+            remember(hostname, resolved.first)
+            return resolved.first
         }
-        cache[hostname] = CacheEntry(resolved.first, now + resolved.second * 1000L)
-        return resolved.first
+
+        // DoH 失败/超时/非 200/Status!=0 —— 回落系统 DNS（用户口径）。
+        // 但系统 DNS 自己也可能失败（盒子/电视的私人 DNS 坏掉时就是这样），
+        // 所以这里必须自己兜住异常，不能让它直接抛出去。
+        val sys = runCatching { Dns.SYSTEM.lookup(hostname) }.getOrNull()
+        if (!sys.isNullOrEmpty()) {
+            remember(hostname, sys)
+            return sys
+        }
+
+        // 两条路都断了：用上次成功解析到的地址直连。
+        // TTL 过期也照用——DNS 抖动时"稍微旧一点的 IP"远好过"直接黑屏"。
+        val last = stale[hostname]
+        if (!last.isNullOrEmpty()) {
+            android.util.Log.w("DohDns", "解析失败，用上次解析到的地址兜底（$hostname）")
+            return last
+        }
+        throw java.net.UnknownHostException("Unable to resolve host \"$hostname\"")
     }
 
     /** @return (地址列表, TTL 秒)；失败返回 null 表示"该回落"。 */

@@ -61,7 +61,8 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
     private lateinit var app: LitvApp
     private lateinit var surface: SurfaceView
     private lateinit var surfaceTex: android.view.TextureView
-    private lateinit var playerView: androidx.media3.ui.PlayerView
+    /** 视频输出容器：比例由它按设置处理，里面放 SurfaceView / TextureView。 */
+    private lateinit var videoAspect: androidx.media3.ui.AspectRatioFrameLayout
     /** 换台时冻结上一帧用的快照层（布局里一直有，但之前代码从没用过）。 */
     private lateinit var snapshot: android.widget.ImageView
     private var videoSurface: android.view.Surface? = null
@@ -286,7 +287,6 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
             }
         }
 
-        player.playerView = playerView
         snapshot = findViewById(R.id.snapshot)
         setupRenderTarget()
 
@@ -492,7 +492,10 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         // PlayerView 只给 Exo 用。它在布局里位于最上层，
         // 给 VLC / mpv 时必须隐藏，否则会盖住下面的渲染目标。
         // 初始显示它（默认链首选 Exo），真正的切换在 onEngineChanged 里做。
-        playerView.visibility = android.view.View.VISIBLE
+        // 渲染目标二选一：TextureView（GPU 合成，老盒子更稳）或 SurfaceView。
+        // 两者都在 videoAspect 里，比例由它统一处理。
+        surface.visibility = if (useTexture) android.view.View.GONE else android.view.View.VISIBLE
+        surfaceTex.visibility = if (useTexture) android.view.View.VISIBLE else android.view.View.GONE
 
         if (useTexture) {
             surfaceTex.surfaceTextureListener = object : android.view.TextureView.SurfaceTextureListener {
@@ -544,7 +547,7 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
     private fun bindViews() {
         surface = findViewById(R.id.surface)
         surfaceTex = findViewById(R.id.surfaceTex)
-        playerView = findViewById(R.id.playerView)
+        videoAspect = findViewById(R.id.videoAspect)
         curtain = findViewById(R.id.curtain)
         loading = findViewById(R.id.loading)
         loadingText = findViewById(R.id.loadingText)
@@ -2569,7 +2572,7 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         // PlayerView 在布局里 z 序最高，给 VLC / mpv 时不隐藏就会盖住画面。
         val isExo = kind == EngineKind.EXO
         activeEngine = kind
-        playerView.visibility = if (isExo) View.VISIBLE else View.GONE
+        surface.visibility = if (isExo) View.VISIBLE else View.GONE
     }
 
     override fun onPrepared(width: Int, height: Int) = Unit
@@ -3203,6 +3206,29 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
 
     override fun onVideoSizeChanged(width: Int, height: Int, frameRate: Float) {
         applyContentFrameRate(frameRate)
+        applyAspect(width, height)
+    }
+
+    /**
+     * 画面比例：PlayerView 拿掉之后由这里负责。
+     *
+     * auto 用实际视频比例（未知时不动，避免 0 尺寸把画面算没），
+     * 16:9 / 4:3 强制比例，fill 拉伸、zoom 裁切、其余留黑边。
+     */
+    private fun applyAspect(width: Int, height: Int) {
+        if (!::videoAspect.isInitialized) return
+        val mode = app.prefs.aspect
+        val ratio = when (mode) {
+            "16:9" -> 16f / 9f
+            "4:3" -> 4f / 3f
+            else -> if (width > 0 && height > 0) width.toFloat() / height.toFloat() else 0f
+        }
+        if (ratio > 0f) videoAspect.setAspectRatio(ratio)
+        videoAspect.resizeMode = when (mode) {
+            "fill" -> androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_FILL
+            "zoom" -> androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_ZOOM
+            else -> androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_FIT
+        }
     }
 
     /**
@@ -3254,13 +3280,52 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
 
     // ---------------------------------------------------------------- 生命周期
 
+    /**
+     * 退后台超过这个秒数就不再续播，直接重建播放器。
+     *
+     * 2 秒的依据：pause() 之后硬件解码器经常再也出不了帧，resume() 会变成
+     * 「已起播、无画面」，要等 5 秒无帧看门狗换软解才恢复。重建约 1 秒，
+     * 比黑 5 秒等降级快。
+     */
+    private val resumeMaxBgSec = 2L
+
+    /** 上一次**真正**暂停的时刻（ms）；0 = 没有在后台暂停过。 */
+    private var pausedAtMs = 0L
+
+    /**
+     * 从后台回来：短时续播，长时重播。
+     *
+     * pause() 只是挂起引擎，地址和播放位置都冻在退后台那一刻。后台待久了，
+     * 直连模式的源站地址会过期、直播窗口也会滑走，回来接着播就是拿失效地址
+     * 去请求窗口外的分片——Exo 失败 → VLC 拿同一地址再失败 → mpv 不可用 →
+     * 36 秒预算烧完 → 黑屏「起播超时」。
+     *
+     * 重建必须带 forceRebuild：否则缓存命中会跳过 prepare，等于什么都没做。
+     */
+    private fun resumeOrRebuildAfterBackground() {
+        if (!::player.isInitialized) return
+        val pausedAt = pausedAtMs
+        pausedAtMs = 0L
+        val ch = current ?: return
+        val bgSec = if (pausedAt == 0L) 0L else (System.currentTimeMillis() - pausedAt) / 1000
+        if (bgSec < resumeMaxBgSec) {
+            // 短时回来：只有播放器确实还停在这个台上才续播
+            if (ch.id == player.playingChannelId) player.resume()
+            return
+        }
+        // 长时回来：不管 id 对不对得上都要重建——播放器里那条地址和那个位置
+        // 都已经不可信了。
+        Log.i(TAG, "后台 ${bgSec}s 回来，重建播放器（旧地址/位置可能已失效）")
+        playChannel(ch, currentStreamId, forceRebuild = true)
+    }
+
     override fun onResume() {
         // 前台播放中：保持常亮
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         super.onResume()
         // 从后台回来先看是否跨天：盒子上没人会主动重启 App
         checkEpgDayRollover()
-        player.resume()
+        resumeOrRebuildAfterBackground()
         // 接管遥控指令：手机发来的按键直接走本页原有的按键逻辑
         app.remote.onCommand = { cmd -> main.post { RemoteKeys.handle(this, cmd) } }
         app.remote.connect()
@@ -3270,6 +3335,7 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         super.onPause()
         // 离开前台：解除常亮，允许系统息屏；同时暂停播放（下面一行）
         window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        pausedAtMs = System.currentTimeMillis()
         player.pause()
         app.remote.onCommand = null
         // 跨端续播：离开时记下看到哪个台，别的设备打开就能"接着看"

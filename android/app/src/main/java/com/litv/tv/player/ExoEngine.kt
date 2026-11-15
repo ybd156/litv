@@ -124,7 +124,20 @@ class ExoEngine : PlayerEngine {
         }
 
     /** 加载失败回调：让 PlayerManager 立刻换内核，不必等满无数据看门狗。 */
-    var onLoadFailure: (() -> Unit)? = null
+    var onLoadFailure: ((String) -> Unit)? = null
+
+    /**
+     * 异常摘要：只留根因的类名与消息，并把 URL 的 query 段抹掉
+     * （地址里带签名参数，不能进日志、也不该进上报）。
+     */
+    private fun briefError(t: Throwable): String {
+        var c: Throwable? = t
+        var guard = 0
+        while (c?.cause != null && c.cause !== c && guard++ < 8) c = c.cause
+        val root = c ?: t
+        val msg = (root.message ?: "").replace(Regex("\\?[^\\s\"']*"), "?<redacted>")
+        return root.javaClass.simpleName + (if (msg.isEmpty()) "" else ": $msg")
+    }
 
     private val dynamicHttpFactory: androidx.media3.datasource.HttpDataSource.Factory =
         object : androidx.media3.datasource.HttpDataSource.Factory {
@@ -171,28 +184,16 @@ class ExoEngine : PlayerEngine {
 
     override fun isAvailable(context: Context): Boolean = true
 
-    /** 由 PlayerActivity 注入的 PlayerView（media3-ui），优先用它 */
-    var playerView: androidx.media3.ui.PlayerView? = null
-
     override fun attach(context: Context, surface: android.view.Surface?, container: ViewGroup?) {
         appContext = context.applicationContext
         videoSurface = surface
         player?.let { p ->
-            // ⚠ PlayerView 在场时**只能**把播放器交给它，不能再 setVideoSurface。
-            //
-            // 两个都设的后果（真机实测）：PlayerView 会用自己内部的 SurfaceView
-            // 覆盖掉我们显式设置的那个，被顶掉的 Surface 随即销毁，于是
-            //   Surface 销毁 -> onSurfaceCreated -> attach（又设一次）-> 再被顶掉
-            // 循环往复；息屏唤醒后画面落在一个没人显示的表面 -> 全黑。
-            //
-            // 只有没有 PlayerView（VLC / mpv 或裸 SurfaceView 模式）时才自己设 surface。
-            if (playerView != null) {
-                playerView!!.player = p
-            } else {
-                // 传 null 也要设：否则旧 Surface 留在渲染器里，
-                // 被系统销毁后抛 "The surface has been released"。
-                runCatching { p.setVideoSurface(surface) }
-            }
+            // 统一契约：Exo 只认 Activity 交过来的 Surface。
+            // 不再有 PlayerView 分支——那个分支里「同一个播放器再绑一次」是空操作，
+            // 新 Surface 永远应用不上，表现就是「退出去再进黑屏、声音还在」。
+            // 传 null 也要设：否则旧 Surface 留在渲染器里，
+            // 被系统销毁后会抛 "The surface has been released"。
+            runCatching { p.setVideoSurface(surface) }
         }
     }
 
@@ -232,36 +233,10 @@ class ExoEngine : PlayerEngine {
         exoFirstFrameRendered = false
 
         player = p
-        // 有 PlayerView 就交给它管 Surface（参考实现就是这么做的），
-        // 否则退回直接 setVideoSurface
-        if (playerView != null) {
-            playerView!!.player = p
-            playerView!!.useController = false
-            // tunneled 模式下视频走独立硬件图层，PlayerView 默认的黑色
-            // 遮罩（shutter）会把它整块盖住——表现为"解码器在解、首帧也
-            // 触发了，但屏幕全黑"。必须把遮罩设成透明才能看到画面。
-            playerView!!.setShutterBackgroundColor(android.graphics.Color.TRANSPARENT)
-            // 画面比例：让设置里的选项真正生效。
-            //
-            // auto = 保持比例**裁切铺满**（zoom）：电视上最符合"铺满屏幕"的预期，
-            //        代价是 4:3 之类的老片源会切掉上下一点点。
-            // fill = 拉伸铺满（会变形，用户明确选了才用）
-            // 16:9 / 4:3 = 强制该比例，完整显示（留黑边）
-            when (aspect) {
-                // 拉伸铺满：会变形，用户明确选了才用
-                "fill" -> playerView!!.resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FILL
-                // 裁切铺满：用户主动选才用。
-                // 默认(auto)不能用它——视频尺寸未知时 ZOOM 会把子视图算成 0 尺寸，
-                // 表现为"转圈结束后黑屏"。
-                "zoom" -> playerView!!.resizeMode = AspectRatioFrameLayout.RESIZE_MODE_ZOOM
-                // 16:9 / 4:3 / auto：完整显示留黑边。
-                // 当前 media3 版本的 PlayerView 没有 setAspectRatio(float)，
-                // 无法强制比例，只能保证不裁切。
-                else -> playerView!!.resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
-            }
-        } else {
-            p.setVideoSurface(videoSurface)
-        }
+        // 统一契约：视频输出永远是 Activity 交过来的 Surface。
+        // 画面比例（auto/zoom/fill/16:9/4:3）由 Activity 侧的
+        // AspectRatioFrameLayout 负责，引擎不再参与。
+        p.setVideoSurface(videoSurface)
         // 直播延迟：让播放器主动落后直播边缘（默认 20 秒）。
         //
         // 贴着边缘跑时，解码慢一点或网络抖一下就掉出 HLS 窗口
@@ -406,11 +381,11 @@ class ExoEngine : PlayerEngine {
             .setTrackSelector(trackSelector)
             .setLoadControl(loadControl)
             .setMediaSourceFactory(
-                if (Av3aLoader.available(ctx)) {
-                    LitvMediaSourceFactory(dsFactory, true)
-                } else {
-                    DefaultMediaSourceFactory(dsFactory)
-                }
+                // 统一走自己的工厂（AV3A 解析器只在该库存在时才挂）：
+                // 只有走它，HLS 才能拿到 setAllowChunklessPreparation
+                // 与自定义错误策略；DefaultMediaSourceFactory 没有这两个入口。
+                LitvMediaSourceFactory(dsFactory, Av3aLoader.available(ctx))
+                    .setLoadErrorHandlingPolicy(noRetryOnHtml)
             )
             .build()
 
@@ -470,9 +445,15 @@ class ExoEngine : PlayerEngine {
                 wasCanceled: Boolean,
             ) {
                 if (wasCanceled) return
-                Log.w(TAG, "加载失败 ${error.javaClass.simpleName}: ${error.message}")
+                val brief = briefError(error)
+                Log.w(TAG, "加载失败 $brief")
                 // 告诉 PlayerManager：这个内核拿不到数据，别再等 12 秒看门狗了。
-                onLoadFailure?.invoke()
+                //
+                // ★ 必须把**真实原因**传上去。以前这里传的是常量「加载失败」，
+                //   PlayerManager 里「网络类失败 → 重试同一内核 5×2s」那条分支
+                //   因此永远不成立，DNS 抖动被当成内核失败，一路把内核链烧完
+                //   —— 表现就是「息屏唤醒后网络还没起来，画面直接黑掉」。
+                onLoadFailure?.invoke(brief)
             }
 
             override fun onBandwidthEstimate(
@@ -624,8 +605,28 @@ class ExoEngine : PlayerEngine {
         return msg.contains("codec memory", true) || msg.contains("0x80001000", true)
     }
 
-    override fun play() { player?.playWhenReady = true }
-    override fun pause() { player?.playWhenReady = false }
+    override fun play() {
+        val p = player ?: return
+        // stop() 之后播放器处于 IDLE，必须重新 prepare 才会重建解码器。
+        // 只把 playWhenReady 置回 true 是不够的：挂起过的硬解码器经常
+        // 再也不出帧（黑屏，要等 5 秒无帧看门狗换软解才恢复）。
+        if (p.playbackState == androidx.media3.common.Player.STATE_IDLE) {
+            runCatching { p.prepare() }
+        }
+        p.playWhenReady = true
+    }
+
+    /**
+     * 暂停用 stop()，不是 playWhenReady=false。
+     *
+     * stop() 会释放解码器资源，回来时 [play] 重新 prepare，解码管线是新建的。
+     * 这是参照成熟实现的做法（my-tv 的 PlayerFragment：onPause → stop()、
+     * onStart → prepare() + play()）。用 pause() 保留解码器的话，退后台
+     * 一会儿再回来会黑屏，必须等看门狗换软解才出画面。
+     */
+    override fun pause() {
+        runCatching { player?.stop() }
+    }
     override fun stop() { player?.stop() }
     override fun release() = releaseInternal()
 

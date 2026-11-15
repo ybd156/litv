@@ -15,39 +15,28 @@
     android:layout_height="match_parent"
     android:background="@android:color/black">
 
-    <!-- 用 TextureView 而不是 SurfaceView：
-         老 Amlogic 盒子上 SurfaceView + MediaCodec 会出现解码器不往 Surface 写帧、
-         画面全黑（日志 DequeueBuffer time out）。TextureView 走 GPU 合成更稳。 -->
-    <!-- 两套渲染目标，按「渲染方式」设置显示其中一个：
-         TextureView 走 GPU 合成，在老 Amlogic 盒子上比 SurfaceView 稳；
-         SurfaceView 更省电、延迟更低，但个别设备会黑屏。 -->
-    <SurfaceView
-        android:id="@+id/surface"
+    <!-- 视频输出统一契约：一个 AspectRatioFrameLayout 包住渲染目标，
+         比例由代码按设置处理（auto / 16:9 / 4:3 / fill / zoom）。
+         Exo / mpv 用 SurfaceView；个别老 Amlogic 盒子改用 TextureView（GPU 合成更稳）。
+         不再使用 media3 的 PlayerView —— 它和裸 Surface 并存时会出现
+         「同一个播放器再绑一次是空操作、新 Surface 应用不上」。 -->
+    <androidx.media3.ui.AspectRatioFrameLayout
+        android:id="@+id/videoAspect"
         android:layout_width="match_parent"
-        android:layout_height="match_parent"
-        android:visibility="gone" />
+        android:layout_height="match_parent">
 
-    <TextureView
-        android:id="@+id/surfaceTex"
-        android:layout_width="match_parent"
-        android:layout_height="match_parent"
-        android:visibility="gone" />
+        <SurfaceView
+            android:id="@+id/surface"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:visibility="gone" />
 
-    <!-- Exo 走 PlayerView（media3-ui）：它自己管 Surface 生命周期，
-         参考实现能正常播就是用的这个。
-
-         注意 resize_mode 必须是 fit。
-         曾改成 zoom（保持比例裁切铺满），结果出现"转圈结束就黑屏"：
-         zoom 在**视频尺寸未知时**会把子视图算成 0 尺寸，
-         一旦 VideoSize 迟迟不到（硬解失败/纯音频），画面就一直是黑的。
-         需要裁切铺满时走设置里的「画面比例」，不要动这里的默认值。 -->
-    <androidx.media3.ui.PlayerView
-        android:id="@+id/playerView"
-        android:layout_width="match_parent"
-        android:layout_height="match_parent"
-        app:use_controller="false"
-        app:resize_mode="fit"
-        app:shutter_background_color="@android:color/transparent" />
+        <TextureView
+            android:id="@+id/surfaceTex"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:visibility="gone" />
+    </androidx.media3.ui.AspectRatioFrameLayout>
 
     <ImageView
         android:id="@+id/snapshot"

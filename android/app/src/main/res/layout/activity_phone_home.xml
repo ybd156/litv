@@ -73,26 +73,23 @@
                     android:elevation="0dp"
                 />
 
-                <!-- Exo 官方视图：内部 AspectRatioFrameLayout + SurfaceView，
-                     自己处理尺寸/比例变化，全屏不需要重建播放器 -->
-                <androidx.media3.ui.PlayerView
-                    android:id="@+id/exoView"
+                <!-- 视频输出只有一个目标：这个 SurfaceView。
+                     Exo / VLC / mpv 都往它上面画，比例由外层 AspectRatioFrameLayout
+                     按设置里的选项（auto/zoom/fill/16:9/4:3）处理。 -->
+                <androidx.media3.ui.AspectRatioFrameLayout
+                    android:id="@+id/videoAspect"
                     android:layout_width="match_parent"
                     android:layout_height="match_parent"
-                                        android:clickable="false"
-                    android:focusable="false"
-                    android:elevation="0dp"
-                />
+                    android:clickable="false"
+                    android:focusable="false">
 
-                <!-- mpv 用的裸 SurfaceView（当前不可用，保留） -->
-                <SurfaceView
-                    android:id="@+id/surface"
-                    android:layout_width="match_parent"
-                    android:layout_height="match_parent"
-                    android:visibility="gone"                     android:clickable="false"
-                    android:focusable="false"
-                    android:elevation="0dp"
-                />
+                    <SurfaceView
+                        android:id="@+id/surface"
+                        android:layout_width="match_parent"
+                        android:layout_height="match_parent"
+                        android:clickable="false"
+                        android:focusable="false" />
+                </androidx.media3.ui.AspectRatioFrameLayout>
 
                 <ProgressBar
                     android:id="@+id/loading"

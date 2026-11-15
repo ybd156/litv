@@ -33,19 +33,33 @@ class LitvMediaSourceFactory(
      * 直连播放时 Exo 拿不到任何轨道，15 秒超时后黑屏。
      * 用户机器上根本没放 AV3A 库，却因为这个改动影响了全部频道。
      */
-    private val hls: HlsMediaSource.Factory = HlsMediaSource.Factory(dsFactory).apply {
+    private var hls: HlsMediaSource.Factory = HlsMediaSource.Factory(dsFactory).apply {
         if (av3aEnabled) setExtractorFactory(Av3aHlsExtractorFactory())
+        // 允许"无分片准备"：起播时不必先把每个变体的 playlist 全拉一遍，
+        // 少一个网络往返。IPTV 只有一个变体，这个优化是纯赚。
+        setAllowChunklessPreparation(true)
     }
 
-    private val progressive = ProgressiveMediaSource.Factory(dsFactory)
+    private var progressive = ProgressiveMediaSource.Factory(dsFactory)
 
+    // 下面两个 setter 以前直接 `= this` 把参数丢掉，等于 ExoPlayer 下发的
+    // 错误处理策略永远到不了底层工厂——表现为 setLoadErrorHandlingPolicy
+    // 写了却完全不起作用。必须真的转发。
     override fun setDrmSessionManagerProvider(
         drmSessionManagerProvider: DrmSessionManagerProvider,
-    ): MediaSource.Factory = this
+    ): MediaSource.Factory {
+        hls = hls.setDrmSessionManagerProvider(drmSessionManagerProvider)
+        progressive = progressive.setDrmSessionManagerProvider(drmSessionManagerProvider)
+        return this
+    }
 
     override fun setLoadErrorHandlingPolicy(
         loadErrorHandlingPolicy: LoadErrorHandlingPolicy,
-    ): MediaSource.Factory = this
+    ): MediaSource.Factory {
+        hls = hls.setLoadErrorHandlingPolicy(loadErrorHandlingPolicy)
+        progressive = progressive.setLoadErrorHandlingPolicy(loadErrorHandlingPolicy)
+        return this
+    }
 
     override fun getSupportedTypes(): IntArray =
         intArrayOf(C.CONTENT_TYPE_HLS, C.CONTENT_TYPE_OTHER)

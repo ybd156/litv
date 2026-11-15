@@ -49,8 +49,6 @@ class PlayerManager(
 
     private val main = Handler(Looper.getMainLooper())
     private var surface: android.view.Surface? = null
-    /** media3-ui 的 PlayerView，交给 ExoEngine 管 Surface */
-    var playerView: androidx.media3.ui.PlayerView? = null
     private var container: ViewGroup? = null
     private var current: PlayerEngine? = null
     private var currentKind: EngineKind? = null
@@ -73,6 +71,9 @@ class PlayerManager(
 
     /** 本次内核已经重试过几次 */
     private var retried = 0
+
+    /** 直播流意外结束后的同线路重连次数（换台清零）。 */
+    private var endedRetries = 0
 
     /** 网络类失败（DNS/连接）的重试次数：换台时清零。 */
     private var netRetry = 0
@@ -441,7 +442,16 @@ class PlayerManager(
         this.surface = surface
         container = parent
         current?.attach(context, surface, parent)
+        // Surface 晚到：把之前挂起的起播接上（手机端 onResume 常早于 surfaceCreated）
+        if (surface != null && pendingStartForSurface && !released) {
+            pendingStartForSurface = false
+            Log.i(TAG, "Surface 就绪，继续挂起的起播")
+            main.post { if (!released) startCurrent() }
+        }
     }
+
+    /** 起播时 Surface 还没就绪，挂起等 attach() 再继续。 */
+    private var pendingStartForSurface = false
 
     /**
      * Surface 被销毁：立刻通知当前内核松手。
@@ -513,6 +523,10 @@ class PlayerManager(
         // retried 会以 1 的残值留给下一个台，于是换台后的第一次超时
         // 直接跳过了重试（设置里的"重试 1 次"时有时无）。
         retried = 0
+        // 换台：直播流结束的重连额度也重新给满
+        endedRetries = 0
+        // 网络类失败的重试额度同理：上一个台把额度用光，不该拖累下一个台
+        netRetry = 0
         // 起播阶段：清掉上一次的所有计时器，重置第一帧标志，并设一个硬预算。
         removeStartTimers()
         firstFrame = false
@@ -549,8 +563,10 @@ class PlayerManager(
         // resolve host`），几十秒后就正常。以前一律当成"内核失败 → 换下一个"，
         // 而 VLC / mpv 在多数手机上都不可用，等于一次抖动就把可用内核全烧掉，
         // 用户看到的就是"突然播不了"。
-        val netErr = reason.contains("无法解析") || reason.contains("UnknownHost") ||
-            reason.contains("IOException")
+        // 判据必须和 isNetworkFailure 一致：以前这里只认三个关键字，
+        // 息屏唤醒时的 `ENETUNREACH (Network is unreachable)` 一个都不匹配，
+        // 于是被当成内核失败，直接跳到「直连失败」报错。
+        val netErr = isNetworkFailure(reason)
         // ★ 网络问题归网络、内核问题归内核。
         //
         // DNS/连接类失败只在**当前内核**上重试（5 次 × 2 秒）；
@@ -565,7 +581,7 @@ class PlayerManager(
                 }, NET_RETRY_DELAY_MS)
             } else {
                 Log.e(TAG, "网络类失败已重试 $NET_RETRY_MAX 次，判定为网络问题，不换内核")
-                callback?.onError("网络异常：视频源域名解析失败（已重试 $NET_RETRY_MAX 次）")
+                callback?.onError("网络不可用：已重试 $NET_RETRY_MAX 次（每次 ${NET_RETRY_DELAY_MS / 1000} 秒）")
             }
             return
         }
@@ -649,12 +665,19 @@ class PlayerManager(
         // 记录这个内核能不能上报首帧：不报的不开首帧看门狗
         engineReportsFirstFrame = engine.reportsFirstFrame
 
-        // PlayerView 模式下不需要外部 Surface —— 它自己管 Surface 生命周期，
-        // 所以只有两条都没有时才算「视图未就绪」。
-        if (surface == null && playerView == null) {
-            callback?.onError("播放视图未就绪")
+        // 统一契约：视频输出只有一个来源 —— Activity 交过来的 Surface。
+        // 引擎层不再有「PlayerView 模式」这种分支（以前有，导致同一个播放器
+        // 再绑一次是空操作，新 Surface 永远应用不上：退出再进黑屏、声音还在）。
+        if (surface == null) {
+            // Surface 还没就绪（Activity 刚重建 / onResume 早于 surfaceCreated）。
+            // 以前这里直接报错返回 —— 手机退后台再回来就变成「黑屏 + 没声音」：
+            // 播放器重建被挡在这里，之后 Surface 到了也没人再拉起起播。
+            // 现在挂起，等 attach(surface) 到了自动继续。
+            pendingStartForSurface = true
+            Log.i(TAG, "Surface 未就绪，挂起起播，等 Surface 到来")
             return
         }
+        pendingStartForSurface = false
         engine.attach(context, surface, container)
         stopStallWatchdog()
         // 息屏前那次起播留下的 15 秒 startTimeout 必须清掉：
@@ -736,7 +759,12 @@ class PlayerManager(
                 main.post {
                     // 起播预算已耗尽：内核晚到的事件不再改变状态（终态）
                     if (budgetExpired || released) return@post
-                    if (currentKind == kind) tryNext(message)
+                    if (currentKind != kind) return@post
+                    // 网络类错误（DNS/连接）**不换内核**：交给 notifyLoadFailed
+                    // 走「重试同一内核 5×2s」。否则一次 DNS 抖动就会把内核链
+                    // 一路烧完，中间还会闪一下错误提示——息屏唤醒时最常见。
+                    if (isNetworkFailure(message)) notifyLoadFailed(message)
+                    else tryNext(message)
                 }
             }
 
@@ -785,7 +813,28 @@ class PlayerManager(
                 main.post { callback?.onVideoSizeChanged(width, height, frameRate) }
             }
 
-            override fun onEnded() = Unit
+            override fun onEnded() {
+                // 直播流的 ENDED = **异常结束**（上游断开 / 分片没了 / 换台后的残留回调）。
+                //
+                // 以前这里是 `= Unit`（空实现），结果就是「已经播起来之后被上游断掉」
+                // 落进一个没人管的空洞：画面停黑、没声音、屏幕上连一句提示都没有。
+                // 三个看门狗都救不了它：
+                //   · 无帧看门狗只在 firstFrame == false 时判，而首帧早就出过了；
+                //   · 卡死看门狗判「位置不再前进」，但 ENDED 之后位置本来就不动；
+                //   · 起播预算是起播阶段计时，早就用完了。
+                main.post {
+                    if (released || userPaused) return@post
+                    if (endedRetries < 2) {
+                        endedRetries++
+                        Log.w(TAG, "直播流结束，重连第 ${endedRetries} 次（同一线路）")
+                        startCurrent()
+                        return@post
+                    }
+                    endedRetries = 0
+                    Log.w(TAG, "直播流反复结束，换下一个内核")
+                    tryNext("直播流结束")
+                }
+            }
         }
 
         engine.aspect = prefs.aspect
@@ -864,9 +913,8 @@ class PlayerManager(
 
     private fun create(kind: EngineKind): PlayerEngine? = when (kind) {
         EngineKind.EXO -> ExoEngine().also {
-            it.playerView = playerView
             // 加载失败（源站回 HTML / 协议错误）立刻换内核，不等 12 秒看门狗
-            it.onLoadFailure = { main.post { notifyLoadFailed("加载失败") } }
+            it.onLoadFailure = { msg -> main.post { notifyLoadFailed(msg) } }
         }
         EngineKind.VLC -> VlcEngine()
         EngineKind.MPV -> MpvEngine(avs3Mode = false)
@@ -955,7 +1003,9 @@ class PlayerManager(
 
         /** 网络类失败（DNS/连接）最多重试几次、每次间隔多久。 */
         const val NET_RETRY_MAX = 5
-        const val NET_RETRY_DELAY_MS = 2_000L
+        // 5 次 × 5 秒 = 25 秒，仍在 36 秒起播预算内。
+        // 息屏唤醒时 Wi-Fi 重新关联往往要十几秒，2 秒的间隔不够用。
+        const val NET_RETRY_DELAY_MS = 5_000L
 
         /** 卡死放弃后多久自动再试一次（毫秒）。 */
         const val GIVE_UP_RETRY_MS = 60_000L

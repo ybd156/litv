@@ -59,6 +59,7 @@ class XmltvEpg(private val context: Context) {
     var programCount = 0
         private set
 
+
     fun isReady(): Boolean = loaded
 
     /**

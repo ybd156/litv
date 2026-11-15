@@ -60,15 +60,16 @@ class EpgAdapter : RecyclerView.Adapter<EpgAdapter.VH>() {
         val now = System.currentTimeMillis() / 1000
         val ctx = holder.itemView.context
 
-        // ---- 时间段
-        holder.time.text =
-            hm.format(Date(p.startAt * 1000)) + "-" + hm.format(Date(p.endAt * 1000))
+        // ---- 时间段（格式与手机端共用 EpgPrograms.rangeLabel）
+        holder.time.text = com.litv.tv.data.EpgPrograms.rangeLabel(p)
 
         // ---- 节目名
         holder.title.text = p.title.ifBlank { "（无标题）" }
 
-        val isNow = position == currentIndex
-        val isPast = p.endAt in 1 until now
+        // 动作判定走共用规则，手机端用同一份
+        val act = com.litv.tv.data.EpgPrograms.actionOf(p, now)
+        val isNow = act == com.litv.tv.data.EpgPrograms.Action.PLAYING
+        val isPast = act == com.litv.tv.data.EpgPrograms.Action.REPLAY
         holder.title.setTextColor(ctx.getColor(if (isNow) R.color.accent else R.color.text_primary))
         holder.title.alpha = if (isNow) 1f else 0.88f
 

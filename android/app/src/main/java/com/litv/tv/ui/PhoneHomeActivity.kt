@@ -524,6 +524,7 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
 
     /** 用本地节目单缓存重算「正在播」，服务端 now 为空时完全靠它。 */
     private fun refreshFromEpg() {
+        dayInit = false
         if (!app.epg.ready) return
         val nowSec = System.currentTimeMillis() / 1000
         val fresh = HashMap<Long, String>()
@@ -753,7 +754,12 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
         renderEpg()
     }
 
-    /** 节目单：当前节目高亮。 */
+    /** 节目单当前查看的日期偏移（0=今天，1=明天，-1=昨天…）。 */
+    private var epgDayOffset = 0
+    /** 是否已按「今天」初始化过日期选择（只做一次，之后尊重用户点击）。 */
+    private var dayInit = false
+
+    /** 节目单：按日期分组 + 正在播/预约/回看。 */
     private fun renderEpg() {
         epgList.removeAllViews()
         if (programs.isEmpty()) {
@@ -765,16 +771,120 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
             epgList.addView(tv)
             return
         }
+
         val now = System.currentTimeMillis() / 1000
-        val fmt = java.text.SimpleDateFormat("HH:mm", java.util.Locale.getDefault())
-        programs.forEach { p ->
-            val row = TextView(this)
-            val playing = p.startAt <= now && p.endAt > now
-            row.text = fmt.format(java.util.Date(p.startAt * 1000)) + "  " + p.title
-            row.textSize = 13f
-            row.setPadding(dp(10), dp(9), dp(10), dp(9))
-            row.setTextColor(getColor(if (playing) R.color.accent else R.color.text_secondary))
-            if (playing) row.setTypeface(null, android.graphics.Typeface.BOLD)
+        // 日期分组/标签/动作判定都走 EpgPrograms（电视端用同一份）
+        val byDay = com.litv.tv.data.EpgPrograms.groupByDay(programs)
+        val days = byDay.keys.toList()
+        // 默认停在「今天」。节目单里常常前几天也有数据（回看用），
+        // 排在前面；如果直接取 days[0]，看到的就是几天前 —— 用户会以为没更新。
+        if (!dayInit) {
+            val todayKey = com.litv.tv.data.EpgPrograms.dayKeyOf(now)
+            val i = days.indexOf(todayKey)
+            epgDayOffset = if (i >= 0) i else (days.size - 1).coerceAtLeast(0)
+            dayInit = true
+        }
+        val selectedKey = days.getOrNull(epgDayOffset.coerceIn(0, (days.size - 1).coerceAtLeast(0)))
+            ?: days.firstOrNull() ?: return
+
+        // ---- 日期条 ----
+        val bar = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            // 显式给尺寸：不给的话在某些设备上会被父容器撑开一大块空白
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+            )
+            setPadding(0, 0, 0, dp(4))
+        }
+        days.forEachIndexed { i, key ->
+            val label = com.litv.tv.data.EpgPrograms.dayLabel(key)
+            val chip = TextView(this).apply {
+                text = label
+                textSize = 13f
+                layoutParams = LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                )
+                setPadding(dp(12), dp(6), dp(12), dp(6))
+                setTextColor(getColor(if (i == days.indexOf(selectedKey)) R.color.accent else R.color.text_secondary))
+                isClickable = true
+                setOnClickListener {
+                    epgDayOffset = i
+                    renderEpg()
+                }
+            }
+            bar.addView(chip)
+        }
+        // 日期多于一屏时要能横向滑，不能挤到第二行（挤了会把整条撑高一大截）
+        val barScroll = android.widget.HorizontalScrollView(this).apply {
+            isHorizontalScrollBarEnabled = false
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+            )
+            addView(bar)
+        }
+        epgList.addView(barScroll)
+        // 把选中的那天（默认今天）滚到可见位置：节目单常带前几天，
+        // 今天往往在右边屏外，不滚过去用户会以为没更新。
+        val selIndex = days.indexOf(selectedKey)
+        if (selIndex > 0) {
+            barScroll.post {
+                val chip = bar.getChildAt(selIndex) ?: return@post
+                barScroll.scrollTo((chip.left - dp(24)).coerceAtLeast(0), 0)
+            }
+        }
+
+        // ---- 节目行 ----
+        byDay[selectedKey]?.forEach { p ->
+            val action = com.litv.tv.data.EpgPrograms.actionOf(p, now)
+            val playing = action == com.litv.tv.data.EpgPrograms.Action.PLAYING
+            val finished = action == com.litv.tv.data.EpgPrograms.Action.REPLAY
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = android.view.Gravity.CENTER_VERTICAL
+                setPadding(dp(10), dp(9), dp(10), dp(9))
+            }
+            val title = TextView(this).apply {
+                text = com.litv.tv.data.EpgPrograms.timeLabel(p.startAt) + "  " + p.title
+                textSize = 13f
+                setTextColor(getColor(if (playing) R.color.accent else R.color.text_secondary))
+                if (playing) setTypeface(null, android.graphics.Typeface.BOLD)
+                layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+            }
+            row.addView(title)
+
+            val actionView = TextView(this).apply {
+                textSize = 12f
+                setPadding(dp(10), dp(4), dp(10), dp(4))
+                when {
+                    playing -> { text = "正在播"; setTextColor(getColor(R.color.accent)) }
+                    finished -> {
+                        text = "回看"
+                        setTextColor(getColor(R.color.accent))
+                        isClickable = true
+                        setOnClickListener {
+                            EpgActions.replay(this@PhoneHomeActivity, app.api, player,
+                                currentChannel ?: return@setOnClickListener, app.prefs.engine, p)
+                        }
+                    }
+                    else -> {
+                        text = "预约"
+                        setTextColor(getColor(R.color.text_secondary))
+                        isClickable = true
+                        setOnClickListener {
+                            val ch = currentChannel ?: return@setOnClickListener
+                            EpgActions.reserve(this@PhoneHomeActivity, app.api, ch, p) { renderEpg() }
+                        }
+                    }
+                }
+            }
+            row.addView(actionView)
+            row.layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+            )
             epgList.addView(row)
         }
     }

@@ -35,6 +35,7 @@ const ALLOW_SHRINK = process.env.ALLOW_SHRINK === "1";
 //   client        = **D1 不写频道与线路**，客户端自己拉 m3u 解析。
 //                   省掉重建时几千行 DELETE/INSERT（D1 按写入行数计费），
 //                   也让 bootstrap 的响应小很多。
+// 由 .github/workflows/edge-deploy.yml 通过 vars.CHANNELS_MODE 传入。
 const CHANNELS_MODE = (process.env.CHANNELS_MODE || "server").toLowerCase();
 const BUILD_STATE_FILE = process.env.BUILD_STATE_FILE || "";
 const FETCH_TIMEOUT_MS = 30_000;

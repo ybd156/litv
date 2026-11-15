@@ -11,7 +11,12 @@
 --   channel_overrides    对订阅频道的改名/改分组/隐藏，按 stable_key 存
 --
 -- 重建顺序见 scripts/build.mjs 生成的 seed.sql：
---   删 m3u 线路 → 删 m3u 频道 → 插新频道 → 手工线路重新挂 id → 插新线路
+--   删 m3u 线路 → **channels 按 stable_key upsert（不删不重建，id 稳定）**
+--   → 手工线路重新挂 id → 插新线路 → 清掉这次没再出现的 m3u 频道
+--
+-- 注意：这里以前写的是"删 m3u 频道 → 插新频道"。那样 AUTOINCREMENT 会让 id 每次
+-- 重建都变，而 epg_programs 按 channel_id 存、六小时才整表重刷 —— 中间几小时节目单
+-- 全挂在失效 id 上。build.mjs 已经改成 upsert，这段注释留个记录免得再被改回去。
 
 CREATE TABLE IF NOT EXISTS channels (
   id         INTEGER PRIMARY KEY AUTOINCREMENT,

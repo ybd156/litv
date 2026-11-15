@@ -1274,29 +1274,11 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
         // VLC 用 TextureView 输出（可无缝换全屏），Exo 用 SurfaceView。
         // 两个视图都在 videoBox 里，按当前内核切换可见性，避免互相盖住。
         val isVlc = kind == EngineKind.VLC
-        // 不要立刻隐藏 SurfaceView：VLC 的 TextureView 可能要等一会儿才可用，
-        // 两边都隐藏就会出现"内核显示 VLC 但画面全黑"。
         findViewById<android.view.TextureView>(R.id.vlcTexture)?.visibility =
             if (isVlc) android.view.View.VISIBLE else android.view.View.GONE
-        if (!isVlc) findViewById<android.view.SurfaceView>(R.id.surface)?.visibility = android.view.View.VISIBLE
-        if (isVlc) {
-            val tv = findViewById<android.view.TextureView>(R.id.vlcTexture)
-            player.setVlcTexture(tv)
-            // TextureView 尺寸变化只会回调这里（SurfaceTexture 不销毁），
-            // 在这里把新尺寸交给 VLC，就能连续渲染、不用重建播放器。
-            tv?.surfaceTextureListener = object : android.view.TextureView.SurfaceTextureListener {
-                override fun onSurfaceTextureAvailable(st: android.graphics.SurfaceTexture, w: Int, h: Int) {
-                    android.util.Log.i(TAG, "TextureView 就绪 ${w}x$h")
-                    runCatching { player.resyncWindow() }
-                }
-                override fun onSurfaceTextureSizeChanged(st: android.graphics.SurfaceTexture, w: Int, h: Int) {
-                    android.util.Log.i(TAG, "TextureView 尺寸变化 ${w}x$h")
-                    runCatching { player.resyncWindow() }
-                }
-                override fun onSurfaceTextureDestroyed(st: android.graphics.SurfaceTexture) = true
-                override fun onSurfaceTextureUpdated(st: android.graphics.SurfaceTexture) = Unit
-            }
-        }
+        findViewById<android.view.SurfaceView>(R.id.surface)?.visibility =
+            if (isVlc) android.view.View.GONE else android.view.View.VISIBLE
+        if (isVlc) player.setVlcTexture(findViewById(R.id.vlcTexture))
     }
 
     override fun onPrepared(width: Int, height: Int) = Unit
@@ -1324,10 +1306,6 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
             playHint.visibility = View.GONE
             playRoute.text = "客户端直连（本地解析）" +
                 uaLine(currentChannel?.let { com.litv.tv.data.M3uClient.headersOf(it.id) } ?: emptyMap())
-        }
-        // VLC 真的把输出接到 TextureView 了才隐藏 SurfaceView
-        if (player.usingTexture()) {
-            findViewById<android.view.SurfaceView>(R.id.surface)?.visibility = android.view.View.GONE
         }
         if (!controlsFlashedForChannel) {
             controlsFlashedForChannel = true

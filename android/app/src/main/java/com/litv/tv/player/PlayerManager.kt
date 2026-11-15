@@ -413,8 +413,6 @@ class PlayerManager(
     /** VLC 专用输出视图（由界面提供，引擎创建时注入） */
     private var vlcTexture: android.view.TextureView? = null
 
-    fun usingTexture(): Boolean = (current as? VlcEngine)?.usedTexture ?: false
-
     fun setVlcTexture(tv: android.view.TextureView?) {
         vlcTexture = tv
         (current as? VlcEngine)?.attachTexture(tv)
@@ -425,7 +423,7 @@ class PlayerManager(
         // 布局会连着触发多次（宽度/高度各一次），每次都重建等于连两次重连，
         // 用户看到的就是"全屏后要等很久"。800ms 内只认第一次。
         val now = android.os.SystemClock.elapsedRealtime()
-        if (now - lastResyncAt < 200) return
+        if (now - lastResyncAt < 800) return
         lastResyncAt = now
         // VLC 不接受"事后改窗口尺寸 + 重挂 vout"（会报 already attached，画面定格）。
         // 全屏/旋转后让它按新尺寸重新初始化一次（等价换台重连，约 1 秒）。
@@ -444,7 +442,7 @@ class PlayerManager(
                         Log.i(TAG, "resync: 仅调整 VLC 窗口 ${w}x${h}（不重建）")
                     }
                 }
-            }, 0)
+            }, 300)
             return
         }
         main.postDelayed({

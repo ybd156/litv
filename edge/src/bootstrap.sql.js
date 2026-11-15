@@ -134,6 +134,11 @@ SELECT json_object(
   -- 与心跳同源的频道指纹：客户端拿到 bootstrap 就记下基线，
   -- 之后心跳里发现变了才重拉，避免每次心跳都白拉一次列表。
   'channels_version', ${CHANNELS_VERSION_SQL},
+  -- 频道由客户端解析时置 1：客户端据此跳过 /tv/channels，直接拉 /tv/channel-src
+  'client_parse', COALESCE(
+    (SELECT CASE WHEN json_extract(v, '$.channels_mode') = 'client' THEN 1 ELSE 0 END
+       FROM kv WHERE k = 'last_build'), 0
+  ),
   'groups', COALESCE((
     SELECT json_group_array(json_object('name', g, 'count', n))
       FROM (

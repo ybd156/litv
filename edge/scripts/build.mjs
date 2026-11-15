@@ -29,6 +29,13 @@ const MIN_CHANNELS = Number(process.env.MIN_CHANNELS || "1");
 // 而那种半失败每小时后重演一次，线上会一直是残的。
 const MIN_KEEP_RATIO = Number(process.env.MIN_KEEP_RATIO || "0.6");
 const ALLOW_SHRINK = process.env.ALLOW_SHRINK === "1";
+
+// 频道模式：
+//   server（默认）= 频道/线路写进 D1，由 /tv/channels 下发（现状）
+//   client        = **D1 不写频道与线路**，客户端自己拉 m3u 解析。
+//                   省掉重建时几千行 DELETE/INSERT（D1 按写入行数计费），
+//                   也让 bootstrap 的响应小很多。
+const CHANNELS_MODE = (process.env.CHANNELS_MODE || "server").toLowerCase();
 const BUILD_STATE_FILE = process.env.BUILD_STATE_FILE || "";
 const FETCH_TIMEOUT_MS = 30_000;
 // 同时抓几个源。串行的话 N 个源就是 N 次完整握手相加。
@@ -534,6 +541,17 @@ function renderSeed(channels) {
     });
   });
 
+  if (CHANNELS_MODE === "client") {
+    // 客户端解析模式：不写 channels / streams。
+    // 只保留一条说明，方便日后查 D1 里为什么没有频道表数据。
+    return [
+      "-- 由 scripts/build.mjs 生成，不要手改",
+      "-- CHANNELS_MODE=client：频道与线路交给客户端解析，D1 不写入。",
+      "-- 需要恢复服务端下发时，把环境变量改回 server 再重建即可（客户端会自动回落）。",
+      "",
+    ].join("\n");
+  }
+
   return [
     "-- 由 scripts/build.mjs 生成，不要手改",
     "",
@@ -618,6 +636,7 @@ function renderMeta(channels, sourceCount, lineCount, rawCount, sourceIds, epgUr
     // xmltv 节目单地址：随 bootstrap 下发给客户端，由客户端自己下载解析。
     // 服务端不存节目数据，D1 一行都不用写。
     epg_url: epgUrl || "",
+    channels_mode: CHANNELS_MODE,
   };
   return [
     "-- 由 scripts/build.mjs 生成：记录本次重建结果",
@@ -754,6 +773,11 @@ async function loadEpgState() {
 }
 
 function renderEpg(rows, matched, now) {
+  if (CHANNELS_MODE === "client") {
+    // 客户端解析模式下节目单也走客户端（epg_url 下发，客户端自己下载解析），
+    // 这里一行都不写 —— 一次全量节目单几千行，是 D1 写入额度里最大的一块。
+    return "-- CHANNELS_MODE=client：节目单由客户端解析，D1 不写入\n";
+  }
   const lines = ["-- 由 scripts/build.mjs 生成：节目单（整表替换）", "DELETE FROM epg_programs;"];
 
   const values = rows.map((r) =>

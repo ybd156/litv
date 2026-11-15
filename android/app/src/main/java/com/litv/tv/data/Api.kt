@@ -197,6 +197,9 @@ class Api(private val prefs: Prefs) {
             // 版本号只用于管理台展示"这台设备装的是哪版"
             "app_version" to com.litv.tv.BuildConfig.VERSION_NAME,
             "code" to (bindCode ?: ""),
+            // 设备级信封密钥：服务端用它加密「源 m3u 地址 + 显示规则」后下发，
+            // 密文绑定这台设备，换设备/过期都解不开。
+            "dl_key" to prefs.dlKey,
         )
         call("/api/v1/device/register", "POST", body, auth = false,
             clazz = RegisterResult::class.java,

@@ -183,6 +183,34 @@ class Prefs(ctx: Context) {
         get() = sp.getString(K_DECODE, "auto") ?: "auto"
         set(v) = sp.edit().putString(K_DECODE, v).apply()
 
+    /**
+     * 频道列表来源：`server`（默认，服务端下发）或 `client`（客户端自己拉 m3u 解析）。
+     *
+     * 默认必须是 server —— 服务端下发是现状且更稳；客户端解析要用户显式打开，
+     * 失败会自动回落 server。
+     */
+    var channelSource: String
+        get() = sp.getString(K_CHANNEL_SOURCE, "server") ?: "server"
+        set(v) = sp.edit().putString(K_CHANNEL_SOURCE, v).apply()
+
+    /**
+     * 设备级信封密钥（32 字节 base64）。
+     *
+     * 只用于解开服务端下发的加密信封（源 m3u 地址 + 显示规则）。
+     * 存在应用私有 prefs 里：它本身不是凭据，泄漏了也拿不到服务端 token，
+     * 但能让持有者解开自己设备的信封，所以不进日志、不上报界面。
+     */
+    val dlKey: String
+        get() {
+            val cur = sp.getString(K_DL_KEY, "") ?: ""
+            if (cur.length >= 40) return cur
+            val raw = ByteArray(32)
+            java.security.SecureRandom().nextBytes(raw)
+            val v = android.util.Base64.encodeToString(raw, android.util.Base64.NO_WRAP)
+            sp.edit().putString(K_DL_KEY, v).apply()
+            return v
+        }
+
     var bufferMs: Int
         get() = sp.getInt(K_BUFFER, PlaybackDefaults.BUFFER_MS)
         set(v) = sp.edit().putInt(K_BUFFER, v).apply()
@@ -330,6 +358,8 @@ class Prefs(ctx: Context) {
         const val K_SHOW_PLAY_STATUS = "show_play_status"
         const val K_ENGINE = "engine"
         const val K_DECODE = "decode"
+        const val K_CHANNEL_SOURCE = "channel_source"
+        const val K_DL_KEY = "dl_key"
         const val K_BUFFER = "buffer_ms"
         const val K_LIVE_OFFSET = "live_offset_ms"
         const val K_CACHE_EPOCH = "play_cache_epoch"

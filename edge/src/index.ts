@@ -897,6 +897,15 @@ async function tvResume(env: Env, device: DeviceRow): Promise<Response> {
 
 /** GET /api/v1/tv/channels —— 分页频道列表（bootstrap 之外的第二条路） */
 async function tvChannels(env: Env, url: URL): Promise<Response> {
+  // 客户端解析模式：D1 里根本没有频道表数据，直接返回空列表，
+  // 让客户端走 /tv/channel-src 自己解析（省下这几千行的读写）。
+  const mode = await env.DB.prepare(
+    "SELECT json_extract(v, '$.channels_mode') AS m FROM kv WHERE k = 'last_build'",
+  ).first<{ m: string }>();
+  if ((mode?.m || "").toLowerCase() === "client") {
+    return ok({ channels: [], client_parse: true });
+  }
+
   const group = (url.searchParams.get("group") || "").trim();
   const limit = Math.min(1000, Math.max(1, Number(url.searchParams.get("limit") || "500") || 500));
   const offset = Math.max(0, Number(url.searchParams.get("offset") || "0") || 0);

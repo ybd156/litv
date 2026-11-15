@@ -567,7 +567,13 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
 
     // ---------------------------------------------------------------- 数据
 
+    private var loadStarted = false
+
     private fun load() {
+        // 只加载一次：onCreate/onStart 都可能触发，重复跑会建出两套数据，
+        // 界面上表现为"有节目单的播放页"和"没有节目单的同款页面"来回切。
+        if (loadStarted) return
+        loadStarted = true
         val cached = app.prefs.cachedBootstrap
         if (cached.isNotBlank()) {
             runCatching { apply(Gson().fromJson(cached, Bootstrap::class.java), true) }
@@ -576,13 +582,14 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
             onOk = { b ->
                 android.util.Log.i(
                     TAG,
-                    "bootstrap: clientParse=${b.clientParse} channels=${b.channels.size} " +
+                    "bootstrap: clientParse=${b.clientParseFlag != 0} channels=${b.channels.size} " +
                         "version=${b.channelsVersion} epg=${b.epgUrl.isNotEmpty()}",
                 )
                 app.prefs.cachedBootstrap = Gson().toJson(b)
                 apply(b, false)
             },
             onErr = { msg ->
+                android.util.Log.w(TAG, "bootstrap 失败：$msg（频道来自缓存 ${all.size} 个）")
                 if (all.isEmpty()) {
                     status.text = "加载失败：$msg"
                     if (msg.contains("未绑定") || msg.contains("token")) {
@@ -615,7 +622,7 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
 
     private fun apply(b: Bootstrap, fromCache: Boolean) {
         // 网络回来的才可信；缓存里可能没有 client_parse 字段
-        if (!fromCache) app.prefs.clientParseSeen = b.clientParse
+        if (!fromCache) app.prefs.clientParseSeen = b.clientParseFlag != 0
         all = b.channels
         favorites.clear(); favorites.addAll(b.favorites)
         nowTitles.clear(); nowTitles.putAll(b.now.associate { it.channelId to it.title })
@@ -624,7 +631,11 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
         //   所以手机端一行节目名都没有。
         //   现在自己下载 xmltv 并按本地节目单算「正在播」，服务端 now 只作兜底。
         app.epg.ensure(b.epgUrl) { main.post { refreshFromEpg() } }
-        if (b.clientParse || app.prefs.clientParseSeen || app.prefs.channelSource == "client") {
+        // 只从**网络**那次触发：缓存那次也会进来，两次都拉就重复下载 m3u，
+        // 并把结果回调到可能已销毁的实例上（表现是"两个界面"）。
+        if (!fromCache &&
+            (b.clientParseFlag != 0 || app.prefs.clientParseSeen || app.prefs.channelSource == "client")
+        ) {
             com.litv.tv.data.M3uClient.load(this, app.api, app.prefs.dlKey) { parsed ->
                 if (parsed != null && parsed.channels.isNotEmpty()) {
                     all = parsed.channels

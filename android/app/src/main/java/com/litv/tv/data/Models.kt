@@ -135,7 +135,11 @@ data class Bootstrap(
      * 服务端处于「客户端解析」模式：频道列表由客户端自己拉源解析
      * （服务端 D1 里不存频道表）。见 [M3uClient]。
      */
-    @SerializedName("client_parse") val clientParse: Boolean = false,
+    // 服务端用 SQL 拼 JSON，这个字段实际是 **0/1 数字**（SQLite 没有布尔类型）。
+    // 之前声明成 Boolean，Gson 严格模式抛
+    // `Expected BOOLEAN but was NUMBER at path $.client_parse`，
+    // 整份 bootstrap 解析失败 → 客户端退回缓存，新模式永远拿不到。
+    @SerializedName("client_parse") val clientParseFlag: Int = 0,
     /** 与心跳同源的频道指纹，拿到 bootstrap 时记下基线。 */
     @SerializedName("channels_version") val channelsVersion: String = "",
 )

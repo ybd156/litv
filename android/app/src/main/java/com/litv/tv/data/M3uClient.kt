@@ -125,17 +125,30 @@ object M3uClient {
      * 加载频道：版本一致直接用磁盘缓存，否则重新拉源解析。
      * 任何一步失败都回调 null，由调用方回落到服务端下发的频道。
      */
+    @Volatile
+    private var loading = false
+
     fun load(ctx: Context, api: Api, dlKey: String, onDone: (Parsed?) -> Unit) {
+        // 幂等：bootstrap 可能被调用两次（缓存 + 网络、或界面重建），
+        // 不去重就会重复下载 m3u、并且回调打到已经销毁的 Activity 上。
+        if (loading) {
+            Log.i(TAG, "已在加载中，跳过重复请求")
+            current?.let { onDone(it) }
+            return
+        }
+        loading = true
         api.channelSrc(
             onOk = { env ->
                 Thread {
                     val result = runCatching { build(ctx, api, env, dlKey) }.getOrNull()
                     if (result == null) Log.w(TAG, "客户端解析失败，回落服务端频道")
                     else Log.i(TAG, "客户端频道就绪：${result.channels.size} 个 / 版本 ${result.version}")
+                    loading = false
                     android.os.Handler(android.os.Looper.getMainLooper()).post { onDone(result) }
                 }.start()
             },
             onErr = { msg ->
+                loading = false
                 Log.w(TAG, "channel-src 失败（$msg），回落服务端频道")
                 onDone(null)
             },

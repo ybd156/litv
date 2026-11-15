@@ -618,6 +618,15 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
         nowTitles.clear()
         nowTitles.putAll(fresh)
         render()
+
+        // ★ 下载完成后必须**整页重绘**：日期条只在初始化时建过一次，
+        //   首次绑定进来时节目单为空 → 日期条也是空的 → 之后即使数据到了也不会重建，
+        //   用户看到的就是"节目单不显示，退出重进才有"。
+        if (currentTab == TAB_PLAY) {
+            dayInit = false
+            ensureDateBar()
+            renderEpg()
+        }
     }
 
     private fun apply(b: Bootstrap, fromCache: Boolean) {
@@ -729,6 +738,12 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
 
     // ---------------------------------------------------------------- 播放
 
+    /** 把播放头里的 UA 拼到链路文案（为空就返回空串） */
+    private fun uaLine(h: Map<String, String>): String {
+        val ua = h["User-Agent"].orEmpty()
+        return if (ua.isBlank()) "" else " · UA: " + ua.take(30)
+    }
+
     private fun playChannel(ch: Channel) {
         playingTimeshift = false
         renderLiveBadge()
@@ -753,7 +768,8 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
         // ---- 客户端解析模式：地址就在本地，直接播，不请求 /tv/play ----
         val directUrl = com.litv.tv.data.M3uClient.urlOf(ch.id)
         if (directUrl != null) {
-            playRoute.text = "直连源站 · 客户端解析"
+            // 地址是客户端自己从源 m3u 里解析出来的
+            playRoute.text = "客户端直连（本地解析）" + uaLine(com.litv.tv.data.M3uClient.headersOf(ch.id))
             player.play(ch.id, directUrl, com.litv.tv.data.M3uClient.headersOf(ch.id), app.prefs.engine)
             return
         }
@@ -773,7 +789,7 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
 
         if (cacheUsable) {
             android.util.Log.i(TAG, "缓存起播 ${ch.name}，签名还剩 ${cached!!.expires - nowSec}s")
-            playRoute.text = (if (cached.mode == "direct") "直连源站" else "服务端中转") +
+            playRoute.text = (if (cached.mode == "direct") "服务端签名直连（缓存地址）" else "服务端中转（缓存地址）") +
                 " · " + (if (cached.ua.isBlank()) "默认 UA" else "UA: " + cached.ua.take(30))
             player.play(ch.id, app.api.absolute(cached.url), cached.headers, app.prefs.engine)
         }
@@ -786,7 +802,7 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
                 val headers = info.playHeaders("LITV/1.0 (Android)")
                 val absUrl = app.api.absolute(info.url)
                 // 把链路和实际用的 UA 显示出来，方便确认源站校验的 UA 到底带没带
-                val modeText = if (info.mode == "direct") "直连源站" else "服务端中转"
+                val modeText = if (info.mode == "direct") "服务端签名直连" else "服务端中转"
                 val uaText = if (info.ua.isBlank()) "默认 UA" else "UA: " + info.ua.take(30)
                 playRoute.text = modeText + " · " + uaText
 
@@ -881,7 +897,16 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
     private val reservedStarts = HashSet<Long>()
 
     /** 节目单：按日期分组 + 正在播/预约/回看。 */
+    /** 节目单还没就绪（首次绑定后要下 xmltv）时给一行明确提示，而不是空白。 */
+    private fun showEpgLoadingIfNeeded() {
+        if (app.epg.ready) return
+        val tip = findViewById<android.widget.TextView>(R.id.playHint) ?: return
+        tip.visibility = android.view.View.VISIBLE
+        tip.text = "正在下载节目单…（首次需要几秒到几十秒）"
+    }
+
     private fun renderEpg() {
+        showEpgLoadingIfNeeded()
         epgList.removeAllViews()
         if (programs.isEmpty()) {
             val tv = TextView(this)

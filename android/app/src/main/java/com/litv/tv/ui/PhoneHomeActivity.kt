@@ -816,23 +816,23 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
             }
             bar.addView(chip)
         }
-        // 日期多于一屏时要能横向滑，不能挤到第二行（挤了会把整条撑高一大截）
-        val barScroll = android.widget.HorizontalScrollView(this).apply {
-            isHorizontalScrollBarEnabled = false
-            layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT,
-            )
-            addView(bar)
+        // 日期条要**固定在节目单上方**，不能塞进滚动内容里 ——
+        // 塞进去的话一滚到「正在播」那一档，日期条自己也滚没了。
+        val dateBarScrollView = ensureDateBar()
+        val barHolder = dateBarScrollView.getChildAt(0) as LinearLayout
+        barHolder.removeAllViews()
+        while (bar.childCount > 0) {
+            val v = bar.getChildAt(0)
+            bar.removeViewAt(0)
+            barHolder.addView(v)
         }
-        epgList.addView(barScroll)
         // 把选中的那天（默认今天）滚到可见位置：节目单常带前几天，
         // 今天往往在右边屏外，不滚过去用户会以为没更新。
         val selIndex = days.indexOf(selectedKey)
         if (selIndex > 0) {
-            barScroll.post {
-                val chip = bar.getChildAt(selIndex) ?: return@post
-                barScroll.scrollTo((chip.left - dp(24)).coerceAtLeast(0), 0)
+            dateBarScrollView.post {
+                val chip = barHolder.getChildAt(selIndex) ?: return@post
+                dateBarScrollView.scrollTo((chip.left - dp(24)).coerceAtLeast(0), 0)
             }
         }
 
@@ -903,6 +903,38 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
                 }
             }
         }
+    }
+
+    private var dateBarScroll: android.widget.HorizontalScrollView? = null
+
+    /**
+     * 取得（必要时创建）固定在节目单上方的日期条容器。
+     * 它插在 ScrollView 的**父容器**里、和 ScrollView 平级，
+     * 所以滚动节目列表时日期条不会跟着消失。
+     */
+    private fun ensureDateBar(): android.widget.HorizontalScrollView {
+        dateBarScroll?.let { return it }
+        val scroll = android.widget.HorizontalScrollView(this).apply {
+            isHorizontalScrollBarEnabled = false
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+            )
+            setPadding(dp(16), 0, dp(16), dp(4))
+            addView(
+                LinearLayout(this@PhoneHomeActivity).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                },
+            )
+        }
+        val epgScroll = findViewById<android.view.View>(R.id.epgScroll)
+        val parent = epgScroll?.parent as? LinearLayout
+        if (parent != null) {
+            val idx = parent.indexOfChild(epgScroll)
+            parent.addView(scroll, if (idx >= 0) idx else 0)
+        }
+        dateBarScroll = scroll
+        return scroll
     }
 
     // ---------------------------------------------------------------- PlayerManager.Callback

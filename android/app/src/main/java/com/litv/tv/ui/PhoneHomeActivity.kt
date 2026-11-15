@@ -837,6 +837,7 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
         }
 
         // ---- 节目行 ----
+        var playingRow: View? = null
         byDay[selectedKey]?.forEach { p ->
             val action = com.litv.tv.data.EpgPrograms.actionOf(p, now)
             val playing = action == com.litv.tv.data.EpgPrograms.Action.PLAYING
@@ -885,7 +886,22 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT,
             )
+            if (playing) playingRow = row
             epgList.addView(row)
+        }
+
+        // 滚到「正在播」那一档：节目单是一整天的列表，
+        // 不滚的话默认停在 01:02，用户要往下翻很久才看到现在播的。
+        // 滚到「正在播」那一档：等这一行真正布局完再算位置，
+        // 用 main.post 会早于布局，row.top 还是 0，等于没滚。
+        playingRow?.let { row ->
+            row.post {
+                val sc = findViewById<android.widget.ScrollView>(R.id.epgScroll)
+                if (sc != null) {
+                    val top = (row.top - dp(16)).coerceAtLeast(0)
+                    sc.smoothScrollTo(0, top)
+                }
+            }
         }
     }
 

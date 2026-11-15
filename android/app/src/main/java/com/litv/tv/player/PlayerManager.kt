@@ -419,11 +419,8 @@ class PlayerManager(
         lastResyncAt = now
         // VLC 不接受"事后改窗口尺寸 + 重挂 vout"（会报 already attached，画面定格）。
         // 全屏/旋转后让它按新尺寸重新初始化一次（等价换台重连，约 1 秒）。
-        main.postDelayed({
-            if (released) return@postDelayed
-            android.util.Log.i(TAG, "resync: 用新尺寸重建 VLC")
-            retryNow()
-        }, 120)
+        // 不再重建播放器（那会断流、黑一下）。交给引擎按顺序重排输出层。
+        main.postDelayed({ if (!released) v.resyncWindow() }, 120)
     }
 
     fun attach(surface: android.view.Surface?, parent: ViewGroup?) {

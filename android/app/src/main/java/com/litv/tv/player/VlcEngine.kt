@@ -271,14 +271,24 @@ class VlcEngine : PlayerEngine {
             "resync: player=${p != null} view=${v != null} w=${v?.width ?: -1} h=${v?.height ?: -1}",
         )
         if (p == null) return
-        syncWindowSize(p)
-        // 只改尺寸 vout 不会自己重排，画面会停在最后一帧。
-        // 重挂一次输出层（会闪一下黑，属正常）。
-        runCatching {
-            p.vlcVout.detachViews()
-            p.vlcVout.attachViews()
-            android.util.Log.i(TAG, "resync: vout 已重挂")
-        }.onFailure { android.util.Log.w(TAG, "resync: vout 重挂失败 ${it.message}") }
+        val surf = videoSurface
+        val w = if (v != null && v.width > 0) v.width else 1920
+        val h = if (v != null && v.height > 0) v.height else 1080
+        // 正确顺序：先 detach，再改尺寸，再重新给 surface，最后 attach。
+        // 之前是先 setWindowSize 再 detach —— detach 被忽略，attach 报
+        // "already attached"，只能靠重建播放器绕过（那就是全屏卡一下的根因）。
+        runCatching { p.vlcVout.detachViews() }
+        try {
+            val m = p.vlcVout.javaClass.getMethod("setWindowSize", Int::class.java, Int::class.java)
+            m.invoke(p.vlcVout, w, h)
+        } catch (t: Throwable) {
+            Log.w(TAG, "setWindowSize 不可用：${t.message}")
+        }
+        if (surf != null && surf.isValid) {
+            runCatching { p.vlcVout.setVideoSurface(surf, surfaceHolder) }
+        }
+        val ok = runCatching { p.vlcVout.attachViews() }.isSuccess
+        Log.i(TAG, "resync: ${w}x${h} attach=$ok")
     }
 
     override var aspect: String = "auto"

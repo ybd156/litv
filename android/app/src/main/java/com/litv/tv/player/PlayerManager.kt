@@ -200,9 +200,12 @@ class PlayerManager(
             stallRecovered++
             if (stallRecovered > MAX_STALL_RECOVER) {
                 // 反复卡死说明不是偶发抖动，重启也没用，别再无限循环
-                Log.e(TAG, "已自动恢复 $MAX_STALL_RECOVER 次仍然卡死，停止重试")
+                Log.e(TAG, "已自动恢复 $MAX_STALL_RECOVER 次仍然卡死，本轮停止重试")
                 stopStallWatchdog()
-                callback?.onError("播放反复卡死，请换台或检查网络")
+                callback?.onError("播放反复卡死，正在等待自动重试（也可换台）")
+                // 以前这里是**永久放弃**：屏幕停在"所有内核均失败"，不换台就永远不动。
+                // 源侧抖动是暂时的，60 秒后再试一次；期间用户换台也会正常重置。
+                main.postDelayed(giveUpRetry, GIVE_UP_RETRY_MS)
                 return@Runnable
             }
             Log.w(TAG, "判定卡死，第 $stallRecovered 次自动恢复")
@@ -220,6 +223,24 @@ class PlayerManager(
             startCurrent()
         }
         main.postDelayed(stallWatchdog, STALL_CHECK_MS)
+    }
+
+    /** 卡死放弃后的延时重试（60 秒一次，直到用户切台或暂停）。 */
+    private val giveUpRetry = Runnable {
+        if (userPaused) return@Runnable
+        Log.i(TAG, "卡死放弃后自动重试一次")
+        retryNow()
+    }
+
+    /** 手动/自动重试当前台（不计入换内核链）。 */
+    fun retryNow() {
+        if (pendingChannelId <= 0) return
+        stallRecovered = 0
+        lastPosMs = -1
+        lastPosChangeAt = 0
+        prepared = false
+        startCurrent()
+        startStallWatchdog()
     }
 
     private fun startStallWatchdog() {
@@ -430,6 +451,7 @@ class PlayerManager(
         }
         prepared = false
         stallRecovered = 0
+        main.removeCallbacks(giveUpRetry)
         // 重试额度也必须按次重置。
         // 以前只重置上面两个：如果上一个台是"重试过一次才成功"的，
         // retried 会以 1 的残值留给下一个台，于是换台后的第一次超时
@@ -841,6 +863,9 @@ class PlayerManager(
 
         /** 自动恢复的次数上限。超过就不再重启，直接报错。 */
         const val MAX_STALL_RECOVER = 3
+
+        /** 卡死放弃后多久自动再试一次（毫秒）。 */
+        const val GIVE_UP_RETRY_MS = 60_000L
 
         /**
          * 连续稳定播放这么久之后，把 [MAX_STALL_RECOVER] 的累计计数归零。

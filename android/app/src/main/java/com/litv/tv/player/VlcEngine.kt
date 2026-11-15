@@ -63,6 +63,8 @@ class VlcEngine : PlayerEngine {
     }
 
     /** SurfaceView 的 holder：libVLC 只给 Surface 不给 holder 时能挂上但不解码（黑屏） */
+    private val main = android.os.Handler(android.os.Looper.getMainLooper())
+
     var surfaceHolder: android.view.SurfaceHolder? = null
         private set
 
@@ -287,8 +289,20 @@ class VlcEngine : PlayerEngine {
         if (surf != null && surf.isValid) {
             runCatching { p.vlcVout.setVideoSurface(surf, surfaceHolder) }
         }
+        val wasPlaying = runCatching { p.isPlaying }.getOrDefault(false)
         val ok = runCatching { p.vlcVout.attachViews() }.isSuccess
-        Log.i(TAG, "resync: ${w}x${h} attach=$ok")
+        Log.i(TAG, "resync: ${w}x${h} attach=$ok wasPlaying=$wasPlaying")
+        // attach 成功了，但 vout 重挂后 VLC 不一定会继续送帧（真机表现：画面定格）。
+        // 轻推一下播放状态即可唤醒，不用重建播放器（重建会断流、黑一下）。
+        if (ok && wasPlaying) {
+            main.postDelayed({
+                runCatching {
+                    p.pause()
+                    p.play()
+                }
+                android.util.Log.i(TAG, "resync: 已轻推 pause/play 唤醒画面")
+            }, 120)
+        }
     }
 
     override var aspect: String = "auto"

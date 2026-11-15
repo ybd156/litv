@@ -680,6 +680,11 @@ class PlayerManager(
                     // 起播预算已耗尽：内核晚到的事件不再改变状态（终态）
                     if (budgetExpired || released) return@post
                     prepared = true
+                    // VLC 没有单独的"首帧"回调（engineReportsFirstFrame=false），
+                    // 它的 Playing 就等于出画面。不在这里补 firstFrame，
+                    // budgetWatchdog 会在 36 秒后判超时并置 budgetExpired，
+                    // 之后内核报什么都进不来 —— 表现就是"画面在放，但界面写超时"。
+                    if (!engineReportsFirstFrame) firstFrame = true
                     main.removeCallbacks(startTimeout)
                     main.removeCallbacks(noDataWatchdog)
                     if (!firstFrame && engineReportsFirstFrame) {

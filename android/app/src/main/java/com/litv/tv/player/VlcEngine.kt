@@ -166,8 +166,47 @@ class VlcEngine : PlayerEngine {
         }
         releaseInternal()
 
-        val lib = ensureLib(ctx)
-        val mp = MediaPlayer(lib)
+        // ★ LibVLC 的初始化必须放到后台线程。
+        //   首次 dlopen 42MB 的 libvlc.so + 扫描插件要好几秒，在主线程做就是 ANR
+        //   （真机日志：Going to pause when pause is already pending，
+        //   之后整个 App 冻住、连 logcat 都没有输出）。
+        Thread {
+            val lib = try {
+                ensureLib(ctx)
+            } catch (t: Throwable) {
+                android.util.Log.e(TAG, "LibVLC 初始化失败: " + t.message, t)
+                null
+            }
+            val main = android.os.Handler(android.os.Looper.getMainLooper())
+            if (lib == null) {
+                main.post { listener?.onError("VLC 初始化失败") }
+                return@Thread
+            }
+            // ★ MediaPlayer 的构造同样是重活（要建 vout/音频输出线程），
+            //   必须留在这个后台线程里。只把"绑 Surface + play"放主线程。
+            val mp = try {
+                MediaPlayer(lib)
+            } catch (t: Throwable) {
+                android.util.Log.e(TAG, "MediaPlayer 创建失败: " + t.message, t)
+                main.post { listener?.onError("VLC 播放器创建失败") }
+                return@Thread
+            }
+            main.post { startOnMain(mp, url, headers, bufferMs, decode) }
+        }.start()
+    }
+
+    /** 初始化完成后的实际起播（主线程）。 */
+    private fun startOnMain(
+        mp: MediaPlayer,
+        url: String,
+        headers: Map<String, String>,
+        bufferMs: Int,
+        decode: String,
+    ) {
+        val lib = libVlc ?: run {
+            listener?.onError("VLC 未初始化")
+            return
+        }
 
         mp.setEventListener { event ->
             when (event.type) {

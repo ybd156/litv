@@ -1318,9 +1318,13 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
 
     /** 用当前偏好的内核/解码重起当前台。currentChannel 可能是 null，要能兜住。 */
     private fun restartCurrent() {
-        val target = currentChannel
-            ?: all.firstOrNull { it.id == player.playingChannelId }
-            ?: all.firstOrNull { com.litv.tv.data.M3uClient.urlOf(it.id) != null }
+        // 优先选**本地解析里有地址**的台：currentChannel 可能是服务端那份对象，
+        // 它的 id 在解析结果里不存在，拿去重启会永远停在「正在解析频道地址…」。
+        val hasUrl = { ch: Channel -> com.litv.tv.data.M3uClient.urlOf(ch.id) != null }
+        val target = currentChannel?.takeIf(hasUrl)
+            ?: all.firstOrNull { it.id == player.playingChannelId && hasUrl(it) }
+            ?: all.firstOrNull(hasUrl)
+            ?: currentChannel
             ?: all.firstOrNull()
         if (target == null) {
             android.util.Log.w(TAG, "restartCurrent: 没有可用频道，跳过")

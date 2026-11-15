@@ -349,6 +349,58 @@ async function deviceRegister(req: Request, env: Env): Promise<Response> {
   return ok({ device_id: deviceId, token, status: "bound", hint: "" });
 }
 
+/**
+ * 客户端自己解析频道用的数据：**源 m3u 地址 + 显示规则**。
+ *
+ * 为什么改成客户端解析：服务端不再存频道表，重建只负责"校验源能不能用"，
+ * 频道/分类的呈现交给客户端（本地缓存，版本不变就不重下）。
+ * 服务端仍然掌握"显示哪些"：policy 里的隐藏分类/频道就是屏蔽清单 + 频道隐藏。
+ *
+ * 版本号沿用 channels_version：管理台改源、改屏蔽都会 bump，
+ * 客户端发现版本变了才重下 m3u —— 所以"服务端换源，客户端自动跟上"。
+ */
+async function tvChannelSrc(env: Env): Promise<Response> {
+  const [{ results }, blockedRow, hiddenRow, verRow] = await Promise.all([
+    env.DB.prepare(
+      `SELECT id, name, url, ua, referer FROM sources WHERE enabled = 1 ORDER BY sort, id`,
+    ).all<{ id: number; name: string; url: string; ua: string; referer: string }>(),
+    env.DB.prepare("SELECT v FROM kv WHERE k = 'blocked'").first<{ v: string }>(),
+    env.DB.prepare(
+      `SELECT COALESCE(o.name, c.name) AS name
+         FROM channel_overrides o
+         JOIN channels c ON c.stable_key = o.stable_key
+        WHERE o.enabled = 0`,
+    ).all<{ name: string }>(),
+    env.DB.prepare("SELECT v FROM kv WHERE k = 'channels_version'").first<{ v: string }>(),
+  ]);
+
+  let groupsHidden: string[] = [];
+  let channelsHidden: string[] = [];
+  try {
+    const o = JSON.parse(blockedRow?.v || "{}") as { groups?: unknown; channels?: unknown };
+    if (Array.isArray(o.groups)) groupsHidden = o.groups.map(String);
+    if (Array.isArray(o.channels)) channelsHidden = o.channels.map(String);
+  } catch {
+    /* 存坏了就当没屏蔽，别让整页崩 */
+  }
+  // 管理台里"隐藏"的频道也算隐藏（去重）
+  for (const r of hiddenRow.results ?? []) {
+    if (r.name && !channelsHidden.includes(r.name)) channelsHidden.push(r.name);
+  }
+
+  return ok({
+    version: verRow?.v ?? "0",
+    urls: (results ?? []).map((r) => ({
+      id: r.id,
+      name: r.name || "",
+      url: r.url,
+      ua: r.ua || "",
+      referer: r.referer || "",
+    })),
+    policy: { groups_hidden: groupsHidden, channels_hidden: channelsHidden },
+  });
+}
+
 async function tvBootstrap(env: Env, device: DeviceRow): Promise<Response> {
   const now = nowSec();
   // **这里不写 last_seen**。
@@ -2726,6 +2778,7 @@ export default {
     if (!device) return fail(2003, "设备未绑定或会话已失效，请重新绑定");
 
     if (path === "/api/v1/tv/bootstrap") return tvBootstrap(env, device);
+    if (path === "/api/v1/tv/channel-src") return tvChannelSrc(env);
     if (path === "/api/v1/tv/channels") return tvChannels(env, url);
     if (path === "/api/v1/tv/heartbeat") return tvHeartbeat(req, env, device);
     if (path === "/api/v1/tv/resume") return tvResume(env, device);

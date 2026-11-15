@@ -228,6 +228,57 @@ class Api(private val prefs: Prefs) {
      * 拼接待实现在 [UrlJoin] 里：那是纯函数，可以脱离 Android 框架单测
      * （这段逻辑拼错的表现是"全黑屏 + 日志里只有一串 URI"，很难在真机上反推）。
      */
+    /**
+     * 取「源 m3u 地址 + 显示规则」的信封（原始 JSON，不解密）。
+     *
+     * 用原始 JSON 而不是 Gson 实体：信封可能是明文（v=0）也可能是密文（v=1），
+     * 字段形状随版本变，用实体反而容易在升级时解析失败。
+     */
+    fun channelSrc(onOk: (org.json.JSONObject) -> Unit, onErr: (String) -> Unit) {
+        val base = prefs.serverBase
+        if (base.isBlank()) {
+            onErr("还没设置服务器地址")
+            return
+        }
+        val url = base.trimEnd('/') + "/api/v1/tv/channel-src"
+        val req = okhttp3.Request.Builder()
+            .url(url)
+            .header("Authorization", "Bearer " + prefs.token)
+            .get()
+            .build()
+        client.newCall(req).enqueue(object : okhttp3.Callback {
+            override fun onFailure(c: okhttp3.Call, e: java.io.IOException) {
+                main.post { onErr(e.javaClass.simpleName) }
+            }
+
+            override fun onResponse(c: okhttp3.Call, r: okhttp3.Response) {
+                r.use { resp ->
+                    val text = resp.body?.string().orEmpty()
+                    val obj = runCatching { org.json.JSONObject(text) }.getOrNull()
+                    if (!resp.isSuccessful || obj == null || obj.optInt("code", -1) != 0) {
+                        main.post { onErr(obj?.optString("msg") ?: ("HTTP " + resp.code)) }
+                        return
+                    }
+                    val data = obj.optJSONObject("data")
+                    if (data == null) main.post { onErr("信封为空") } else main.post { onOk(data) }
+                }
+            }
+        })
+    }
+
+    /**
+     * 拉取任意文本（源 m3u）。**同步阻塞**，调用方必须保证不在主线程。
+     * 源站常按 UA / Referer 校验，所以这两个头要透传。
+     */
+    fun fetchText(url: String, ua: String, referer: String): String? = runCatching {
+        val b = okhttp3.Request.Builder().url(url).get()
+        if (ua.isNotBlank()) b.header("User-Agent", ua)
+        if (referer.isNotBlank()) b.header("Referer", referer)
+        client.newCall(b.build()).execute().use { r ->
+            if (!r.isSuccessful) null else r.body?.string()
+        }
+    }.getOrNull()
+
     fun absolute(url: String): String = UrlJoin.absolute(prefs.serverBase, url)
 
     /**

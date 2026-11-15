@@ -617,6 +617,17 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
         //   所以手机端一行节目名都没有。
         //   现在自己下载 xmltv 并按本地节目单算「正在播」，服务端 now 只作兜底。
         app.epg.ensure(b.epgUrl) { main.post { refreshFromEpg() } }
+        if (b.clientParse || app.prefs.channelSource == "client") {
+            com.litv.tv.data.M3uClient.load(this, app.api, app.prefs.dlKey) { parsed ->
+                if (parsed != null && parsed.channels.isNotEmpty()) {
+                    all = parsed.channels
+                    groups = all.map { it.group }.filter { it.isNotBlank() }.distinct()
+                    status.text = "客户端解析 ${all.size} 个频道"
+                    renderChips()
+                    render()
+                }
+            }
+        }
         groups = all.map { it.group }.filter { it.isNotBlank() }.distinct()
         status.text = if (fromCache) "缓存 ${all.size} 个频道" else "${all.size} 个频道"
         renderChips()
@@ -720,6 +731,14 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
         loading.visibility = View.VISIBLE
         paused = false
         btnPlayPause.setImageResource(R.drawable.ic_pause)
+
+        // ---- 客户端解析模式：地址就在本地，直接播，不请求 /tv/play ----
+        val directUrl = com.litv.tv.data.M3uClient.urlOf(ch.id)
+        if (directUrl != null) {
+            playRoute.text = "直连源站 · 客户端解析"
+            player.play(ch.id, directUrl, com.litv.tv.data.M3uClient.headersOf(ch.id), app.prefs.engine)
+            return
+        }
 
         // ---- 先用缓存地址起播，把 /tv/play 的网络往返从关键路径上摘掉 ----
         //

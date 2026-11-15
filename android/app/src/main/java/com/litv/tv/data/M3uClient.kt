@@ -1,0 +1,305 @@
+package com.litv.tv.data
+
+import android.content.Context
+import android.util.Base64
+import android.util.Log
+import org.json.JSONArray
+import org.json.JSONObject
+import java.io.File
+import javax.crypto.Cipher
+import javax.crypto.spec.GCMParameterSpec
+import javax.crypto.spec.SecretKeySpec
+
+/**
+ * 客户端自己解析频道。
+ *
+ * 服务端只下发「源 m3u 地址 + 显示规则」的**加密信封**（绑定本设备、60 秒有效），
+ * 客户端解开后自己拉 m3u、解析、按规则过滤，并把结果连同版本号缓存到磁盘。
+ * 版本没变就不重下 —— 服务端换源时 bump 了 channels_version，这才触发更新。
+ *
+ * 解析规则必须与 edge/scripts/build.mjs 一致：dedupeKey = id:tvgId 或 name:规范化名。
+ * 否则同一个台在管理台和客户端是两个 stable_key，屏蔽/改名就对不上。
+ */
+object M3uClient {
+
+    private const val TAG = "M3uClient"
+
+    data class Parsed(
+        val version: String,
+        val channels: List<Channel>,
+        /** 频道 id → 直连地址（客户端模式下不再走 /tv/play） */
+        val urlById: Map<Long, String>,
+        /** 频道 id → 播放需要的头（UA / Referer） */
+        val headersById: Map<Long, Map<String, String>>,
+    )
+
+    /** 内存副本：播放时按 id 取直连地址 */
+    @Volatile
+    var current: Parsed? = null
+        private set
+
+    fun urlOf(channelId: Long): String? = current?.urlById?.get(channelId)
+
+    fun headersOf(channelId: Long): Map<String, String> =
+        current?.headersById?.get(channelId) ?: emptyMap()
+
+    private fun cacheFile(ctx: Context) = File(ctx.filesDir, "channels_client.json")
+
+    /** 把服务端下发的信封解成明文 JSON（v=0 时本来就是明文）。 */
+    fun decrypt(env: JSONObject, dlKeyB64: String): JSONObject? {
+        if (env.optInt("v", 0) != 1) return env
+        val iv = Base64.decode(env.getString("iv"), Base64.NO_WRAP)
+        val enc = Base64.decode(env.getString("enc"), Base64.NO_WRAP)
+        val key = Base64.decode(dlKeyB64, Base64.NO_WRAP)
+        if (key.size != 32 || iv.size != 12) return null
+        val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+        cipher.init(Cipher.DECRYPT_MODE, SecretKeySpec(key, "AES"), GCMParameterSpec(128, iv))
+        return JSONObject(String(cipher.doFinal(enc), Charsets.UTF_8))
+    }
+
+    /** 读磁盘缓存；没有/损坏返回 null。 */
+    fun readCache(ctx: Context): Parsed? = runCatching {
+        val f = cacheFile(ctx)
+        if (!f.exists()) return null
+        val root = JSONObject(f.readText())
+        val arr = root.optJSONArray("channels") ?: return null
+        val list = ArrayList<Channel>(arr.length())
+        val urlById = HashMap<Long, String>()
+        val headersById = HashMap<Long, Map<String, String>>()
+        for (i in 0 until arr.length()) {
+            val o = arr.optJSONObject(i) ?: continue
+            val id = o.optLong("id")
+            list.add(
+                Channel(
+                    id = id,
+                    number = o.optInt("n"),
+                    name = o.optString("name"),
+                    group = o.optString("g", "未分组"),
+                    logo = o.optString("logo"),
+                    tvgId = o.optString("tvg"),
+                    epgId = o.optString("epg"),
+                    enabled = true,
+                ),
+            )
+            val url = o.optString("url")
+            if (url.isNotEmpty()) urlById[id] = url
+            val h = o.optJSONObject("h")
+            if (h != null) {
+                val m = HashMap<String, String>()
+                for (k in h.keys()) m[k] = h.optString(k)
+                headersById[id] = m
+            }
+        }
+        if (list.isEmpty()) null
+        else Parsed(root.optString("version", "0"), list, urlById, headersById)
+    }.getOrNull()
+
+    /** 写磁盘缓存。 */
+    fun writeCache(ctx: Context, p: Parsed) {
+        runCatching {
+            val arr = JSONArray()
+            for (ch in p.channels) {
+                val o = JSONObject()
+                o.put("id", ch.id)
+                o.put("n", ch.number)
+                o.put("name", ch.name)
+                o.put("g", ch.group)
+                o.put("logo", ch.logo)
+                o.put("tvg", ch.tvgId)
+                o.put("epg", ch.epgId)
+                o.put("url", p.urlById[ch.id] ?: "")
+                val h = p.headersById[ch.id]
+                if (h != null) o.put("h", JSONObject(h as Map<*, *>))
+                arr.put(o)
+            }
+            val root = JSONObject()
+            root.put("version", p.version)
+            root.put("channels", arr)
+            cacheFile(ctx).writeText(root.toString())
+        }.onFailure { Log.w(TAG, "写缓存失败: ${it.javaClass.simpleName}") }
+    }
+
+    // ---------------------------------------------------------------- 入口
+
+    /**
+     * 加载频道：版本一致直接用磁盘缓存，否则重新拉源解析。
+     * 任何一步失败都回调 null，由调用方回落到服务端下发的频道。
+     */
+    fun load(ctx: Context, api: Api, dlKey: String, onDone: (Parsed?) -> Unit) {
+        api.channelSrc(
+            onOk = { env ->
+                Thread {
+                    val result = runCatching { build(ctx, api, env, dlKey) }.getOrNull()
+                    if (result == null) Log.w(TAG, "客户端解析失败，回落服务端频道")
+                    else Log.i(TAG, "客户端频道就绪：${result.channels.size} 个 / 版本 ${result.version}")
+                    android.os.Handler(android.os.Looper.getMainLooper()).post { onDone(result) }
+                }.start()
+            },
+            onErr = { msg ->
+                Log.w(TAG, "channel-src 失败（$msg），回落服务端频道")
+                onDone(null)
+            },
+        )
+    }
+
+    /** 后台线程里跑：解密 → 版本比对 → 拉源 → 解析 → 过滤 → 缓存。 */
+    private fun build(ctx: Context, api: Api, env: JSONObject, dlKey: String): Parsed? {
+        val payload = decrypt(env, dlKey) ?: return readCache(ctx)
+        val version = payload.optString("version", "0")
+
+        readCache(ctx)?.let { cached ->
+            if (cached.version == version) return adopt(cached)
+        }
+
+        val urls = payload.optJSONArray("urls") ?: return null
+        val policy = payload.optJSONObject("policy")
+        val hiddenGroups = policy?.optJSONArray("groups_hidden").strList()
+        val hiddenChannels = policy?.optJSONArray("channels_hidden").strList()
+
+        val merged = LinkedHashMap<String, Channel>()
+        val urlById = HashMap<Long, String>()
+        val headersById = HashMap<Long, Map<String, String>>()
+
+        for (i in 0 until urls.length()) {
+            val u = urls.optJSONObject(i) ?: continue
+            val text = api.fetchText(u.optString("url"), u.optString("ua"), u.optString("referer"))
+            if (text.isNullOrBlank()) {
+                Log.w(TAG, "源拉取失败：" + u.optString("name"))
+                continue
+            }
+            mergeInto(text, merged, urlById, headersById)
+        }
+
+        val kept = merged.values.filter { it.group !in hiddenGroups && it.name !in hiddenChannels }
+        if (kept.isEmpty()) return readCache(ctx)
+
+        val keepIds = kept.map { it.id }.toSet()
+        urlById.keys.retainAll(keepIds)
+        headersById.keys.retainAll(keepIds)
+
+        val parsed = Parsed(version, kept, urlById, headersById)
+        writeCache(ctx, parsed)
+        return adopt(parsed)
+    }
+
+    // ---------------------------------------------------------------- m3u 解析
+
+    /** 与 build.mjs 的 normalizeName 等价（不用正则，避免多层转义被吃掉）。 */
+    private fun normalizeName(name: String): String {
+        val sb = StringBuilder()
+        for (ch in name.lowercase()) {
+            val c = ch.code
+            if (c <= 32 || c == 92 || c == 47 || c == 124 || c == 183) continue
+            if (ch == '-' || ch == '_' || ch == '.') continue
+            sb.append(ch)
+        }
+        return sb.toString()
+    }
+
+    /** #EXTINF 的属性段与名字之间用逗号分隔，但属性值里也可能有逗号。 */
+    private fun commaOutsideQuotes(line: String): Int {
+        var inQuote = false
+        for (i in line.indices) {
+            val c = line[i]
+            if (c == '"') inQuote = !inQuote
+            else if (c == ',' && !inQuote) return i
+        }
+        return -1
+    }
+
+    private val ATTR_RE = Regex("([A-Za-z0-9_-]+)=\"([^\"]*)\"")
+
+    private fun attr(head: String, key: String): String {
+        for (m in ATTR_RE.findAll(head)) {
+            if (m.groupValues[1].lowercase() == key) return m.groupValues[2]
+        }
+        return ""
+    }
+
+    private fun JSONArray?.strList(): List<String> {
+        if (this == null) return emptyList()
+        val out = ArrayList<String>(length())
+        for (i in 0 until length()) if (!isNull(i)) out.add(optString(i))
+        return out
+    }
+
+    /** 把一个源的文件内容合并进总表；同一频道的备用线路只保留第一条。 */
+    fun mergeInto(
+        text: String,
+        merged: MutableMap<String, Channel>,
+        urlById: MutableMap<Long, String>,
+        headersById: MutableMap<Long, Map<String, String>>,
+    ) {
+        var name = ""
+        var tvgId = ""
+        var logo = ""
+        var group = ""
+        var ua = ""
+        var referer = ""
+        var pending = false
+
+        // lines() 按任意换行符切分，省掉转义
+        for (raw in text.lines()) {
+            val line = raw.trim()
+            if (line.isEmpty() || line.startsWith("#EXTM3U")) continue
+            if (line.startsWith("#EXTINF")) {
+                val comma = commaOutsideQuotes(line)
+                val head = if (comma > 0) line.substring(0, comma) else line
+                name = if (comma > 0) line.substring(comma + 1).trim() else ""
+                tvgId = attr(head, "tvg-id")
+                logo = attr(head, "tvg-logo")
+                group = attr(head, "group-title")
+                ua = ""
+                referer = ""
+                pending = true
+                continue
+            }
+            if (line.startsWith("#EXTGRP:")) {
+                if (pending && group.isEmpty()) group = line.removePrefix("#EXTGRP:").trim()
+                continue
+            }
+            if (line.startsWith("#EXTVLCOPT:")) {
+                val opt = line.removePrefix("#EXTVLCOPT:")
+                val eq = opt.indexOf('=')
+                if (pending && eq > 0) {
+                    val k = opt.substring(0, eq).trim().lowercase()
+                    val v = opt.substring(eq + 1).trim()
+                    if (k == "http-user-agent") ua = v
+                    else if (k == "http-referrer" || k == "http-referer") referer = v
+                }
+                continue
+            }
+            if (line.startsWith("#")) continue
+            if (!pending) continue
+
+            val key = if (tvgId.isNotEmpty()) "id:$tvgId" else "name:" + normalizeName(name)
+            val id = key.hashCode().toLong() and 0x7FFFFFFFL
+            if (!merged.containsKey(key)) {
+                merged[key] = Channel(
+                    id = id,
+                    number = merged.size + 1,
+                    name = name,
+                    group = group.ifEmpty { "未分组" },
+                    logo = logo,
+                    tvgId = tvgId,
+                    epgId = tvgId,
+                    enabled = true,
+                )
+                urlById[id] = line
+                if (ua.isNotEmpty() || referer.isNotEmpty()) {
+                    val h = HashMap<String, String>()
+                    if (ua.isNotEmpty()) h["User-Agent"] = ua
+                    if (referer.isNotEmpty()) h["Referer"] = referer
+                    headersById[id] = h
+                }
+            }
+            pending = false
+        }
+    }
+
+    /** 记到内存（播放时按 id 取地址）。 */
+    fun adopt(p: Parsed): Parsed {
+        current = p
+        return p
+    }
+}

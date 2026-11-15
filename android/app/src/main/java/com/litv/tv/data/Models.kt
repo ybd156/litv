@@ -131,6 +131,11 @@ data class Bootstrap(
      * 为空表示源里没有节目单地址。
      */
     @SerializedName("epg_url") val epgUrl: String = "",
+    /**
+     * 服务端处于「客户端解析」模式：频道列表由客户端自己拉源解析
+     * （服务端 D1 里不存频道表）。见 [M3uClient]。
+     */
+    @SerializedName("client_parse") val clientParse: Boolean = false,
     /** 与心跳同源的频道指纹，拿到 bootstrap 时记下基线。 */
     @SerializedName("channels_version") val channelsVersion: String = "",
 )

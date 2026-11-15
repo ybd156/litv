@@ -173,6 +173,11 @@ jobs:
           # **Variables** 标签页 → New repository variable，名字 ALLOW_SHRINK，值 1。
           # 用 variable 而不是 secret：它不是机密，而且值要在日志里看得见才好排查。
           ALLOW_SHRINK: ${{ vars.ALLOW_SHRINK }}
+          # 频道模式：server（默认，频道写进 D1 由 /tv/channels 下发）
+          #       或 client（D1 不写频道/线路/节目单，客户端自己拉源解析，
+          #       省掉重建时几千行写入 —— D1 免费额度的大头）。
+          # 同样用 Variable 而不是 Secret：不是机密，值看得见才好排查。
+          CHANNELS_MODE: ${{ vars.CHANNELS_MODE || 'server' }}
         # pipefail：不加的话 `| tee` 会把退出码变成 tee 的 0，
         # 生成失败也显示成功——那比失败更糟。
         run: |

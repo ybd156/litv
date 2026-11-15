@@ -65,6 +65,31 @@ class VlcEngine : PlayerEngine {
     /** SurfaceView 的 holder：libVLC 只给 Surface 不给 holder 时能挂上但不解码（黑屏） */
     private val main = android.os.Handler(android.os.Looper.getMainLooper())
 
+    /** 最近一次收到 VLC TimeChanged 的时刻（elapsedRealtime） */
+    @Volatile private var lastTimeEventAt = 0L
+
+    /** VLC 自己的看门狗：只在本引擎内部生效，不改 PlayerManager 的位置语义 */
+    private var nudgedOnce = false
+    private val vlcWatchdog = object : Runnable {
+        override fun run() {
+            val p = player ?: return
+            val now = android.os.SystemClock.elapsedRealtime()
+            val idle = if (lastTimeEventAt > 0) now - lastTimeEventAt else 0
+            if (lastTimeEventAt > 0 && idle > 12_000) {
+                Log.w(TAG, "VLC 12 秒没送帧（idle=${idle}ms），轻推一次")
+                runCatching { p.pause(); p.play() }
+                if (nudgedOnce) {
+                    listener?.onError("VLC 停止送帧")
+                    return
+                }
+                nudgedOnce = true
+            } else if (idle in 1..3_000) {
+                nudgedOnce = false
+            }
+            main.postDelayed(this, 5_000)
+        }
+    }
+
     var surfaceHolder: android.view.SurfaceHolder? = null
         private set
 
@@ -218,7 +243,14 @@ class VlcEngine : PlayerEngine {
 
         mp.setEventListener { event ->
             when (event.type) {
-                MediaPlayer.Event.Playing -> listener?.onPlaying()
+                MediaPlayer.Event.Playing -> {
+                    listener?.onPlaying()
+                    lastTimeEventAt = android.os.SystemClock.elapsedRealtime()
+                    nudgedOnce = false
+                    main.removeCallbacks(vlcWatchdog)
+                    main.postDelayed(vlcWatchdog, 5_000)
+                }
+                MediaPlayer.Event.TimeChanged -> lastTimeEventAt = android.os.SystemClock.elapsedRealtime()
                 MediaPlayer.Event.EndReached -> listener?.onEnded()
                 MediaPlayer.Event.EncounteredError -> listener?.onError("VLC 解码/网络错误")
                 // libVLC 3.5.1 的 MediaPlayer 没有公开 videoSize API，
@@ -311,6 +343,7 @@ class VlcEngine : PlayerEngine {
     override fun pause() { player?.pause() }
     // libvlc 的 stop/release 要等 vout/音频线程收尾，主线程做会卡死（ANR）。
     override fun stop() {
+        main.removeCallbacks(vlcWatchdog)
         val p = player
         Thread { runCatching { p?.stop() } }.start()
     }

@@ -189,6 +189,17 @@ class Prefs(ctx: Context) {
      * 默认必须是 server —— 服务端下发是现状且更稳；客户端解析要用户显式打开，
      * 失败会自动回落 server。
      */
+    /**
+     * 上次**网络** bootstrap 是否声明了客户端解析模式。
+     *
+     * 为什么要落盘：启动时先吃 bootstrap 缓存，而缓存是上一版写的、
+     * 里面没有 client_parse 字段 → 会一直按服务端模式跑。
+     * 记下来以后，即使这次读的是缓存也能立刻切到客户端解析。
+     */
+    var clientParseSeen: Boolean
+        get() = sp.getBoolean("client_parse_seen", false)
+        set(v) = sp.edit().putBoolean("client_parse_seen", v).apply()
+
     var channelSource: String
         get() = sp.getString(K_CHANNEL_SOURCE, "server") ?: "server"
         set(v) = sp.edit().putString(K_CHANNEL_SOURCE, v).apply()

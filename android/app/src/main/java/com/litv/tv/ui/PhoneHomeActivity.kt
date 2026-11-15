@@ -609,6 +609,8 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
     }
 
     private fun apply(b: Bootstrap, fromCache: Boolean) {
+        // 网络回来的才可信；缓存里可能没有 client_parse 字段
+        if (!fromCache) app.prefs.clientParseSeen = b.clientParse
         all = b.channels
         favorites.clear(); favorites.addAll(b.favorites)
         nowTitles.clear(); nowTitles.putAll(b.now.associate { it.channelId to it.title })
@@ -617,7 +619,7 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
         //   所以手机端一行节目名都没有。
         //   现在自己下载 xmltv 并按本地节目单算「正在播」，服务端 now 只作兜底。
         app.epg.ensure(b.epgUrl) { main.post { refreshFromEpg() } }
-        if (b.clientParse || app.prefs.channelSource == "client") {
+        if (b.clientParse || app.prefs.clientParseSeen || app.prefs.channelSource == "client") {
             com.litv.tv.data.M3uClient.load(this, app.api, app.prefs.dlKey) { parsed ->
                 if (parsed != null && parsed.channels.isNotEmpty()) {
                     all = parsed.channels

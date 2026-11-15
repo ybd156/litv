@@ -298,6 +298,12 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
         // 点画面：呼出/收起控件浮层（现代播放器的通用交互）。
         // 原来点一下就直接暂停，用户完全看不到有哪些控件。
         surface.setOnClickListener { toggleControls() }
+        // 全屏时画面按 16:9 居中，两侧/上下会有黑边。黑边属于 panelPlay 而不是
+        // videoBox —— 只给 surface 挂点击的话，用户点黑边没有任何反应，
+        // 就像"全屏里控件点不了/唤不出来"。全屏时整块 panelPlay 都能唤出控件。
+        findViewById<View>(R.id.panelPlay)?.setOnClickListener {
+            if (landscape) toggleControls()
+        }
     }
 
     /**

@@ -574,6 +574,11 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
         }
         app.api.bootstrap(
             onOk = { b ->
+                android.util.Log.i(
+                    TAG,
+                    "bootstrap: clientParse=${b.clientParse} channels=${b.channels.size} " +
+                        "version=${b.channelsVersion} epg=${b.epgUrl.isNotEmpty()}",
+                )
                 app.prefs.cachedBootstrap = Gson().toJson(b)
                 apply(b, false)
             },

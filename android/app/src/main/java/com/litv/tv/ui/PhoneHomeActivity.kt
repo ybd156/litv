@@ -304,11 +304,15 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
             val order = listOf("auto", "exo", "vlc", "mpv")
             app.prefs.engine = order[(order.indexOf(app.prefs.engine).coerceAtLeast(0) + 1) % order.size]
             syncFsTools()
+            // 改了内核要立刻用新内核重起，否则要等下次换台才生效
+            currentChannel?.let { playChannel(it) }
         }
         findViewById<TextView>(R.id.fsDecode)?.setOnClickListener {
             val order = listOf("auto", "hard", "soft")
             app.prefs.decode = order[(order.indexOf(app.prefs.decode).coerceAtLeast(0) + 1) % order.size]
             syncFsTools()
+            // 软/硬解切换同样要重起当前台
+            currentChannel?.let { playChannel(it) }
         }
 
         // 投屏：发现由服务端做（iOS 拿不到多播权限，安卓也统一走服务端）
@@ -482,14 +486,29 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
         val availH = if (parent != null && parent.height > 0) parent.height
                      else resources.displayMetrics.heightPixels
 
-        // 按 16:9 **同时受宽高约束**：
+        // 画面比例：auto/16:9 走 16:9，4:3 走 4:3，fill 铺满可用空间。
+        // 以前这里写死 16:9，所以点「比例」只改标签、画面纹丝不动。
+        val ratio = when (app.prefs.aspect) {
+            "4:3" -> 4f / 3f
+            "fill" -> 0f          // 0 表示铺满
+            else -> 16f / 9f
+        }
+        if (ratio == 0f) {
+            lp.width = availW
+            lp.height = availH
+            box.layoutParams = lp
+            (parent as? LinearLayout)?.gravity = android.view.Gravity.CENTER
+            return
+        }
+
+        // 按源比例 **同时受宽高约束**：
         // 只按宽度算的话，横屏 2712×9/16=1526 > 屏高 1220，画面会比屏幕还高，
         // 控件被顶到可视区外 —— 就是"全屏控件不见了、画面放大到看不见"。
         var w = availW
-        var h = (availW * 9 / 16)
+        var h = (availW / ratio).toInt()
         if (h > availH) {
             h = availH
-            w = (availH * 16 / 9)
+            w = (availH * ratio).toInt()
         }
 
         lp.width = w

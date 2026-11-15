@@ -20,8 +20,8 @@
 - `server/` — Go 服务端。认证、SQLite、源解析、EPG、流扇出、录制、时移、
   遥控中转、DLNA（服务端 + 投屏控制端）、HTTP API
 - `admin/` — Vue 3 + TypeScript + Vite 管理台，部署在 `/app/litv/`
-- `android/` — Android TV 与手机，**同一份代码、两个 flavor**
-  （`tv` → `com.litv.tv`，`phone` → `com.litv.tv.phone`，可同时安装）。
+- `android/` — Android TV 与手机，**同一份代码、一个包**（`com.litv.tv`）。
+  界面形态由「界面模式」（默认 auto）按设备自动选择，发版只按 ABI 拆包。
   Media3 主，VLC / mpv 兜底
 - `ios/` — SwiftUI。MobileVLCKit 主，AVPlayer 兜底
 - `packaging/fnos/` — fpk 清单、生命周期脚本、安装向导
@@ -168,7 +168,7 @@ packaging/fnos/app/server/litvd_*
 
 | 工作流 | 触发 | 做什么 |
 |---|---|---|
-| `.github/workflows/build-check.yml` | push 到 main、PR、手动 | 四个 job：`preflight`（工作流 YAML/bash -n/契约对账/版本五处）、`server`（gofmt+build+vet+test -race）、`admin`（typecheck+build）、`android`（两 flavor 编译 + 两 flavor 单测 + lint 报告模式） |
+| `.github/workflows/build-check.yml` | push 到 main、PR、手动 | 四个 job：`preflight`（工作流 YAML/bash -n/契约对账/版本五处）、`server`（gofmt+build+vet+test -race）、`admin`（typecheck+build）、`android`（编译 + 单测 + lint 报告模式） |
 | `.github/workflows/ios-check.yml` | 只在 `ios/**` 变化时 | 编译 iOS（不发版） |
 | `.github/workflows/release.yml` | `v*` tag 或手动 | 出三端产物（APK / fpk / ipa） |
 | `.github/workflows/edge-deploy.yml` | 只在 `edge/**` 变化、每日定时、手动 | 边缘降级部署：typecheck + 自测 + 部署到 Cloudflare。**可选**，四个 Secrets 没配全时自动跳过部署（只跑检查），不会让 main 变红 |
@@ -249,16 +249,16 @@ npm run build
 
 ```bash
 cd android
-gradle lintTvDebug lintPhoneDebug testTvDebugUnitTest testPhoneDebugUnitTest assembleTvDebug assemblePhoneDebug
+gradle lintDebug testDebugUnitTest assembleDebug
 ```
 
 Release/R8 行为（JNI 回调、Gson 反射）需要 `assembleRelease` 验证，
 只过 debug 不算数。
 
-**注意两个坑：**
+**注意：**
 
-- `lintDebug` 是**歧义任务名**（tv/phone 各有 debug 变体，AGP 会直接报
-  「Task 'lintDebug' is ambiguous」），必须写成 `lintTvDebug lintPhoneDebug`。
+- 已经不再分 tv/phone flavor，所以 `lintDebug` / `testDebugUnitTest` /
+  `assembleDebug` 都是**唯一任务名**，不会再有「ambiguous」问题。
 - `android/app/build.gradle.kts` 里是 `lint { abortOnError = false }`，
   所以 lint 目前**只是报告模式、不是门禁**。要让它变成门禁得先关掉这个开关，
   并处理掉既有告警——别以为 CI 绿就代表 lint 干净。

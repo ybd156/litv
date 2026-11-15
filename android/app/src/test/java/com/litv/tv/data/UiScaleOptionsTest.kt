@@ -18,9 +18,10 @@ class UiScaleOptionsTest {
     }
 
     @Test
-    fun `三档字号与行高单调递增`() {
+    fun `四档字号与行高单调递增`() {
+        // 新增「特小」档（给手机/平板看电视界面用），所以是四档
         val scales = UiScaleOptions.all
-        assertEquals(3, scales.size)
+        assertEquals(4, scales.size)
         for (i in 1 until scales.size) {
             assertTrue(scales[i].fontScale > scales[i - 1].fontScale)
             assertTrue(scales[i].rowHeightDp > scales[i - 1].rowHeightDp)

@@ -62,19 +62,12 @@ def purpose(name):
             return "飞牛 NAS（ARM）"
         return "飞牛 NAS"
     if n.endswith(".apk"):
-        # 新命名带 tv-/phone- 前缀，旧命名只有架构后缀
-        if "tv-armv7" in n:
-            return "**电视 / 盒子，32 位**（Android 9 及以下装这个）"
-        if "tv-arm64" in n:
-            return "电视 / 盒子，64 位"
-        if "phone-armv7" in n:
-            return "手机，32 位（2018 年前的老机型）"
-        if "phone-arm64" in n:
-            return "手机，64 位（绝大多数手机装这个）"
+        # 现在只按架构分（不再分 tv-/phone- 前缀）；
+        # 旧命名的 tv-/phone- 前缀仍兼容，避免历史 Release 的表格错乱。
         if "armv7" in n:
-            return "**电视 / 盒子，32 位**（Android 9 及以下装这个）"
+            return "**32 位**（Android 9 及以下的老盒子 / 老手机）"
         if "arm64" in n:
-            return "64 位设备（新电视 / 手机）"
+            return "**64 位**（绝大多数电视盒子与手机）"
         if "x86" in n:
             return "模拟器（x86）"
         return "Android"

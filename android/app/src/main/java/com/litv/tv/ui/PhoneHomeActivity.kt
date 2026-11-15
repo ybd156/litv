@@ -240,7 +240,15 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
                 player.attach(h.surface, findViewById(android.R.id.content))
             }
 
-            override fun surfaceDestroyed(h: android.view.SurfaceHolder) = Unit
+            override fun surfaceDestroyed(h: android.view.SurfaceHolder) {
+                // ★ 必须解绑。以前这里是空实现：Surface 被销毁了，解码器还挂在
+                // 那张死 Surface 上；回来接一张新的时候，硬解直接
+                // `ERROR_CODE_DECODING_FAILED: Decoder failed: c2.qti.avc.decoder`，
+                // 然后降级软解、软解也起不来 —— 表现就是"切几次就播不了"。
+                // 解绑后 ExoPlayer 会在新 Surface 到来时重新配置解码器。
+                android.util.Log.i(TAG, "Surface 销毁，解绑播放器 Surface")
+                runCatching { player.attach(null, null) }
+            }
         })
 
         player.attach(surface.holder.surface, findViewById(android.R.id.content))

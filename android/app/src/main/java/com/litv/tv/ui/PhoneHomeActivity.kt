@@ -877,6 +877,24 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
                     "hasThisId=${mc?.channels?.any { it.id == ch.id } ?: false}",
             )
             waitingForParse = true
+            // 兜底：8 秒还没等到地址，就挑第一个有地址的台起播，绝不无限停在"正在解析"
+            android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                if (!waitingForParse) return@postDelayed
+                val alt = com.litv.tv.data.M3uClient.current?.channels
+                    ?.firstOrNull { com.litv.tv.data.M3uClient.urlOf(it.id) != null }
+                if (alt != null) {
+                    android.util.Log.w(TAG, "等待解析超时，改用 ${alt.name} 起播")
+                    waitingForParse = false
+                    currentChannel = alt
+                    player.stop()
+                    playChannel(alt)
+                } else {
+                    waitingForParse = false
+                    playHint.text = "频道地址解析失败，请换台或重试"
+                    playHint.visibility = View.VISIBLE
+                    android.util.Log.w(TAG, "等待解析超时且无可用地址")
+                }
+            }, 8000)
             // 这个 ch 来自**缓存的服务端频道**，它的 id 在客户端解析结果里不存在，
             // 拿它去重播会永远等下去（用户看到的就是"一直解析"）。
             // 记下名字，解析完成后按名字重新定位。
@@ -1267,6 +1285,13 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
         // 只在**这个台第一次出画面**时闪一下控件。
         // 以前每次进 playing 都闪：缓冲卡一下、重连一次就冒出一条控件，
         // 看着像界面在抽搐。
+        // 出画面说明地址已就绪：清掉"正在解析"的等待态，避免残留卡在那句话上
+        if (waitingForParse) {
+            waitingForParse = false
+            playHint.visibility = View.GONE
+            playRoute.text = "客户端直连（本地解析）" +
+                uaLine(currentChannel?.let { com.litv.tv.data.M3uClient.headersOf(it.id) } ?: emptyMap())
+        }
         if (!controlsFlashedForChannel) {
             controlsFlashedForChannel = true
             showControls()

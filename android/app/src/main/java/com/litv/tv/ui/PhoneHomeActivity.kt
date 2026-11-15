@@ -1357,12 +1357,14 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
             val order = listOf("auto", "exo", "vlc", "mpv")
             app.prefs.engine = order[(order.indexOf(app.prefs.engine).coerceAtLeast(0) + 1) % order.size]
             syncFsTools()
+            restartCurrent()   // 真正生效：重起当前台
         }
         d.setOnClickListener {
             android.util.Log.i(TAG, "全屏工具：解码 点击")
             val order = listOf("auto", "hard", "soft")
             app.prefs.decode = order[(order.indexOf(app.prefs.decode).coerceAtLeast(0) + 1) % order.size]
             syncFsTools()
+            restartCurrent()   // 真正生效：重起当前台
         }
         fsBound = true
     }

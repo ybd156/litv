@@ -25,10 +25,11 @@ object M3uClient {
     private const val TAG = "M3uClient"
 
     /** 缓存格式版本：解析逻辑改了（如补 epgId）就 +1，强制重解析一次 */
-    private const val CACHE_FORMAT = 2
+    private const val CACHE_FORMAT = 5
 
     /** 临时诊断：打印前几条没取到 tvg-id 的 EXTINF 原文 */
     private var dbgLines = 0
+    private var dbgBuild = 0
 
     data class Parsed(
         val version: String,
@@ -86,7 +87,7 @@ object M3uClient {
                     group = o.optString("g", "未分组"),
                     logo = o.optString("logo"),
                     tvgId = o.optString("tvg"),
-                    epgId = o.optString("epg"),
+                    epgId = o.optString("epg").ifBlank { o.optString("tvg") },
                     enabled = true,
                 ),
             )
@@ -99,6 +100,7 @@ object M3uClient {
                 headersById[id] = m
             }
         }
+        Log.i(TAG, "读缓存：${list.size} 个，epgId 非空 ${list.count { it.epgId.isNotBlank() }} 个")
         if (list.isEmpty()) null
         else Parsed(root.optString("version", "0"), list, urlById, headersById)
     }.getOrNull()
@@ -115,7 +117,7 @@ object M3uClient {
                 o.put("g", ch.group)
                 o.put("logo", ch.logo)
                 o.put("tvg", ch.tvgId)
-                o.put("epg", ch.epgId)
+                o.put("epg", ch.epgId.ifBlank { ch.tvgId })
                 o.put("url", p.urlById[ch.id] ?: "")
                 val h = p.headersById[ch.id]
                 if (h != null) o.put("h", JSONObject(h as Map<*, *>))
@@ -126,6 +128,7 @@ object M3uClient {
             root.put("v", CACHE_FORMAT)
             root.put("channels", arr)
             cacheFile(ctx).writeText(root.toString())
+            Log.i(TAG, "写缓存：${p.channels.size} 个，其中 epgId 非空 ${p.channels.count { it.epgId.isNotBlank() }} 个")
         }.onFailure { Log.w(TAG, "写缓存失败: ${it.javaClass.simpleName}") }
     }
 
@@ -138,7 +141,19 @@ object M3uClient {
     @Volatile
     private var loading = false
 
-    fun load(ctx: Context, api: Api, dlKey: String, onDone: (Parsed?) -> Unit) {
+    /** 补 epgId 时要用到节目单的 名称→id 映射 */
+    private var ctxRef: Context? = null
+    private var epgRef: XmltvEpg? = null
+
+    fun load(
+        ctx: Context,
+        api: Api,
+        dlKey: String,
+        epg: XmltvEpg? = null,
+        onDone: (Parsed?) -> Unit,
+    ) {
+        this.ctxRef = ctx.applicationContext
+        this.epgRef = epg
         // 幂等：bootstrap 可能被调用两次（缓存 + 网络、或界面重建），
         // 不去重就会重复下载 m3u、并且回调打到已经销毁的 Activity 上。
         if (loading) {
@@ -213,7 +228,19 @@ object M3uClient {
         urlById.keys.retainAll(keepIds)
         headersById.keys.retainAll(keepIds)
 
-        val parsed = Parsed(version, kept, urlById, headersById)
+        // 没有 tvg-id 的频道：用显示名去 xmltv 的 <display-name> 里找回 epg_id。
+        // 服务端入库时就是这么对的（build.mjs），客户端跳过后节目单会全空。
+        val epg = epgRef
+        val fixed = if (epg == null) kept else kept.map { ch ->
+            if (ch.epgId.isNotBlank()) ch
+            else {
+                val id = epg.idByName(ch.name)
+                if (id.isBlank()) ch else ch.copy(epgId = id)
+            }
+        }
+        Log.i(TAG, "epgId 补齐：" + fixed.count { it.epgId.isNotBlank() } + "/" + fixed.size)
+
+        val parsed = Parsed(version, fixed, urlById, headersById)
         writeCache(ctx, parsed)
         return adopt(parsed)
     }
@@ -327,6 +354,10 @@ object M3uClient {
                     epgId = tvgId,
                     enabled = true,
                 )
+                if (dbgBuild < 3) {
+                    dbgBuild++
+                    Log.i(TAG, "构造 tvgId='${merged[key]?.tvgId}' epgId='${merged[key]?.epgId}' name='$name'")
+                }
                 urlById[id] = line
                 // 频道自己没写 #EXTVLCOPT 时，用**源级别**的 UA/Referer 兜底。
                 // 源的 UA 配在管理台的 sources 里，只用在"拉 m3u"上一次是不够的：

@@ -650,7 +650,7 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
         if (!fromCache &&
             (b.clientParseFlag != 0 || app.prefs.clientParseSeen || app.prefs.channelSource == "client")
         ) {
-            com.litv.tv.data.M3uClient.load(this, app.api, app.prefs.dlKey) { parsed ->
+            com.litv.tv.data.M3uClient.load(this, app.api, app.prefs.dlKey, app.epg) { parsed ->
                 if (parsed != null && parsed.channels.isNotEmpty()) {
                     all = parsed.channels
                     if (waitingForParse) {
@@ -661,6 +661,12 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
                     }
                     groups = all.map { it.group }.filter { it.isNotBlank() }.distinct()
                     status.text = "客户端解析 ${all.size} 个频道"
+                    // 把 currentChannel 指向新列表里同一个台：
+                    // 节目单是按 currentChannel.epgId 查的，老对象是服务端频道，
+                    // 不换就会一直「暂无节目单」。
+                    currentChannel?.let { old ->
+                        all.firstOrNull { it.name == old.name }?.let { currentChannel = it }
+                    }
                     renderChips()
                     render()
                     // 频道表换了，必须重算"正在播"并重绘节目单，
@@ -814,6 +820,19 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
             // 地址是客户端自己从源 m3u 里解析出来的
             playRoute.text = "客户端直连（本地解析）" + uaLine(com.litv.tv.data.M3uClient.headersOf(ch.id))
             player.play(ch.id, directUrl, com.litv.tv.data.M3uClient.headersOf(ch.id), app.prefs.engine)
+            // ★ 这里 return 会跳过下面那段"本地节目单优先"的加载，
+            //   于是 programs 一直是空的 → 界面永远「暂无节目单」。
+            //   客户端模式下必须在这里自己把节目单填上。
+            val epgId = ch.epgId
+            val local = if (epgId.isBlank()) null else app.epg.programsFor(epgId)
+            programs = local?.map {
+                com.litv.tv.data.EpgProgram(
+                    startAt = it.start, endAt = it.end, title = it.title,
+                    description = it.description, category = it.category,
+                )
+            } ?: emptyList()
+            dayInit = false
+            renderNow()
             return
         }
 

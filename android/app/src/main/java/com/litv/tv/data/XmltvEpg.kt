@@ -50,6 +50,15 @@ class XmltvEpg(private val context: Context) {
 
     /** epg_id（= m3u 的 tvg-id / xmltv 的 channel id）→ 该频道的节目，按开始时间升序 */
     private val byChannel = HashMap<String, MutableList<Program>>()
+
+    /**
+     * 规范化显示名 → xmltv channel id。
+     *
+     * 为什么需要：不少源的 m3u 条目**没有 tvg-id**（实测一个源 65 个频道全空），
+     * 而服务端入库时会拿频道名去对 xmltv 的 <display-name> 算出 epg_id。
+     * 客户端解析要走同一条路，否则节目单永远匹配不上。
+     */
+    private val nameToId = HashMap<String, String>()
     private var loaded = false
     private var loading = false
     private var loadedAtMs = 0L
@@ -78,6 +87,44 @@ class XmltvEpg(private val context: Context) {
     fun hasParsedCache(): Boolean {
         val xml = cacheFile()
         return xml.exists() && !expired() && binUsable(xml)
+    }
+
+    /**
+     * 按频道显示名找 xmltv id。
+     *
+     * 先精确匹配；失败再做**前缀匹配** —— 源里常见「CCTV1-MCP」「CCTV1-HD」这种
+     * 带后缀的写法，而 xmltv 里只有 CCTV1。规范化把 - 去掉后是
+     * cctv1mcp vs cctv1，精确比必然落空，这就是节目单一直空的原因。
+     * 取"最长且是频道名前缀"的那个，避免 CCT1/CCTV1 这类误配。
+     */
+    fun idByName(name: String): String {
+        if (name.isBlank()) return ""
+        val n = normalizeName(name)
+        if (n.isEmpty()) return ""
+        synchronized(this) {
+            nameToId[n]?.let { return it }
+            var bestId = ""
+            var bestLen = 0
+            for ((k, v) in nameToId) {
+                if (k.isNotEmpty() && k.length > bestLen && n.startsWith(k)) {
+                    bestId = v
+                    bestLen = k.length
+                }
+            }
+            return bestId
+        }
+    }
+
+    /** 与 build.mjs 的 normalizeName 一致 */
+    private fun normalizeName(name: String): String {
+        val sb = StringBuilder()
+        for (ch in name.lowercase()) {
+            val c = ch.code
+            if (c <= 32 || c == 92 || c == 47 || c == 124 || c == 183) continue
+            if (ch == '-' || ch == '_' || ch == '.') continue
+            sb.append(ch)
+        }
+        return sb.toString()
     }
 
     fun programsFor(epgId: String): List<Program>? {
@@ -206,6 +253,12 @@ class XmltvEpg(private val context: Context) {
                         out.writeUTF(p.category)
                     }
                 }
+                // 名称→id 映射（给没有 tvg-id 的频道兜底）
+                out.writeInt(nameToId.size)
+                for ((n, id) in nameToId) {
+                    out.writeUTF(n)
+                    out.writeUTF(id)
+                }
             }
             if (!tmp.renameTo(target)) {
                 tmp.copyTo(target, overwrite = true)
@@ -246,6 +299,11 @@ class XmltvEpg(private val context: Context) {
                     }
                     map[id] = list
                     count += n
+                }
+                val nameCount = runCatching { input.readInt() }.getOrDefault(0)
+                nameToId.clear()
+                repeat(if (nameCount in 0..200_000) nameCount else 0) {
+                    nameToId[input.readUTF()] = input.readUTF()
                 }
                 byChannel.clear()
                 byChannel.putAll(map)
@@ -298,6 +356,27 @@ class XmltvEpg(private val context: Context) {
         }
         var event = parser.eventType
         while (event != XmlPullParser.END_DOCUMENT) {
+            // <channel id="x"><display-name>名称</display-name></channel>
+            if (event == XmlPullParser.START_TAG && parser.name == "channel") {
+                val cid = parser.getAttributeValue(null, "id") ?: ""
+                var dn = ""
+                val depth = parser.depth
+                while (true) {
+                    val ev = parser.next()
+                    if (ev == XmlPullParser.END_DOCUMENT) break
+                    if (ev == XmlPullParser.END_TAG && parser.depth == depth) break
+                    if (ev == XmlPullParser.START_TAG && parser.name == "display-name" && dn.isEmpty()) {
+                        dn = parser.nextText().trim()
+                    }
+                }
+                if (cid.isNotEmpty()) {
+                    if (dn.isNotEmpty()) nameToId[normalizeName(dn)] = cid
+                    nameToId[normalizeName(cid)] = cid
+                }
+                event = parser.next()
+                continue
+            }
+
             if (event == XmlPullParser.START_TAG && parser.name == "programme") {
                 val ch = parser.getAttributeValue(null, "channel") ?: ""
                 val start = parseTime(parser.getAttributeValue(null, "start"))
@@ -367,6 +446,8 @@ class XmltvEpg(private val context: Context) {
         /** 缓存有效期：节目单一天一变，24 小时足够 */
         const val REFRESH_MS = 24 * 60 * 60 * 1000L
         /** 二进制缓存文件头。改格式就换这个值，旧缓存自动作废。 */
-        const val MAGIC = 0x4C495456  // "LITV"
+        // v2：多了 名称→xmltv id 映射。老缓存没这段，必须作废重解析，
+        // 否则客户端解析的频道找不到 epg_id，节目单永远是空的。
+        const val MAGIC = 0x4C495457  // "LITW"（v2）
     }
 }

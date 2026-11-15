@@ -712,6 +712,27 @@ struct PlayerView: View {
             // R08：能选内核的是"实际能力"，不是请求参数。
             //   有 VLCKit -> 尝试直连（省掉 NAS 中转），裸 TS 也能解；
             //   没有 VLCKit -> 直接要 relay + HLS，AVPlayer 只认 HLS。
+            // 客户端解析模式：地址就是本机解析出来的源地址，不请求 /tv/play。
+            // 服务端那边 D1 已经没有频道表了，走它只会拿到 404 或旧签名。
+            if session.clientParse,
+               let direct = ChannelStore.shared.url(of: active.id),
+               let directURL = URL(string: direct) {
+                let h = ChannelStore.shared.headers(of: active.id)
+                playURL = directURL
+                playUA = h["User-Agent"] ?? ""
+                playHeaders = h.isEmpty ? ["User-Agent": "LITV/1.0 (iOS)"] : h
+                playMode = "direct"
+                if VLCPlayerView.isAvailable {
+                    usingVLC = true
+                    player = nil
+                } else {
+                    usingVLC = false
+                    startAVPlayer(directURL)
+                }
+                await session.api.heartbeat(channelId: active.id)
+                return
+            }
+
             let viaVLC = VLCPlayerView.isAvailable
             let info = try await session.api.play(
                 channelId: active.id, streamId: streamId, direct: viaVLC)

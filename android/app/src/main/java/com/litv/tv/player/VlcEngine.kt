@@ -65,9 +65,6 @@ class VlcEngine : PlayerEngine {
     /** SurfaceView 的 holder：libVLC 只给 Surface 不给 holder 时能挂上但不解码（黑屏） */
     private val main = android.os.Handler(android.os.Looper.getMainLooper())
 
-    /** 最近一次收到 VLC TimeChanged 的时刻（elapsedRealtime） */
-    @Volatile private var lastTimeEventAt = 0L
-
     var surfaceHolder: android.view.SurfaceHolder? = null
         private set
 
@@ -222,9 +219,6 @@ class VlcEngine : PlayerEngine {
         mp.setEventListener { event ->
             when (event.type) {
                 MediaPlayer.Event.Playing -> listener?.onPlaying()
-                // VLC 直播的 time 常常是 -1，看门狗会因此跳过判活。
-                // 用"还在不在发 TimeChanged"当心跳，位置用当前时刻代替（一定递增）。
-                MediaPlayer.Event.TimeChanged -> lastTimeEventAt = android.os.SystemClock.elapsedRealtime()
                 MediaPlayer.Event.EndReached -> listener?.onEnded()
                 MediaPlayer.Event.EncounteredError -> listener?.onError("VLC 解码/网络错误")
                 // libVLC 3.5.1 的 MediaPlayer 没有公开 videoSize API，
@@ -374,12 +368,7 @@ class VlcEngine : PlayerEngine {
     override fun isPlaying(): Boolean = player?.isPlaying == true
 
     override fun stats(): EngineStats = EngineStats(
-        // 2 秒内还有 TimeChanged 就当作"在前进"，位置用当前时刻代替；
-        // 超时没有事件说明播放在停，返回 -1 让看门狗进入计时判定。
-        positionMs = run {
-            val now = android.os.SystemClock.elapsedRealtime()
-            if (lastTimeEventAt > 0 && now - lastTimeEventAt < 2000) now else -1L
-        },
+        positionMs = runCatching { player?.time ?: -1L }.getOrDefault(-1L),
         width = videoW,
         height = videoH,
     )

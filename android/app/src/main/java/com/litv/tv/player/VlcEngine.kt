@@ -93,6 +93,14 @@ class VlcEngine : PlayerEngine {
     var surfaceHolder: android.view.SurfaceHolder? = null
         private set
 
+    /** VLC 专用输出（TextureView）：布局变化不销毁 SurfaceTexture，可无缝换全屏 */
+    private var videoTexture: android.view.TextureView? = null
+
+    fun attachTexture(tv: android.view.TextureView?) { videoTexture = tv }
+
+    /** 供上层在布局变化时只调 setWindowSize（不重建） */
+    fun playerForResize(): MediaPlayer? = player
+
     fun setHolder(h: android.view.SurfaceHolder?) { surfaceHolder = h }
 
     override fun attach(context: Context, surface: android.view.Surface?, container: ViewGroup?) {
@@ -259,6 +267,19 @@ class VlcEngine : PlayerEngine {
             }
         }
 
+        // TextureView 优先：布局变化不销毁 SurfaceTexture，换全屏只调 setWindowSize
+        val texture = videoTexture
+        if (texture != null && texture.isAvailable) {
+            runCatching {
+                mp.vlcVout.setVideoView(texture)
+                mp.vlcVout.setWindowSize(
+                    texture.width.coerceAtLeast(1),
+                    texture.height.coerceAtLeast(1),
+                )
+                mp.vlcVout.attachViews()
+                android.util.Log.i(TAG, "VLC 输出接到 TextureView ${texture.width}x${texture.height}")
+            }
+        } else
         // 同 attach：只挂**有效**的 Surface。
         videoSurface?.takeIf { it.isValid }?.let {
             // 有 holder 必须一起传：只传 Surface 时 libVLC 拿不到缓冲区格式，会黑屏不报错

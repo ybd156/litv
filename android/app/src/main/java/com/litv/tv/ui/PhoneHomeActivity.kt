@@ -211,6 +211,11 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
                     return
                 }
                 // 重建（切 Tab / 从设置页回来 / 退后台再进）
+                //
+                // 新 Surface 会让解码器重新初始化，失败一次就会把"强制软解"标记置上，
+                // 而软解在这类机器上同样起不来 —— 表现就是"切几次就播不了"。
+                // 所以换 Surface 时清掉该标记，让重试仍从硬解开始。
+                player.resetSoftDecodeFlag()
                 val ch = currentChannel
                 val sameChannelPlaying = ch != null &&
                     player.playingChannelId == ch.id && player.isPlaying

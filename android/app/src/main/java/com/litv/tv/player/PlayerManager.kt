@@ -232,6 +232,18 @@ class PlayerManager(
         retryNow()
     }
 
+    /**
+     * 清除"强制软解"标记。
+     *
+     * 这个标记在**一次**解码器失败后就会被置上，然后一直用到换台为止。
+     * 但 Surface 重建（切 Tab、从设置页回来）本身会导致一次解码器初始化失败，
+     * 若不清掉，后续所有重试都走软解 —— 在软解也不支持的机器上就是
+     * "所有内核均失败"，只能换台才能恢复。
+     */
+    fun resetSoftDecodeFlag() {
+        exoForceSoftwareDecode = false
+    }
+
     /** 手动/自动重试当前台（不计入换内核链）。 */
     fun retryNow() {
         if (pendingChannelId <= 0) return

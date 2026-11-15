@@ -614,6 +614,11 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
             val cur = list.firstOrNull { nowSec >= it.start && nowSec < it.end } ?: continue
             fresh[ch.id] = cur.title
         }
+        android.util.Log.i(
+            TAG,
+            "EPG 匹配 ${fresh.size}/${all.size}；示例 epgId=" +
+                all.take(3).joinToString(",") { it.epgId.ifBlank { "(空)" } },
+        )
         if (fresh.isEmpty()) return
         nowTitles.clear()
         nowTitles.putAll(fresh)
@@ -658,6 +663,10 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
                     status.text = "客户端解析 ${all.size} 个频道"
                     renderChips()
                     render()
+                    // 频道表换了，必须重算"正在播"并重绘节目单，
+                    // 否则播放页的节目单还是按旧频道算的（表现：节目单空）
+                    dayInit = false
+                    refreshFromEpg()
                 }
             }
         }

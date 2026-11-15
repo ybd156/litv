@@ -24,6 +24,12 @@ object M3uClient {
 
     private const val TAG = "M3uClient"
 
+    /** 缓存格式版本：解析逻辑改了（如补 epgId）就 +1，强制重解析一次 */
+    private const val CACHE_FORMAT = 2
+
+    /** 临时诊断：打印前几条没取到 tvg-id 的 EXTINF 原文 */
+    private var dbgLines = 0
+
     data class Parsed(
         val version: String,
         val channels: List<Channel>,
@@ -62,6 +68,9 @@ object M3uClient {
         val f = cacheFile(ctx)
         if (!f.exists()) return null
         val root = JSONObject(f.readText())
+        // 缓存格式变了就丢弃：老版本写的缓存里 epgId 是空的，
+        // 而频道版本号没变 → 会一直复用那份数据，节目单永远匹配不上。
+        if (root.optInt("v", 0) != CACHE_FORMAT) return null
         val arr = root.optJSONArray("channels") ?: return null
         val list = ArrayList<Channel>(arr.length())
         val urlById = HashMap<Long, String>()
@@ -114,6 +123,7 @@ object M3uClient {
             }
             val root = JSONObject()
             root.put("version", p.version)
+            root.put("v", CACHE_FORMAT)
             root.put("channels", arr)
             cacheFile(ctx).writeText(root.toString())
         }.onFailure { Log.w(TAG, "写缓存失败: ${it.javaClass.simpleName}") }
@@ -137,6 +147,15 @@ object M3uClient {
             return
         }
         loading = true
+
+        // ★ 先用磁盘缓存顶上：起播不该等网络。
+        //   以前是"先问服务端要信封 → 再拉 m3u"，冷启动凭空多几秒。
+        //   缓存在就立刻可用，网络那次只做版本校验与更新。
+        readCache(ctx)?.let { cached ->
+            current = cached
+            onDone(cached)
+        }
+
         api.channelSrc(
             onOk = { env ->
                 Thread {
@@ -266,6 +285,10 @@ object M3uClient {
                 val head = if (comma > 0) line.substring(0, comma) else line
                 name = if (comma > 0) line.substring(comma + 1).trim() else ""
                 tvgId = attr(head, "tvg-id")
+                if (tvgId.isEmpty() && dbgLines < 3) {
+                    dbgLines++
+                    Log.w(TAG, "EXTINF 没取到 tvg-id，原文=" + head.take(160))
+                }
                 logo = attr(head, "tvg-logo")
                 group = attr(head, "group-title")
                 ua = ""

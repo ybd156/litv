@@ -633,7 +633,11 @@ struct PlayerView: View {
     /// 按天重新拉节目单。day 是相对今天的偏移。
     private func loadEpg(day: Int) async {
         epgTip = nil
-        let list = (try? await session.api.epg(channelId: active.id, day: day)) ?? []
+        // 本地节目单优先（服务端只给 xmltv 地址，epg_programs 在 edge 上是空的）
+        let local = EpgStore.shared.programs(epgId: active.epgId, dayOffset: day) ?? []
+        let list = local.isEmpty
+            ? ((try? await session.api.epg(channelId: active.id, day: day)) ?? [])
+            : local
         programs = list
         epgDay = day
         if list.isEmpty {
@@ -681,7 +685,10 @@ struct PlayerView: View {
         // 之前放在播放成功之后，一旦取流失败（或 VLC 卡住不回调），
         // 节目单就永远是空的——用户看到的就是"视频里没有节目单"。
         epgDay = 0
-        programs = (try? await session.api.epg(channelId: active.id)) ?? []
+        let localNow = EpgStore.shared.programs(epgId: active.epgId, dayOffset: 0) ?? []
+        programs = localNow.isEmpty
+            ? ((try? await session.api.epg(channelId: active.id)) ?? [])
+            : localNow
 
         // 转圈兜底：VLC 的 .playing 回调在个别源/机型上可能一直不来，
         // 那样中间的圈会永远转下去。这里加一个超时，到点无论如何都收起。

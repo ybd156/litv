@@ -275,9 +275,13 @@ struct Bootstrap: Codable {
     var channels: [Channel] = []
     var favorites: [Int64] = []
     var now: [NowPlaying] = []
+    /// xmltv 节目单地址：服务端只下发地址，客户端自己下载解析并本地缓存
+    /// （与 Android 端 XmltvEpg 一致）。
+    var epgUrl: String = ""
 
     enum CodingKeys: String, CodingKey {
         case server, device, groups, channels, favorites, now
+        case epgUrl = "epg_url"
     }
 }
 

@@ -221,7 +221,13 @@ final class Session: ObservableObject {
         }
     }
 
+    /// 服务端下发的 xmltv 地址（客户端自己下载解析，本地缓存）
+    private(set) var epgUrl: String = ""
+
     private func applyBootstrap(_ b: Bootstrap) {
+        epgUrl = b.epgUrl
+        // 拿到地址就后台拉一次：不阻塞界面，解析完本地就有节目单了
+        EpgStore.shared.ensure(url: b.epgUrl)
         channels = b.channels
         groups = b.groups
         favorites = Set(b.favorites)

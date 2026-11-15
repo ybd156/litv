@@ -350,8 +350,15 @@ async function fetchOne(src, index) {
     const buf = new Uint8Array(await res.arrayBuffer());
     const text = decodeBody(buf);
 
-    // 节目单地址写在 m3u 第一行的 x-tvg-url 上，顺手收走
-    for (const m of text.slice(0, 500).matchAll(/x-tvg-url="([^"]+)"/gi)) {
+    // 节目单地址写在 m3u 头部（#EXTM3U 那一行）的 x-tvg-url 上，顺手收走。
+    //
+    // 以前只扫前 500 个字符、且只认双引号：
+    //   · 有些源第一行属性很长（tvg-shift、catchup、user-agent…），
+    //     地址被挤到 500 之后 → 抓不到 → epg_url 为空 → 客户端没有节目单
+    //   · 也有源用单引号
+    // 现在扫头部 4KB，单双引号都认，并兼容 url-tvg 这个别名。
+    const head = text.slice(0, 4096);
+    for (const m of head.matchAll(/(?:x-tvg-url|url-tvg)\s*=\s*["']([^"']+)["']/gi)) {
       for (const u of m[1].split(",")) if (u.trim()) epgUrls.add(u.trim());
     }
 

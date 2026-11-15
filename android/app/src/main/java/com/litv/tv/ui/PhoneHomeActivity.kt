@@ -759,6 +759,9 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
     /** 是否已按「今天」初始化过日期选择（只做一次，之后尊重用户点击）。 */
     private var dayInit = false
 
+    /** 本次会话里已预约的节目起点，用来把「预约」显示成「已预约」。 */
+    private val reservedStarts = HashSet<Long>()
+
     /** 节目单：按日期分组 + 正在播/预约/回看。 */
     private fun renderEpg() {
         epgList.removeAllViews()
@@ -870,14 +873,13 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
                                 currentChannel ?: return@setOnClickListener, app.prefs.engine, p)
                         }
                     }
+                    reservedStarts.contains(p.startAt) -> {
+                        text = "已预约"
+                        setTextColor(getColor(R.color.text_primary))
+                    }
                     else -> {
                         text = "预约"
                         setTextColor(getColor(R.color.text_secondary))
-                        isClickable = true
-                        setOnClickListener {
-                            val ch = currentChannel ?: return@setOnClickListener
-                            EpgActions.reserve(this@PhoneHomeActivity, app.api, ch, p) { renderEpg() }
-                        }
                     }
                 }
             }
@@ -886,6 +888,22 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT,
             )
+            // 整行可点：动作按钮只有几个字，手指容易点偏；点整行等价于点动作。
+            if (!playing) {
+                row.isClickable = true
+                row.setOnClickListener {
+                    val ch = currentChannel ?: return@setOnClickListener
+                    android.util.Log.i(TAG, "节目单点击：${p.title} finished=$finished")
+                    if (finished) {
+                        EpgActions.replay(this@PhoneHomeActivity, app.api, player, ch, app.prefs.engine, p)
+                    } else {
+                        EpgActions.reserve(this@PhoneHomeActivity, app.api, ch, p) {
+                            reservedStarts.add(p.startAt)
+                            renderEpg()
+                        }
+                    }
+                }
+            }
             if (playing) playingRow = row
             epgList.addView(row)
         }

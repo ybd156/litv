@@ -397,6 +397,16 @@ class PlayerManager(
     /** 当前内核是否已经起播（用于 Surface 晚就绪时决定要不要补播） */
     val isPlaying: Boolean get() = prepared
 
+    /** 带 SurfaceHolder 的 attach：VLC 需要 holder 才能真正解码 */
+    fun attachWithHolder(surface: android.view.Surface?, holder: android.view.SurfaceHolder?, parent: ViewGroup?) {
+        (current as? VlcEngine)?.setHolder(holder)
+        pendingHolder = holder
+        attach(surface, parent)
+    }
+
+    @Volatile
+    private var pendingHolder: android.view.SurfaceHolder? = null
+
     fun attach(surface: android.view.Surface?, parent: ViewGroup?) {
         this.surface = surface
         container = parent

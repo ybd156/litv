@@ -62,6 +62,12 @@ class VlcEngine : PlayerEngine {
         return ok
     }
 
+    /** SurfaceView 的 holder：libVLC 只给 Surface 不给 holder 时能挂上但不解码（黑屏） */
+    var surfaceHolder: android.view.SurfaceHolder? = null
+        private set
+
+    fun setHolder(h: android.view.SurfaceHolder?) { surfaceHolder = h }
+
     override fun attach(context: Context, surface: android.view.Surface?, container: ViewGroup?) {
         videoSurface = surface
         appCtx = context.applicationContext
@@ -221,7 +227,8 @@ class VlcEngine : PlayerEngine {
 
         // 同 attach：只挂**有效**的 Surface。
         videoSurface?.takeIf { it.isValid }?.let {
-            mp.vlcVout.setVideoSurface(it, null)
+            // 有 holder 必须一起传：只传 Surface 时 libVLC 拿不到缓冲区格式，会黑屏不报错
+            mp.vlcVout.setVideoSurface(it, surfaceHolder)
             mp.vlcVout.attachViews()
             syncWindowSize(mp)
         }
@@ -252,13 +259,18 @@ class VlcEngine : PlayerEngine {
 
         player = mp
         mp.play()
+        android.util.Log.i(TAG, "VLC play() 已调用 url=" + url.take(60) + " holder=" + (surfaceHolder != null))
     }
 
     override var aspect: String = "auto"
 
     override fun play() { player?.play() }
     override fun pause() { player?.pause() }
-    override fun stop() { player?.stop() }
+    // libvlc 的 stop/release 要等 vout/音频线程收尾，主线程做会卡死（ANR）。
+    override fun stop() {
+        val p = player
+        Thread { runCatching { p?.stop() } }.start()
+    }
 
     override fun release() = releaseInternal()
 

@@ -207,7 +207,7 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
                 // 首次创建：正常 attach，等上层 playChannel
                 if (!surfaceReadyOnce) {
                     surfaceReadyOnce = true
-                    player.attach(h.surface, findViewById(android.R.id.content))
+                    player.attachWithHolder(h.surface, h, findViewById(android.R.id.content))
                     return
                 }
                 // 重建（切 Tab / 从设置页回来 / 退后台再进）
@@ -226,7 +226,7 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
                     // 播放器一直活着（Service 保活），缓冲也在：
                     // 只把新 Surface 接上去并确保继续播，不重新拉流。
                     android.util.Log.i(TAG, "Surface 重建，播放器仍持有该台，只接 Surface")
-                    player.attach(h.surface, findViewById(android.R.id.content))
+                    player.attachWithHolder(h.surface, h, findViewById(android.R.id.content))
                     runCatching { player.resume() }
                     return
                 }
@@ -863,6 +863,13 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
                     return
                 }
             }
+            val mc = com.litv.tv.data.M3uClient.current
+            android.util.Log.w(
+                TAG,
+                "waiting: ch=${ch.id}/${ch.name} url=${com.litv.tv.data.M3uClient.urlOf(ch.id)} " +
+                    "current=${mc != null} count=${mc?.channels?.size ?: -1} " +
+                    "hasThisId=${mc?.channels?.any { it.id == ch.id } ?: false}",
+            )
             waitingForParse = true
             // 这个 ch 来自**缓存的服务端频道**，它的 id 在客户端解析结果里不存在，
             // 拿它去重播会永远等下去（用户看到的就是"一直解析"）。
@@ -1332,8 +1339,12 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
         }
         android.util.Log.i(TAG, "restartCurrent: ${target.name} 内核=${app.prefs.engine} 解码=${app.prefs.decode}")
         currentChannel = target
-        player.stop()
-        playChannel(target)
+        val pm = player
+        // 停当前引擎也是重活（libvlc 释放要几秒），放到后台，完成后再起播
+        Thread {
+            runCatching { pm.stop() }
+            android.os.Handler(android.os.Looper.getMainLooper()).post { playChannel(target) }
+        }.start()
     }
 
     private var fsBound = false

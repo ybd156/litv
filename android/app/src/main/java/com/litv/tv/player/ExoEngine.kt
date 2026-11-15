@@ -161,6 +161,9 @@ class ExoEngine : PlayerEngine {
             ): androidx.media3.datasource.HttpDataSource.Factory = this
         }
 
+    /** 已打过日志的解码器查询（mime|secure|tunnel），避免重复与空行。 */
+    private val loggedCodecQueries = HashSet<String>()
+
     private var appContext: Context? = null
     private var videoSurface: android.view.Surface? = null
     private var videoW = 0
@@ -358,7 +361,20 @@ class ExoEngine : PlayerEngine {
                 val all = androidx.media3.exoplayer.mediacodec.MediaCodecSelector.DEFAULT
                     .getDecoderInfos(mimeType, requiresSecureDecoder, requiresTunnelingDecoder)
                 if (!mimeType.startsWith("video/")) return all
-                Log.i(TAG, "解码器候选($mimeType): " + all.joinToString(", ") { it.name })
+                // 只在**非空**且**首次**时打日志。
+                // 以前每次都打：Media3 会为 secure / tunneled 变体各查一次，
+                // 那些查询正常也会返回空列表，于是日志里全是
+                // 「解码器候选(video/avc): 」这种空行，看着像"设备没有解码器"。
+                if (all.isNotEmpty()) {
+                    val key = mimeType + "|" + requiresSecureDecoder + "|" + requiresTunnelingDecoder
+                    if (loggedCodecQueries.add(key)) {
+                        Log.i(
+                            TAG,
+                            "解码器候选($mimeType secure=$requiresSecureDecoder tunnel=$requiresTunnelingDecoder): " +
+                                all.joinToString(", ") { it.name },
+                        )
+                    }
+                }
                 val soft = all.filter {
                     it.name.contains("c2.android") || it.name.contains("OMX.google") ||
                         it.name.contains(".sw.")

@@ -33,6 +33,8 @@ import { canWrite } from '@/session'
 
 const groups = ref<GroupStat[]>([])
 const rows = ref<Channel[]>([])
+/** 服务端处于客户端解析模式：列表由边缘现拉现解析，改名/隐藏/删线路等写操作不可用 */
+const clientParse = ref(false)
 const total = ref(0)
 const loading = ref(false)
 const error = ref('')
@@ -132,6 +134,7 @@ async function loadChannels(silent = false): Promise<void> {
     })
     // 过期响应：不要动 rows/total/error，也别关 loading（那是新请求的事）
     if (gen !== queryGeneration) return
+    clientParse.value = res.clientParse === true
     rows.value = res.items
     total.value = res.total
     loaded.value = true
@@ -626,6 +629,14 @@ watch(sourceFilter, () => {
       </template>
     </PageHeader>
 
+    <!-- 客户端解析模式：数据不在 D1 里，是边缘现拉源解析出来的。
+         写操作（改名/隐藏/删线路/探活）依赖频道表，这里如实说明。 -->
+    <div v-if="clientParse" class="client-parse-tip">
+      当前服务端是<b>客户端解析模式</b>：这份列表由边缘从源实时解析，
+      不写数据库。改名 / 隐藏 / 删除线路请到「源管理」或用频道屏蔽；
+      电视端会自己拉源解析，看到的与这里一致。
+    </div>
+
     <div class="layout">
       <aside class="groups">
         <div class="g-title">分组</div>
@@ -774,6 +785,16 @@ watch(sourceFilter, () => {
 </template>
 
 <style scoped>
+.client-parse-tip {
+  margin: 0 0 12px;
+  padding: 10px 14px;
+  border-radius: 8px;
+  border: 1px solid var(--n-border-color, #2b2b2b);
+  background: rgba(255, 193, 7, 0.08);
+  color: var(--n-text-color-2, #ddd);
+  font-size: 13px;
+  line-height: 1.6;
+}
 .layout {
   display: flex;
   gap: 14px;

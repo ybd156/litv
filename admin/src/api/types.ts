@@ -203,6 +203,8 @@ export type ChannelPatch = Partial<{
 export interface ChannelPage {
   total: number
   items: Channel[]
+  /** 服务端处于「客户端解析」模式：列表是现拉的，D1 里没有频道表 */
+  clientParse?: boolean
 }
 
 export interface ChannelStream {

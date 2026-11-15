@@ -46,6 +46,8 @@ export async function listChannels(query: ChannelQuery = {}): Promise<ChannelPag
   return {
     total: typeof obj.total === 'number' ? obj.total : items.length,
     items,
+    // 客户端解析模式下服务端会把整份列表一次性给全（D1 里没有表，没法分页）
+    clientParse: obj.client_parse === true,
   }
 }
 

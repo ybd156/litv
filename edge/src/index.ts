@@ -1310,12 +1310,19 @@ function parseM3uChannels(text: string): Map<string, LiveChannel> {
   return out;
 }
 
-async function adminChannelsLive(env: Env): Promise<Response> {
-  // 非 client 模式：D1 里有表，走原来的查询（带屏蔽过滤与分页）
-  const mode = await env.DB.prepare(
+/** 当前是否客户端解析模式 */
+async function isClientParseMode(env: Env): Promise<boolean> {
+  const row = await env.DB.prepare(
     "SELECT json_extract(v, '$.channels_mode') AS m FROM kv WHERE k = 'last_build'",
   ).first<{ m: string }>();
-  if ((mode?.m || "").toLowerCase() !== "client") return fail(2009, "当前是服务端下发模式，请用 /admin/channels");
+  return (row?.m || "").toLowerCase() === "client";
+}
+
+async function adminChannelsLive(env: Env): Promise<Response> {
+  // 非 client 模式：D1 里有表，走原来的查询（带屏蔽过滤与分页）
+  if (!(await isClientParseMode(env))) {
+    return fail(2009, "当前是服务端下发模式，请用 /admin/channels");
+  }
 
   const [{ results }, blockedRow, overrides] = await Promise.all([
     env.DB.prepare(`SELECT url, ua, referer FROM sources WHERE enabled = 1 ORDER BY sort, id`).all<{
@@ -1370,6 +1377,11 @@ async function adminChannelsLive(env: Env): Promise<Response> {
 }
 
 async function adminChannels(env: Env, url: URL): Promise<Response> {
+  // 客户端解析模式：直接返回实时解析结果，管理台前端不用改就能看到列表。
+  // 注意：此时 q/group/分页参数不生效（数据不在 D1，没法用 SQL 过滤），
+  //       前端按返回的完整列表自己筛。
+  if (await isClientParseMode(env)) return adminChannelsLive(env);
+
   const q = (url.searchParams.get("q") || "").trim();
   const group = (url.searchParams.get("group") || "").trim();
   const limit = Math.min(Math.max(Number(url.searchParams.get("limit") || "200"), 1), 500);

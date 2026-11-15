@@ -108,6 +108,19 @@
         <item name="android:focusable">true</item>
     </style>
 
+    <style name="PhoneCtlPill">
+        <item name="android:layout_width">wrap_content</item>
+        <item name="android:layout_height">30dp</item>
+        <item name="android:layout_marginEnd">8dp</item>
+        <item name="android:background">@drawable/bg_badge_pill</item>
+        <item name="android:gravity">center</item>
+        <item name="android:paddingHorizontal">10dp</item>
+        <item name="android:textColor">#FFFFFFFF</item>
+        <item name="android:textSize">11sp</item>
+        <item name="android:clickable">true</item>
+        <item name="android:focusable">true</item>
+    </style>
+
     <style name="PhoneCtlSmall">
         <item name="android:layout_width">30dp</item>
         <item name="android:layout_height">30dp</item>

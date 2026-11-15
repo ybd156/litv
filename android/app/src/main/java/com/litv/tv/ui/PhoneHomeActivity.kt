@@ -274,8 +274,6 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
     }
 
     private fun setupControls() {
-        findViewById<TextView>(R.id.btnPrev).setOnClickListener { switchBy(-1) }
-        findViewById<TextView>(R.id.btnNext).setOnClickListener { switchBy(+1) }
 
         btnPlayPause.setOnClickListener {
             if (currentChannel == null) { switchTab(TAB_CHANNEL); return@setOnClickListener }
@@ -415,7 +413,29 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
         findViewById<View>(R.id.panelChannel)?.visibility =
             if (on) View.GONE else if (currentTab == TAB_CHANNEL) View.VISIBLE else View.GONE
 
+        findViewById<View>(R.id.fsTools)?.visibility = if (on) View.VISIBLE else View.GONE
+        if (on) syncFsTools()
+
         applyVideoRatio()
+    }
+
+    /** 把三个全屏工具按钮的文字同步成当前设置。 */
+    private fun syncFsTools() {
+        findViewById<TextView>(R.id.fsAspect)?.text = "比例 " + aspectLabel(app.prefs.aspect)
+        findViewById<TextView>(R.id.fsEngine)?.text = "内核 " + engineLabelShort(app.prefs.engine)
+        findViewById<TextView>(R.id.fsDecode)?.text = "解码 " + decodeLabelShort(app.prefs.decode)
+    }
+
+    private fun aspectLabel(v: String) = when (v) {
+        "16:9" -> "16:9"; "4:3" -> "4:3"; "fill" -> "铺满"; else -> "自动"
+    }
+
+    private fun engineLabelShort(v: String) = when (v) {
+        "exo" -> "Exo"; "vlc" -> "VLC"; "mpv" -> "mpv"; "avs3" -> "AV3S"; else -> "自动"
+    }
+
+    private fun decodeLabelShort(v: String) = when (v) {
+        "hard" -> "硬解"; "soft" -> "软解"; else -> "自动"
     }
 
     /**
@@ -429,12 +449,15 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
     private fun applyVideoRatio() {
         val box = findViewById<View>(R.id.videoBox) ?: return
         val lp = box.layoutParams ?: return
-        if (landscape) {
-            lp.height = ViewGroup.LayoutParams.MATCH_PARENT
-        } else {
-            if (box.width > 0) videoHeight169 = box.width * 9 / 16
-            lp.height = if (videoHeight169 > 0) videoHeight169
-            else ViewGroup.LayoutParams.WRAP_CONTENT
+        // 原生 SurfaceView 会把内容拉满自己的尺寸 —— 给多大就拉成多大。
+        // 所以竖屏、横屏都必须按源比例算高度，否则全屏就是"被拉伸"。
+        if (box.width > 0) videoHeight169 = box.width * 9 / 16
+        lp.height = if (videoHeight169 > 0) videoHeight169
+        else ViewGroup.LayoutParams.WRAP_CONTENT
+        // 横屏时多出来的空间上下均分，画面居中
+        (box.parent as? android.view.ViewGroup)?.let { p ->
+            (p as? LinearLayout)?.gravity = if (landscape) android.view.Gravity.CENTER_VERTICAL
+                                            else android.view.Gravity.TOP
         }
         box.layoutParams = lp
     }
@@ -655,6 +678,8 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
     // ---------------------------------------------------------------- 播放
 
     private fun playChannel(ch: Channel) {
+        playingTimeshift = false
+        renderLiveBadge()
         // 「同一台又播了一次」= 几乎一定是卡住/失败后的重播。
         // 这种情况必须重建播放器：否则缓存命中会跳过 prepare，重播等于
         // 什么都没做，画面一直卡着（和电视端是同一类 bug）。
@@ -781,6 +806,17 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
     /** 是否已按「今天」初始化过日期选择（只做一次，之后尊重用户点击）。 */
     private var dayInit = false
 
+    /** 当前是否在回放（时移回看），false = 直播。 */
+    private var playingTimeshift = false
+
+    /** 刷新左上角「直播 / 回放」胶囊。 */
+    private fun renderLiveBadge() {
+        findViewById<TextView>(R.id.liveBadge)?.apply {
+            text = if (playingTimeshift) "◀ 回放" else "● 直播"
+            setTextColor(if (playingTimeshift) getColor(R.color.text_primary) else 0xFFFF4D4F.toInt())
+        }
+    }
+
     /** 已预约的节目起点：来自本地存储（ReminderStore），重启后仍在。 */
     private val reservedStarts = HashSet<Long>()
 
@@ -892,6 +928,8 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
                         setTextColor(getColor(R.color.accent))
                         isClickable = true
                         setOnClickListener {
+                            playingTimeshift = true
+                            renderLiveBadge()
                             EpgActions.replay(this@PhoneHomeActivity, app.api, player,
                                 currentChannel ?: return@setOnClickListener, app.prefs.engine, p)
                         }
@@ -918,6 +956,8 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
                     val ch = currentChannel ?: return@setOnClickListener
                     android.util.Log.i(TAG, "节目单点击：${p.title} finished=$finished")
                     if (finished) {
+                        playingTimeshift = true
+                        renderLiveBadge()
                         EpgActions.replay(this@PhoneHomeActivity, app.api, player, ch, app.prefs.engine, p)
                     } else {
                         // 本地记录即可：预约是"到点提醒我"，不需要服务端参与

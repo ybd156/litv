@@ -19,33 +19,28 @@ object DeviceType {
 
     fun isTV(context: Context): Boolean {
         val pm = context.packageManager
-
         val hasTouch = pm.hasSystemFeature(PackageManager.FEATURE_TOUCHSCREEN)
         val hasLeanback = pm.hasSystemFeature(PackageManager.FEATURE_LEANBACK)
-
-        // 0) 有触摸屏 + 屏幕窄 + **不是 leanback 设备** → 一定是手机。
-        //
-        //    为什么要加 !hasLeanback 这个条件：部分电视盒子（小米电视棒之类）
-        //    会同时上报 FEATURE_TOUCHSCREEN 和较窄的 smallestScreenWidthDp，
-        //    只看这两项会把电视误判成手机，跑出竖屏小窗的界面。
-        //    上报了 leanback 就说明它有电视桌面，按电视处理。
         val sw = context.resources.configuration.smallestScreenWidthDp
-        if (hasTouch && sw in 1..599 && !hasLeanback) return false
-
-        // 1) 明确的电视特征：有 leanback 且没有触摸屏
-        if (hasLeanback && !hasTouch) return true
-
-        // 2) UiModeManager 判定
         val uiMode = context.getSystemService(Context.UI_MODE_SERVICE) as? android.app.UiModeManager
-        if (uiMode?.currentModeType == android.content.res.Configuration.UI_MODE_TYPE_TELEVISION) {
-            return true
+        val tvUiMode = uiMode?.currentModeType == android.content.res.Configuration.UI_MODE_TYPE_TELEVISION
+
+        // ★ 判定顺序很重要：UiMode 是最强信号，必须**最先**看。
+        //   原来它排在第 3 位，前面「有触摸屏 → 手机」的分支会先把带触摸屏的
+        //   电视盒子判成手机（这类机器确实存在），自动识别就"识别不出来"了。
+        val isTv = when {
+            tvUiMode -> true
+            hasLeanback && !hasTouch -> true
+            hasTouch && sw in 1..599 && !hasLeanback -> false
+            hasTouch -> false
+            else -> !hasHardwareKeyboard(context)
         }
-
-        // 3) 有触摸屏基本就是手机/平板
-        if (hasTouch) return false
-
-        // 4) 兜底：没有触摸屏且没有输入法（盒子常见）
-        return !hasHardwareKeyboard(context)
+        android.util.Log.i(
+            "DeviceType",
+            "自动识别: uiMode=${uiMode?.currentModeType} leanback=$hasLeanback " +
+                "touch=$hasTouch sw=${sw}dp -> " + if (isTv) "电视" else "手机",
+        )
+        return isTv
     }
 
     /** 给日志用：说明为什么判成了这个类型。 */

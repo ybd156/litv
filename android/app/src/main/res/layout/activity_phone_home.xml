@@ -100,6 +100,21 @@
 
                 <!-- 播放控件浮层：像现代播放器一样做在画面里。
                      点画面呼出，4 秒后自动隐藏，不遮挡内容。 -->
+                <!-- 直播 / 回放 状态：常显在画面左上角 -->
+                <TextView
+                    android:id="@+id/liveBadge"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_gravity="top|start"
+                    android:layout_marginStart="12dp"
+                    android:layout_marginTop="12dp"
+                    android:background="@drawable/bg_badge_pill"
+                    android:paddingHorizontal="10dp"
+                    android:paddingVertical="4dp"
+                    android:text="● 直播"
+                    android:textColor="#FFFFFFFF"
+                    android:textSize="11sp" />
+
                 <!-- 播放控件浮层：铺满画面 + 底部渐变，控件按现代播放器分区。
                      点画面呼出，4 秒自动隐藏。 -->
                 <FrameLayout
@@ -127,21 +142,38 @@
                         android:orientation="horizontal">
 
                         <TextView
-                            android:id="@+id/btnPrev"
-                            style="@style/PhoneCtl"
-                            android:text="◀◀" />
-
-                        <TextView
                             android:id="@+id/btnPlayPause"
                             style="@style/PhoneCtlBig"
                             android:layout_marginStart="12dp"
                             android:layout_marginEnd="12dp"
                             android:text="❙❙" />
+                    </LinearLayout>
+
+                    <!-- 全屏专用：比例 / 内核 / 解码。竖屏时不显示 -->
+                    <LinearLayout
+                        android:id="@+id/fsTools"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_gravity="bottom|start"
+                        android:layout_marginBottom="10dp"
+                        android:layout_marginStart="12dp"
+                        android:orientation="horizontal"
+                        android:visibility="gone">
 
                         <TextView
-                            android:id="@+id/btnNext"
-                            style="@style/PhoneCtl"
-                            android:text="▶▶" />
+                            android:id="@+id/fsAspect"
+                            style="@style/PhoneCtlPill"
+                            android:text="比例 自动" />
+
+                        <TextView
+                            android:id="@+id/fsEngine"
+                            style="@style/PhoneCtlPill"
+                            android:text="内核 自动" />
+
+                        <TextView
+                            android:id="@+id/fsDecode"
+                            style="@style/PhoneCtlPill"
+                            android:text="解码 自动" />
                     </LinearLayout>
 
                     <!-- 右下：静音 / 全屏 -->

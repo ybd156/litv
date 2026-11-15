@@ -151,7 +151,7 @@
 
             <TextView
                 style="@style/SettingLabel"
-                android:text="数字跳台等待" />
+                android:text="界面模式" />
 
             <TextView
                 android:id="@+id/valueUiMode"

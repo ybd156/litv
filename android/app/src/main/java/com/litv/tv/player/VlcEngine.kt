@@ -32,16 +32,34 @@ class VlcEngine : PlayerEngine {
     /** 承载画面的容器，用来取真实窗口尺寸 */
     /** 已经挂给 libVLC 的 Surface，用来避免重复 attach。 */
     private var attachedSurface: android.view.Surface? = null
+    /** 原生库可用性只探测一次：loadLibrary 失败要缓存，别每次换台都重试。 */
+    private var probeResult: Boolean? = null
 
     private var hostView: android.view.View? = null
     private var videoW = 0
     private var videoH = 0
 
-    override fun isAvailable(context: Context): Boolean = try {
-        Class.forName("org.videolan.libvlc.LibVLC")
-        true
-    } catch (t: Throwable) {
-        false
+    override fun isAvailable(context: Context): Boolean {
+        // ★ 必须真的去加载 so，不能只 Class.forName。
+        //
+        // LibVLC 的静态初始化块在原生库加载失败时会自己调 System.exit(1)：
+        //   E/VLC/LibVLC: Can't load vlcjni library: UnsatisfiedLinkError:
+        //                 cannot locate symbol "__sfp_handle_exceptions"
+        //   I/com.litv.tv: System.exit called, status: 1
+        // 那是**进程级退出**，catch 不到、也没有堆栈，用户看到的就是"点一下闪退"。
+        //
+        // 先自己 loadLibrary：失败只会抛 UnsatisfiedLinkError（可以捕获），
+        // 于是我们永远不会走到 LibVLC 的构造，进程也就不会被带走。
+        if (probeResult != null) return probeResult!!
+        val ok = try {
+            System.loadLibrary("vlcjni")
+            true
+        } catch (t: Throwable) {
+            Log.w(TAG, "VLC 原生库不可用：" + t.javaClass.simpleName)
+            false
+        }
+        probeResult = ok
+        return ok
     }
 
     override fun attach(context: Context, surface: android.view.Surface?, container: ViewGroup?) {

@@ -2574,18 +2574,6 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
 
     override fun onPrepared(width: Int, height: Int) = Unit
 
-    /**
-     * 播放列表原地打转（位置连续回落）→ 强制重新起播当前台。
-     *
-     * 真机现象：黑屏但仍有声音，日志里 position 每 12 秒掉一次、伴随重缓冲。
-     * 原因不是网络也不是解码，是源侧 HLS 播放列表窗口在回退，播放器一直重载。
-     * 重新 prepare 会重新拉一份播放列表，通常就恢复正常。
-     */
-    override fun onVideoStuck() {
-        val ch = current ?: return
-        Log.w(TAG, "视频输出卡住，强制重载：${ch.name}")
-        playChannel(ch, currentStreamId, forceRebuild = true)
-    }
 
     /**
      * 本次换台的转场方向：+1 = 旧画面向上滑走（切到下一个台），

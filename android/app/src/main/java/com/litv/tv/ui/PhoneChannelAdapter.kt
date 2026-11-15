@@ -73,6 +73,17 @@ class PhoneChannelAdapter(
         if (url.isBlank()) return
         logoCache.get(url)?.let { target.setImageBitmap(it); return }
         target.tag = url
+        // 磁盘缓存：原来只有内存 LruCache，应用一重启就全部重下，
+        // 网络慢的时候列表里只剩「首字方块」。
+        val disk = logoFile(target.context.applicationContext, url)
+        if (disk.exists() && disk.length() > 512) {
+            val cached = android.graphics.BitmapFactory.decodeFile(disk.absolutePath)
+            if (cached != null) {
+                logoCache.put(url, cached)
+                target.setImageBitmap(cached)
+                return
+            }
+        }
         executor.execute {
             val bmp = try {
                 val conn = (URL(url).openConnection() as HttpURLConnection).apply {
@@ -92,9 +103,23 @@ class PhoneChannelAdapter(
             }
             if (bmp != null) {
                 logoCache.put(url, bmp)
+                runCatching {
+                    java.io.FileOutputStream(logoFile(target.context.applicationContext, url))
+                        .use { out -> bmp.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, out) }
+                }
                 main.post { if (target.tag == url) target.setImageBitmap(bmp) }
             }
         }
+    }
+
+    private var logoDir: java.io.File? = null
+
+    /** 台标磁盘缓存：cacheDir/logos/<url 的 md5>。 */
+    private fun logoFile(ctx: android.content.Context, url: String): java.io.File {
+        val dir = logoDir ?: java.io.File(ctx.cacheDir, "logos").apply { mkdirs() }.also { logoDir = it }
+        val md = java.security.MessageDigest.getInstance("MD5").digest(url.toByteArray())
+        val name = md.joinToString("") { "%02x".format(it) }
+        return java.io.File(dir, name)
     }
 
     class VH(v: View) : RecyclerView.ViewHolder(v) {

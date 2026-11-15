@@ -522,10 +522,32 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
             })
     }
 
+    /** 用本地节目单缓存重算「正在播」，服务端 now 为空时完全靠它。 */
+    private fun refreshFromEpg() {
+        if (!app.epg.ready) return
+        val nowSec = System.currentTimeMillis() / 1000
+        val fresh = HashMap<Long, String>()
+        for (ch in all) {
+            val epgId = ch.epgId ?: continue
+            val list = app.epg.programsFor(epgId) ?: continue
+            val cur = list.firstOrNull { nowSec >= it.start && nowSec < it.end } ?: continue
+            fresh[ch.id] = cur.title
+        }
+        if (fresh.isEmpty()) return
+        nowTitles.clear()
+        nowTitles.putAll(fresh)
+        render()
+    }
+
     private fun apply(b: Bootstrap, fromCache: Boolean) {
         all = b.channels
         favorites.clear(); favorites.addAll(b.favorites)
         nowTitles.clear(); nowTitles.putAll(b.now.associate { it.channelId to it.title })
+        // ★ 手机界面以前**从来没有调用过 app.epg.ensure()**，节目单根本没下载，
+        //   而服务端 bootstrap 的 now 又是空的（重建后就没数据了），
+        //   所以手机端一行节目名都没有。
+        //   现在自己下载 xmltv 并按本地节目单算「正在播」，服务端 now 只作兜底。
+        app.epg.ensure(b.epgUrl) { main.post { refreshFromEpg() } }
         groups = all.map { it.group }.filter { it.isNotBlank() }.distinct()
         status.text = if (fromCache) "缓存 ${all.size} 个频道" else "${all.size} 个频道"
         renderChips()
@@ -686,10 +708,26 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
                 }
             })
 
-        app.api.epg(ch.id, 0, onOk = { p ->
-            programs = p
+        // ★ 本地节目单优先。服务端的 epg_programs 在 edge 重建后是空的，
+        //   只靠 app.api.epg 就永远显示「暂无节目单」。
+        val localEpg = ch.epgId?.takeIf { it.isNotBlank() }?.let { app.epg.programsFor(it) }
+        if (!localEpg.isNullOrEmpty()) {
+            programs = localEpg.map {
+                com.litv.tv.data.EpgProgram(
+                    startAt = it.start,
+                    endAt = it.end,
+                    title = it.title,
+                    description = it.description,
+                    category = it.category,
+                )
+            }
             renderNow()
-        }, onErr = {})
+        } else {
+            app.api.epg(ch.id, 0, onOk = { p ->
+                programs = p
+                renderNow()
+            }, onErr = {})
+        }
     }
 
     private fun switchBy(delta: Int) {
@@ -750,6 +788,9 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
     override fun onPrepared(width: Int, height: Int) = Unit
 
     override fun onPlaying() {
+        // 播放页在这个 Activity 里（底部「播放」标签），不是 PhonePlayerActivity，
+        // 所以常亮必须在这里加，否则看着看着就黑屏。
+        window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         loading.visibility = View.GONE
         playHint.visibility = View.GONE
         // 出画面时闪一下控件，让用户知道点画面能呼出操作条
@@ -825,6 +866,8 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
 
     override fun onPause() {
         super.onPause()
+        // 离开前台：解除常亮，允许系统息屏
+        window.clearFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         // 只暂停，不改 paused —— 那是用户的意图，回来还要按它恢复
         player.pause()
     }

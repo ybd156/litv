@@ -208,6 +208,13 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
                 if (!surfaceReadyOnce) {
                     surfaceReadyOnce = true
                     player.attachWithHolder(h.surface, h, findViewById(R.id.videoBox))
+                    // 进出全屏时 Surface 会重建：延后一拍让布局量完，再让 VLC 按新尺寸重排，
+                    // 否则退出全屏会停在最后一帧。
+                    h.surfaceFrame.let {
+                        android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                            runCatching { player.resyncWindow() }
+                        }, 200)
+                    }
                     return
                 }
                 // 重建（切 Tab / 从设置页回来 / 退后台再进）

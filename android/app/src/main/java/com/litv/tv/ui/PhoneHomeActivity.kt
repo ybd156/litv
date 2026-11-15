@@ -759,7 +759,7 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
     /** 是否已按「今天」初始化过日期选择（只做一次，之后尊重用户点击）。 */
     private var dayInit = false
 
-    /** 本次会话里已预约的节目起点，用来把「预约」显示成「已预约」。 */
+    /** 已预约的节目起点：来自本地存储（ReminderStore），重启后仍在。 */
     private val reservedStarts = HashSet<Long>()
 
     /** 节目单：按日期分组 + 正在播/预约/回看。 */
@@ -775,6 +775,7 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
             return
         }
 
+        loadReminders()
         val now = System.currentTimeMillis() / 1000
         // 日期分组/标签/动作判定都走 EpgPrograms（电视端用同一份）
         val byDay = com.litv.tv.data.EpgPrograms.groupByDay(programs)
@@ -897,10 +898,13 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
                     if (finished) {
                         EpgActions.replay(this@PhoneHomeActivity, app.api, player, ch, app.prefs.engine, p)
                     } else {
-                        EpgActions.reserve(this@PhoneHomeActivity, app.api, ch, p) {
-                            reservedStarts.add(p.startAt)
-                            renderEpg()
-                        }
+                        // 本地记录即可：预约是"到点提醒我"，不需要服务端参与
+                        com.litv.tv.data.ReminderStore.add(this@PhoneHomeActivity, p.startAt, ch.id, p.title)
+                        reservedStarts.add(p.startAt)
+                        android.widget.Toast.makeText(
+                            this@PhoneHomeActivity, "已预约：" + p.title, android.widget.Toast.LENGTH_SHORT,
+                        ).show()
+                        renderEpg()
                     }
                 }
             }
@@ -962,6 +966,11 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
     }
 
     override fun onPrepared(width: Int, height: Int) = Unit
+
+    private fun loadReminders() {
+        reservedStarts.clear()
+        reservedStarts.addAll(com.litv.tv.data.ReminderStore.reservedStarts(this))
+    }
 
     override fun onPlaying() {
         // 播放页在这个 Activity 里（底部「播放」标签），不是 PhonePlayerActivity，

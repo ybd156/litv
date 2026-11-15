@@ -839,17 +839,15 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
                     // 已经推送的提醒不受影响——如实提示，不假装已删。
                     toastTip("已取消本机标记（服务端已排的提醒不会撤回）")
                 } else {
-                    app.api.createReminder(ch.id, p.title, p.startAt,
-                        onOk = {
-                            reservedStarts.add(p.startAt)
-                            toastTip("已预约：" + p.title)
-                            refreshEpgColumn()
-                            epgList.post {
-                                val vh = epgList.findViewHolderForAdapterPosition(keepPos)
-                                if (vh != null) vh.itemView.requestFocus() else epgList.requestFocus()
-                            }
-                        },
-                        onErr = { toastTip("预约失败：$it") })
+                    // 预约只在本地记录：到点提醒属于本机行为，不需要服务端参与
+                    com.litv.tv.data.ReminderStore.add(this, p.startAt, ch.id, p.title)
+                    reservedStarts.add(p.startAt)
+                    toastTip("已预约：" + p.title)
+                    refreshEpgColumn()
+                    epgList.post {
+                        val vh = epgList.findViewHolderForAdapterPosition(keepPos)
+                        if (vh != null) vh.itemView.requestFocus() else epgList.requestFocus()
+                    }
                 }
             }
         }
@@ -2242,6 +2240,8 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         epgHandle.visibility = View.GONE
         // 展开时按"焦点所在的台"取节目单，而不是正在播的那个台。
         // 之前只在 epg 已展开时（onFocus 里）才换数据，第一次展开一定是错的。
+        reservedStarts.clear()
+        reservedStarts.addAll(com.litv.tv.data.ReminderStore.reservedStarts(this))
         val byChild = focusedPanelChannelId()
         val targetId = byChild.takeIf { it > 0 }
             ?: panelLastFocusId.takeIf { it > 0 }

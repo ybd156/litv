@@ -68,7 +68,10 @@
                     android:id="@+id/vlcLayout"
                     android:layout_width="match_parent"
                     android:layout_height="match_parent"
-                    android:visibility="gone" />
+                    android:visibility="gone"                     android:clickable="false"
+                    android:focusable="false"
+                    android:elevation="0dp"
+                />
 
                 <!-- Exo 官方视图：内部 AspectRatioFrameLayout + SurfaceView，
                      自己处理尺寸/比例变化，全屏不需要重建播放器 -->
@@ -76,14 +79,20 @@
                     android:id="@+id/exoView"
                     android:layout_width="match_parent"
                     android:layout_height="match_parent"
-                    />
+                                        android:clickable="false"
+                    android:focusable="false"
+                    android:elevation="0dp"
+                />
 
                 <!-- mpv 用的裸 SurfaceView（当前不可用，保留） -->
                 <SurfaceView
                     android:id="@+id/surface"
                     android:layout_width="match_parent"
                     android:layout_height="match_parent"
-                    android:visibility="gone" />
+                    android:visibility="gone"                     android:clickable="false"
+                    android:focusable="false"
+                    android:elevation="0dp"
+                />
 
                 <ProgressBar
                     android:id="@+id/loading"
@@ -125,7 +134,8 @@
                     android:layout_width="match_parent"
                     android:layout_height="match_parent"
                     android:background="@drawable/bg_scrim_bottom"
-                    android:visibility="gone">
+                    android:visibility="gone"
+                    android:elevation="12dp">
 
                 <!-- 直播 / 回放 状态：跟控件一起显示，不常驻 -->
                 <TextView

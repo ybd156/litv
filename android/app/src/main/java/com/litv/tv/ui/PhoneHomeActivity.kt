@@ -331,6 +331,10 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
         // 点画面：呼出/收起控件浮层（现代播放器的通用交互）。
         // 原来点一下就直接暂停，用户完全看不到有哪些控件。
         surface.setOnClickListener { toggleControls() }
+        // 画面现在渲染在 exoView / vlcLayout 里（不在 surface 上），
+        // 只给 surface 挂监听就永远唤不出控件。挂到父容器 videoBox 上，
+        // 子视图都设了 clickable=false，点击会冒泡到这里。
+        findViewById<View>(R.id.videoBox)?.setOnClickListener { toggleControls() }
         // 全屏时画面按 16:9 居中，两侧/上下会有黑边。黑边属于 panelPlay 而不是
         // videoBox —— 只给 surface 挂点击的话，用户点黑边没有任何反应，
         // 就像"全屏里控件点不了/唤不出来"。全屏时整块 panelPlay 都能唤出控件。
@@ -1312,6 +1316,10 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
         if (!controlsFlashedForChannel) {
             controlsFlashedForChannel = true
             showControls()
+        }
+        // 兜底：控件曾因自动隐藏变 GONE，这里确保它在起播后可见（4 秒后照常自动隐藏）
+        findViewById<View>(R.id.playerControls)?.let {
+            if (it.visibility != View.VISIBLE) showControls()
         }
         prefetchNeighbors()
     }

@@ -276,12 +276,19 @@ class VlcEngine : PlayerEngine {
                         mp.attachViews(vlay, null, true, false)
                         // 画面比例交给官方的 videoScale（对应「比例」设置），
                         // 之前用 BEST_FIT 会缩成小窗。
+                        // 与「比例」设置一一对应：
+                        //   自动 → 保持原始比例（必要时留黑边）
+                        //   16:9 / 4:3 → 强制该比例
+                        //   铺满 → 裁切填满
                         mp.videoScale = when (aspect) {
+                            "16:9" -> MediaPlayer.ScaleType.SURFACE_16_9
+                            "4:3" -> MediaPlayer.ScaleType.SURFACE_4_3
                             "fill" -> MediaPlayer.ScaleType.SURFACE_FILL
-                            "16:9", "4:3" -> MediaPlayer.ScaleType.SURFACE_FIT_SCREEN
-                            else -> MediaPlayer.ScaleType.SURFACE_FIT_SCREEN
+                            else -> MediaPlayer.ScaleType.SURFACE_FILL
                         }
                         android.util.Log.i(TAG, "attachViews ok ${vlay.width}x${vlay.height}")
+                        stretchInnerSurface(vlay)
+                        vlay.postDelayed({ stretchInnerSurface(vlay) }, 300)
                     }.onFailure { android.util.Log.w(TAG, "attachViews 失败：${it.message}") }
                 } else {
                     android.util.Log.w(TAG, "layout 还没测量（${vlay.width}x${vlay.height}），等布局完成再挂")
@@ -295,10 +302,14 @@ class VlcEngine : PlayerEngine {
                                 runCatching {
                                     mp.attachViews(vlay, null, true, false)
                                     mp.videoScale = when (aspect) {
+                                        "16:9" -> MediaPlayer.ScaleType.SURFACE_16_9
+                                        "4:3" -> MediaPlayer.ScaleType.SURFACE_4_3
                                         "fill" -> MediaPlayer.ScaleType.SURFACE_FILL
-                                        else -> MediaPlayer.ScaleType.SURFACE_FIT_SCREEN
+                                        else -> MediaPlayer.ScaleType.SURFACE_FILL
                                     }
                                     android.util.Log.i(TAG, "attachViews ok(延迟) ${v.width}x${v.height}")
+                                    stretchInnerSurface(vlay)
+                                    vlay.postDelayed({ stretchInnerSurface(vlay) }, 300)
                                 }
                             }
                         }
@@ -383,6 +394,45 @@ class VlcEngine : PlayerEngine {
                 android.util.Log.i(TAG, "resync: 已轻推 pause/play 唤醒画面")
             }, 120)
         }
+    }
+
+
+    /**
+     * VLCVideoLayout 内层是 player_surface_frame → surface_video，
+     * 尺寸由 libvlc 的 updateVideoSurfaces() 计算后写回 LayoutParams。
+     * 直播源常常拿不到正确的视频宽高，算出来是容器的一半（实测 680x360），
+     * 所以在挂载后把这些内层视图强制设成 MATCH_PARENT，让 VLC 自己往里缩放。
+     */
+    /** 打印视图树：拿到 VLCVideoLayout 内层真实类名/资源名/尺寸 */
+    private fun dumpTree(v: android.view.View, depth: Int = 0) {
+        val name = runCatching { v.resources.getResourceEntryName(v.id) }.getOrNull() ?: "?"
+        android.util.Log.i(
+            TAG,
+            "tree " + "  ".repeat(depth) + v.javaClass.simpleName + " id=" + v.id + "(" + name + ") " + v.width + "x" + v.height,
+        )
+        if (v is android.view.ViewGroup) {
+            for (i in 0 until v.childCount) dumpTree(v.getChildAt(i), depth + 1)
+        }
+    }
+
+    private fun stretchInnerSurface(vlay: org.videolan.libvlc.util.VLCVideoLayout) {
+        runCatching { dumpTree(vlay) }
+        runCatching {
+            val res = vlay.resources
+            val pkg = "org.videolan.libvlc"
+            val ids = listOf("player_surface_frame", "surface_video", "texture_video", "surface_subtitles")
+            for (name in ids) {
+                val id = res.getIdentifier(name, "id", pkg)
+                if (id == 0) continue
+                vlay.findViewById<android.view.View>(id)?.let { v ->
+                    v.layoutParams = android.widget.FrameLayout.LayoutParams(
+                        android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+                        android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+                    )
+                    android.util.Log.i(TAG, "内层 $name 已设为铺满")
+                }
+            }
+        }.onFailure { android.util.Log.w(TAG, "内层铺满失败：${it.message}") }
     }
 
     override var aspect: String = "auto"

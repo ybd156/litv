@@ -426,7 +426,7 @@ class PlayerManager(
             if (released) return@postDelayed
             Log.i(TAG, "resync: 用新尺寸重建 VLC")
             retryNow()
-        }, 120)
+        }, 400)
     }
 
     fun attach(surface: android.view.Surface?, parent: ViewGroup?) {

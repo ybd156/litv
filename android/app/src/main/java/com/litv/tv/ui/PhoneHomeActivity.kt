@@ -304,22 +304,15 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
             val order = listOf("auto", "exo", "vlc", "mpv")
             app.prefs.engine = order[(order.indexOf(app.prefs.engine).coerceAtLeast(0) + 1) % order.size]
             syncFsTools()
-            // 改了内核要**真正重建**：同台直接 playChannel 会命中"复用引擎实例"，
-            // 等于什么都没做。先 stop() 拆掉当前引擎再起。
-            currentChannel?.let {
-                player.stop()
-                playChannel(it)
-            }
+            // 改了内核要真正重建（同台会命中"复用引擎实例"），见 restartCurrent
+            restartCurrent()
         }
         findViewById<TextView>(R.id.fsDecode)?.setOnClickListener {
             val order = listOf("auto", "hard", "soft")
             app.prefs.decode = order[(order.indexOf(app.prefs.decode).coerceAtLeast(0) + 1) % order.size]
             syncFsTools()
-            // 解码方式同理：prepare() 只在重建时才带新参数，复用时会沿用旧的
-            currentChannel?.let {
-                player.stop()
-                playChannel(it)
-            }
+            // 解码同理：prepare() 只在重建时才带新参数
+            restartCurrent()
         }
 
         // 投屏：发现由服务端做（iOS 拿不到多播权限，安卓也统一走服务端）
@@ -1322,6 +1315,22 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
     override fun onVideoSizeChanged(width: Int, height: Int, frameRate: Float) = Unit
 
     // ---------------------------------------------------------------- 生命周期
+
+    /** 用当前偏好的内核/解码重起当前台。currentChannel 可能是 null，要能兜住。 */
+    private fun restartCurrent() {
+        val target = currentChannel
+            ?: all.firstOrNull { it.id == player.playingChannelId }
+            ?: all.firstOrNull { com.litv.tv.data.M3uClient.urlOf(it.id) != null }
+            ?: all.firstOrNull()
+        if (target == null) {
+            android.util.Log.w(TAG, "restartCurrent: 没有可用频道，跳过")
+            return
+        }
+        android.util.Log.i(TAG, "restartCurrent: ${target.name} 内核=${app.prefs.engine} 解码=${app.prefs.decode}")
+        currentChannel = target
+        player.stop()
+        playChannel(target)
+    }
 
     private var fsBound = false
 

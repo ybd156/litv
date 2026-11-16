@@ -64,15 +64,6 @@
                 android:layout_height="wrap_content"
                 android:background="@android:color/black">
 
-                <org.videolan.libvlc.util.VLCVideoLayout
-                    android:id="@+id/vlcLayout"
-                    android:layout_width="match_parent"
-                    android:layout_height="match_parent"
-                    android:visibility="gone"                     android:clickable="false"
-                    android:focusable="false"
-                    android:elevation="0dp"
-                />
-
                 <!-- 视频输出只有一个目标：这个 SurfaceView。
                      Exo / VLC / mpv 都往它上面画，比例由外层 AspectRatioFrameLayout
                      按设置里的选项（auto/zoom/fill/16:9/4:3）处理。 -->
@@ -87,6 +78,17 @@
                         android:id="@+id/surface"
                         android:layout_width="match_parent"
                         android:layout_height="match_parent"
+                        android:clickable="false"
+                        android:focusable="false" />
+
+                    <!-- VLC 也放进这个比例容器：否则它 match_parent 会量到
+                         整屏高度（实测 1220x2268），画面被拉伸，而且每次
+                         尺寸变化都要重建 vout。 -->
+                    <org.videolan.libvlc.util.VLCVideoLayout
+                        android:id="@+id/vlcLayout"
+                        android:layout_width="match_parent"
+                        android:layout_height="match_parent"
+                        android:visibility="gone"
                         android:clickable="false"
                         android:focusable="false" />
                 </androidx.media3.ui.AspectRatioFrameLayout>

@@ -175,7 +175,10 @@ class VlcEngine : PlayerEngine {
                 Log.w(TAG, "setWindowSize 不可用（忽略）：${t.message}")
             }
         }
-        if (v.width > 0) apply.run() else v.post(apply)
+        // 一律延后到布局完成再设尺寸：直接 run 时布局还没量好，
+        // 拿到的可能是整屏高度（实测 1220x2268 而不是 16:9 的 686），
+        // VLC 会按整屏渲染并反复重建 vout。
+        v.post(apply)
     }
 
     /**

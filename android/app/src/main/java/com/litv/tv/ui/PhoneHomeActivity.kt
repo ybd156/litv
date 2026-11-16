@@ -195,8 +195,12 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
 
         // 播放器是 Application 级单例 + 前台服务保活：
         // Activity 重建、退到后台再回来都不重建播放器，缓冲也还在。
-        com.litv.tv.player.PlaybackService.ensureRunning(this)
-        player = app.player.also { it.callback = this }
+        // 播放器归本 Activity 所有（和电视端一致）：
+        // 全局单例 + 前台服务那套要自己维护「surface 何时有效 / 引擎换到哪 /
+        // 起播进行到哪一步」，状态散在十几个字段里，退后台回来黑屏、
+        // VLC 回来黑屏、首帧反复重建都是它的衍生问题。
+        // 代价是每次进播放页重建一次（约 0.7 秒），换来状态干净。
+        player = com.litv.tv.player.PlayerManager(this, app.prefs).also { it.callback = this }
         // 视频输出统一交给 PlayerManager：Exo / VLC / mpv 都往同一个 Surface 上画。
         // 不再用 media3 的 PlayerView——它和裸 SurfaceView 并存时，
         // 「同一个播放器再绑一次」是空操作，新 Surface 应用不上，
@@ -1282,11 +1286,11 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
         val isVlc = kind == EngineKind.VLC
         // 视频输出只有一个 SurfaceView（Exo / mpv 都往它上面画）；
         // VLC 自己需要一块 VLCVideoLayout，所以在 VLC 时把 SurfaceView 让出来。
-        // 用 INVISIBLE 而不是 GONE：GONE 的 SurfaceView 会被系统销毁，
-        // PlayerManager 手里的 surface 变 null，起播就会永远挂在
-        // 「等 Surface 到来」上（VLC 切换时必现，起播预算 36 秒耗光）。
-        // INVISIBLE 不参与显示但保留 Surface，VLC 的 vlcLayout 也能显示。
-        findViewById<android.view.View>(R.id.videoAspect)?.visibility =
+        // videoAspect（比例容器）永远可见——它负责 16:9，隐藏它 VLC 也会被藏起来。
+        // 只切里面两个渲染目标：VLC 用 vlcLayout，其余用 SurfaceView。
+        // SurfaceView 用 INVISIBLE 而不是 GONE：GONE 会被销毁，
+        // PlayerManager 手里的 surface 变 null，起播会永远挂在「等 Surface 到来」。
+        findViewById<android.view.View>(R.id.surface)?.visibility =
             if (isVlc) android.view.View.INVISIBLE else android.view.View.VISIBLE
         findViewById<org.videolan.libvlc.util.VLCVideoLayout>(R.id.vlcLayout)?.visibility =
             if (isVlc) android.view.View.VISIBLE else android.view.View.GONE
@@ -1462,6 +1466,12 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
     override fun onResume() {
         bindFsTools()
         resumeOrRebuildAfterBackground()
+        // Activity 重建后引擎没变，onEngineChanged 不会回调，
+        // 右上角的解码器标签就会空着。这里从播放器补一次。
+        if (::player.isInitialized) {
+            val lbl = player.engineLabel()
+            if (lbl.isNotBlank()) playEngine.text = lbl
+        }
         super.onResume()
         // 从遥控器/设置返回时重新应用一次当前 Tab，
         // 避免两个面板的可见性因为重建而错乱
@@ -1530,11 +1540,11 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
     override fun onDestroy() {
         app.api.onAuthExpired = null
         super.onDestroy()
-        // 不释放播放器：它归前台服务管，退到后台还要继续播。
-        // 只断开回调和 Surface，避免持有已销毁的 Activity / Surface。
+        // 播放器归本 Activity：界面走就释放，状态归零。
         if (::player.isInitialized) {
             player.callback = null
             player.attach(null, null)
+            runCatching { player.release() }
         }
     }
 

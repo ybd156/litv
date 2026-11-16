@@ -200,6 +200,31 @@ struct ApiClient {
         _ = try? await send(req, as: HeartbeatResult.self)
     }
 
+    /// QoE 上报（与 Android 端 StatsPayload 同一份契约）。
+    ///
+    /// event: start | stall | stop | error
+    /// 字段名必须和服务端 handlers_client.go 的 tvReportStats 对齐：
+    /// channel_id / event / startup_ms / detail / stall_ms / watch_ms / path / engine
+    ///
+    /// 失败静默：统计不能影响播放。
+    func reportStats(channelId: Int64, event: String,
+                     startupMs: Int = 0, detail: String = "",
+                     stallMs: Int = 0, watchMs: Int = 0,
+                     path: String = "", engine: String = "") async {
+        var body: [String: Any] = [
+            "channel_id": channelId,
+            "event": event,
+            "startup_ms": startupMs,
+            "detail": detail,
+            "stall_ms": stallMs,
+            "watch_ms": watchMs,
+        ]
+        if !path.isEmpty { body["path"] = path }
+        if !engine.isEmpty { body["engine"] = engine }
+        guard let req = request("/api/v1/tv/stats", method: "POST", body: body) else { return }
+        _ = try? await send(req, as: HeartbeatResult.self)
+    }
+
     /// 可被遥控的设备列表（不含自己）。
     func remoteTargets() async throws -> [RemoteTarget] {
         guard let req = request("/api/v1/tv/remote/targets", method: "GET", body: nil) else {

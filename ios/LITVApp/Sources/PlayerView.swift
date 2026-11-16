@@ -74,6 +74,10 @@ struct PlayerView: View {
 
     /// 是不是因为退到后台才暂停的（回来要接着播）。
     @State private var pausedByBackground = false
+
+    /// QoE：本次起播的起点 / 已经上报过 start 没有。
+    @State private var playStartedAt: Date?
+    @State private var startReported = false
     @State private var forceFullscreen = false
     @State private var controlsHideTask: Task<Void, Never>?
     @State private var muted = false
@@ -141,6 +145,16 @@ struct PlayerView: View {
             showControls()
             Task { await start() }
         }
+        .onChange(of: loading) { v in
+            // QoE：首帧出来（loading 收起且没有错误）时上报起播耗时
+            guard v == false, !startReported, errorText == nil else { return }
+            startReported = true
+            let ms = playStartedAt.map { Int(Date().timeIntervalSince($0) * 1000) } ?? 0
+            let ch = active.id
+            let p = playMode, e = usingVLC ? "vlc" : "avplayer"
+            Task { await session.api.reportStats(
+                channelId: ch, event: "start", startupMs: ms, path: p, engine: e) }
+        }
         .onChange(of: scenePhase) { phase in
             // App 退到后台时 onDisappear **不会**触发，音频会一直响。
             // 后台一律停播；回到前台重建播放器再播（和 Android 端一致：
@@ -156,6 +170,14 @@ struct PlayerView: View {
             }
         }
         .onDisappear {
+            // QoE：离开播放页补一条 stop（带观看时长）
+            if startReported, let t0 = playStartedAt {
+                let ms = Int(Date().timeIntervalSince(t0) * 1000)
+                let ch = active.id
+                let p = playMode, e = usingVLC ? "vlc" : "avplayer"
+                Task { await session.api.reportStats(
+                    channelId: ch, event: "stop", watchMs: ms, path: p, engine: e) }
+            }
             player?.pause()
             player = nil
             // KVO / 通知必须成对摘掉，否则 item 释放后再回调就是崩。
@@ -692,6 +714,9 @@ struct PlayerView: View {
         session.lastChannel = active
         loading = true
         errorText = nil
+        // QoE：每次起播重新计时
+        playStartedAt = Date()
+        startReported = false
         fallbackInFlight = false
         // 换台/重试时清掉上一次的降级请求，否则新旧两个标志会互相打架
         fallbackRequested = false

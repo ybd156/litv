@@ -1282,8 +1282,12 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
         val isVlc = kind == EngineKind.VLC
         // 视频输出只有一个 SurfaceView（Exo / mpv 都往它上面画）；
         // VLC 自己需要一块 VLCVideoLayout，所以在 VLC 时把 SurfaceView 让出来。
+        // 用 INVISIBLE 而不是 GONE：GONE 的 SurfaceView 会被系统销毁，
+        // PlayerManager 手里的 surface 变 null，起播就会永远挂在
+        // 「等 Surface 到来」上（VLC 切换时必现，起播预算 36 秒耗光）。
+        // INVISIBLE 不参与显示但保留 Surface，VLC 的 vlcLayout 也能显示。
         findViewById<android.view.View>(R.id.videoAspect)?.visibility =
-            if (isVlc) android.view.View.GONE else android.view.View.VISIBLE
+            if (isVlc) android.view.View.INVISIBLE else android.view.View.VISIBLE
         findViewById<org.videolan.libvlc.util.VLCVideoLayout>(R.id.vlcLayout)?.visibility =
             if (isVlc) android.view.View.VISIBLE else android.view.View.GONE
         if (isVlc) player.setVlcLayout(findViewById(R.id.vlcLayout))

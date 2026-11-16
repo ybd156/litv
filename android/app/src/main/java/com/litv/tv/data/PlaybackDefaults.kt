@@ -60,9 +60,9 @@ object PlaybackDefaults {
     const val RETRY_COUNT = 1
 
     /** 网络缓冲（毫秒）。 */
-    const val BUFFER_MS = 10000
+    const val BUFFER_MS = 5000
     /** 直播延迟默认 20 秒：主动落后直播边缘，换缓冲换稳定。 */
-    const val LIVE_OFFSET_MS = 20000
+    const val LIVE_OFFSET_MS = 8_000
 
     /**
      * 起播超时可选值（毫秒，**升序**）。必须包含 [START_TIMEOUT_MS]。

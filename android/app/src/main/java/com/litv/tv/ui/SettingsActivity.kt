@@ -29,6 +29,7 @@ class SettingsActivity : AppCompatActivity() {
     private lateinit var valueEngine: TextView
     private lateinit var valueDecode: TextView
     private lateinit var valueBuffer: TextView
+    private lateinit var valueLiveOffset: TextView
     private lateinit var valueAspect: TextView
     private lateinit var valueReverse: TextView
     private lateinit var valueAv3a: TextView
@@ -50,6 +51,15 @@ class SettingsActivity : AppCompatActivity() {
     private val engines = listOf("auto", "exo", "vlc", "mpv", "avs3")
     private val decodes = listOf("auto", "hard", "soft")
     private val buffers = listOf(1000, 2000, 3000, 5000, 8000)
+
+    /**
+     * 直播延迟可选项（毫秒）：主动落后直播边缘多久。
+     *
+     * 上限受服务端 HLS 窗口限制：remux 的窗口是 6 片 × 2 秒 = 12 秒，
+     * 所以给到 10000 就已经接近极限，20000 会被 Media3 静默 clamp 到窗口内，
+     * 反而更容易掉出窗口（BEHIND_LIVE_WINDOW）。
+     */
+    private val liveOffsets = listOf(2000, 4000, 6000, 8000, 10000)
     private val aspects = listOf("auto", "16:9", "4:3", "fill")
     private val numTimeouts = listOf(1500, 2000, 2500, 3000)
 
@@ -67,6 +77,7 @@ class SettingsActivity : AppCompatActivity() {
         valueEngine = findViewById(R.id.valueEngine)
         valueDecode = findViewById(R.id.valueDecode)
         valueBuffer = findViewById(R.id.valueBuffer)
+        valueLiveOffset = findViewById(R.id.valueLiveOffset)
         valueAspect = findViewById(R.id.valueAspect)
         valueReverse = findViewById(R.id.valueReverse)
         valueAv3a = findViewById(R.id.valueAv3a)
@@ -94,6 +105,10 @@ class SettingsActivity : AppCompatActivity() {
         bindCycle(R.id.rowBuffer, valueBuffer, buffers.map { it.toString() },
             app.prefs.bufferMs.toString()) { v ->
             app.prefs.bufferMs = v.toInt(); labelBuffer(v.toInt())
+        }
+        bindCycle(R.id.rowLiveOffset, valueLiveOffset, liveOffsets.map { it.toString() },
+            app.prefs.liveOffsetMs.toString()) { v ->
+            app.prefs.liveOffsetMs = v.toInt(); labelLiveOffset(v.toInt())
         }
         bindCycle(R.id.rowAspect, valueAspect, aspects, app.prefs.aspect) { v ->
             app.prefs.aspect = v; labelAspect(v)
@@ -285,6 +300,7 @@ class SettingsActivity : AppCompatActivity() {
         labelEngine(app.prefs.engine)
         labelDecode(app.prefs.decode)
         labelBuffer(app.prefs.bufferMs)
+        labelLiveOffset(app.prefs.liveOffsetMs)
         labelAspect(app.prefs.aspect)
         labelReverse(app.prefs.reverseChannelKeys)
         labelNumTimeout(app.prefs.numberJumpTimeoutMs)
@@ -321,6 +337,10 @@ class SettingsActivity : AppCompatActivity() {
             "soft" -> "软解优先"
             else -> "自动"
         }
+    }
+
+    private fun labelLiveOffset(ms: Int) = run {
+        valueLiveOffset.text = if (ms >= 1000) "${ms / 1000} 秒" else "${ms} 毫秒"
     }
 
     private fun labelBuffer(ms: Int) = run {

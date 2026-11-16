@@ -76,6 +76,19 @@
         </LinearLayout>
 
         <LinearLayout
+            android:id="@+id/rowLiveOffset"
+            style="@style/SettingRow">
+
+            <TextView
+                style="@style/SettingLabel"
+                android:text="直播延迟" />
+
+            <TextView
+                android:id="@+id/valueLiveOffset"
+                style="@style/SettingValue" />
+        </LinearLayout>
+
+        <LinearLayout
             android:id="@+id/rowAspect"
             style="@style/SettingRow">
 

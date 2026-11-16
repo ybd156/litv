@@ -84,6 +84,7 @@ class PlayerManager(
         if (retried < prefs.retryCount) {
             retried++
             Log.w(TAG, "内核 ${currentKind?.key} 起播超时，重试第 $retried 次（上限 ${prefs.retryCount}）")
+            com.litv.tv.data.PlayLog.w(TAG, "内核 ${currentKind?.key} 起播超时，重试第 $retried 次（上限 ${prefs.retryCount}）")
             startCurrent()
             return@Runnable
         }
@@ -99,6 +100,7 @@ class PlayerManager(
             retried = 0
         netRetry = 0
             Log.w(TAG, "exo 起播超时，改用软解重试")
+            com.litv.tv.data.PlayLog.w(TAG, "exo 起播超时，改用软解重试")
             startCurrent()
             return@Runnable
         }
@@ -206,6 +208,7 @@ class PlayerManager(
             if (stallRecovered > MAX_STALL_RECOVER) {
                 // 反复卡死说明不是偶发抖动，重启也没用，别再无限循环
                 Log.e(TAG, "已自动恢复 $MAX_STALL_RECOVER 次仍然卡死，本轮停止重试")
+                com.litv.tv.data.PlayLog.w(TAG, "已自动恢复 $MAX_STALL_RECOVER 次仍然卡死，本轮停止重试")
                 stopStallWatchdog()
                 callback?.onError("播放反复卡死，正在等待自动重试（也可换台）")
                 // 以前这里是**永久放弃**：屏幕停在"所有内核均失败"，不换台就永远不动。
@@ -214,6 +217,7 @@ class PlayerManager(
                 return@Runnable
             }
             Log.w(TAG, "判定卡死，第 $stallRecovered 次自动恢复")
+            com.litv.tv.data.PlayLog.w(TAG, "判定卡死，第 $stallRecovered 次自动恢复")
             // QoE：把"这次到底冻了多久"报上去。服务端的 StallRate / rebuffer_ratio
             // 在此之前**恒为 0**（客户端只报过 start），面板会显示"卡顿率 0%"主动误导。
             callback?.onStall(frozenMs.toInt())
@@ -221,6 +225,7 @@ class PlayerManager(
                 // 同一个台连续卡两次，多半是这条直连线路有问题。
                 // 交给上层改走服务端中转（和「直连首个内核失败」走同一条路）。
                 Log.w(TAG, "连续卡死，改走服务端中转")
+                com.litv.tv.data.PlayLog.w(TAG, "连续卡死，改走服务端中转")
                 directMode = false
                 onDirectFailed?.invoke("反复卡死")
                 return@Runnable
@@ -234,6 +239,7 @@ class PlayerManager(
     private val giveUpRetry = Runnable {
         if (userPaused) return@Runnable
         Log.i(TAG, "卡死放弃后自动重试一次")
+        com.litv.tv.data.PlayLog.w(TAG, "卡死放弃后自动重试一次")
         retryNow()
     }
 
@@ -311,16 +317,19 @@ class PlayerManager(
         if (retried < prefs.retryCount) {
             retried++
             Log.w(TAG, "内核 ${currentKind?.key} ${PlaybackDefaults.START_NOBYTE_MS / 1000} 秒无数据，重试第 $retried 次（上限 ${prefs.retryCount}）")
+            com.litv.tv.data.PlayLog.w(TAG, "内核 ${currentKind?.key} ${PlaybackDefaults.START_NOBYTE_MS / 1000} 秒无数据，重试第 $retried 次（上限 ${prefs.retryCount}）")
             startCurrent()
             return@Runnable
         }
         retried = 0
         if (!screenInteractive()) {
             Log.i(TAG, "屏幕已熄灭，跳过无数据判定")
+            com.litv.tv.data.PlayLog.w(TAG, "屏幕已熄灭，跳过无数据判定")
             return@Runnable
         }
         failLog += "${currentKind?.key ?: "?"}: ${PlaybackDefaults.START_NOBYTE_MS / 1000} 秒无数据"
         Log.w(TAG, "内核 ${currentKind?.key} ${PlaybackDefaults.START_NOBYTE_MS / 1000} 秒无数据，换下一个内核")
+        com.litv.tv.data.PlayLog.w(TAG, "内核 ${currentKind?.key} ${PlaybackDefaults.START_NOBYTE_MS / 1000} 秒无数据，换下一个内核")
         tryNext("${PlaybackDefaults.START_NOBYTE_MS / 1000} 秒无数据")
     }
 
@@ -347,6 +356,7 @@ class PlayerManager(
         // 息屏时不出帧是正常的，不能当成失败（否则息屏一会儿就"播不了"）
         if (!screenInteractive()) {
             Log.i(TAG, "屏幕已熄灭，跳过首帧判定")
+            com.litv.tv.data.PlayLog.w(TAG, "屏幕已熄灭，跳过首帧判定")
             return@Runnable
         }
         if (currentKind == EngineKind.EXO && !exoForceSoftwareDecode) {
@@ -371,6 +381,7 @@ class PlayerManager(
         // 真的停掉内核。只报错不停止的话，它会在后台继续缓冲/重连。
         runCatching { current?.stop() }
         Log.e(TAG, "起播总预算 ${PlaybackDefaults.START_BUDGET_MS}ms 用尽，放弃")
+        com.litv.tv.data.PlayLog.w(TAG, "起播总预算 ${PlaybackDefaults.START_BUDGET_MS}ms 用尽，放弃")
         callback?.onError(
             "起播超时（${PlaybackDefaults.START_BUDGET_MS / 1000} 秒）：" +
                 "源站无响应或线路不可用，请换台或换线路"
@@ -576,11 +587,13 @@ class PlayerManager(
             if (netRetry < NET_RETRY_MAX) {
                 netRetry++
                 Log.w(TAG, "网络类加载失败（$reason），第 $netRetry/$NET_RETRY_MAX 次重试同一内核")
+                com.litv.tv.data.PlayLog.w(TAG, "网络类加载失败（$reason），第 $netRetry/$NET_RETRY_MAX 次重试同一内核")
                 main.postDelayed({
                     if (!released && !budgetExpired && !prepared) startCurrent()
                 }, NET_RETRY_DELAY_MS)
             } else {
                 Log.e(TAG, "网络类失败已重试 $NET_RETRY_MAX 次，判定为网络问题，不换内核")
+                com.litv.tv.data.PlayLog.w(TAG, "网络类失败已重试 $NET_RETRY_MAX 次，判定为网络问题，不换内核")
                 callback?.onError("网络不可用：已重试 $NET_RETRY_MAX 次（每次 ${NET_RETRY_DELAY_MS / 1000} 秒）")
             }
             return
@@ -588,6 +601,7 @@ class PlayerManager(
 
         failLog += "${currentKind?.key ?: "?"}: $reason"
         Log.w(TAG, "内核 ${currentKind?.key} 加载失败（$reason），立即换下一个")
+        com.litv.tv.data.PlayLog.w(TAG, "内核 ${currentKind?.key} 加载失败（$reason），立即换下一个")
         retried = 0
         tryNext(reason)
     }
@@ -650,6 +664,7 @@ class PlayerManager(
             val created = create(kind)
             if (created == null || !created.isAvailable(context)) {
                 Log.i(TAG, "内核 ${kind.key} 不可用，跳过")
+                com.litv.tv.data.PlayLog.w(TAG, "内核 ${kind.key} 不可用，跳过")
                 failLog += "${kind.key}: 不可用"
                 chainIndex++
                 startCurrent()
@@ -795,6 +810,7 @@ class PlayerManager(
                     // "AMediaCodec.queueInputBuffer failed"），白等好几秒。
                     if (currentKind == EngineKind.EXO && !exoForceSoftwareDecode) {
                         Log.w(TAG, "解码器失败($message)，改用软解重试")
+                        com.litv.tv.data.PlayLog.w(TAG, "解码器失败($message)，改用软解重试")
                         exoForceSoftwareDecode = true
                         retried = 0
                         startCurrent()
@@ -803,6 +819,7 @@ class PlayerManager(
                     // 已经是软解还失败，说明这路码流本机真的解不了
                     if (currentKind == EngineKind.EXO && exoForceSoftwareDecode) {
                         Log.w(TAG, "软解也失败，该码流可能超出本机能力")
+                        com.litv.tv.data.PlayLog.w(TAG, "软解也失败，该码流可能超出本机能力")
                         failLog += "exo软解: $message"
                     }
                     tryNext(message)
@@ -868,6 +885,7 @@ class PlayerManager(
     private fun tryNext(reason: String) {
         main.removeCallbacks(startTimeout)
         Log.w(TAG, "内核 ${currentKind?.key} 失败($reason)，尝试下一个")
+        com.litv.tv.data.PlayLog.w(TAG, "内核 ${currentKind?.key} 失败($reason)，尝试下一个")
         com.litv.tv.data.PlayLog.w(TAG, "换内核：${currentKind?.key} 失败($reason)")
         failLog += "${currentKind?.key ?: "?"}: $reason"
 
@@ -881,6 +899,7 @@ class PlayerManager(
         // 把它们当成网络失败，等于把"能救回来的"直接判死。
         if (directMode && chainIndex == 0 && isNetworkFailure(reason)) {
             Log.w(TAG, "直连首个内核失败（网络层：$reason），跳过其余内核")
+            com.litv.tv.data.PlayLog.w(TAG, "直连首个内核失败（网络层：$reason），跳过其余内核")
             directMode = false
             onDirectFailed?.invoke(reason)
             return

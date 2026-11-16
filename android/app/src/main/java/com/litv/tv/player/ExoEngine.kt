@@ -115,6 +115,7 @@ class ExoEngine : PlayerEngine {
                         msg.contains("<html>", true)
                     ) {
                         Log.w(TAG, "源站返回非媒体内容（HTML/协议错误），不再重试")
+                        com.litv.tv.data.PlayLog.w(TAG, "源站返回非媒体内容（HTML/协议错误），不再重试")
                         return androidx.media3.common.C.TIME_UNSET
                     }
                     cause = cause.cause
@@ -288,20 +289,34 @@ class ExoEngine : PlayerEngine {
         // 起播阈值仍保持 300ms（IPTV 对出画时间敏感）。
         // 往前保持 10 秒缓冲（用户指定）：CDN 抖一下不至于立刻欠载。
         // 上限至少要比它大，否则 ExoPlayer 会报参数非法。
-        val minBufferMs = 10_000
+        // ★ 跟随设置里的「缓冲」（prefs.bufferMs），不再写死 10 秒。
+        //
+        // 10 秒对直播是错的：服务端 HLS 窗口只有 6 片 × 2 秒 = 12 秒，
+        // 要保 10 秒缓冲，播放位置必然贴着窗口边缘，一抖就
+        // ERROR_CODE_BEHIND_LIVE_WINDOW → seek 回边缘 → 重新缓冲，
+        // 表现就是「越看越卡」。落盘日志里起播 6 秒就掉出去过一次。
+        // 社区直播实践是 1.5~3 秒，这里跟随设置并夹在 1~8 秒。
+        val minBufferMs = bufferMs.coerceIn(1_000, 8_000)
         // 上限原来只有 max(缓冲设置, 12s)。实测 cctv17 这类源：
         // 播放列表（1KB）每次要 880~1450ms、分片（2~3MB）要 870~1213ms，
         // 两分钟里"加载慢"出现 29 次、重缓冲 2 次 —— 12 秒的池子太薄，
         // 连续两次慢请求就见底。上限放到"缓冲设置 × 3"（下限 20s、上限 60s），
         // 让 ExoPlayer 有空间提前囤货。
-        val maxBufferMs = (bufferMs.coerceIn(2000, 60_000) * 3)
-            .coerceIn(minBufferMs + 10_000, 60_000)
+        // 上限封在 20 秒：直播不需要囤 60 秒，那是纯浪费内存，
+        // 低端盒子上还会把 GC 压力拉满。
+        // 上限 40 秒：它是"最多囤多少"，不是目标深度，不会和 12 秒窗口冲突
+        // （窗口冲突由 minBufferMs 决定）。20 秒太紧——实测 2.8 小时里
+        // 重缓冲 79 次、判定卡死 10 次，上游拉 1KB 清单要 1.5 秒时没有余量。
+        val maxBufferMs = (minBufferMs * 4).coerceIn(minBufferMs + 2_000, 40_000)
         // bufferForPlayback 从 300 提到 800：
         // 实测音频 HAL 的欠载告警全部集中在起播那 4 秒（19 条在 20:42:49~53，
         // 之后 55 秒安静）。300ms 就开播时管线还没填满，第一秒最容易破音。
         // 起播慢 0.5 秒，换掉开头那一段电音。
         val loadControl = DefaultLoadControl.Builder()
-            .setBufferDurationsMs(minBufferMs, maxBufferMs, 800, 2000)
+            // 第 4 个参数是"重缓冲后要再攒多少才恢复播放"。
+            // 2000 → 1000：实测重缓冲 38 次/小时，每次多等 1 秒就是
+            // 每小时多卡 38 秒；上游慢是常态，早点恢复比攒满更划算。
+            .setBufferDurationsMs(minBufferMs, maxBufferMs, 800, 1000)
             .setBackBuffer(0, true)                     // 直播不回退缓冲，省内存
             .setPrioritizeTimeOverSizeThresholds(false) // 优先按字节封顶，防低端盒子 OOM
             .build()
@@ -398,6 +413,7 @@ class ExoEngine : PlayerEngine {
             ) {
                 exoFirstFrameRendered = true
                 Log.i(TAG, "视频首帧已渲染")
+                com.litv.tv.data.PlayLog.w(TAG, "视频首帧已渲染")
                 com.litv.tv.data.PlayLog.w(TAG, "首帧已渲染")
                 listener?.onFirstFrame()
             }
@@ -431,6 +447,7 @@ class ExoEngine : PlayerEngine {
             ) {
                 val ms = loadEventInfo.loadDurationMs
                 if (ms >= 800) {
+                    com.litv.tv.data.PlayLog.w(TAG, "加载慢 ${ms}ms")
                     Log.w(
                         TAG,
                         "加载慢 ${ms}ms / ${loadEventInfo.bytesLoaded / 1024}KB（${mediaLoadData.trackType}）",
@@ -448,6 +465,7 @@ class ExoEngine : PlayerEngine {
                 if (wasCanceled) return
                 val brief = briefError(error)
                 Log.w(TAG, "加载失败 $brief")
+                com.litv.tv.data.PlayLog.w(TAG, "加载失败 $brief")
                 // 告诉 PlayerManager：这个内核拿不到数据，别再等 12 秒看门狗了。
                 //
                 // ★ 必须把**真实原因**传上去。以前这里传的是常量「加载失败」，
@@ -475,6 +493,7 @@ class ExoEngine : PlayerEngine {
                 // 已经在播却退回 BUFFERING = 重缓冲（网络或解码跟不上）
                 if (playbackState == Player.STATE_BUFFERING && exoFirstFrameRendered) {
                     Log.w(TAG, "重缓冲：播放中回到 BUFFERING")
+                    com.litv.tv.data.PlayLog.w(TAG, "重缓冲：播放中回到 BUFFERING")
                 }
             }
         })
@@ -508,6 +527,7 @@ class ExoEngine : PlayerEngine {
                     error.cause?.message?.let { append(": ").append(it) }
                 }
                 Log.w(TAG, "Exo 播放失败: $msg")
+                com.litv.tv.data.PlayLog.w(TAG, "Exo 播放失败: $msg")
 
                 // 播放位置掉到直播窗口之后：**这是可恢复的**，不是失败。
                 //
@@ -524,6 +544,7 @@ class ExoEngine : PlayerEngine {
                 // 用户看的好好的，突然就停了，而且换台才好。
                 if (error.errorCode == androidx.media3.common.PlaybackException.ERROR_CODE_BEHIND_LIVE_WINDOW) {
                     Log.w(TAG, "播放位置掉出直播窗口，seek 回直播边缘继续播（不当作失败）")
+                    com.litv.tv.data.PlayLog.w(TAG, "播放位置掉出直播窗口，seek 回直播边缘继续播（不当作失败）")
                 com.litv.tv.data.PlayLog.w(TAG, "掉出直播窗口，seek 回边缘")
                     val exo = player
                     if (exo == null) {
@@ -556,6 +577,7 @@ class ExoEngine : PlayerEngine {
                     msg.contains("surface", ignoreCase = true) && msg.contains("release", ignoreCase = true)
                 ) {
                     Log.w(TAG, "Surface 已释放，交由上层重接，不当作播放失败")
+                    com.litv.tv.data.PlayLog.w(TAG, "Surface 已释放，交由上层重接，不当作播放失败")
                     listener?.onSurfaceLost(msg)
                     return
                 }
@@ -565,6 +587,7 @@ class ExoEngine : PlayerEngine {
                 // VLC/mpv 也是走同一批 MediaCodec，会再失败一遍。
                 if (isDecoderFailure(error, msg)) {
                     Log.w(TAG, "判定为解码器失败，交由上层切换解码方式")
+                    com.litv.tv.data.PlayLog.w(TAG, "判定为解码器失败，交由上层切换解码方式")
                     listener?.onDecoderFailed(msg)
                 } else {
                     listener?.onError(msg)
@@ -585,6 +608,10 @@ class ExoEngine : PlayerEngine {
      * 加 CodecException 0x80001000。
      */
     private fun isDecoderFailure(error: PlaybackException, msg: String): Boolean {
+        // 注意：不要试图用 `Format(0,` 判断"格式无效"——那个 0 是 format 的 id，
+        // 不是宽高；真正的宽高在后面的 [1920, 1080, ...] 里。
+        // 我按它判断过一次，把真解码器失败误判成数据问题，结果不切软解、
+        // 改去换内核，VLC 又拿不到数据，直接死循环。
         if (error.errorCode == PlaybackException.ERROR_CODE_DECODING_FAILED ||
             error.errorCode == PlaybackException.ERROR_CODE_DECODING_FORMAT_UNSUPPORTED ||
             error.errorCode == PlaybackException.ERROR_CODE_DECODER_INIT_FAILED ||

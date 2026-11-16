@@ -110,18 +110,23 @@ jobs:
         if: failure()
         run: |
           set +e
-          grep -E "error:" /tmp/xcodebuild.log 2>/dev/null | head -40 > "$RUNNER_TEMP/ios-errors.txt"
+          grep -E "error:" /tmp/xcodebuild.log 2>/dev/null | head -60 > "$RUNNER_TEMP/ios-errors.txt"
           if [ ! -s "$RUNNER_TEMP/ios-errors.txt" ]; then
-            tail -200 /tmp/xcodebuild.log > "$RUNNER_TEMP/ios-errors.txt" 2>/dev/null
+            tail -300 /tmp/xcodebuild.log > "$RUNNER_TEMP/ios-errors.txt" 2>/dev/null
           fi
-          cd "$GITHUB_WORKSPACE"
+          echo "----- 采集到的错误 -----"
+          head -40 "$RUNNER_TEMP/ios-errors.txt"
+          # 用独立 worktree，避免在主工作区里 checkout 失败
+          # （pod install / xcodegen 会留下未跟踪文件，checkout 会被拒）
+          rm -rf "$RUNNER_TEMP/ciw"
+          git worktree add -f "$RUNNER_TEMP/ciw" -B ci-logs origin/main
+          cp "$RUNNER_TEMP/ios-errors.txt" "$RUNNER_TEMP/ciw/ios-errors.txt"
+          cd "$RUNNER_TEMP/ciw"
           git config user.name "ci"
           git config user.email "ci@local"
-          git checkout -B ci-logs
-          cp "$RUNNER_TEMP/ios-errors.txt" ios-errors.txt
           git add -f ios-errors.txt
-          git commit -m "ci: iOS 编译错误 ${GITHUB_SHA}" || true
-          git push -f origin ci-logs || true
+          git commit -m "ci: iOS 编译错误 ${GITHUB_SHA}"
+          git push -f origin ci-logs
 
       - name: 失败时回传完整日志
         if: failure()

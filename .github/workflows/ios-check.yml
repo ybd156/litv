@@ -15,7 +15,9 @@ on:
       - ".github/workflows/ios-check.yml"
 
 permissions:
-  contents: read
+  # 失败时要把编译错误推到 ci-logs 分支，需要写权限。
+  # 只读的话那一步会被拒，ci-logs 永远不存在——之前就是这个原因。
+  contents: write
 
 concurrency:
   group: ios-check-${{ github.ref }}

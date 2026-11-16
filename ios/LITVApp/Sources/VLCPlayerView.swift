@@ -58,6 +58,9 @@ import MobileVLCKit
 /// VLC 底层是 FFmpeg，这些都能解。
 struct VLCPlayerView: UIViewRepresentable {
 
+    /// 画面比例：auto / fill / zoom / 16:9 / 4:3（与 Android 的设置同名）
+    var aspect: String = "auto"
+
     let url: URL
     var autoplay: Bool = true
     /// 解码方式：auto（默认，让 VLC 自己选）/ hard（强制硬件）/ soft（强制软件）
@@ -156,6 +159,16 @@ struct VLCPlayerView: UIViewRepresentable {
     /// 播放器还在放旧流（或首帧之后再也不出画面）——
     /// 用户看到的就是「点频道换台黑屏、没有任何提示」。
     func updateUIView(_ uiView: UIView, context: Context) {
+        #if canImport(MobileVLCKit)
+        // 16:9 / 4:3 用 VLC 的强制比例；auto/fill/zoom 交回默认（0 = 跟随源）
+        if let p = coordinator.player as? VLCMediaPlayer {
+            switch aspect {
+            case "16:9": p.videoAspectRatio = "16:9"
+            case "4:3": p.videoAspectRatio = "4:3"
+            default: p.videoAspectRatio = nil
+            }
+        }
+        #endif
         guard context.coordinator.currentURL != url else { return }
         context.coordinator.currentURL = url
         guard let player = context.coordinator.player else { return }

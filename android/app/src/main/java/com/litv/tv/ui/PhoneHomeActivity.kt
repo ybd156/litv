@@ -1471,6 +1471,17 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
         if (::player.isInitialized) {
             val lbl = player.engineLabel()
             if (lbl.isNotBlank()) playEngine.text = lbl
+            // 渲染目标的可见性也要补：布局里 vlcLayout 默认是 gone，
+            // 只在 onEngineChanged 里被设成可见。冷启动时引擎没有"变化"
+            // （本来就是 VLC），回调不触发 → vlcLayout 一直是 gone →
+            // VLC 报"已开始播放"但渲染到不可见视图，画面永远不出来，
+            // 最后烧完 36 秒起播预算。退后台回来时回调会再触发一次，
+            // 所以"退到后台再进就能播"。
+            val isVlc = player.engineKey() == "vlc"
+            findViewById<android.view.View>(R.id.surface)?.visibility =
+                if (isVlc) android.view.View.INVISIBLE else android.view.View.VISIBLE
+            findViewById<android.view.View>(R.id.vlcLayout)?.visibility =
+                if (isVlc) android.view.View.VISIBLE else android.view.View.GONE
         }
         super.onResume()
         // 从遥控器/设置返回时重新应用一次当前 Tab，

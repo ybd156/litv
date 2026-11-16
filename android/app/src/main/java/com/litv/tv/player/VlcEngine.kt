@@ -195,8 +195,25 @@ class VlcEngine : PlayerEngine {
         libVlc?.let { return it }
         // 直播低延迟参数：不丢帧、不跳帧、网络缓冲给足
         val args = ArrayList<String>().apply {
-            add("--no-drop-late-frames")
-            add("--no-skip-frames")
+            // ★ 直播必须允许丢帧/跳帧。
+            // 以前这里写的是 --no-drop-late-frames + --no-skip-frames
+            // （注释还写着"直播低延迟参数：不丢帧、不跳帧"），理解反了：
+            // 解码跟不上时禁止丢帧，延迟会无限积压，积到一定程度 VLC
+            // 就彻底不吐帧。实测播 20 秒后 idle 从 14 秒涨到 20 秒，
+            // 然后「VLC 停止送帧」→ 换内核。
+            // 直播要的是"跟不上就丢，保住实时性"。
+            add("--drop-late-frames")
+            add("--skip-frames")
+            // ★ 关掉时钟抖动/同步补偿。
+            //
+            // 症状：播 20 秒左右 VLC 停止吐帧（idle 从 14s 涨到 20s 然后卡死）。
+            // 社区结论一致——libVLC 默认的**强时钟同步**在直播流上是主要瓶颈：
+            // 直播的时间戳本身不连续（上游切片、GOP 不齐），补偿逻辑会一直
+            // 判定"还要等"，最终不再出帧。
+            // 参考：VLC 网络视频流卡顿问题分析与时钟同步优化方案；
+            //      以及同类症状 https://github.com/xuyuanzhou/react-native-yz-vlcplayer/issues/63
+            add("--clock-jitter=0")
+            add("--clock-synchro=0")
             add("--avcodec-hw=any")          // 尽量硬解
             // 直播缓冲从 1500ms 降到 800ms。
             // VLC 的 network-caching 同时决定「起播前等多久」，1500ms 意味着

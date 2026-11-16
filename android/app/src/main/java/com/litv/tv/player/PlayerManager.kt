@@ -705,7 +705,13 @@ class PlayerManager(
         // 统一契约：视频输出只有一个来源 —— Activity 交过来的 Surface。
         // 引擎层不再有「PlayerView 模式」这种分支（以前有，导致同一个播放器
         // 再绑一次是空操作，新 Surface 永远应用不上：退出再进黑屏、声音还在）。
-        if (surface == null) {
+        // VLC 不走 SurfaceView：它渲染到 vlcLayout，而 VLC 模式下我们把
+        // SurfaceView 设成了 INVISIBLE——不可见的 SurfaceView 不会创建
+        // Surface，surfaceCreated 永远不触发，这里就会永久挂起
+        // （日志：Surface 未就绪，挂起起播 → 36 秒预算用尽，中间没有
+        //  Surface 就绪）。所以只有非 VLC 内核才等 Surface。
+        val needsSurface = currentKind?.key != "vlc"
+        if (surface == null && needsSurface) {
             // Surface 还没就绪（Activity 刚重建 / onResume 早于 surfaceCreated）。
             // 以前这里直接报错返回 —— 手机退后台再回来就变成「黑屏 + 没声音」：
             // 播放器重建被挡在这里，之后 Surface 到了也没人再拉起起播。

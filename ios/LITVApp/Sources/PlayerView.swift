@@ -78,6 +78,10 @@ struct PlayerView: View {
     /// QoE：本次起播的起点 / 已经上报过 start 没有。
     @AppStorage("litv.aspect") private var aspectMode = "auto"
 
+    /// 播放页当前分组（nil = 全部）。与 Android 手机端的 chip 一致：
+    /// 切台时只在这个分组的频道里循环。
+    @State private var playGroup: String? = nil
+
     @State private var playStartedAt: Date?
     @State private var startReported = false
     @State private var forceFullscreen = false
@@ -104,6 +108,10 @@ struct PlayerView: View {
                     .padding(.horizontal, 16)
                     .padding(.top, 8)
                     .padding(.bottom, 10)
+            }
+
+            if !isFullscreen {
+                groupChips
             }
 
             videoArea
@@ -574,8 +582,41 @@ struct PlayerView: View {
         }
     }
 
+    /// 播放页分组 chip（与 Android 手机端一致）。
+    private var groupChips: some View {
+        let groups = Array(Set(session.channels.map { $0.group }.filter { !$0.isEmpty })).sorted()
+        return ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                chip("全部", on: playGroup == nil) { playGroup = nil }
+                ForEach(groups, id: \.self) { g in
+                    chip(g, on: playGroup == g) { playGroup = g }
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 6)
+        }
+    }
+
+    private func chip(_ title: String, on: Bool, tap: @escaping () -> Void) -> some View {
+        Button(action: tap) {
+            Text(title)
+                .font(.caption)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .background(on ? Color.accentColor.opacity(0.25) : Color.white.opacity(0.08))
+                .foregroundColor(on ? .accentColor : .gray)
+                .clipShape(Capsule())
+        }
+        .buttonStyle(.plain)
+    }
+
     private func switchBy(_ delta: Int) {
-        let list = session.channels
+        // 只在当前分组内循环（未选分组 = 全部），与 Android 手机端一致
+        var list = session.channels
+        if let g = playGroup {
+            let inGroup = list.filter { $0.group == g }
+            if !inGroup.isEmpty { list = inGroup }
+        }
         guard !list.isEmpty else { return }
         let i = list.firstIndex(where: { $0.id == active.id }) ?? 0
         let n = ((i + delta) % list.count + list.count) % list.count

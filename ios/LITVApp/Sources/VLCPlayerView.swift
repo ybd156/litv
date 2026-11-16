@@ -69,8 +69,6 @@ struct VLCPlayerView: UIViewRepresentable {
     var headers: [String: String] = [:]
     /// 控制条通过它拿到底层播放器
     var control: VLCControl? = nil
-    /// 画面比例：auto / fill / zoom / 16:9 / 4:3（与 Android 设置同名）
-    var aspect: String = "auto"
     var onState: ((VLCPlaybackState) -> Void)?
 
     /// 大小写不敏感地在 headers 里找一个头。
@@ -158,16 +156,6 @@ struct VLCPlayerView: UIViewRepresentable {
     /// 播放器还在放旧流（或首帧之后再也不出画面）——
     /// 用户看到的就是「点频道换台黑屏、没有任何提示」。
     func updateUIView(_ uiView: UIView, context: Context) {
-        #if canImport(MobileVLCKit)
-        // 16:9 / 4:3 用 VLC 的强制比例；auto / fill / zoom 交回默认（跟随源）
-        if let p = context.coordinator.player as? VLCMediaPlayer {
-            switch aspect {
-            case "16:9": p.videoAspectRatio = "16:9"
-            case "4:3": p.videoAspectRatio = "4:3"
-            default: p.videoAspectRatio = nil
-            }
-        }
-        #endif
         guard context.coordinator.currentURL != url else { return }
         context.coordinator.currentURL = url
         guard let player = context.coordinator.player else { return }

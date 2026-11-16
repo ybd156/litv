@@ -113,6 +113,31 @@ packaging/fnos/app/server/litvd_*
 - Release 构建不能带详细 HTTP 日志
 - 播放器改动必须验证：release、Activity 生命周期、快速切台、断网恢复、重试有上限
 
+### 真机验证的两个坑（2026-11-16 各踩一次，代价很大）
+
+**1. 装完必须核对 APK 时间戳**
+
+Gradle 的增量编译判断会失效：改了源码、`assembleRelease` 报 SUCCESSFUL，
+但 APK 根本没重编。此时装上去的是旧包，于是「改完没变化」——
+
+```bash
+ls -l --time-style=+%H:%M:%S app/build/outputs/apk/release/app-*-release.apk
+ls -l --time-style=+%H:%M:%S app/src/main/java/.../改过的文件.kt
+# APK 时间必须晚于源码时间，否则：
+gradle :app:assembleRelease --rerun-tasks
+```
+
+**2. 先怀疑布局，再怀疑引擎**
+
+「画面往左偏」查了很久渲染目标可见性、vout 挂载、Surface 绑定，
+实际原因是：`AspectRatioFrameLayout` 设了 `setAspectRatio()` 后会
+**把自己缩到视频比例**，而它挂在 `FrameLayout` 里，`FrameLayout`
+默认把子视图放**左上角**。一行 `android:layout_gravity="center"` 解决。
+
+判断顺序应该是：**布局层（尺寸/gravity/比例）→ 渲染目标（可见性/绑定）
+→ 引擎（解码/时钟）**。反过来查会浪费大量轮次，而且每次「修好」的
+都是不存在的病因。
+
 ### iOS 特有
 
 - **部署目标是 iOS 15。不要用 iOS 16+ 的 API。**

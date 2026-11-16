@@ -79,6 +79,7 @@ class VlcEngine : PlayerEngine {
                 Log.w(TAG, "VLC 12 秒没送帧（idle=${idle}ms），轻推一次")
                 runCatching { p.pause(); p.play() }
                 if (nudgedOnce) {
+                    com.litv.tv.data.PlayLog.w(TAG, "VLC 停止送帧")
                     listener?.onError("VLC 停止送帧")
                     return
                 }
@@ -169,6 +170,7 @@ class VlcEngine : PlayerEngine {
                 val m = mp.vlcVout.javaClass.getMethod("setWindowSize", Int::class.java, Int::class.java)
                 m.invoke(mp.vlcVout, w, h)
                 Log.i(TAG, "已设置 VLC 窗口尺寸 ${w}x${h}")
+                com.litv.tv.data.PlayLog.w(TAG, "已设置 VLC 窗口尺寸 ${w}x${h}")
             } catch (t: Throwable) {
                 Log.w(TAG, "setWindowSize 不可用（忽略）：${t.message}")
             }
@@ -176,6 +178,16 @@ class VlcEngine : PlayerEngine {
         if (v.width > 0) apply.run() else v.post(apply)
     }
 
+    /**
+     * 取（或创建）LibVLC 实例。
+     *
+     * ★ 必须同步：LibVLC 构造要上百毫秒，两个线程同时进来都会通过
+     *   `libVlc?.let` 检查、各建一个实例，后一个覆盖字段，第一个成为
+     *   永不释放的孤儿。实测 logcat 里同时出现两个 libvlc 地址，
+     *   音频时钟互相打架（playback too early / inserting zeroes）。
+     *   触发条件是 prepare() 被并发/重复调用。
+     */
+    @Synchronized
     private fun ensureLib(context: Context): LibVLC {
         libVlc?.let { return it }
         // 直播低延迟参数：不丢帧、不跳帧、网络缓冲给足
@@ -248,6 +260,7 @@ class VlcEngine : PlayerEngine {
             when (event.type) {
                 MediaPlayer.Event.Playing -> {
                     listener?.onPlaying()
+                    com.litv.tv.data.PlayLog.w(TAG, "VLC 已开始播放")
                     lastTimeEventAt = android.os.SystemClock.elapsedRealtime()
                     nudgedOnce = false
                     main.removeCallbacks(vlcWatchdog)
@@ -255,7 +268,10 @@ class VlcEngine : PlayerEngine {
                 }
                 MediaPlayer.Event.TimeChanged -> lastTimeEventAt = android.os.SystemClock.elapsedRealtime()
                 MediaPlayer.Event.EndReached -> listener?.onEnded()
-                MediaPlayer.Event.EncounteredError -> listener?.onError("VLC 解码/网络错误")
+                MediaPlayer.Event.EncounteredError -> {
+                    com.litv.tv.data.PlayLog.w(TAG, "VLC 解码/网络错误")
+                    listener?.onError("VLC 解码/网络错误")
+                }
                 // libVLC 3.5.1 的 MediaPlayer 没有公开 videoSize API，
                 // 画面尺寸交给上层按 Surface 比例处理，这里不做上报。
                 else -> Unit

@@ -30,6 +30,7 @@ class SettingsActivity : AppCompatActivity() {
     private lateinit var valueDecode: TextView
     private lateinit var valueBuffer: TextView
     private lateinit var valueLiveOffset: TextView
+    private lateinit var valueExportLog: TextView
     private lateinit var valueAspect: TextView
     private lateinit var valueReverse: TextView
     private lateinit var valueAv3a: TextView
@@ -78,6 +79,7 @@ class SettingsActivity : AppCompatActivity() {
         valueDecode = findViewById(R.id.valueDecode)
         valueBuffer = findViewById(R.id.valueBuffer)
         valueLiveOffset = findViewById(R.id.valueLiveOffset)
+        valueExportLog = findViewById(R.id.valueExportLog)
         valueAspect = findViewById(R.id.valueAspect)
         valueReverse = findViewById(R.id.valueReverse)
         valueAv3a = findViewById(R.id.valueAv3a)
@@ -105,6 +107,12 @@ class SettingsActivity : AppCompatActivity() {
         bindCycle(R.id.rowBuffer, valueBuffer, buffers.map { it.toString() },
             app.prefs.bufferMs.toString()) { v ->
             app.prefs.bufferMs = v.toInt(); labelBuffer(v.toInt())
+        }
+        findViewById<android.view.View>(R.id.rowExportLog)?.setOnClickListener {
+            val p = com.litv.tv.data.PlayLog.exportTo(this)
+            valueExportLog.text = if (p != null) "已导出" else "无日志"
+            android.widget.Toast.makeText(this, p ?: "没有可导出的日志",
+                android.widget.Toast.LENGTH_LONG).show()
         }
         bindCycle(R.id.rowLiveOffset, valueLiveOffset, liveOffsets.map { it.toString() },
             app.prefs.liveOffsetMs.toString()) { v ->

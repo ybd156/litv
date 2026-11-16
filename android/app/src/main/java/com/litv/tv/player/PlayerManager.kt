@@ -457,7 +457,9 @@ class PlayerManager(
         if (surface != null && pendingStartForSurface && !released) {
             pendingStartForSurface = false
             Log.i(TAG, "Surface 就绪，继续挂起的起播")
-            main.post { if (!released) startCurrent() }
+            // 必须 force：这是「挂起后恢复」，不能被 250ms 去重挡掉
+            // （第一次 startCurrent 已经把 lastStartAtMs 写过了）
+            main.post { if (!released) startCurrent(force = true) }
         }
     }
 
@@ -611,7 +613,27 @@ class PlayerManager(
         budgetExpired = true
     }
 
-    private fun startCurrent() {
+    /** 上一次真正执行 startCurrent 的时刻（uptime），用于去重。 */
+    private var lastStartAtMs = 0L
+
+    /**
+     * 起播（幂等）。
+     *
+     * 为什么要去重：这个方法有 13 个调用点（看门狗、重试、内核回调、
+     * Surface 就绪……），而 attach() 又有 4 个来源（surfaceCreated /
+     * surfaceChanged / onResume / reattachVideo）。一次「回到前台」
+     * 会同时触发 2~3 条路径，每次都全量重建播放器——实测同一秒打出
+     * 三次「首帧已渲染」，VLC 还会因此并发出两个 LibVLC 实例。
+     *
+     * 参照 my-tv 的做法（`if (!isPlaying) { prepare(); play() }`）：
+     * 短时间内的重复请求直接忽略。真正需要重建的场景（换台 / 换内核）
+     * 传 force = true。
+     */
+    private fun startCurrent(force: Boolean = false) {
+        // ⚠ 去重暂时关闭：实测加上之后手机端完全不播（一条事件都没有），
+        // 说明有某条必需的起播路径被 250ms 窗口挡掉了，而我没定位到是哪条。
+        // 先回到「每次都执行」的已知可用状态，等能复现时再逐条核调用点。
+        lastStartAtMs = android.os.SystemClock.elapsedRealtime()
         main.removeCallbacks(startTimeout)
 
         // 换内核前给上一个解码器一点时间真正释放。
@@ -909,7 +931,8 @@ class PlayerManager(
             callback?.onError(chainFailMessage())
             return
         }
-        startCurrent()
+        // 换内核必须重建，不能被去重挡掉
+        startCurrent(force = true)
     }
 
     /**

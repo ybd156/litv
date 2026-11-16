@@ -1497,38 +1497,19 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
      * 先重新解析一次 m3u 再起播。
      */
     private fun resumeOrRebuildAfterBackground() {
-        if (!::player.isInitialized) {
-            android.util.Log.i(TAG, "onResume: 播放器未初始化，跳过")
-            return
-        }
-        val pausedAt = pausedAtMs
+        // 标准做法（官方 Media3 指南）：resume 只 resume，不重建播放器。
+        // 以前这里「后台超过 2 秒就整个重建」，是当初把「退后台回来黑屏」
+        // 误判成解码器问题加上的补丁；真正原因是重复 Activity 实例
+        // （singleTask 已修）。这个补丁在 VLC 上直接表现为回来黑屏
+        // ——vlcLayout 的 Surface 接不上。
+        // 现在 Exo / VLC 走同一条路：Surface 重建交给 surfaceCreated，
+        // 换台交给 playChannel，resume 不触发任何重建。
+        if (!::player.isInitialized) return
         pausedAtMs = 0L
-        val bgSec = if (pausedAt == 0L) 0L else (System.currentTimeMillis() - pausedAt) / 1000
-        val ch = currentChannel
-        android.util.Log.i(
-            TAG,
-            "onResume: bg=${bgSec}s ch=${ch?.id} playingId=${player.playingChannelId} paused=$paused",
-        )
-        if (ch == null) return
-        // 用户自己按的暂停：回来不能自己响
+        val ch = currentChannel ?: return
         if (paused) return
-        if (bgSec < resumeMaxBgSec) {
-            if (ch.id == player.playingChannelId) runCatching { player.resume() }
-            return
-        }
-        android.util.Log.i(TAG, "后台 ${bgSec}s 回来，重建播放器（解码器已不可用）")
-        if (bgSec >= 60 && clientMode()) {
-            // 久到上游 token 可能已经轮换：重新解析 m3u 再起播
-            com.litv.tv.data.M3uClient.load(this, app.api, app.prefs.dlKey, app.epg) { parsed ->
-                main.post {
-                    if (isFinishing || isDestroyed) return@post
-                    val target = parsed?.channels?.firstOrNull { it.name == ch.name } ?: ch
-                    playChannel(target)
-                }
-            }
-        } else {
-            playChannel(ch)
-        }
+        if (ch.id != player.playingChannelId) return
+        runCatching { player.resume() }
     }
 
     override fun onPause() {

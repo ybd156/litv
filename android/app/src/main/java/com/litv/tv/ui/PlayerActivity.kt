@@ -3360,20 +3360,12 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
      * 重建必须带 forceRebuild：否则缓存命中会跳过 prepare，等于什么都没做。
      */
     private fun resumeOrRebuildAfterBackground() {
+        // 同手机端：resume 只 resume，不重建（见 PhoneHomeActivity 里的说明）。
         if (!::player.isInitialized) return
-        val pausedAt = pausedAtMs
         pausedAtMs = 0L
         val ch = current ?: return
-        val bgSec = if (pausedAt == 0L) 0L else (System.currentTimeMillis() - pausedAt) / 1000
-        if (bgSec < resumeMaxBgSec) {
-            // 短时回来：只有播放器确实还停在这个台上才续播
-            if (ch.id == player.playingChannelId) player.resume()
-            return
-        }
-        // 长时回来：不管 id 对不对得上都要重建——播放器里那条地址和那个位置
-        // 都已经不可信了。
-        Log.i(TAG, "后台 ${bgSec}s 回来，重建播放器（旧地址/位置可能已失效）")
-        playChannel(ch, currentStreamId, forceRebuild = true)
+        if (ch.id != player.playingChannelId) return
+        runCatching { player.resume() }
     }
 
     override fun onResume() {

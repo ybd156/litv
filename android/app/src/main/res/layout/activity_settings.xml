@@ -89,6 +89,20 @@
         </LinearLayout>
 
         <LinearLayout
+            android:id="@+id/rowExportLog"
+            style="@style/SettingRow">
+
+            <TextView
+                style="@style/SettingLabel"
+                android:text="导出播放日志" />
+
+            <TextView
+                android:id="@+id/valueExportLog"
+                style="@style/SettingValue"
+                android:text="点击导出" />
+        </LinearLayout>
+
+        <LinearLayout
             android:id="@+id/rowAspect"
             style="@style/SettingRow">
 

@@ -29,8 +29,54 @@ object PlayLog {
 
     fun init(ctx: Context) {
         if (file != null) return
-        val dir = ctx.getExternalFilesDir(null) ?: ctx.filesDir
+        val ext = ctx.getExternalFilesDir(null)
+        val dir = ext ?: ctx.filesDir
         file = File(dir, "play.log")
+        // 打一次路径，方便排查"日志写到哪了"
+        android.util.Log.i("PlayLog", "日志路径=" + file!!.absolutePath + " 外部可用=" + (ext != null))
+    }
+
+    /** 当前日志文件（可能为 null，表示还没写过）。 */
+    fun currentFile(): File? = file
+
+    /**
+     * 导出到用户可访问的 Download 目录，返回写出的路径（失败返回 null）。
+     *
+     * 为什么需要：adb 在 Android 13 上读不到应用私有目录，
+     * `getExternalFilesDir` 也可能返回 null 而回落到 filesDir，
+     * 结果就是"App 在播但看不到日志"。导出到 Download 后 adb 直接能拉。
+     */
+    fun exportTo(ctx: Context): String? {
+        val src = file ?: return null
+        if (!src.isFile) return null
+        val text = runCatching { src.readText() }.getOrNull() ?: return null
+        val name = "litv-play.log"
+        return try {
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+                val values = android.content.ContentValues().apply {
+                    put(android.provider.MediaStore.MediaColumns.DISPLAY_NAME, name)
+                    put(android.provider.MediaStore.MediaColumns.MIME_TYPE, "text/plain")
+                    put(android.provider.MediaStore.MediaColumns.RELATIVE_PATH,
+                        android.os.Environment.DIRECTORY_DOWNLOADS)
+                }
+                val uri = ctx.contentResolver.insert(
+                    android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+                    ?: return null
+                ctx.contentResolver.openOutputStream(uri)?.use {
+                    it.write(text.toByteArray())
+                } ?: return null
+                "/sdcard/Download/$name"
+            } else {
+                val dir = android.os.Environment.getExternalStoragePublicDirectory(
+                    android.os.Environment.DIRECTORY_DOWNLOADS)
+                val dst = File(dir, name)
+                dst.writeText(text)
+                dst.absolutePath
+            }
+        } catch (t: Throwable) {
+            android.util.Log.w("PlayLog", "导出失败", t)
+            null
+        }
     }
 
     fun w(tag: String, msg: String) {

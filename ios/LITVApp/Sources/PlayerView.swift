@@ -70,6 +70,10 @@ struct PlayerView: View {
 
     /// 手机横过来时自动全屏；也可以点控制条上的「全屏」按钮强制全屏。
     @Environment(\.verticalSizeClass) private var vSize
+    @Environment(\.scenePhase) private var scenePhase
+
+    /// 是不是因为退到后台才暂停的（回来要接着播）。
+    @State private var pausedByBackground = false
     @State private var forceFullscreen = false
     @State private var controlsHideTask: Task<Void, Never>?
     @State private var muted = false
@@ -136,6 +140,20 @@ struct PlayerView: View {
         .onAppear {
             showControls()
             Task { await start() }
+        }
+        .onChange(of: scenePhase) { phase in
+            // App 退到后台时 onDisappear **不会**触发，音频会一直响。
+            // 后台一律停播；回到前台重建播放器再播（和 Android 端一致：
+            // 唤醒后解码器常常出不了帧，续播容易变成黑屏）。
+            if phase == .active {
+                if pausedByBackground {
+                    pausedByBackground = false
+                    Task { await start() }
+                }
+            } else if player != nil {
+                pausedByBackground = true
+                player?.pause()
+            }
         }
         .onDisappear {
             player?.pause()

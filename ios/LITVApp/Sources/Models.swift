@@ -299,6 +299,13 @@ extension Bootstrap {
         channels = try c.litv(.channels, [Channel]())
         favorites = try c.litv(.favorites, [Int64]())
         now = try c.litv(.now, [NowPlaying]())
+        // ★ 这两个以前**漏解**了：字段声明了、CodingKeys 也写了，但自定义
+        //   init 覆盖了合成解码器，于是它们永远是默认值。
+        //   epgUrl 恒为空 → EpgStore.ensure(url:) 第一行就 return
+        //   → iOS 节目单永久为空；clientParse 恒为 0 → 客户端解析分支是死代码。
+        //   缺字段回落默认值，纯增量，不影响旧服务端。
+        epgUrl = try c.litv(.epgUrl, "")
+        clientParse = try c.litv(.clientParse, 0)
     }
 }
 

@@ -170,6 +170,18 @@ enum DecodeFixtures {
             return nil
         }
 
+        // ★ 回归：Bootstrap 的自定义 init 曾经漏解 epg_url / client_parse——
+        //   字段声明了、CodingKeys 也写了，但自定义 init 覆盖了合成解码器，
+        //   于是 epg_url 恒为空 → EpgStore.ensure 直接 return → 节目单永久为空。
+        let bootstrapEpg = Data("""
+        {"server":{"name":"LITV"},"channels":[],"epg_url":"https://example.com/e.xml","client_parse":1}
+        """.utf8)
+        report("bootstrap/epg_url 与 client_parse", bootstrapEpg, as: Bootstrap.self) { b in
+            if b.epgUrl != "https://example.com/e.xml" { return "epg_url 没解出来：\(b.epgUrl)" }
+            if b.clientParse != 1 { return "client_parse 没解出来：\(b.clientParse)" }
+            return nil
+        }
+
         report("play/direct 裸 TS", playDirectTs, as: PlayInfo.self) { p in
             if p.kind != "ts" { return "kind 应该是 ts，实得 \(p.kind)" }
             if p.mode != "direct" { return "mode 应该是 direct，实得 \(p.mode)" }

@@ -85,6 +85,10 @@ struct VLCPlayerView: UIViewRepresentable {
         // 让 UIView 跟着 SwiftUI 给的尺寸走。不设这个的话，
         // 画面会保持一个很小的初始尺寸，看起来"播放框缩在角落/下方"。
         view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        // 显式给一个初始 frame：裸 UIView 没有 intrinsic size，
+        // 只靠 autoresizingMask 时在部分容器里会缩成一小块
+        // （AGENTS §6 要求 frame 与 autoresizingMask 两者都有）。
+        view.frame = CGRect(x: 0, y: 0, width: 1, height: 1)
 
         let player = VLCMediaPlayer()
         player.drawable = view

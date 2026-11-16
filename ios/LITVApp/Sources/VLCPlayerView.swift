@@ -160,9 +160,11 @@ struct VLCPlayerView: UIViewRepresentable {
     func updateUIView(_ uiView: UIView, context: Context) {
         #if canImport(MobileVLCKit)
         if let p = context.coordinator.player as? VLCMediaPlayer {
+            // VLCKit 的 videoAspectRatio 是 C 字符串（char *），不是 Swift String，
+            // 必须转成 UnsafeMutablePointer<CChar>；传 nil 表示"跟随源"。
             switch aspect {
-            case "16:9": p.videoAspectRatio = "16:9"
-            case "4:3": p.videoAspectRatio = "4:3"
+            case "16:9": p.videoAspectRatio = strdup("16:9")
+            case "4:3": p.videoAspectRatio = strdup("4:3")
             default: p.videoAspectRatio = nil
             }
         }

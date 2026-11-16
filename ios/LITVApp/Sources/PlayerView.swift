@@ -240,8 +240,17 @@ struct PlayerView: View {
                     // 用 minimumDistance 区分点击和滑动，两者不冲突。
                     .gesture(
                         DragGesture(minimumDistance: 25)
-                            .onChanged { v in handleVerticalDrag(v) }
-                            .onEnded { _ in
+                            .onChanged { v in
+                                // 横向滑动留给切台，不要同时去调亮度/音量
+                                guard abs(v.translation.height) >= abs(v.translation.width) else { return }
+                                handleVerticalDrag(v)
+                            }
+                            .onEnded { v in
+                                // 左右滑切台（与 Android 手机端一致：OSD 不再放上一台/下一台）
+                                if abs(v.translation.width) > 60,
+                                   abs(v.translation.width) > abs(v.translation.height) {
+                                    switchBy(v.translation.width < 0 ? +1 : -1)
+                                }
                                 dragStartBrightness = nil
                                 dragStartVolume = nil
                                 let tip = gestureTip
@@ -420,23 +429,16 @@ struct PlayerView: View {
         // 横向可滚动：按钮已经有 8 个，iPhone 竖屏宽度放不下，
         // 直接塞 HStack 会被压缩变形。用 ScrollView 保证每个按钮都能点到。
         ScrollView(.horizontal, showsIndicators: false) {
-        HStack(spacing: 12) {
-            ctlButton("backward.end.fill", "上一台", size: 18) { switchBy(-1) }
+        // 与 Android 手机端对齐：OSD 只留 4 个按钮
+        // （播放暂停 / 静音 / 全屏 / 投屏）。
+        // 切台改成左右滑动手势；节目单和线路在顶部导航栏，不占 OSD。
+        HStack(spacing: 20) {
             ctlButton(paused ? "play.fill" : "pause.fill", paused ? "播放" : "暂停", size: 22) { togglePause() }
-            ctlButton("forward.end.fill", "下一台", size: 18) { switchBy(+1) }
             ctlButton(muted ? "speaker.slash.fill" : "speaker.wave.2.fill", muted ? "取消静音" : "静音", size: 18) { toggleMute() }
-            // 这两个原来只在 toolbar 上。PlayTab 里没有 NavigationView，
-            // toolbar 不会被渲染，用户就找不到节目单和线路了。
-            ctlButton("list.bullet.rectangle", "节目单", size: 18) { showEpg = true }
-            ctlButton("arrow.triangle.2.circlepath", "线路", size: 18) {
-                Task { await loadStreams() }
-            }
-            // 竖屏时手动切全屏（横过来也会自动全屏）
             ctlButton(isFullscreen
                         ? "arrow.down.right.and.arrow.up.left"
                         : "arrow.up.left.and.arrow.down.right",
                       isFullscreen ? "退出全屏" : "全屏", size: 18) { toggleFullscreen() }
-            // 投屏：把当前频道推给局域网里的电视/盒子
             ctlButton("airplayvideo", "投屏", size: 18) {
                 showCast = true
                 Task { await loadRenderers() }

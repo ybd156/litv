@@ -79,6 +79,24 @@ XCTSkip 显示 `skipped` 会被判失败。
 - 服务端被同名域名换掉（DNS / 中间人）——那要靠 TLS 校验，本仓库没有关闭它
 - 用户在另一个 App 里手动清 Keychain 后本进程仍持有内存中的 token
 
+## 三之二、2026-11-16 补齐的能力（均已过 iOS Build Check）
+
+| 能力 | 实现位置 | 备注 |
+|---|---|---|
+| 节目单不再为空 | `Models.swift` 的 `Bootstrap.init(from:)` | 之前漏解 `epg_url` / `client_parse`，`epgUrl` 恒空 → `EpgStore.ensure` 直接 return |
+| 节目单常驻在视频下方 | `PlayerView.liveEpgPanel` | 与 Android 手机端一致；全屏仍用 sheet |
+| 画面比例 auto/16:9/4:3/拉伸/裁切 | `PlayerLayerView`（新增）+ `VLCPlayerView.aspect` | AVPlayer 走 `videoGravity`，VLC 走 `videoAspectRatio` |
+| OSD 4 按钮 + 左右滑切台 | `PlayerView.controls` | 与 Android 的 `btnPlayPause`/`btnMute`/`btnFullscreen`/`btnCast` 对应 |
+| 播放页分组 chip | `PlayerView.groupChips` | 切台只在当前分组内循环 |
+| 时移（回看）入口 | `PlayerView.startTimeshift` | 走 `/tv/timeshift`，`playMode = timeshift` |
+| QoE 上报 | `Api.reportStats` + `PlayerView` 埋点 | `start` / `stop`，字段与 Android `StatsPayload` 一致 |
+| 后台停播 | `PlayerView` 监听 `scenePhase` | `onDisappear` 在后台不触发，音频会一直响 |
+
+**踩过的坑（值得记住）**：`VLCMediaPlayer.videoAspectRatio` 在 VLCKit 里是
+**`char *`**（Swift 导入为 `UnsafeMutablePointer<CChar>`），不是 `String`。
+按 `String` 赋值会编译失败，且这个错误让 iOS 构建连红 4 次才定位到——
+定位手段是 `ci-logs` 分支（见 `.github/workflows/ios-check.yml` 的失败导出步骤）。
+
 ## 四、未验证项（都是真的没验证）
 
 | 项 | 为什么没验证 | 怎么验 |

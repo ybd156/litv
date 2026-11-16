@@ -204,16 +204,17 @@ class VlcEngine : PlayerEngine {
             // 直播要的是"跟不上就丢，保住实时性"。
             add("--drop-late-frames")
             add("--skip-frames")
-            // ★ 关掉时钟抖动/同步补偿。
+            // ★ 不要整个关掉时钟同步。
             //
-            // 症状：播 20 秒左右 VLC 停止吐帧（idle 从 14s 涨到 20s 然后卡死）。
-            // 社区结论一致——libVLC 默认的**强时钟同步**在直播流上是主要瓶颈：
-            // 直播的时间戳本身不连续（上游切片、GOP 不齐），补偿逻辑会一直
-            // 判定"还要等"，最终不再出帧。
-            // 参考：VLC 网络视频流卡顿问题分析与时钟同步优化方案；
-            //      以及同类症状 https://github.com/xuyuanzhou/react-native-yz-vlcplayer/issues/63
-            add("--clock-jitter=0")
-            add("--clock-synchro=0")
+            // 曾经为修「播 20 秒停止吐帧」加过 --clock-jitter=0
+            // --clock-synchro=0。那样确实不再卡死，但音视频各自跑、慢慢漂开，
+            // VLC 到阈值做一次硬重同步——表现为「卡一下 + 电音，一会又好」，
+            // 而且初始播放就会周期出现。
+            //
+            // 现在用更温和的组合处理直播漂移：
+            //   --drop-late-frames / --skip-frames  跟不上就丢帧，保住实时性
+            //   --audio-time-stretch                音频重采样对齐，不丢样本
+            // 时钟同步保持默认，让 VLC 自己平滑校正。
             add("--avcodec-hw=any")          // 尽量硬解
             // 直播缓冲从 1500ms 降到 800ms。
             // VLC 的 network-caching 同时决定「起播前等多久」，1500ms 意味着
@@ -221,7 +222,12 @@ class VlcEngine : PlayerEngine {
             // 800ms 在局域网/中转场景够用，再低容易花屏。
             add("--network-caching=800")
             add("--live-caching=800")
-            add("--no-audio-time-stretch")
+            // ★ 不要关音频时间伸缩。
+            // 关掉之后（原来的 --no-audio-time-stretch），音视频时钟漂移
+            // 只能靠丢样本/插零来凑，听感就是"电音"、断续，过一会再同步、
+            // 然后又漂——表现为周期性卡一下 + 电音。
+            // 允许伸缩时 VLC 会重采样音频去对齐，代价极小，听感正常。
+            add("--audio-time-stretch")
             add("-vvv")
         }
         return LibVLC(context.applicationContext, args).also { libVlc = it }

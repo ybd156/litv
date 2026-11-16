@@ -521,6 +521,7 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
             surface.holder.addCallback(object : android.view.SurfaceHolder.Callback {
                 override fun surfaceCreated(h: android.view.SurfaceHolder) {
                     Log.i(TAG, "SurfaceView 就绪，绑定播放器")
+                    player.attachVideoLayout(findViewById(R.id.vlcLayout))
                     player.attach(surface.holder.surface, findViewById(android.R.id.content))
                     val pending = pendingAutoPlayChannel
                     if (pending != null) {
@@ -3412,6 +3413,10 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         pausedAtMs = 0L
         val ch = current ?: return
         if (ch.id != player.playingChannelId) return
+        // 不在 onResume 里重建：那一刻 Surface 可能还没就绪，
+        // VLC 会无 vout 起播（音频时钟异常 → 电音），而且 surfaceCreated
+        // 可能再触发一次 → 两个播放器同时出声。
+        // VLC 的重建改到 surfaceCreated 里做（Surface 真正就绪时）。
         runCatching { player.resume() }
     }
 

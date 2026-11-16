@@ -112,7 +112,8 @@ struct PlayerView: View {
                 osdDetails
                     .padding(.horizontal, 16)
                     .padding(.top, 10)
-                Spacer(minLength: 0)
+                // 节目单常驻在视频下方（与 Android 手机端一致：不再是弹层）
+                liveEpgPanel
             }
         }
         .background(Color.black.ignoresSafeArea())
@@ -584,6 +585,64 @@ struct PlayerView: View {
         avWatcher = nil
         // 复用同一个页面：改 switched 后由 onChange 重新起播
         switched = list[n]
+    }
+
+    /// 常驻节目单：视频下方直接铺开，按天切换。
+    ///
+    /// 与 Android 手机端对齐——那边节目单是常驻面板，不是按钮弹出来的。
+    /// 全屏时仍然用 sheet（画面优先）。
+    private var liveEpgPanel: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 18) {
+                Button { Task { await loadEpg(day: epgDay - 1) } } label: {
+                    Image(systemName: "chevron.left")
+                }
+                Text(dayLabel(epgDay))
+                    .font(.subheadline)
+                    .frame(maxWidth: .infinity)
+                Button { Task { await loadEpg(day: epgDay + 1) } } label: {
+                    Image(systemName: "chevron.right")
+                }
+            }
+            .padding(.horizontal, 20)
+            .padding(.vertical, 8)
+
+            if let tip = epgTip {
+                Text(tip)
+                    .font(.caption)
+                    .foregroundColor(.orange)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 4)
+            }
+
+            if programs.isEmpty {
+                Text("暂无节目单")
+                    .font(.caption)
+                    .foregroundColor(.gray)
+                    .frame(maxWidth: .infinity, alignment: .center)
+                    .padding(.vertical, 24)
+            } else {
+                ScrollView {
+                    LazyVStack(spacing: 0) {
+                        ForEach(programs) { p in
+                            HStack {
+                                Text(p.timeText)
+                                    .foregroundColor(.gray)
+                                    .font(.caption)
+                                    .frame(width: 44, alignment: .leading)
+                                Text(p.title)
+                                    .foregroundColor(p.isNow ? .green : .primary)
+                                Spacer()
+                            }
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 8)
+                        }
+                    }
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     }
 
     /// 节目单弹层：支持按天切换，长按节目可以设开播提醒 / 预约录制。

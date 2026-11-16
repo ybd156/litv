@@ -76,6 +76,8 @@ struct PlayerView: View {
     @State private var pausedByBackground = false
 
     /// QoE：本次起播的起点 / 已经上报过 start 没有。
+    @AppStorage("litv.aspect") private var aspectMode = "auto"
+
     @State private var playStartedAt: Date?
     @State private var startReported = false
     @State private var forceFullscreen = false
@@ -296,7 +298,7 @@ struct PlayerView: View {
             // 而裸 UIView 没有 intrinsic size，结果画面缩成一小块。
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else if let p = player {
-            VideoPlayer(player: p)
+            PlayerLayerView(player: p, aspect: aspectMode)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }

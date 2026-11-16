@@ -23,7 +23,8 @@
     <androidx.media3.ui.AspectRatioFrameLayout
         android:id="@+id/videoAspect"
         android:layout_width="match_parent"
-        android:layout_height="match_parent">
+        android:layout_height="match_parent"
+        android:layout_gravity="center">
 
         <SurfaceView
             android:id="@+id/surface"
@@ -36,6 +37,17 @@
             android:layout_width="match_parent"
             android:layout_height="match_parent"
             android:visibility="gone" />
+
+            <!-- VLC 需要 VLCVideoLayout 才能挂载画面；之前电视布局里没有它，
+                 VlcEngine.videoLayout 恒为 null，attachViews 从不执行，
+                 表现就是只有声音没有画面。 -->
+            <org.videolan.libvlc.util.VLCVideoLayout
+                android:id="@+id/vlcLayout"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:visibility="gone"
+                android:clickable="false"
+                android:focusable="false" />
     </androidx.media3.ui.AspectRatioFrameLayout>
 
     <ImageView

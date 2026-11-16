@@ -1800,6 +1800,18 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
                 infoRow(row, "设备名称", app.prefs.deviceName.ifBlank { "未命名" })
                 infoRow(row, "服务器", app.prefs.serverBase.ifBlank { "未配置" })
                 infoRow(row, "渲染档位", app.tier.name)
+                // 导出播放日志：TV 界面在 Android 13 手机上也跑，
+                // adb 读不到 Android/data，必须给用户一个可访问的出口。
+                infoRow(row, "导出播放日志", "按 OK 导出")
+                row.getChildAt(row.childCount - 1).apply {
+                    isFocusable = true
+                    setOnClickListener {
+                        val p = com.litv.tv.data.PlayLog.exportTo(this@PlayerActivity)
+                        android.widget.Toast.makeText(this@PlayerActivity,
+                            p ?: "没有可导出的日志",
+                            android.widget.Toast.LENGTH_LONG).show()
+                    }
+                }
                 // 解除绑定要二次确认：遥控器上 OK 和方向键挨得近，
                 // 一次误触就得重新绑定才能看。第一次 OK 只是把行变成"再按一次确认"。
                 var armed = false
@@ -1937,6 +1949,9 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
      * 用户按键能操作下面的界面（面板还会展开），但看到的永远是"正在起播…"。
      * 这个现象实测遇到过：频道面板已经展开、截图却还是开屏层。
      */
+    /** VLC 用：onPlaying 之后稍等再撤启动画面（它不发 onFirstFrame）。 */
+    private val splashOnPlaying = Runnable { hideSplashOverlay() }
+
     private val splashTimeout = Runnable {
         android.util.Log.w("LITV", "开屏层等不到首帧，超时撤掉")
         hideSplashOverlay()
@@ -2615,9 +2630,36 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         // Exo 用 media3 的 PlayerView（它自己管 Surface）；
         // VLC / mpv 用外部 Surface（TextureView / SurfaceView）。
         // PlayerView 在布局里 z 序最高，给 VLC / mpv 时不隐藏就会盖住画面。
-        val isExo = kind == EngineKind.EXO
         activeEngine = kind
-        surface.visibility = if (isExo) View.VISIBLE else View.GONE
+        // 电视端现在也有独立的 vlcLayout（和手机一致）：
+        // Exo 渲染到 surface，VLC 渲染到 vlcLayout，互斥显示。
+        // 之前只有 surface，VLC 没有可挂载的 VLCVideoLayout →
+        // VlcEngine.videoLayout 恒为 null → attachViews 从不执行 →
+        // 只有声音没有画面。
+        val isVlc = kind == EngineKind.VLC
+        // VlcEngine 认自己的 videoLayout 字段，必须显式给它；
+        // 换引擎时引擎实例是新的，所以每次都要重设。
+        // VLC 时把 vlcLayout 交给引擎；切回 Exo 时置空，让它松手，
+        // 否则 vout 还挂在旧目标上，Exo 的画面会被挤偏。
+        player.attachVideoLayout(if (isVlc) findViewById(R.id.vlcLayout) else null)
+        // 渲染目标要按「渲染方式」设置决定（SurfaceView / TextureView），
+        // 不能无条件把 surface 设成可见——那会覆盖掉用户的选择，
+        // 表现为切回 Exo 时画面偏/错位。
+        val useTex = app.prefs.renderView == "texture"
+        findViewById<android.view.View>(R.id.vlcLayout)?.visibility =
+            if (isVlc) View.VISIBLE else View.GONE
+        surface.visibility =
+            if (isVlc || useTex) View.INVISIBLE else View.VISIBLE
+        findViewById<android.view.View>(R.id.surfaceTex)?.visibility =
+            if (!isVlc && useTex) View.VISIBLE else View.GONE
+        if (!isVlc) {
+            // 比例清回「自动」，等 Exo 的 onVideoSizeChanged 重新给值，
+            // 避免沿用 VLC 那一路的比例导致画面偏。
+            runCatching {
+                videoAspect.setAspectRatio(0f)
+                videoAspect.requestLayout()
+            }
+        }
     }
 
     override fun onPrepared(width: Int, height: Int) = Unit
@@ -2937,6 +2979,11 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
     override fun onPlaying() {
         hasRenderedFrame = true
         prefetchNeighbours()
+        // VLC 永远不发 onFirstFrame，而启动画面只在 onFirstFrame 里撤，
+        // 另一条路是 12 秒兜底超时——所以 VLC 下声音早出来了、画面也在播，
+        // 启动画面却要等满 12 秒。这里延 1.2 秒撤（留时间让 vout 出帧）。
+        main.removeCallbacks(splashOnPlaying)
+        main.postDelayed(splashOnPlaying, 1_200)
         // onPlaying 比 onFirstFrame 可靠得多（首帧回调在起播预算耗尽时会被丢掉），
         // 这里也撤一次冻结帧，避免画面停在旧帧。
         unfreezeFrame()

@@ -449,6 +449,17 @@ class PlayerManager(
         }, 400)
     }
 
+    /**
+     * 把 VLCVideoLayout 交给当前引擎。
+     *
+     * VlcEngine 认的是自己的 videoLayout 字段，传 attach(container) 是不够的
+     * （videoLayout 恒为 null → attachViews 从不执行 → 只有声音没有画面）。
+     * 换引擎时要重新设置，因为引擎实例是新建的。
+     */
+    fun attachVideoLayout(l: org.videolan.libvlc.util.VLCVideoLayout?) {
+        (current as? VlcEngine)?.attachVideoLayout(l)
+    }
+
     fun attach(surface: android.view.Surface?, parent: ViewGroup?) {
         this.surface = surface
         container = parent

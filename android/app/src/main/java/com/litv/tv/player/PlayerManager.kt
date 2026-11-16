@@ -868,6 +868,7 @@ class PlayerManager(
     private fun tryNext(reason: String) {
         main.removeCallbacks(startTimeout)
         Log.w(TAG, "内核 ${currentKind?.key} 失败($reason)，尝试下一个")
+        com.litv.tv.data.PlayLog.w(TAG, "换内核：${currentKind?.key} 失败($reason)")
         failLog += "${currentKind?.key ?: "?"}: $reason"
 
         // 直连模式下第一个内核就失败：只有**网络层**失败才值得跳过其余内核。

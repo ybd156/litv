@@ -398,6 +398,7 @@ class ExoEngine : PlayerEngine {
             ) {
                 exoFirstFrameRendered = true
                 Log.i(TAG, "视频首帧已渲染")
+                com.litv.tv.data.PlayLog.w(TAG, "首帧已渲染")
                 listener?.onFirstFrame()
             }
 
@@ -523,6 +524,7 @@ class ExoEngine : PlayerEngine {
                 // 用户看的好好的，突然就停了，而且换台才好。
                 if (error.errorCode == androidx.media3.common.PlaybackException.ERROR_CODE_BEHIND_LIVE_WINDOW) {
                     Log.w(TAG, "播放位置掉出直播窗口，seek 回直播边缘继续播（不当作失败）")
+                com.litv.tv.data.PlayLog.w(TAG, "掉出直播窗口，seek 回边缘")
                     val exo = player
                     if (exo == null) {
                         listener?.onError(msg)

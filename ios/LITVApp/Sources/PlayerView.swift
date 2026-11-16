@@ -129,6 +129,18 @@ struct PlayerView: View {
         }
         .toolbar {
             ToolbarItemGroup(placement: .navigationBarTrailing) {
+                // 画面比例：和 Android 设置同名（auto / 16:9 / 4:3 / 拉伸 / 裁切）。
+                // 用 Menu 而不是条件 ToolbarItem —— 后者会编译成 buildIf，
+                // 那是 iOS 16 才有的 API（AGENTS §6 的坑）。
+                Menu {
+                    Button("自动") { aspectMode = "auto" }
+                    Button("16:9") { aspectMode = "16:9" }
+                    Button("4:3") { aspectMode = "4:3" }
+                    Button("拉伸铺满") { aspectMode = "fill" }
+                    Button("裁切铺满") { aspectMode = "zoom" }
+                } label: {
+                    Image(systemName: "rectangle.arrowtriangle.2.outward")
+                }
                 Button {
                     showEpg = true
                 } label: {
@@ -272,7 +284,7 @@ struct PlayerView: View {
             // （Swift 的逐成员初始化器按声明顺序传参）
             VLCPlayerView(url: u, decodeMode: session.decodeMode,
                           userAgent: playUA, headers: playHeaders,
-                          control: vlc) { st in
+                          control: vlc, aspect: aspectMode) { st in
                 // VLCKit 的状态通知是在它自己的线程上发出的，直接改 @State
                 // 属于跨线程写 UI 状态；统一切回主线程再处理。
                 Task { @MainActor in

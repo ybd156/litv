@@ -105,6 +105,23 @@ iOS 是 SwiftUI。
    到管理台「设备」页批准
 3. 同一台设备重装 / 清数据**不需要重新批准**——客户端用系统稳定标识认回原设备
 
+## 加密 DNS（DoH）
+
+Android 端在 App 内自带 DoH（设置里可开关，失败回落系统 DNS，并把上次解析结果落盘，
+网络抖动时用旧地址直连）。
+
+**iOS 端不做 App 内 DoH**，改用系统原生能力，更彻底也更省事：
+
+> iOS 14 起支持「加密 DNS」。装一个 DoH 描述文件（阿里 `223.5.5.5`、
+> 腾讯 `1.12.12.12` 等都有公开的 `.mobileconfig`），在
+> 「设置 → 通用 → VPN与设备管理」里安装，再到「设置 → 无线局域网 →
+> 当前网络 → 配置 DNS → 加密 DNS」选它即可。装完对**所有 App** 生效。
+
+不做 App 内实现的原因：`URLSession` 没有 DNS 钩子，唯一正路是
+`NEDNSProxyProvider`（Network Extension target + entitlement + 用户手动启用），
+成本高于收益；而绕过 DNS 自己连 IP 的做法在 HTTPS 上必然要碰证书校验，
+那是 AGENTS §6 明令禁止的。
+
 ## 已知限制
 
 - **iOS 只能由 CI 编译**，产物需自签

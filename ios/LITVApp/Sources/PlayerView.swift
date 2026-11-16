@@ -82,6 +82,9 @@ struct PlayerView: View {
     /// 切台时只在这个分组的频道里循环。
     @State private var playGroup: String? = nil
 
+    /// 时移（回看）地址。非空时 start() 直接播它，不再请求 /tv/play。
+    @State private var timeshiftURL: URL?
+
     @State private var playStartedAt: Date?
     @State private var startReported = false
     @State private var forceFullscreen = false
@@ -154,6 +157,11 @@ struct PlayerView: View {
                     showEpg = true
                 } label: {
                     Image(systemName: "list.bullet.rectangle")
+                }
+                Button {
+                    Task { await startTimeshift() }
+                } label: {
+                    Image(systemName: "clock.arrow.circlepath")
                 }
                 Button {
                     Task { await loadStreams() }
@@ -610,6 +618,21 @@ struct PlayerView: View {
         .buttonStyle(.plain)
     }
 
+    /// 开始回看（时移）。服务端没开时移时给一句提示，不改播放状态。
+    private func startTimeshift() async {
+        do {
+            let info = try await session.api.timeshift(channelId: active.id)
+            guard info.enabled, let u = session.api.url(info.url) else {
+                gestureTip = "这个台没有时移（服务端未开启或频道不支持）"
+                return
+            }
+            timeshiftURL = u
+            await start()
+        } catch {
+            gestureTip = "时移失败：\(error.localizedDescription)"
+        }
+    }
+
     private func switchBy(_ delta: Int) {
         // 只在当前分组内循环（未选分组 = 全部），与 Android 手机端一致
         var list = session.channels
@@ -624,6 +647,8 @@ struct PlayerView: View {
         player = nil
         avWatcher?.stop()
         avWatcher = nil
+        // 换台就不再是回看
+        timeshiftURL = nil
         // 复用同一个页面：改 switched 后由 onChange 重新起播
         switched = list[n]
     }
@@ -871,6 +896,22 @@ struct PlayerView: View {
             // R08：能选内核的是"实际能力"，不是请求参数。
             //   有 VLCKit -> 尝试直连（省掉 NAS 中转），裸 TS 也能解；
             //   没有 VLCKit -> 直接要 relay + HLS，AVPlayer 只认 HLS。
+            // 时移（回看）：地址由 /tv/timeshift 下发，直接播，不再请求 /tv/play
+            if let ts = timeshiftURL {
+                playURL = ts
+                playUA = ""
+                playHeaders = ["User-Agent": "LITV/1.0 (iOS)"]
+                playMode = "timeshift"
+                if VLCPlayerView.isAvailable {
+                    usingVLC = true
+                    player = nil
+                } else {
+                    usingVLC = false
+                    startAVPlayer(ts)
+                }
+                return
+            }
+
             // 客户端解析模式：地址就是本机解析出来的源地址，不请求 /tv/play。
             // 服务端那边 D1 已经没有频道表了，走它只会拿到 404 或旧签名。
             if session.clientParse,

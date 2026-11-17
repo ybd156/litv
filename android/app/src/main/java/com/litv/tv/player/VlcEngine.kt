@@ -580,6 +580,34 @@ class VlcEngine : PlayerEngine {
     }
 
     /**
+     * 尺寸变化后**只重造视频输出**，不重建播放器。
+     *
+     * 为什么要这条：`resyncWindow()` 走 `retryNow()` 是整条重连（网络 + 解复用），
+     * 真机转场后要黑 2–10 秒。而 `attachViews` 重挂又不可靠（vout 不重连、画面定住）。
+     * `setVideoTrackEnabled(false→true)` 会让 libvlc **销毁并重建 vout**，
+     * 用当前 Surface 和窗口尺寸重新出画，MediaPlayer 与 demux 都不动。
+     *
+     * @return false 表示当前没法重造（没播放器 / Surface 无效），调用方退化到重建
+     */
+    fun recreateVout(): Boolean {
+        val p = player ?: return false
+        val s = videoSurface ?: return false
+        if (!s.isValid) return false
+        // 记下重造前的已显示帧数，稍后用它判断到底有没有真的出画
+        picsAtReattach = displayedPictures()
+        val ok = runCatching {
+            // 先把窗口设成**当前**尺寸，vout 重建时才会用新尺寸
+            applyRenderSizeBeforeAttach(p)
+            p.videoScale = scaleFor(aspect)
+            p.setVideoTrackEnabled(false)
+            p.setVideoTrackEnabled(true)
+            true
+        }.getOrDefault(false)
+        android.util.Log.i(TAG, "recreateVout: ok=$ok 重造前已显示帧=${picsAtReattach}")
+        return ok
+    }
+
+    /**
      * 布局尺寸变了（全屏/旋转）之后，**原地**把视频输出重挂到当前 Surface。
      *
      * 为什么不用 `retryNow()` 重建：那等于换台重连，约 1 秒黑屏 ——

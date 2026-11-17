@@ -589,19 +589,41 @@ class PlayerManager(
         val now = android.os.SystemClock.elapsedRealtime()
         if (now - lastResyncAt < 800) return
         lastResyncAt = now
-        // ★ 回滚"原地重挂"，恢复成重建。
+        // ★ 优先**只重造 vout**（不重建播放器）。
         //
-        // 真机证据（2026-11-18 00:44 / 01:03，共 18 次转场）：
-        //   reattachVideo 之后 vout **不会真正重连** —— 重挂后 1.5s 只吐 2~10 帧
-        //   （25fps 应约 37 帧）就停，画面定住、音频继续，**换台才能恢复**。
-        //   8 次转场里 6 次定格，4 次退出竖屏 4/4 定格。
-        // 期间两版判据都失效过：`TimeChanged` 在 vout 死掉时照常上报；
-        // 改用 `displayedPictures` 后又因为"任意增长"太弱（+2 也算过）继续误判。
-        // 所以这条路不通，回到能自愈的重建；重建偶尔也会不出画，
-        // 由本类新增的「起播后 3s 复检 displayedPictures」兜底再重建一次。
+        // 重建 = 整条重连（网络 + 解复用），真机转场后要黑 2–10 秒；
+        // `reattachVideo` 又不可靠（vout 不重连、画面定住，8 次转场 6 次定格）。
+        // `setVideoTrackEnabled(false→true)` 只让 libvlc 销毁并重建视频输出，
+        // MediaPlayer / demux 都不动 —— 这是唯一可能既快又稳的路线。
+        // 判据仍然是"已显示帧数有没有增长"，1.2s 内不增长就退回重建。
         main.postDelayed({
             if (released) return@postDelayed
-            Log.i(TAG, "resync: 用新尺寸重建 VLC")
+            val vv = current as? VlcEngine
+            if (vv != null && vv.recreateVout()) {
+                Log.i(TAG, "resync: 只重造 vout（不重建），1.2s 后验帧")
+                main.postDelayed({
+                    if (released) return@postDelayed
+                    val v2 = current as? VlcEngine ?: return@postDelayed
+                    val before = v2.picturesAtReattach()
+                    val now = v2.displayedPictures()
+                    val delta = if (before >= 0 && now >= 0) now - before else -1
+                    // 阈值按帧率量级而不是"有没有涨"：
+                    // 真机出全屏时 1.2s 只涨 5–7 帧（≈4–6fps）也算"涨"，
+                    // 于是判了生效、却在 1.2s 之后定格。25fps/1.8s 应约 45 帧，
+                    // 这里要求至少 12 帧（≈7fps）才算真的在出画。
+                    if (delta >= 0 && delta < VLC_VOUT_MIN_FRAMES) {
+                        Log.w(TAG, "resync: 重造 vout 后帧数不足（$before -> $now，仅 $delta 帧），改为重建 VLC")
+                        retryNow()
+                    } else if (delta < 0) {
+                        Log.w(TAG, "resync: 取不到已显示帧数，保守走重建")
+                        retryNow()
+                    } else {
+                        Log.i(TAG, "resync: 重造 vout 生效（已显示帧 $before -> $now，$delta 帧）")
+                    }
+                }, VLC_VOUT_VERIFY_MS)
+                return@postDelayed
+            }
+            Log.w(TAG, "resync: 无法重造 vout，改为重建 VLC")
             retryNow()
         }, 400)
     }
@@ -1227,6 +1249,21 @@ class PlayerManager(
 
         /** 复检的采样窗口：这段时间内已显示帧数增长不到 5 帧即视为没在出画。 */
         const val VLC_FRAME_SAMPLE_MS = 700L
+
+        /**
+         * 「重造 vout」之后的验帧窗口 / 帧数下限。
+         *
+         * 实测调参记录（2026-11-18 01:25 / 01:40 两轮各 8 个相位）：
+         *   - 5 帧 / 1.2s：快路径 8/9 成功，进全屏 0s、出全屏 4.5s（自恢复），合计 4.5s
+         *   - 12 帧 / 1.8s：快路径 0/8，全部退回重建，合计 8.3s（比全重建基线 9.2s 只好一点）
+         * 原因：`displayedPictures` 会**滞后**——R1 进全屏时 SurfaceFlinger 已涨 27 帧，
+         * libVLC 只报 +6。所以这个计数只能用来判"最终有没有死"，不能用来卡时间窗口，
+         * 阈值取太严会把正常的快路径也判死。故回到 5 帧 / 1.2s。
+         */
+        const val VLC_VOUT_VERIFY_MS = 1200L
+
+        /** 见上：低于这个增量认为 vout 没真正出画（仅为"是否归零"量级判断）。 */
+        const val VLC_VOUT_MIN_FRAMES = 5
 
         /**
          * 播放位置完全不变多久算卡死。

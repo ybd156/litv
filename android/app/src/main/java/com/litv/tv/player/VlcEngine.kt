@@ -78,7 +78,8 @@ class VlcEngine : PlayerEngine {
             val idle = if (lastTimeEventAt > 0) now - lastTimeEventAt else 0
             if (lastTimeEventAt > 0 && idle > 12_000) {
                 Log.w(TAG, "VLC 12 秒没送帧（idle=${idle}ms），轻推一次")
-                runCatching { p.pause(); p.play() }
+                // 必须走 VlcOps：看门狗跑在主线程，直接 pause/play 会和 release 抢 libvlc 的锁
+                VlcOps.exec.execute { runCatching { p.pause(); p.play() } }
                 if (nudgedOnce) {
                     com.litv.tv.data.PlayLog.w(TAG, "VLC 停止送帧")
                     listener?.onError("VLC 停止送帧")
@@ -476,8 +477,7 @@ class VlcEngine : PlayerEngine {
         if (ok && wasPlaying) {
             main.postDelayed({
                 runCatching {
-                    p.pause()
-                    p.play()
+                    VlcOps.exec.execute { runCatching { p.pause(); p.play() } }
                 }
                 android.util.Log.i(TAG, "resync: 已轻推 pause/play 唤醒画面")
             }, 120)
@@ -604,8 +604,7 @@ class VlcEngine : PlayerEngine {
         if (wasPlaying) {
             main.postDelayed({
                 runCatching {
-                    p.pause()
-                    p.play()
+                    VlcOps.exec.execute { runCatching { p.pause(); p.play() } }
                 }
             }, 120)
         }
@@ -657,8 +656,7 @@ class VlcEngine : PlayerEngine {
             if (wasPlaying) {
                 main.postDelayed({
                     runCatching {
-                        p.pause()
-                        p.play()
+                        VlcOps.exec.execute { runCatching { p.pause(); p.play() } }
                     }
                     android.util.Log.i(TAG, "rebindVideo(layout): 已轻推 pause/play 唤醒画面")
                 }, 120)
@@ -699,8 +697,7 @@ class VlcEngine : PlayerEngine {
         if (wasPlaying) {
             main.postDelayed({
                 runCatching {
-                    p.pause()
-                    p.play()
+                    VlcOps.exec.execute { runCatching { p.pause(); p.play() } }
                 }
                 android.util.Log.i(TAG, "rebindVideo: 已轻推 pause/play 唤醒画面")
             }, 120)
@@ -829,13 +826,51 @@ class VlcEngine : PlayerEngine {
 
     override var aspect: String = "auto"
 
-    override fun play() { player?.play() }
-    override fun pause() { player?.pause() }
+    /**
+     * 所有 libvlc 播放器操作（stop / release / detachViews / pause / play）都排到
+     * **同一条专用线程**串行执行，主线程只投递、不等待。
+     *
+     * 真机 ANR 证据（2026-11-17 21:58，`/data/anr` 5 份 trace 同一形态）：
+     *
+     * ```
+     * "main" state=S
+     *   pthread_mutex_lock
+     *   libvlc_media_player_stop+40
+     *   MediaPlayer.nativeStop / MediaPlayer.stop
+     *   …VlcEngine 释放路径… → Handler.run        ← 主线程
+     * Thread-16（e3.b0.run）
+     *   libvlc_media_player_stop+48 → input_Close → vlc_join → vlc_sem_wait
+     * ```
+     *
+     * 即**两个线程同时调 stop** → libvlc 内部互锁，主线程被挡 ≥5 秒，系统判
+     * `Waited 5005ms for MotionEvent(action=DOWN)` → ANR（2 天内 7 条）。
+     * 两处来源就是本类：`stop()` 里 `Thread { p.stop() }`，以及
+     * `releaseInternal()` 在调用方线程（通常是主线程）直接 `it.stop()`。
+     */
+    private object VlcOps {
+        val exec: java.util.concurrent.ExecutorService =
+            java.util.concurrent.Executors.newSingleThreadExecutor { r ->
+                Thread(r, "vlc-ops").apply { isDaemon = true }
+            }
+    }
+
+    override fun play() {
+        val p = player ?: return
+        VlcOps.exec.execute { runCatching { p.play() } }
+    }
+
+    override fun pause() {
+        val p = player ?: return
+        VlcOps.exec.execute { runCatching { p.pause() } }
+    }
+
     // libvlc 的 stop/release 要等 vout/音频线程收尾，主线程做会卡死（ANR）。
+    // 统一走 VlcOps：与 release 串行，绝不再出现两个线程同时 stop。
     override fun stop() {
         main.removeCallbacks(vlcWatchdog)
         val p = player
-        Thread { runCatching { p?.stop() } }.start()
+        if (p == null) return
+        VlcOps.exec.execute { runCatching { p.stop() } }
     }
 
     override fun release() = releaseInternal()
@@ -854,16 +889,20 @@ class VlcEngine : PlayerEngine {
      * 所有权因此清晰：谁创建谁销毁，且不在热路径上反复重建。
      */
     private fun releaseInternal() {
-        player?.let {
+        // 先把引用摘掉：之后任何 stop/play 都拿不到这个播放器，避免和这里的
+        // release 抢同一把 libvlc 锁（ANR 就是这么来的，见 VlcOps 的注释）。
+        val p = player
+        player = null
+        if (p == null) return
+        VlcOps.exec.execute {
             try {
-                it.stop()
-                it.vlcVout.detachViews()
-                it.release()
+                p.stop()
+                p.vlcVout.detachViews()
+                p.release()
             } catch (t: Throwable) {
                 Log.w(TAG, "释放 VLC 播放器出错", t)
             }
         }
-        player = null
     }
 
     /**
@@ -871,17 +910,22 @@ class VlcEngine : PlayerEngine {
      *
      * 由 PlayerManager 在丢弃本引擎时调用。必须幂等：
      * 重复调用不能崩，也不能把已经放掉的引用再放一次。
+     *
+     * 注意：`releaseInternal()` 的任务先投递、这个后投递，
+     * 单线程执行器保证**先放播放器再放 LibVLC** 的顺序。
      */
     fun releaseLibVLC() {
         releaseInternal()
-        libVlc?.let {
+        val lv = libVlc
+        libVlc = null
+        if (lv == null) return
+        VlcOps.exec.execute {
             try {
-                it.release()
+                lv.release()
             } catch (t: Throwable) {
                 Log.w(TAG, "释放 LibVLC 出错", t)
             }
         }
-        libVlc = null
     }
 
     override fun setVolume(volume: Float) {

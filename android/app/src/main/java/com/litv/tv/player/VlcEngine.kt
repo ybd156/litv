@@ -69,6 +69,12 @@ class VlcEngine : PlayerEngine {
     /** 最近一次收到 VLC TimeChanged 的时刻（elapsedRealtime） */
     @Volatile private var lastTimeEventAt = 0L
 
+    /**
+     * 最近一次重挂 vout 之前的"已显示帧数"，-1 表示取不到（反射失败）。
+     * 重挂后必须看到它**增长**才算真的在出画。
+     */
+    @Volatile private var picsAtReattach = -1L
+
     /** VLC 自己的看门狗：只在本引擎内部生效，不改 PlayerManager 的位置语义 */
     private var nudgedOnce = false
     private val vlcWatchdog = object : Runnable {
@@ -590,6 +596,10 @@ class VlcEngine : PlayerEngine {
         val s = videoSurface ?: return false
         if (!s.isValid) return false
         val wasPlaying = runCatching { p.isPlaying }.getOrDefault(false)
+        // 记下重挂前的"已显示帧数"，重挂后要看它有没有继续增长
+        // （TimeChanged 在 vout 死掉时照样在走，靠它验帧会假绿灯）
+        val picsBefore = displayedPictures()
+        picsAtReattach = picsBefore
         runCatching { p.vlcVout.detachViews() }
         // ★ 必须在 attachViews 之前把窗口设成**当前**尺寸，否则旋转后仍按旧尺寸画
         applyRenderSizeBeforeAttach(p)
@@ -598,7 +608,10 @@ class VlcEngine : PlayerEngine {
             p.vlcVout.attachViews()
             p.videoScale = scaleFor(aspect)
         }.isSuccess
-        android.util.Log.i(TAG, "reattachVideo: ok=$ok wasPlaying=$wasPlaying")
+        android.util.Log.i(
+            TAG,
+            "reattachVideo: ok=$ok wasPlaying=$wasPlaying 已显示帧=$picsBefore",
+        )
         if (!ok) return false
         attachedSurface = s
         if (wasPlaying) {
@@ -943,6 +956,29 @@ class VlcEngine : PlayerEngine {
     override fun setVolume(volume: Float) {
         player?.volume = (volume.coerceIn(0f, 1f) * 100).toInt()
     }
+
+    /**
+     * VLC 实际**已显示**的画面帧数（`MediaStats.displayedPictures`）。
+     *
+     * 这是判断"vout 到底有没有在出画"的唯一可靠信号：
+     *   - `MediaPlayer.time` / `Event.TimeChanged` 在 vout 死掉时**照样在走**
+     *     （demux 没停），真机上因此出现「日志说有帧、屏幕定住」的假绿灯；
+     *   - `attachViews` 的返回值只表示没抛异常（同一个坑，11-17 已踩过）。
+     *
+     * 用反射读，避免为 libvlc 的内部类引入编译期依赖；取不到返回 -1，
+     * 调用方需退化到旧判据。
+     */
+    fun displayedPictures(): Long {
+        val mp = player ?: return -1
+        return runCatching {
+            val media = mp.media ?: return -1
+            val stats = media.javaClass.getMethod("getStats").invoke(media) ?: return -1
+            stats.javaClass.getField("displayedPictures").getLong(stats)
+        }.getOrDefault(-1)
+    }
+
+    /** 重挂前的已显示帧数；-1 表示取不到（此时调用方退化到 TimeChanged 判据）。 */
+    fun picturesAtReattach(): Long = picsAtReattach
 
     override fun isPlaying(): Boolean = player?.isPlaying == true
 

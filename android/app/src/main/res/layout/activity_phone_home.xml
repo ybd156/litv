@@ -163,6 +163,24 @@
                         android:src="@drawable/ic_pause"
                         android:alpha="0.85" />
 
+                    <!-- 上一频道 / 下一频道：贴在画面左右边缘。
+                         竖屏与全屏共用这一层浮层，所以两处都会出现。 -->
+                    <TextView
+                        android:id="@+id/btnPrevCh"
+                        style="@style/PhoneCtlSmall"
+                        android:layout_gravity="start|center_vertical"
+                        android:layout_marginStart="10dp"
+                        android:contentDescription="上一频道"
+                        android:text="⏮" />
+
+                    <TextView
+                        android:id="@+id/btnNextCh"
+                        style="@style/PhoneCtlSmall"
+                        android:layout_gravity="end|center_vertical"
+                        android:layout_marginEnd="10dp"
+                        android:contentDescription="下一频道"
+                        android:text="⏭" />
+
                     <!-- 投屏：右上角 -->
                     <TextView
                         android:id="@+id/btnCast"

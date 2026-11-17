@@ -354,6 +354,46 @@ class PlayerManager(
     /** 换内核前那 600ms 的延迟启动。必须持有引用，否则 release 取消不掉。 */
     private var pendingEngineStart: Runnable? = null
 
+    /**
+     * VLC 起播/重建之后的"画面复检"。
+     *
+     * 为什么需要它：重建路径偶尔也会不出画（真机 1/3 轮）。此时
+     * `MediaPlayer.Event.TimeChanged` 照常上报（demux 没停），
+     * `attachViews` 也返回成功，两个旧判据全都会误判成"好了"。
+     * 唯一可靠信号是 VLC 自己统计的**已显示帧数** `displayedPictures`：
+     * 700ms 内 25fps 应有约 17 帧，实测定格时只有 0~2 帧。
+     *
+     * 最多重建一次（[vlcFrameRetried]），避免出画失败时无限重连。
+     */
+    private var vlcFrameRetried = false
+
+    private val vlcFrameRecheck = Runnable {
+        if (released) return@Runnable
+        val v = current as? VlcEngine ?: return@Runnable
+        val a = v.displayedPictures()
+        if (a < 0) return@Runnable
+        main.postDelayed({
+            if (released) return@postDelayed
+            val v2 = current as? VlcEngine ?: return@postDelayed
+            val b = v2.displayedPictures()
+            if (b < 0) return@postDelayed
+            val delta = b - a
+            if (delta < 5) {
+                if (vlcFrameRetried) {
+                    Log.w(TAG, "复检：仍无画面（已显示帧 $a -> $b），不再重试，等用户换台")
+                    com.litv.tv.data.PlayLog.w(TAG, "VLC 起播后无画面（$a -> $b）")
+                } else {
+                    vlcFrameRetried = true
+                    Log.w(TAG, "复检：画面未推进（已显示帧 $a -> $b，仅 $delta 帧），重建一次")
+                    retryNow()
+                }
+            } else {
+                vlcFrameRetried = false
+                Log.i(TAG, "复检：画面正常（已显示帧 $a -> $b，$delta 帧）")
+            }
+        }, VLC_FRAME_SAMPLE_MS)
+    }
+
     private val noDataWatchdog = Runnable {
         if (prepared) return@Runnable
         if (retried < prefs.retryCount) {
@@ -549,37 +589,19 @@ class PlayerManager(
         val now = android.os.SystemClock.elapsedRealtime()
         if (now - lastResyncAt < 800) return
         lastResyncAt = now
-        // ★ 优先**原地重挂**（不重建），并用「有没有出帧」做兜底判据。
+        // ★ 回滚"原地重挂"，恢复成重建。
         //
-        // 为什么改：全屏时重建会让**新 VLC 实例建在旧实例还没释放完的时候**，
-        // 真机实测 1/3 轮会卡住不出帧 ——
-        //   22:59:20.133 VLC play() holder=true 窗口 2168x1220
-        //   ……之后 20 秒无任何 demux/decoder 日志，帧 5→0
-        //   22:59:40.616 VLC 12 秒没送帧（idle=15009ms），轻推一次
-        // 靠 12 秒看门狗才救回来，用户就是"转过去卡十几秒"。
-        //
-        // 早先试过原地重挂但回滚了，理由是"attach 成功但输出已死"。那次错在
-        // **只看了 attachViews 的返回值**（ok=true 只表示没抛异常）。现在改为：
-        // 重挂后 1.5 秒检查 `msSinceLastFrame()`，没出帧就立刻重建 —— 判据是帧，不是返回值。
+        // 真机证据（2026-11-18 00:44 / 01:03，共 18 次转场）：
+        //   reattachVideo 之后 vout **不会真正重连** —— 重挂后 1.5s 只吐 2~10 帧
+        //   （25fps 应约 37 帧）就停，画面定住、音频继续，**换台才能恢复**。
+        //   8 次转场里 6 次定格，4 次退出竖屏 4/4 定格。
+        // 期间两版判据都失效过：`TimeChanged` 在 vout 死掉时照常上报；
+        // 改用 `displayedPictures` 后又因为"任意增长"太弱（+2 也算过）继续误判。
+        // 所以这条路不通，回到能自愈的重建；重建偶尔也会不出画，
+        // 由本类新增的「起播后 3s 复检 displayedPictures」兜底再重建一次。
         main.postDelayed({
             if (released) return@postDelayed
-            val vv = current as? VlcEngine
-            if (vv != null && vv.reattachVideo()) {
-                Log.i(TAG, "resync: 原地重挂完成，1.5s 后验帧")
-                main.postDelayed({
-                    if (released) return@postDelayed
-                    val v2 = current as? VlcEngine ?: return@postDelayed
-                    val idle = v2.msSinceLastFrame()
-                    if (idle > RESYNC_FRAME_CHECK_MS) {
-                        Log.w(TAG, "resync: 重挂后 ${idle}ms 无帧，改为重建 VLC")
-                        retryNow()
-                    } else {
-                        Log.i(TAG, "resync: 重挂后 ${idle}ms 内有帧，保持不重建")
-                    }
-                }, RESYNC_FRAME_CHECK_MS)
-                return@postDelayed
-            }
-            Log.w(TAG, "resync: 无法原地重挂，改为重建 VLC")
+            Log.i(TAG, "resync: 用新尺寸重建 VLC")
             retryNow()
         }, 400)
     }
@@ -684,6 +706,8 @@ class PlayerManager(
         retried = 0
         // 换台：直播流结束的重连额度也重新给满
         endedRetries = 0
+        // 换台重新给一次"画面复检"的重建额度，避免上一个台用光后拖累下一个台
+        vlcFrameRetried = false
         // 网络类失败的重试额度同理：上一个台把额度用光，不该拖累下一个台
         netRetry = 0
         // 起播阶段：清掉上一次的所有计时器，重置第一帧标志，并设一个硬预算。
@@ -888,6 +912,9 @@ class PlayerManager(
         main.removeCallbacks(noFrameWatchdog)
         main.removeCallbacks(noDataWatchdog)
         main.postDelayed(noDataWatchdog, PlaybackDefaults.START_NOBYTE_MS.toLong())
+        // VLC 专属复检：起播/重建 3 秒后看"已显示帧数"有没有推进（见 vlcFrameRecheck 说明）
+        main.removeCallbacks(vlcFrameRecheck)
+        main.postDelayed(vlcFrameRecheck, VLC_FRAME_RECHECK_MS)
         // 所有内核回调统一 post 到主线程。
         //
         // mpv 的日志/状态回调是从 native 线程发出来的，以前直接往下走，
@@ -1194,6 +1221,12 @@ class PlayerManager(
          * 这个值不能太长：它就是用户看到的"转过去卡住"的时长。
          */
         const val RESYNC_FRAME_CHECK_MS = 1500L
+
+        /** VLC 起播/重建后多久开始复检画面（见 vlcFrameRecheck 说明）。 */
+        const val VLC_FRAME_RECHECK_MS = 3000L
+
+        /** 复检的采样窗口：这段时间内已显示帧数增长不到 5 帧即视为没在出画。 */
+        const val VLC_FRAME_SAMPLE_MS = 700L
 
         /**
          * 播放位置完全不变多久算卡死。

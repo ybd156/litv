@@ -96,6 +96,16 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
      */
     private var paused = false
     private var muted = false
+
+    /**
+     * 本次起播**实际用的**内核/解码偏好。
+     *
+     * 设置页的「播放内核 / 解码方式」是 `bindCycle`，只写 prefs、不重建播放器，
+     * 所以用户在设置页改完，当前这台其实没变。回到前台时用这两个值比对 prefs，
+     * 不同就重起当前台，避免"看着改了其实没生效"。
+     */
+    private var appliedEngine = ""
+    private var appliedDecode = ""
     private var landscape = false
 
     /** 上一次预热过相邻频道的台 id（onPlaying 会重复回调，用它去重） */
@@ -305,6 +315,10 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
         }
 
         findViewById<TextView>(R.id.btnFullscreen).setOnClickListener { toggleOrientation() }
+
+        // 上一频道 / 下一频道：贴着画面左右边缘，竖屏与全屏共用同一层浮层。
+        findViewById<TextView>(R.id.btnPrevCh)?.setOnClickListener { stepChannel(-1) }
+        findViewById<TextView>(R.id.btnNextCh)?.setOnClickListener { stepChannel(+1) }
 
         // 全屏工具：比例 / 内核 / 解码，点一次切下一档。
         // ★ 这三个监听器在改控件布局时被整块替换掉了 —— 按钮能收到点击却没有反应，
@@ -532,13 +546,15 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
         findViewById<View>(R.id.videoBox)?.postDelayed({ applyVideoRatio() }, 120)
 
         // 恢复播放（见本方法开头 vlcHold 的说明）。
-        // 700ms 是实测"布局稳定 + surface 尺寸到位"的经验值；期间界面本来也在
-        // 过渡，用户看不到额外黑屏。恢复后 VLC 会重新对时，不再把 pts_delay 抬到 2 秒。
+        // 150ms 而不是 700ms：真机日志里重挂发生在 resume 之前
+        // （`reattachVideo ... wasPlaying=false` 7/8 次），等于在暂停状态下重挂、
+        // 再恢复，恢复时要重新起流，那 1/4 概率的 ~1.2s 停顿就是这个。
+        // 提前到布局落定（120ms 的重算之后）即可，让重挂在**正在播**的流上发生。
         if (vlcHold) {
             findViewById<View>(R.id.videoBox)?.postDelayed({
                 runCatching { if (::player.isInitialized) player.resume() }
                 android.util.Log.i(TAG, "全屏过渡完成，恢复 VLC 播放（避免 pts_delay 追帧卡顿）")
-            }, 700)
+            }, 150)
         }
     }
 
@@ -1002,6 +1018,9 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
         app.prefs.lastChannelTvgId = ch.tvgId
         app.prefs.lastChannelName = ch.name
         playName.text = ch.name
+        // 记下这次实际用的偏好，供 onResume 判断"设置页改过没生效"
+        appliedEngine = app.prefs.engine
+        appliedDecode = app.prefs.decode
         playHint.visibility = View.GONE
         loading.visibility = View.VISIBLE
         paused = false
@@ -1483,6 +1502,28 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
      *
      * 只预热地址，不预开流——预开流要额外占一个解码器，低端盒子上内存吃不消。
      */
+    /**
+     * 切到上一个 / 下一个频道（按频道表顺序，首尾循环）。
+     *
+     * 找不到当前频道时退回第一个而不是什么都不做 —— 点了没反应比切错更让人困惑
+     * （`currentChannel` 可能是服务端那份对象，它的 id 在本地解析结果里不存在）。
+     */
+    private fun stepChannel(delta: Int) {
+        if (all.isEmpty()) {
+            android.util.Log.w(TAG, "stepChannel: 频道表为空，忽略")
+            return
+        }
+        val cur = currentChannel
+        val i = cur?.let { c -> all.indexOfFirst { it.id == c.id } } ?: -1
+        val n = all.size
+        val target = if (i < 0) all[0] else all[((i + delta) % n + n) % n]
+        android.util.Log.i(TAG, "stepChannel: delta=$delta ${cur?.name ?: "-"}（$i）-> ${target.name}")
+        if (currentTab != TAB_PLAY) switchTab(TAB_PLAY)
+        playChannel(target)
+        // 切台后让控件再停一会儿：连续切台时不用每次都重新呼出
+        showControls()
+    }
+
     private fun prefetchNeighbors() {
         val cur = currentChannel ?: return
         if (lastPrefetchChannel == cur.id) return   // onPlaying 会重复回调，去重
@@ -1626,6 +1667,20 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
         // 从设置页/遥控器页回来：Surface 是重建的，必须重接并恢复播放
         if (::panelPlay.isInitialized && currentTab == TAB_PLAY) reattachVideo()
         if (::adapter.isInitialized && all.isNotEmpty()) load()
+
+        // ★ 设置页的「播放内核 / 解码方式」只写 prefs、不重建播放器（bindCycle），
+        //   所以改完回到这里必须自己比对一次，否则用户以为改了、其实当前台没变。
+        //   只比对"本次起播实际用的值"，不同才重起，避免每次回到前台都重连。
+        if (::player.isInitialized && player.playingChannelId > 0 &&
+            (appliedEngine != app.prefs.engine || appliedDecode != app.prefs.decode)
+        ) {
+            android.util.Log.i(
+                TAG,
+                "onResume: 内核/解码已改（$appliedEngine/$appliedDecode -> " +
+                    "${app.prefs.engine}/${app.prefs.decode}），重起当前台",
+            )
+            restartCurrent()
+        }
     }
 
     /** 正在打开应用内页面（设置/遥控器）：此时 onPause 不该停播。 */

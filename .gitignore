@@ -132,3 +132,9 @@ __pycache__/
 /*.jpeg
 /*.csv
 /*.json
+
+# 取证产物（截图/logcat/ui dump）一律放仓库外；这里兜底防止误提交
+LITV2-ab-artifacts/
+_artifacts/
+_rotate_probe*/
+_probe*/

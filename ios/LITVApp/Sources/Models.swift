@@ -334,9 +334,17 @@ struct PlayInfo: Codable {
     /// direct 直连只带 UA 必然 403，而 relay 因为服务端带头反而正常
     /// ——表现就是"直连打不开、中转能看"，用户完全猜不到原因。
     var headers: [String: String] = [:]
+    /// 服务端**实际选中**的线路 id（tvPlay 两个分支都会给）。
+    ///
+    /// 为什么必须解出来：Android 一直有，iOS 一直缺 —— 结果 iOS 无法
+    /// 「记住这条线路能播」，重播时也没法把 `stream_id=` 回传，
+    /// 于是同一个台两端会选中不同线路，排查"为什么手机上能播、iPad 上不能"时
+    /// 缺少最关键的那个变量。0 = 服务端没给（老 NAS）。
+    var streamId: Int64 = 0
 
     enum CodingKeys: String, CodingKey {
         case kind, url, expires, channel, ua, mode, headers
+        case streamId = "stream_id"
     }
 
     /// 交给播放内核的最终请求头。
@@ -373,6 +381,11 @@ extension PlayInfo {
         ua = try c.litv(.ua, "")
         mode = try c.litv(.mode, "relay")
         headers = try c.litv(.headers, [:])
+        // ★ 新增字段必须加到这里。
+        //   这个 struct 有**手写** init(from:)，合成的解码器不参与——
+        //   只往 CodingKeys 里加一行，字段会永远静默保持默认值 0，
+        //   而所有"字段存在"检查（包括 grep 型门禁）都会通过。
+        streamId = try c.litv(.streamId, Int64(0))
     }
 }
 

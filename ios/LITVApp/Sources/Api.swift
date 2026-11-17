@@ -335,9 +335,31 @@ struct EmptyResponse: Codable {}
 struct HeartbeatResult: Codable {
     var configVersion: Int64 = 0
     var serverTime: Int64 = 0
+    /// 频道表指纹（服务端 handlers_client.go 的 `channels_version`）。
+    ///
+    /// 为什么必须解出来：Android 有、iOS 一直缺 —— 于是服务端加台/停台/改分组
+    /// 之后，iOS 端**永远发现不了**，用户只能杀掉 App 重进才看到新频道。
+    /// 空串 = 服务端没给（老 NAS），此时不做任何失效判断。
+    var channelsVersion: String = ""
 
     enum CodingKeys: String, CodingKey {
         case configVersion = "config_version"
         case serverTime = "server_time"
+        case channelsVersion = "channels_version"
+    }
+
+    init() {}
+
+    /// 手写解码：三个字段全部按"缺省回落"处理。
+    ///
+    /// 为什么不能靠合成的解码器：Swift 合成的 `init(from:)` **不会**用属性的
+    /// 默认值，键不存在就直接 throw。这样「新 App + 老 NAS」会在心跳上抛错，
+    /// 而心跳是后台静默的，出问题时没有任何界面提示。Models.swift 里所有
+    /// DTO 都是这个约定，这里保持一致。
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        configVersion = try c.decodeIfPresent(Int64.self, forKey: .configVersion) ?? 0
+        serverTime = try c.decodeIfPresent(Int64.self, forKey: .serverTime) ?? 0
+        channelsVersion = try c.decodeIfPresent(String.self, forKey: .channelsVersion) ?? ""
     }
 }

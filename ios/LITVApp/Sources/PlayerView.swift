@@ -95,6 +95,16 @@ struct PlayerView: View {
     @State private var switched: Channel?
     /// direct / relay，用于 OSD 显示
     @State private var playMode = ""
+    /// 播放封装：ts / hls / remux。取服务端 PlayInfo.kind。
+    ///
+    /// **这是 QoE 上报里 `path` 字段的唯一合法来源。**
+    /// 曾经这里把 `playMode`（direct/relay/timeshift）当 path 发上去，
+    /// 于是服务端的 `by_path` 分组全被污染，按封装看起播 P90 变得不可比，
+    /// 而且不报错——path 是自由文本，服务端只做 32 字节截断。
+    /// 与 `playMode` 是**正交两维**，不能互相顶替。
+    /// 客户端解析模式（address 来自本地源表）拿不到服务端的 kind，留空
+    /// —— 空值不会下发，比猜一个 "ts" 诚实。
+    @State private var playKind = ""
 
     /// 当前实际在播的频道
     private var active: Channel { switched ?? channel }
@@ -182,7 +192,7 @@ struct PlayerView: View {
             startReported = true
             let ms = playStartedAt.map { Int(Date().timeIntervalSince($0) * 1000) } ?? 0
             let ch = active.id
-            let p = playMode, e = usingVLC ? "vlc" : "avplayer"
+            let p = playKind, e = usingVLC ? "vlc" : "avplayer"
             Task { await session.api.reportStats(
                 channelId: ch, event: "start", startupMs: ms, path: p, engine: e) }
         }
@@ -205,7 +215,7 @@ struct PlayerView: View {
             if startReported, let t0 = playStartedAt {
                 let ms = Int(Date().timeIntervalSince(t0) * 1000)
                 let ch = active.id
-                let p = playMode, e = usingVLC ? "vlc" : "avplayer"
+                let p = playKind, e = usingVLC ? "vlc" : "avplayer"
                 Task { await session.api.reportStats(
                     channelId: ch, event: "stop", watchMs: ms, path: p, engine: e) }
             }
@@ -902,6 +912,8 @@ struct PlayerView: View {
                 playUA = ""
                 playHeaders = ["User-Agent": "LITV/1.0 (iOS)"]
                 playMode = "timeshift"
+                // /live/{id}/timeshift.ts 是裸 TS，所以封装就是 ts
+                playKind = "ts"
                 if VLCPlayerView.isAvailable {
                     usingVLC = true
                     player = nil
@@ -922,6 +934,9 @@ struct PlayerView: View {
                 playUA = h["User-Agent"] ?? ""
                 playHeaders = h.isEmpty ? ["User-Agent": "LITV/1.0 (iOS)"] : h
                 playMode = "direct"
+                // 本地源表只给地址，没有服务端的 kind。留空 = 不上报 path，
+                // 不要猜（猜错的 path 会污染 by_path 分组，比没有更难查）。
+                playKind = ""
                 if VLCPlayerView.isAvailable {
                     usingVLC = true
                     player = nil
@@ -951,6 +966,7 @@ struct PlayerView: View {
                 playUA = info.ua
                 playHeaders = info.playHeaders(defaultUA: "LITV/1.0 (iOS)")
                 playMode = info.mode
+                playKind = info.kind
                 usingVLC = true
                 player = nil
             } else {
@@ -966,6 +982,7 @@ struct PlayerView: View {
                 playUA = info.ua
                 playHeaders = info.playHeaders(defaultUA: "LITV/1.0 (iOS)")
                 playMode = info.mode
+                playKind = info.kind
                 usingVLC = false
                 startAVPlayer(u)
             }
@@ -1011,6 +1028,7 @@ struct PlayerView: View {
             playUA = info.ua
             playHeaders = info.playHeaders(defaultUA: "LITV/1.0 (iOS)")
             playMode = info.mode
+            playKind = info.kind
             startAVPlayer(u)
         } catch {
             errorText = "VLC 播放失败，降级 AVPlayer 也没拿到地址：" + error.localizedDescription

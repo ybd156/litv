@@ -69,6 +69,9 @@ class VlcEngine : PlayerEngine {
     /** 最近一次收到 VLC TimeChanged 的时刻（elapsedRealtime） */
     @Volatile private var lastTimeEventAt = 0L
 
+    /** 上一次 stats() 打日志时的特征串，避免 OSD 刷新时刷屏 */
+    private var lastStatsSig = ""
+
     /** VLC 自己的看门狗：只在本引擎内部生效，不改 PlayerManager 的位置语义 */
     private var nudgedOnce = false
     private val vlcWatchdog = object : Runnable {
@@ -934,11 +937,116 @@ class VlcEngine : PlayerEngine {
 
     override fun isPlaying(): Boolean = player?.isPlaying == true
 
-    override fun stats(): EngineStats = EngineStats(
-        positionMs = runCatching { player?.time ?: -1L }.getOrDefault(-1L),
-        width = videoW,
-        height = videoH,
-    )
+    /**
+     * 修 2026-11-18：以前这里只填了 position，`videoW/videoH` 在整个类里**从未赋值**
+     * （一直是 0），`videoCodec/audioCodec` 也没填 —— 于是 TV 端 OSD 切到 VLC 之后
+     * 分辨率档位（FHD/HD/SD）和音视频编码一片空白，只剩引擎名。
+     *
+     * 现在从 libVLC 的当前轨道直接取：`getCurrentVideoTrack()` / `getCurrentAudioTrack()`
+     * 返回 `IMedia.VideoTrack` / `AudioTrack`，里面有 width/height 和 fourcc 形式的 codec。
+     * 用反射读字段，避免为 libvlc 内部类引入编译期依赖（版本升级时字段名变了也只是
+     * 少一行信息，不会编译失败）。
+     */
+    override fun stats(): EngineStats {
+        val vTrack = track("getCurrentVideoTrack")
+        vTrack?.let { t ->
+            intField(t, "width")?.takeIf { it > 0 }?.let { videoW = it }
+            intField(t, "height")?.takeIf { it > 0 }?.let { videoH = it }
+        }
+        // 音频侧没有 getCurrentAudioTrack()：只能从 media 的轨道列表里挑 AudioTrack。
+        // （2026-11-18 反编译 libvlc-all-3.5.1 的 classes.jar 确认：MediaPlayer 只有
+        //   getAudioTrack(int)/getAudioTracks()，音频轨道对象来自 IMedia.getTrack(i)）
+        val aTrack = audioTrackFromMedia()
+        val vCodec = codecOf(vTrack)
+        val aCodec = codecOf(aTrack)
+        // 只在这个组合变化时打一行，便于真机核对 OSD 为什么缺格子
+        val sig = "$vCodec|$aCodec|$videoW|$videoH"
+        if (sig != lastStatsSig) {
+            lastStatsSig = sig
+            android.util.Log.i(
+                TAG,
+                "stats: vTrack=${vTrack?.javaClass?.simpleName} aTrack=${aTrack?.javaClass?.simpleName} " +
+                    "videoCodec='$vCodec' audioCodec='$aCodec' ${videoW}x$videoH",
+            )
+        }
+        return EngineStats(
+            positionMs = runCatching { player?.time ?: -1L }.getOrDefault(-1L),
+            width = videoW,
+            height = videoH,
+            videoCodec = vCodec,
+            audioCodec = aCodec,
+        )
+    }
+
+    /** 按方法名找 0 参 getter 并调用（getMethod 在声明于父类/签名变化时会抛异常）。 */
+    private fun track(getter: String): Any? = runCatching {
+        val p = player ?: return null
+        p.javaClass.methods
+            .firstOrNull { it.name == getter && it.parameterCount == 0 }
+            ?.invoke(p)
+    }.getOrNull()
+
+    /** 从 media 的轨道列表里挑出音频轨道（运行时类是 `Media$AudioTrack`）。 */
+    private fun audioTrackFromMedia(): Any? {
+        val media = track("getMedia") ?: return null
+        val count = (call(media, "getTrackCount") as? Int) ?: return null
+        for (i in 0 until count) {
+            val t = call(media, "getTrack", i) ?: continue
+            if (t.javaClass.simpleName.equals("AudioTrack", ignoreCase = true)) return t
+        }
+        return null
+    }
+
+    private fun call(o: Any, name: String, vararg args: Any): Any? = runCatching {
+        o.javaClass.methods
+            .firstOrNull { it.name == name && it.parameterCount == args.size }
+            ?.invoke(o, *args)
+    }.getOrNull()
+
+    /**
+     * 沿类层次读字段。
+     *
+     * 先 `getField`（会连**接口**一起找），再退到逐层 `getDeclaredField`。
+     * 2026-11-18 真机教训：只走 getDeclaredField + superclass 时，
+     * `IMedia$VideoTrack` **接口**里声明的 `width/height` 完全找不到 → 读到 0，
+     * OSD 丢掉 FHD 角标（同一份代码用 getField 时是 1920×1080）。
+     */
+    private fun fieldValue(o: Any, name: String): Any? {
+        runCatching { o.javaClass.getField(name) }.getOrNull()
+            ?.let { f -> runCatching { f.get(o) }.getOrNull()?.let { return it } }
+        var c: Class<*>? = o.javaClass
+        while (c != null && c != Any::class.java) {
+            val f = runCatching { c.getDeclaredField(name).apply { isAccessible = true } }.getOrNull()
+            if (f != null) runCatching { f.get(o) }.getOrNull()?.let { return it }
+            c = c.superclass
+        }
+        return null
+    }
+
+    private fun intField(o: Any, name: String): Int? = (fieldValue(o, name) as? Int)
+
+    /**
+     * 取轨道编码。
+     *
+     * `IMedia.Track.codec` 是 **String**（"h264" / "mp4a" / "ac-3" …），
+     * 同名的整型 fourcc 在 `fourcc` 字段里 —— 早先拿 `getInt("codec")` 读，
+     * 必抛 IllegalArgumentException，于是 OSD 永远缺编码。
+     */
+    private fun codecOf(track: Any?): String {
+        if (track == null) return ""
+        (fieldValue(track, "codec") as? String)?.takeIf { it.isNotBlank() }?.let { return it }
+        val fourcc = intField(track, "fourcc") ?: return ""
+        if (fourcc == 0) return ""
+        val s = String(
+            charArrayOf(
+                ((fourcc shr 24) and 0xFF).toChar(),
+                ((fourcc shr 16) and 0xFF).toChar(),
+                ((fourcc shr 8) and 0xFF).toChar(),
+                (fourcc and 0xFF).toChar(),
+            ),
+        ).trim()
+        return if (s.all { it.code in 0x20..0x7E }) s else ""
+    }
 
     private companion object {
         const val TAG = "VlcEngine"

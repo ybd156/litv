@@ -1454,6 +1454,15 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
             android.view.View.GONE
         // 显式清掉，避免引擎还握着那块 layout
         player.setVlcLayout(null)
+        // ★ 切内核时把比例清回「自动」：VLC 在 Surface 内部自己 letterbox，
+        //   容器必须铺满；否则会沿用 Exo 留下的比例被缩成 16:9 并偏离中心。
+        runCatching {
+            findViewById<androidx.media3.ui.AspectRatioFrameLayout>(R.id.videoAspect)
+                ?.apply {
+                    setAspectRatio(0f)
+                    requestLayout()
+                }
+        }
     }
 
     override fun onPrepared(width: Int, height: Int) = Unit

@@ -1440,6 +1440,12 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
     /** 音频编码换成人话：机顶盒 OSD 上写的是"立体声/AAC"，不是 MP4A.40.2 这种。 */
     private fun friendlyAudio(codec: String): String = when {
         codec.startsWith("mp4a", ignoreCase = true) -> "AAC"
+        // VLC 给的是长描述（如 "MPEG AAC Audio"），Exo 给的是 mime（audio/mp4a-latm）。
+        // 不认长描述的话会原样大写显示成 "MPEG AAC AUDIO"。
+        codec.contains("aac", ignoreCase = true) -> "AAC"
+        codec.contains("ac-3", ignoreCase = true) || codec.contains("ac3", ignoreCase = true) -> "AC3"
+        codec.contains("e-ac-3", ignoreCase = true) || codec.contains("eac3", ignoreCase = true) -> "E-AC3"
+        codec.contains("ac-4", ignoreCase = true) || codec.contains("ac4", ignoreCase = true) -> "AC4"
         codec.equals("ac-3", true) -> "AC3"
         codec.equals("ec-3", true) -> "E-AC3"
         codec.equals("ac-4", true) -> "AC4"
@@ -2650,13 +2656,19 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         surface.visibility = if (useTex) View.INVISIBLE else View.VISIBLE
         findViewById<android.view.View>(R.id.surfaceTex)?.visibility =
             if (useTex) View.VISIBLE else View.GONE
-        if (!isVlc) {
-            // 比例清回「自动」，等 Exo 的 onVideoSizeChanged 重新给值，
-            // 避免沿用 VLC 那一路的比例导致画面偏。
-            runCatching {
-                videoAspect.setAspectRatio(0f)
-                videoAspect.requestLayout()
-            }
+        // ★ 两种内核都要把比例清回「自动」，不能只清 Exo。
+        //   · Exo：清掉后等它自己的 onVideoSizeChanged 重新给值；
+        //   · VLC：VLC 在 Surface **内部**按比例 letterbox，容器必须铺满（比例 0）。
+        //   只清 Exo 不清 VLC 的话，切到 VLC 会沿用 Exo 留下的比例 —— 电视那块 2.24:1
+        //   的画面里容器被缩成 16:9 并偏离中心，就是"换了 VLC 画面位置不对"。
+        //   （同类坑见 AGENTS §6：AspectRatioFrameLayout 设了比例会缩自己）
+        runCatching {
+            videoAspect.setAspectRatio(0f)
+            videoAspect.requestLayout()
+        }
+        if (isVlc) {
+            // 切到 VLC 后窗口尺寸按当前容器同步一次，保证 vout 按新尺寸出画
+            runCatching { player.resyncWindow() }
         }
     }
 

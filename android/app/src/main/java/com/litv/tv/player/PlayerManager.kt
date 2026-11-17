@@ -549,15 +549,37 @@ class PlayerManager(
         val now = android.os.SystemClock.elapsedRealtime()
         if (now - lastResyncAt < 800) return
         lastResyncAt = now
-        // VLC 不接受"事后改窗口尺寸 + 重挂 vout"。真机实测（2026-11-17 05:20）：
-        // 用"原地重挂"（detach → setVideoSurface → attachViews）确实不再黑 1 秒，
-        // 但**回竖屏后画面冻结**——像素零变化、音频照常，正是"attach 成功但
-        // 视频输出已死、pause/play 唤不回"的老问题。冻结比卡 1 秒更糟。
-        // 所以仍然重建；`reattachVideo()` 只保留给"息屏唤醒"用（那条路已验证有效，
-        // 且失败会退化到重建）。
+        // ★ 优先**原地重挂**（不重建），并用「有没有出帧」做兜底判据。
+        //
+        // 为什么改：全屏时重建会让**新 VLC 实例建在旧实例还没释放完的时候**，
+        // 真机实测 1/3 轮会卡住不出帧 ——
+        //   22:59:20.133 VLC play() holder=true 窗口 2168x1220
+        //   ……之后 20 秒无任何 demux/decoder 日志，帧 5→0
+        //   22:59:40.616 VLC 12 秒没送帧（idle=15009ms），轻推一次
+        // 靠 12 秒看门狗才救回来，用户就是"转过去卡十几秒"。
+        //
+        // 早先试过原地重挂但回滚了，理由是"attach 成功但输出已死"。那次错在
+        // **只看了 attachViews 的返回值**（ok=true 只表示没抛异常）。现在改为：
+        // 重挂后 1.5 秒检查 `msSinceLastFrame()`，没出帧就立刻重建 —— 判据是帧，不是返回值。
         main.postDelayed({
             if (released) return@postDelayed
-            Log.i(TAG, "resync: 用新尺寸重建 VLC")
+            val vv = current as? VlcEngine
+            if (vv != null && vv.reattachVideo()) {
+                Log.i(TAG, "resync: 原地重挂完成，1.5s 后验帧")
+                main.postDelayed({
+                    if (released) return@postDelayed
+                    val v2 = current as? VlcEngine ?: return@postDelayed
+                    val idle = v2.msSinceLastFrame()
+                    if (idle > RESYNC_FRAME_CHECK_MS) {
+                        Log.w(TAG, "resync: 重挂后 ${idle}ms 无帧，改为重建 VLC")
+                        retryNow()
+                    } else {
+                        Log.i(TAG, "resync: 重挂后 ${idle}ms 内有帧，保持不重建")
+                    }
+                }, RESYNC_FRAME_CHECK_MS)
+                return@postDelayed
+            }
+            Log.w(TAG, "resync: 无法原地重挂，改为重建 VLC")
             retryNow()
         }, 400)
     }
@@ -1164,6 +1186,14 @@ class PlayerManager(
 
         /** 卡顿检测间隔。4 秒读一次播放位置，对 CPU 几乎没有开销。 */
         const val STALL_CHECK_MS = 4000L
+
+        /**
+         * 全屏/尺寸变化后"原地重挂 vout"的验帧窗口。
+         *
+         * 1.5 秒内必须收到 VLC 的 TimeChanged，否则判定重挂无效、改为重建。
+         * 这个值不能太长：它就是用户看到的"转过去卡住"的时长。
+         */
+        const val RESYNC_FRAME_CHECK_MS = 1500L
 
         /**
          * 播放位置完全不变多久算卡死。

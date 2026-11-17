@@ -854,6 +854,18 @@ class VlcEngine : PlayerEngine {
             }
     }
 
+    /**
+     * 距离最近一次 VLC 送帧（TimeChanged）过了多久；从没送过则返回 Long.MAX_VALUE。
+     *
+     * 用于"重挂 vout 之后到底有没有出帧"的判据 —— 只看 `attachViews` 返回值
+     * 会骗人（真机上 attach 成功但视频输出已死，画面定格）。
+     */
+    fun msSinceLastFrame(): Long {
+        val t = lastTimeEventAt
+        if (t <= 0L) return Long.MAX_VALUE
+        return android.os.SystemClock.elapsedRealtime() - t
+    }
+
     override fun play() {
         val p = player ?: return
         VlcOps.exec.execute { runCatching { p.play() } }

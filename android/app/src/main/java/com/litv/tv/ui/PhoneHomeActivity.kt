@@ -458,8 +458,37 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
      */
     private val hiddenForFullscreen = mutableMapOf<View, Int>()
 
+    /**
+     * 上一次实际应用的全屏状态。
+     *
+     * 一次转屏会有**两个入口**都调 applyFullscreen：`toggleOrientation()`（点按钮）
+     * 和 `onConfigurationChanged()`（旋转落地）。真机日志里 `全屏过渡完成`
+     * 每次转场出现 2 条就是证据 —— 等于 pause/resume、隐藏/恢复子项、重算比例
+     * 全跑了两遍。这里用状态去重，谁先到算谁。
+     */
+    private var fullscreenApplied: Boolean? = null
+
     /** 按是否全屏调整可见性与播放器高度。 */
     private fun applyFullscreen(on: Boolean) {
+        if (fullscreenApplied == on) return
+        fullscreenApplied = on
+        // ★ VLC 在全屏切换期间会被"往后拖"。
+        //
+        // 真机实测（2026-11-17 22:31，VLC 内核进全屏）：
+        //   libvlc window: request 3 not implemented          ← 进全屏瞬间
+        //   ES_OUT_SET_(GROUP_)PCR is called too late (pts_delay increased to 1000 ms)
+        //   … → 1231 ms → 2182 ms
+        // 切换时 vout 被阻塞，demux 送进来的 PCR 时间戳已经过期，VLC 一路抬高
+        // pts_delay 去兜，表现为**转过去之后明显顿几秒才恢复**。Exo 不做这种
+        // 时钟补偿，所以只有 VLC 有这个现象。
+        //
+        // 处理：切换期间先停一下，布局稳定后再恢复，让 VLC 重新对时；
+        // 用户本来就暂停着的话不碰（否则会把暂停的人强制播起来）。
+        val vlcHold = runCatching {
+            ::player.isInitialized && player.engineKey() == "vlc" && !paused
+        }.getOrDefault(false)
+        if (vlcHold) runCatching { player.pause() }
+
         findViewById<View>(R.id.bottomTabs)?.visibility = if (on) View.GONE else View.VISIBLE
         // 全屏时连频道名标题也藏掉——用户要的是"只剩画面"
         findViewById<View>(R.id.playHeader)?.visibility = if (on) View.GONE else View.VISIBLE
@@ -501,6 +530,16 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
         //   `it.height` 还是旧值（486），算出来仍是 686。
         //   等布局落定后再算，才能拿到"兄弟全部收起后"的真实可用高度。
         findViewById<View>(R.id.videoBox)?.postDelayed({ applyVideoRatio() }, 120)
+
+        // 恢复播放（见本方法开头 vlcHold 的说明）。
+        // 700ms 是实测"布局稳定 + surface 尺寸到位"的经验值；期间界面本来也在
+        // 过渡，用户看不到额外黑屏。恢复后 VLC 会重新对时，不再把 pts_delay 抬到 2 秒。
+        if (vlcHold) {
+            findViewById<View>(R.id.videoBox)?.postDelayed({
+                runCatching { if (::player.isInitialized) player.resume() }
+                android.util.Log.i(TAG, "全屏过渡完成，恢复 VLC 播放（避免 pts_delay 追帧卡顿）")
+            }, 700)
+        }
     }
 
     /** 把三个全屏工具按钮的文字同步成当前设置。 */

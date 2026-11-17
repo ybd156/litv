@@ -451,11 +451,43 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
         applyFullscreen(landscape)
     }
 
+    /**
+     * 全屏时被我们藏起来的子项 → 原来的可见性。
+     * 退出全屏要**按原值**恢复：panelPlay 里的 playRoute / 日期条 / epgScroll
+     * 本来各有自己的显隐逻辑，无脑设 VISIBLE 会把该藏的也放出来。
+     */
+    private val hiddenForFullscreen = mutableMapOf<View, Int>()
+
     /** 按是否全屏调整可见性与播放器高度。 */
     private fun applyFullscreen(on: Boolean) {
         findViewById<View>(R.id.bottomTabs)?.visibility = if (on) View.GONE else View.VISIBLE
         // 全屏时连频道名标题也藏掉——用户要的是"只剩画面"
         findViewById<View>(R.id.playHeader)?.visibility = if (on) View.GONE else View.VISIBLE
+
+        // ★ 把 panelPlay 里**除视频框所在分支之外**的子项全部收起。
+        //
+        // 实测（2026-11-17 12:50）：只藏 epgList 不够 —— 它的父 epgScroll
+        // （layout_weight=1）空壳仍吃 329px，加上 playRoute(57) 和日期条(100)，
+        // 兄弟合计 486，usableH 只剩 1172-486=686 → 视频被挤成 1219×686
+        // （≈屏幕宽 45%，左右各约 740px 黑边）。
+        // 这里按"保留视频框分支"的方式处理，以后界面再加控件也不会漏。
+        val box = findViewById<View>(R.id.videoBox)
+        val panel = findViewById<android.view.ViewGroup>(R.id.panelPlay)
+        if (box != null && panel != null) {
+            if (on) {
+                for (i in 0 until panel.childCount) {
+                    val c = panel.getChildAt(i)
+                    if (c === box || c === box.parent) continue
+                    if (c.visibility == View.VISIBLE) {
+                        hiddenForFullscreen[c] = View.VISIBLE
+                        c.visibility = View.GONE
+                    }
+                }
+            } else {
+                for ((v, vis) in hiddenForFullscreen) v.visibility = vis
+                hiddenForFullscreen.clear()
+            }
+        }
         // 沉浸式：隐藏状态栏与导航栏，下滑可临时唤出
         setSystemBarsHidden(on)
         findViewById<View>(R.id.panelChannel)?.visibility =
@@ -465,6 +497,10 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
         if (on) syncFsTools()
 
         applyVideoRatio()
+        // ★ 再算一次：上面这次跑的时候，被 GONE 掉的兄弟还没重新 measure，
+        //   `it.height` 还是旧值（486），算出来仍是 686。
+        //   等布局落定后再算，才能拿到"兄弟全部收起后"的真实可用高度。
+        findViewById<View>(R.id.videoBox)?.postDelayed({ applyVideoRatio() }, 120)
     }
 
     /** 把三个全屏工具按钮的文字同步成当前设置。 */
@@ -586,6 +622,14 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
         //   applyVideoRatio 按竖屏逻辑算：宽度 MATCH_PARENT + 高度沿用竖屏缓存的 686
         //   → 容器变成 2624×686，16:9 内容只能左右留 700px 黑边。
         landscape = newConfig.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
+
+        // ★ 横屏自动进全屏（隐藏标题栏 / 底部 tab / 系统栏）。
+        //   不这么做的话，横屏可用高度只剩 932-246=686，视频只能撑到屏幕宽的 44.9%
+        //   （左右各约 740px 黑边）—— 用户要的"横屏铺满"就是这个。
+        //
+        //   只在「播放」页生效：频道列表页在横屏仍需要底部 tab 才能切页，
+        //   藏起来用户就没法操作了。
+        applyFullscreen(landscape && currentTab == TAB_PLAY)
 
         // ★ 还要等**父容器真的换过尺寸**再算。
         //   直接 `box.post { applyVideoRatio() }` 会跑在父容器 re-measure 之前，

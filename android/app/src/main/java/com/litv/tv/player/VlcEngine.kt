@@ -69,12 +69,6 @@ class VlcEngine : PlayerEngine {
     /** 最近一次收到 VLC TimeChanged 的时刻（elapsedRealtime） */
     @Volatile private var lastTimeEventAt = 0L
 
-    /**
-     * 最近一次重挂 vout 之前的"已显示帧数"，-1 表示取不到（反射失败）。
-     * 重挂后必须看到它**增长**才算真的在出画。
-     */
-    @Volatile private var picsAtReattach = -1L
-
     /** VLC 自己的看门狗：只在本引擎内部生效，不改 PlayerManager 的位置语义 */
     private var nudgedOnce = false
     private val vlcWatchdog = object : Runnable {
@@ -580,79 +574,6 @@ class VlcEngine : PlayerEngine {
     }
 
     /**
-     * 尺寸变化后**只重造视频输出**，不重建播放器。
-     *
-     * 为什么要这条：`resyncWindow()` 走 `retryNow()` 是整条重连（网络 + 解复用），
-     * 真机转场后要黑 2–10 秒。而 `attachViews` 重挂又不可靠（vout 不重连、画面定住）。
-     * `setVideoTrackEnabled(false→true)` 会让 libvlc **销毁并重建 vout**，
-     * 用当前 Surface 和窗口尺寸重新出画，MediaPlayer 与 demux 都不动。
-     *
-     * @return false 表示当前没法重造（没播放器 / Surface 无效），调用方退化到重建
-     */
-    fun recreateVout(): Boolean {
-        val p = player ?: return false
-        val s = videoSurface ?: return false
-        if (!s.isValid) return false
-        // 记下重造前的已显示帧数，稍后用它判断到底有没有真的出画
-        picsAtReattach = displayedPictures()
-        val ok = runCatching {
-            // 先把窗口设成**当前**尺寸，vout 重建时才会用新尺寸
-            applyRenderSizeBeforeAttach(p)
-            p.videoScale = scaleFor(aspect)
-            p.setVideoTrackEnabled(false)
-            p.setVideoTrackEnabled(true)
-            true
-        }.getOrDefault(false)
-        android.util.Log.i(TAG, "recreateVout: ok=$ok 重造前已显示帧=${picsAtReattach}")
-        return ok
-    }
-
-    /**
-     * 布局尺寸变了（全屏/旋转）之后，**原地**把视频输出重挂到当前 Surface。
-     *
-     * 为什么不用 `retryNow()` 重建：那等于换台重连，约 1 秒黑屏 ——
-     * 用户切一次全屏就卡一下，体验上就是"每次切屏都顿"。
-     * 这里只 detach → setVideoSurface → attachViews，再用 pause/play 轻推一下出帧。
-     *
-     * 与 [rebindVideo] 的区别：这里**不动窗口尺寸**（`setWindowSize` 在挂上之后
-     * 本来也不生效，改了反而可能把 libVLC 的缩放算错），只重挂。
-     *
-     * @return false 表示当前没法重挂（没播放器 / Surface 无效），调用方再退化到重建
-     */
-    fun reattachVideo(): Boolean {
-        val p = player ?: return false
-        val s = videoSurface ?: return false
-        if (!s.isValid) return false
-        val wasPlaying = runCatching { p.isPlaying }.getOrDefault(false)
-        // 记下重挂前的"已显示帧数"，重挂后要看它有没有继续增长
-        // （TimeChanged 在 vout 死掉时照样在走，靠它验帧会假绿灯）
-        val picsBefore = displayedPictures()
-        picsAtReattach = picsBefore
-        runCatching { p.vlcVout.detachViews() }
-        // ★ 必须在 attachViews 之前把窗口设成**当前**尺寸，否则旋转后仍按旧尺寸画
-        applyRenderSizeBeforeAttach(p)
-        val ok = runCatching {
-            p.vlcVout.setVideoSurface(s, surfaceHolder)
-            p.vlcVout.attachViews()
-            p.videoScale = scaleFor(aspect)
-        }.isSuccess
-        android.util.Log.i(
-            TAG,
-            "reattachVideo: ok=$ok wasPlaying=$wasPlaying 已显示帧=$picsBefore",
-        )
-        if (!ok) return false
-        attachedSurface = s
-        if (wasPlaying) {
-            main.postDelayed({
-                runCatching {
-                    VlcOps.exec.execute { runCatching { p.pause(); p.play() } }
-                }
-            }, 120)
-        }
-        return true
-    }
-
-    /**
      * 息屏/开屏后**强制**把视频输出重新绑一遍。
      *
      * 为什么不能复用 [attach]：那里有一句
@@ -895,18 +816,6 @@ class VlcEngine : PlayerEngine {
             }
     }
 
-    /**
-     * 距离最近一次 VLC 送帧（TimeChanged）过了多久；从没送过则返回 Long.MAX_VALUE。
-     *
-     * 用于"重挂 vout 之后到底有没有出帧"的判据 —— 只看 `attachViews` 返回值
-     * 会骗人（真机上 attach 成功但视频输出已死，画面定格）。
-     */
-    fun msSinceLastFrame(): Long {
-        val t = lastTimeEventAt
-        if (t <= 0L) return Long.MAX_VALUE
-        return android.os.SystemClock.elapsedRealtime() - t
-    }
-
     override fun play() {
         val p = player ?: return
         VlcOps.exec.execute { runCatching { p.play() } }
@@ -1004,9 +913,6 @@ class VlcEngine : PlayerEngine {
             stats.javaClass.getField("displayedPictures").getLong(stats)
         }.getOrDefault(-1)
     }
-
-    /** 重挂前的已显示帧数；-1 表示取不到（此时调用方退化到 TimeChanged 判据）。 */
-    fun picturesAtReattach(): Long = picsAtReattach
 
     /**
      * 只把窗口尺寸同步成当前渲染目标的尺寸，不做任何重建。

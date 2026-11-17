@@ -1222,34 +1222,11 @@ class PlayerManager(
         /** 卡顿检测间隔。4 秒读一次播放位置，对 CPU 几乎没有开销。 */
         const val STALL_CHECK_MS = 4000L
 
-        /**
-         * 全屏/尺寸变化后"原地重挂 vout"的验帧窗口。
-         *
-         * 1.5 秒内必须收到 VLC 的 TimeChanged，否则判定重挂无效、改为重建。
-         * 这个值不能太长：它就是用户看到的"转过去卡住"的时长。
-         */
-        const val RESYNC_FRAME_CHECK_MS = 1500L
-
         /** VLC 起播/重建后多久开始复检画面（见 vlcFrameRecheck 说明）。 */
         const val VLC_FRAME_RECHECK_MS = 3000L
 
         /** 复检的采样窗口：这段时间内已显示帧数增长不到 5 帧即视为没在出画。 */
         const val VLC_FRAME_SAMPLE_MS = 700L
-
-        /**
-         * 「重造 vout」之后的验帧窗口 / 帧数下限。
-         *
-         * 实测调参记录（2026-11-18 01:25 / 01:40 两轮各 8 个相位）：
-         *   - 5 帧 / 1.2s：快路径 8/9 成功，进全屏 0s、出全屏 4.5s（自恢复），合计 4.5s
-         *   - 12 帧 / 1.8s：快路径 0/8，全部退回重建，合计 8.3s（比全重建基线 9.2s 只好一点）
-         * 原因：`displayedPictures` 会**滞后**——R1 进全屏时 SurfaceFlinger 已涨 27 帧，
-         * libVLC 只报 +6。所以这个计数只能用来判"最终有没有死"，不能用来卡时间窗口，
-         * 阈值取太严会把正常的快路径也判死。故回到 5 帧 / 1.2s。
-         */
-        const val VLC_VOUT_VERIFY_MS = 1200L
-
-        /** 见上：低于这个增量认为 vout 没真正出画（仅为"是否归零"量级判断）。 */
-        const val VLC_VOUT_MIN_FRAMES = 5
 
         /**
          * 播放位置完全不变多久算卡死。

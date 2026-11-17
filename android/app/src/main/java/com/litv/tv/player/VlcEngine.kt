@@ -1008,6 +1008,24 @@ class VlcEngine : PlayerEngine {
     /** 重挂前的已显示帧数；-1 表示取不到（此时调用方退化到 TimeChanged 判据）。 */
     fun picturesAtReattach(): Long = picsAtReattach
 
+    /**
+     * 只把窗口尺寸同步成当前渲染目标的尺寸，不做任何重建。
+     *
+     * 这是 VLC 官方 Android SDK 的做法：`VideoHelper.updateVideoSurfaces()`
+     * 在布局变化的回调里**只调 `vlcVout.setWindowSize(w,h)` 并改 LayoutParams**，
+     * 从不 detach/attach，也不重建 vout 或 MediaPlayer
+     * （`setVideoTrackEnabled(false/true)` 只在 attach/detach 时切换）。
+     *
+     * 我们之前试过的三种做法都会打断视频轨道/解码，转场那 1~5 秒停顿就是这么来的：
+     *   ① reattachVideo（detach→attach）—— vout 不重连，画面定格
+     *   ② recreateVout（setVideoTrackEnabled 切换）—— 等于重启视频轨道，1~5s
+     *   ③ retryNow()（重建 MediaPlayer）—— 整条重连，2~10s
+     */
+    fun syncWindowToCurrentSize(): Boolean {
+        val p = player ?: return false
+        return applyRenderSizeBeforeAttach(p)
+    }
+
     override fun isPlaying(): Boolean = player?.isPlaying == true
 
     override fun stats(): EngineStats = EngineStats(

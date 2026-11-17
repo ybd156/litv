@@ -589,41 +589,27 @@ class PlayerManager(
         val now = android.os.SystemClock.elapsedRealtime()
         if (now - lastResyncAt < 800) return
         lastResyncAt = now
-        // ★ 优先**只重造 vout**（不重建播放器）。
+        // ★ 按 VLC 官方 SDK 的做法：尺寸变化**只同步窗口尺寸**，什么都不重建。
         //
-        // 重建 = 整条重连（网络 + 解复用），真机转场后要黑 2–10 秒；
-        // `reattachVideo` 又不可靠（vout 不重连、画面定住，8 次转场 6 次定格）。
-        // `setVideoTrackEnabled(false→true)` 只让 libvlc 销毁并重建视频输出，
-        // MediaPlayer / demux 都不动 —— 这是唯一可能既快又稳的路线。
-        // 判据仍然是"已显示帧数有没有增长"，1.2s 内不增长就退回重建。
+        // 依据（libvlc 源码 `VideoHelper.updateVideoSurfaces()`）：布局变化时官方只做
+        //   vlcVout.setWindowSize(w, h) + 改子 SurfaceView 的 LayoutParams
+        // 从不 detach/attach，也不重建 vout 或 MediaPlayer；`setVideoTrackEnabled`
+        // 只在 attach/detach 时切换。也就是说"分辨率变了要重建视频输出"这个前提
+        // 是我们自己假设出来的，并不成立。
+        //
+        // 我们先后试过的三种做法都在打断视频轨道/解码，停顿就是这么来的：
+        //   ① reattachVideo（detach→attach）：vout 不重连，画面定格（18 次转场 8+ 次）
+        //   ② recreateVout（setVideoTrackEnabled 切换）：等于重启视频轨道，1~5s
+        //   ③ retryNow()（重建 MediaPlayer）：整条重连，2~10s
         main.postDelayed({
             if (released) return@postDelayed
             val vv = current as? VlcEngine
-            if (vv != null && vv.recreateVout()) {
-                Log.i(TAG, "resync: 只重造 vout（不重建），1.2s 后验帧")
-                main.postDelayed({
-                    if (released) return@postDelayed
-                    val v2 = current as? VlcEngine ?: return@postDelayed
-                    val before = v2.picturesAtReattach()
-                    val now = v2.displayedPictures()
-                    val delta = if (before >= 0 && now >= 0) now - before else -1
-                    // 阈值按帧率量级而不是"有没有涨"：
-                    // 真机出全屏时 1.2s 只涨 5–7 帧（≈4–6fps）也算"涨"，
-                    // 于是判了生效、却在 1.2s 之后定格。25fps/1.8s 应约 45 帧，
-                    // 这里要求至少 12 帧（≈7fps）才算真的在出画。
-                    if (delta >= 0 && delta < VLC_VOUT_MIN_FRAMES) {
-                        Log.w(TAG, "resync: 重造 vout 后帧数不足（$before -> $now，仅 $delta 帧），改为重建 VLC")
-                        retryNow()
-                    } else if (delta < 0) {
-                        Log.w(TAG, "resync: 取不到已显示帧数，保守走重建")
-                        retryNow()
-                    } else {
-                        Log.i(TAG, "resync: 重造 vout 生效（已显示帧 $before -> $now，$delta 帧）")
-                    }
-                }, VLC_VOUT_VERIFY_MS)
+            if (vv != null && vv.syncWindowToCurrentSize()) {
+                Log.i(TAG, "resync: 只同步窗口尺寸（不重挂/不重造/不重建，对齐官方 VideoHelper）")
                 return@postDelayed
             }
-            Log.w(TAG, "resync: 无法重造 vout，改为重建 VLC")
+            // 没有 VLC 引擎或拿不到尺寸时，仍按老路重建（Exo 不会走到这里）
+            Log.w(TAG, "resync: 无法同步窗口尺寸，改为重建")
             retryNow()
         }, 400)
     }

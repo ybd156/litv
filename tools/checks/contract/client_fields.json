@@ -1,0 +1,76 @@
+{
+  "$comment": [
+    "跨端字段级契约的单一真源（Single Source of Truth）。",
+    "为什么需要它：docs/design/01-API.md 明确写着「字段级契约目前没有自动校验，",
+    "只能靠 Go handler 与 TS/Kotlin/Swift 类型人工对齐」。人工对齐已经漂了：",
+    "iOS 的 PlayInfo 没有 stream_id、HeartbeatResult 没有 channels_version。",
+    "",
+    "维护规则：",
+    "  1. 只登记「客户端必须解码」的字段。服务端多给的字段（如 ua 是历史字段）不登记。",
+    "  2. requiredIn 列哪几端就必须在哪几端找到，缺一即失败。",
+    "  3. kotlinFile / swiftFile 必须指向**真正承载该 DTO 的文件**。",
+    "     不许指向 DecodeFixtures / mock：那些地方出现字段名不代表模型能解出来。",
+    "  4. 新增字段先加到这里，再加实现；删字段必须同步删这一行。",
+    "  5. 字段名就是 JSON 线上名（snake_case），不要写语言侧的驼峰。"
+  ],
+  "endpoints": [
+    {
+      "id": "tvPlay",
+      "goHandler": "server/internal/api/handlers_client.go",
+      "kotlinFile": "android/app/src/main/java/com/litv/tv/data/Models.kt",
+      "swiftFile": "ios/LITVApp/Sources/Models.swift",
+      "note": "GET /api/v1/tv/play/{id} 的 data；direct 与 relay 两个分支的并集",
+      "fields": [
+        { "name": "kind", "requiredIn": ["go", "kotlin", "swift"], "unit": "enum: ts|hls|remux", "why": "QoE path 的唯一合法来源；引擎能力选择也看它" },
+        { "name": "mode", "requiredIn": ["go", "kotlin", "swift"], "unit": "enum: direct|relay", "why": "与 kind 正交，不能互相顶替" },
+        { "name": "url", "requiredIn": ["go", "kotlin", "swift"], "unit": "string", "why": "relay 时是相对路径，direct 时是上游绝对地址" },
+        { "name": "expires", "requiredIn": ["go", "kotlin", "swift"], "unit": "unix-seconds(server clock)", "why": "时钟偏移检测与缓存可用性判定" },
+        { "name": "stream_id", "requiredIn": ["go", "kotlin", "swift"], "unit": "int64", "why": "服务端实际选中的线路；不回传就无法「记住这条线路能播」" },
+        { "name": "headers", "requiredIn": ["go", "kotlin", "swift"], "unit": "map<string,string>", "why": "源站防盗链（Referer/Origin）" },
+        { "name": "ua", "requiredIn": ["go", "kotlin", "swift"], "unit": "string", "why": "历史字段，headers 优先；保留只为兼容旧服务端" }
+      ]
+    },
+    {
+      "id": "tvHeartbeat",
+      "goHandler": "server/internal/api/handlers_client.go",
+      "kotlinFile": "android/app/src/main/java/com/litv/tv/data/Models.kt",
+      "swiftFile": "ios/LITVApp/Sources/Api.swift",
+      "note": "POST /api/v1/tv/heartbeat 的 data（iOS 的 HeartbeatResult 定义在 Api.swift 尾部）",
+      "fields": [
+        { "name": "config_version", "requiredIn": ["go", "kotlin", "swift"], "unit": "int64", "why": "设备配置变更通知；客户端据此决定要不要重新 bootstrap" },
+        { "name": "channels_version", "requiredIn": ["go", "kotlin", "swift"], "unit": "string", "why": "频道表指纹；缺了它 iOS 永远发现不了服务端加台" },
+        { "name": "server_time", "requiredIn": ["go", "kotlin", "swift"], "unit": "unix-seconds(server clock)", "why": "唯一可用于算时钟偏移的锚点，比拿本地时钟猜 expires 可靠" }
+      ]
+    },
+    {
+      "id": "tvReportStats",
+      "goHandler": "server/internal/api/handlers_client.go",
+      "kotlinFile": "android/app/src/main/java/com/litv/tv/data/StatsPayload.kt",
+      "swiftFile": "ios/LITVApp/Sources/Api.swift",
+      "note": "POST /api/v1/tv/stats 的请求体（唯一用 decodeLenient 的端点）",
+      "fields": [
+        { "name": "channel_id", "requiredIn": ["go", "kotlin", "swift"], "unit": "int64", "why": "" },
+        { "name": "event", "requiredIn": ["go", "kotlin", "swift"], "unit": "enum: start|stall|error|stop", "why": "" },
+        { "name": "startup_ms", "requiredIn": ["go", "kotlin", "swift"], "unit": "ms", "why": "起播耗时" },
+        { "name": "detail", "requiredIn": ["go", "kotlin", "swift"], "unit": "string(<=512B)", "why": "诊断文本，不得含签名 URL" },
+        { "name": "stall_ms", "requiredIn": ["go", "kotlin", "swift"], "unit": "ms", "why": "rebuffer_ratio 的分子" },
+        { "name": "watch_ms", "requiredIn": ["go", "kotlin", "swift"], "unit": "ms", "why": "rebuffer_ratio 的分母；单位错 1000 倍会直接把指标做废" },
+        { "name": "path", "requiredIn": ["go", "kotlin", "swift"], "unit": "enum: ts|hls|remux", "why": "服务端 by_path 分组键；写成 direct/relay 会污染分组" },
+        { "name": "engine", "requiredIn": ["go", "kotlin", "swift"], "unit": "enum: exo|vlc|mpv|avs3|avplayer", "why": "服务端 by_engine 分组键" }
+      ]
+    },
+    {
+      "id": "tvStreams",
+      "goHandler": "server/internal/api/handlers_client.go",
+      "kotlinFile": "android/app/src/main/java/com/litv/tv/data/Models.kt",
+      "swiftFile": "ios/LITVApp/Sources/Models.swift",
+      "note": "GET /api/v1/tv/streams/{id} 的 data（数组，不能是 null）",
+      "fields": [
+        { "name": "id", "requiredIn": ["go", "kotlin", "swift"], "unit": "int64", "why": "切线路时要回传给 /tv/play?stream_id=" },
+        { "name": "label", "requiredIn": ["go", "kotlin", "swift"], "unit": "string", "why": "" },
+        { "name": "health", "requiredIn": ["go", "kotlin", "swift"], "unit": "int: 1|0|-1", "why": "" },
+        { "name": "latency_ms", "requiredIn": ["go", "kotlin", "swift"], "unit": "ms", "why": "" }
+      ]
+    }
+  ]
+}

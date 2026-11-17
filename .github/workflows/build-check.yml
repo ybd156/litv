@@ -72,6 +72,22 @@ jobs:
         # 发版前必须同步的五处，靠人记就会漏；漏了 release 会发错版本号。
         run: python3 tools/checks/check-versions.py
 
+      - name: 跨端字段级契约（字段名 / 单位 / 语义）
+        # 抓「服务端发了、客户端解不出」与「字段名说毫秒、实参是秒」。
+        # 真实事故：watch_ms 传的是秒 → rebuffer_ratio 分母小 1000 倍，
+        # 60 秒看 3.2 秒卡顿被报成 5333%，且服务端夹取拦不住，完全静默。
+        # 接线顺序曾经踩过坑（check-api-contract.py 长期无人跑、坏了也没人知道），
+        # 所以这个脚本在接入前已确认在当前代码上 exit 0。
+        run: python3 tools/checks/check-field-contract.py
+
+      - name: 播放层安全不变量（日志脱敏 / TLS / 原生 header）
+        # 三类问题单测抓不到，因为不是"算错了"而是"某一行写法"：
+        #   ① 签名 URL 进 logcat（出过两次：url.take(60)、libVLC -vvv）
+        #   ② 关掉 TLS 证书/主机名校验（AGENTS §6 禁止）
+        #   ③ 把 Authorization/Cookie 拼进原生播放器的请求头
+        # 脚本用 --root 自测过：把修复回退掉会精确变红。
+        run: python3 tools/checks/check-playback-security.py
+
   server:
     name: Go 服务端
     runs-on: ubuntu-24.04

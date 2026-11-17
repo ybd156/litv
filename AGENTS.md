@@ -113,7 +113,7 @@ packaging/fnos/app/server/litvd_*
 - Release 构建不能带详细 HTTP 日志
 - 播放器改动必须验证：release、Activity 生命周期、快速切台、断网恢复、重试有上限
 
-### 真机验证的两个坑（2026-11-16 各踩一次，代价很大）
+### 真机验证的坑（2026-11-16 两个，2026-11-17 加一个）
 
 **1. 装完必须核对 APK 时间戳**
 
@@ -126,6 +126,22 @@ ls -l --time-style=+%H:%M:%S app/src/main/java/.../改过的文件.kt
 # APK 时间必须晚于源码时间，否则：
 gradle :app:assembleRelease --rerun-tasks
 ```
+
+**1b. 只比 APK 与源码的 mtime 还会被骗（2026-11-17 实测）**
+
+构建**进行中**改源码时：`compileReleaseKotlin` 已经跑完、源码才被改，
+于是打包出来的 APK mtime 晚于源码、看起来"通过"，**但那个文件根本没进包**。
+
+判据要下沉到**编译产物**：
+
+```bash
+# 每个改过的文件，都要有比它更新的 class
+ls -l --time-style=+%H:%M:%S app/build/tmp/kotlin-classes/release/com/.../改过的类.class
+```
+
+完整链条：源码 mtime → class mtime → dex → APK，**每一环都要递增**。
+另外：构建期间**不要改源码**。需要连改时，改完等 15 秒再重跑，
+否则会拿到"半新半旧"的包——这比不编更糟，因为 mtime 对比会给你假绿灯。
 
 **2. 先怀疑布局，再怀疑引擎**
 

@@ -5,6 +5,7 @@ import android.net.Uri
 import android.util.Log
 import android.view.SurfaceView
 import android.view.ViewGroup
+import com.litv.tv.BuildConfig
 import org.videolan.libvlc.LibVLC
 import org.videolan.libvlc.Media
 import org.videolan.libvlc.MediaPlayer
@@ -161,8 +162,42 @@ class VlcEngine : PlayerEngine {
      * setWindowSize 是 libVLC Android 的标准接口，这里用反射调，
      * 是因为不同小版本的方法签名有过变动，反射可以避免版本不匹配时直接崩。
      */
+    /**
+     * **同步**把窗口尺寸设成布局此刻的尺寸，必须在 [MediaPlayer.attachViews] **之前**调用。
+     *
+     * 真机实测（手机首页预览框，2026-11-17）：
+     *   View 树里 VLCVideoLayout / player_surface_frame / surface_video 都是 1220×686，
+     *   但画面只画出 686×386、居中 —— 正好是容器的 9/16（56.25%）。
+     *   原因：`syncWindowSize()` 是 `post` 出去的，执行时布局只量出了高度，
+     *   于是 `setWindowSize(686, 686)` 被 vout 当成"方形窗口"，16:9 内容缩成 686×386 再居中。
+     *   而 vout 一旦挂上，**事后改窗口尺寸不会重新布局**（画面定格在旧尺寸），
+     *   所以只在 attach 之后补设置是没用的 —— 必须在 attach 之前就设对。
+     */
+    private fun applyWindowSizeNow(mp: MediaPlayer, v: android.view.View) {
+        if (v.width <= 0 || v.height <= 0) return
+        // 布局可能"只量完了高度、宽度还是旧值/等于高度"（真机看到 686x686）。
+        // 这种情况下借父容器的宽度：手机首页那个 16:9 框，父容器是 1220 宽。
+        var w = v.width
+        val h = v.height
+        val pv = v.parent as? android.view.View
+        if (pv != null && pv.width > w) {
+            w = pv.width
+            Log.i(TAG, "setWindowSize：vlay 宽未量完(${v.width})，借用父容器宽 $w")
+        }
+        runCatching {
+            val m = mp.vlcVout.javaClass.getMethod("setWindowSize", Int::class.java, Int::class.java)
+            m.invoke(mp.vlcVout, w, h)
+            Log.i(TAG, "setWindowSize(同步) ${w}x$h")
+        }.onFailure { Log.w(TAG, "setWindowSize(同步) 失败：${it.message}") }
+    }
+
     private fun syncWindowSize(mp: MediaPlayer) {
-        val v = hostView ?: return
+        // ★ 优先用 VLCVideoLayout 的尺寸，而不是 hostView。
+        //   hostView 是 Activity 传进来的 `android.R.id.content`（整屏），
+        //   拿它设窗口尺寸，VLC 会按整屏去算内层渲染区域 ——
+        //   实测手机首页预览框：容器 1220×686，它算成 686×383（宽度取了容器高度的值），
+        //   画面只占 56%，看起来就是"没按比例"。
+        val v = videoLayout ?: hostView ?: return
         val apply = Runnable {
             val w = if (v.width > 0) v.width else 1920
             val h = if (v.height > 0) v.height else 1080
@@ -228,12 +263,20 @@ class VlcEngine : PlayerEngine {
             // 然后又漂——表现为周期性卡一下 + 电音。
             // 允许伸缩时 VLC 会重采样音频去对齐，代价极小，听感正常。
             add("--audio-time-stretch")
-            add("-vvv")
+            // ★ 详细日志只在 debug 包开。
+            //
+            // `-vvv` 会让 libVLC 自己把完整 input MRL（含 `?exp=…&sig=…`）
+            // 和 HTTP 请求头打进 logcat。release 包也这么打，等于把签名地址
+            // 交给任何能 adb / root 的人 —— AGENTS.md §6 明令禁止。
+            // 排查"某个台播不了"时用 debug 包复现即可。
+            if (BuildConfig.DEBUG) add("-vvv")
         }
         return LibVLC(context.applicationContext, args).also { libVlc = it }
     }
 
     override fun prepare(url: String, headers: Map<String, String>, bufferMs: Int, decode: String) {
+        // 打一行比例映射，便于真机核对「设置里的比例到底生效成什么」
+        android.util.Log.i(TAG, "prepare: aspect=$aspect → ${AspectPolicy.of(aspect)}")
         val ctx = appCtx ?: run {
             listener?.onError("VLC 未绑定 Surface")
             return
@@ -315,6 +358,8 @@ class VlcEngine : PlayerEngine {
             val doAttach = {
                 if (vlay.width > 0 && vlay.height > 0) {
                     runCatching {
+                        // ★ 必须在 attachViews 之前设窗口尺寸（挂上后再改不生效）
+                        applyWindowSizeNow(mp, vlay)
                         mp.attachViews(vlay, null, true, false)
                         // 画面比例交给官方的 videoScale（对应「比例」设置），
                         // 之前用 BEST_FIT 会缩成小窗。
@@ -322,15 +367,10 @@ class VlcEngine : PlayerEngine {
                         //   自动 → 保持原始比例（必要时留黑边）
                         //   16:9 / 4:3 → 强制该比例
                         //   铺满 → 裁切填满
-                        mp.videoScale = when (aspect) {
-                            "16:9" -> MediaPlayer.ScaleType.SURFACE_16_9
-                            "4:3" -> MediaPlayer.ScaleType.SURFACE_4_3
-                            "fill" -> MediaPlayer.ScaleType.SURFACE_FILL
-                            else -> MediaPlayer.ScaleType.SURFACE_FILL
-                        }
+                        mp.videoScale = scaleFor(aspect)
                         android.util.Log.i(TAG, "attachViews ok ${vlay.width}x${vlay.height}")
                         stretchInnerSurface(vlay)
-                        vlay.postDelayed({ stretchInnerSurface(vlay) }, 300)
+                        scheduleRefit(vlay)
                     }.onFailure { android.util.Log.w(TAG, "attachViews 失败：${it.message}") }
                 } else {
                     android.util.Log.w(TAG, "layout 还没测量（${vlay.width}x${vlay.height}），等布局完成再挂")
@@ -342,16 +382,12 @@ class VlcEngine : PlayerEngine {
                             if (v.width > 0 && v.height > 0) {
                                 v.removeOnLayoutChangeListener(this)
                                 runCatching {
+                                    applyWindowSizeNow(mp, v)
                                     mp.attachViews(vlay, null, true, false)
-                                    mp.videoScale = when (aspect) {
-                                        "16:9" -> MediaPlayer.ScaleType.SURFACE_16_9
-                                        "4:3" -> MediaPlayer.ScaleType.SURFACE_4_3
-                                        "fill" -> MediaPlayer.ScaleType.SURFACE_FILL
-                                        else -> MediaPlayer.ScaleType.SURFACE_FILL
-                                    }
+                                    mp.videoScale = scaleFor(aspect)
                                     android.util.Log.i(TAG, "attachViews ok(延迟) ${v.width}x${v.height}")
                                     stretchInnerSurface(vlay)
-                                    vlay.postDelayed({ stretchInnerSurface(vlay) }, 300)
+                                    scheduleRefit(vlay)
                                 }
                             }
                         }
@@ -373,11 +409,21 @@ class VlcEngine : PlayerEngine {
             setHWDecoderEnabled(decode != "soft", false)
             addOption(":network-caching=${bufferMs.coerceIn(500, 20000)}")
             addOption(":live-caching=${bufferMs.coerceIn(500, 20000)}")
-            addOption(":clock-jitter=0")
-            addOption(":clock-synchro=0")
+            // ★ 绝不在这里加 :clock-jitter=0 / :clock-synchro=0。
+            //
+            // 这两行曾经存在，而且被删过一次又漏回来过（commit 7456a77 只删了
+            // 实例级 args，漏了这里），结果是"注释说已修、实际没修"。
+            // media 级 option 的优先级**高于** LibVLC 实例参数，所以只要这两行
+            // 还在，ensureLib() 里"时钟同步保持默认"的决定就等于没写：
+            // 音视频各自跑、慢慢漂开，VLC 到阈值做一次硬重同步
+            // ——表现就是「卡一下 + 电音，一会又好」，且初始播放就周期出现。
+            //
+            // 直播漂移由实例级参数处理（--drop-late-frames / --skip-frames /
+            // --audio-time-stretch），见 ensureLib()。删这两行前请先看
+            // ensureLib() 里关于「播 20 秒停止吐帧」的那段注释：
+            // 那次故障的真根因是 --no-drop-late-frames/-no-skip-frames + 关时间伸缩，
+            // 不是时钟同步。
             if (headers.isNotEmpty()) {
-                val sb = StringBuilder()
-                headers.forEach { (k, v) -> sb.append(k).append(": ").append(v).append("\r\n") }
                 addOption(":http-referrer=${headers["Referer"] ?: ""}")
                 addOption(":http-user-agent=${headers["User-Agent"] ?: "LITV/1.0"}")
             }
@@ -394,7 +440,7 @@ class VlcEngine : PlayerEngine {
 
         player = mp
         mp.play()
-        android.util.Log.i(TAG, "VLC play() 已调用 url=" + url.take(60) + " holder=" + (surfaceHolder != null))
+        android.util.Log.i(TAG, "VLC play() 已调用 url=" + Redact.url(url) + " holder=" + (surfaceHolder != null))
     }
 
     /** 布局变化（进出全屏/旋转）后重新同步 VLC 窗口尺寸 */
@@ -440,6 +486,246 @@ class VlcEngine : PlayerEngine {
 
 
     /**
+     * 多次把 VLC 的内层渲染区域压回容器大小。
+     *
+     * 为什么需要"多次"：libvlc 的 `updateVideoSurfaces()` 会按它自己算的尺寸
+     * 回写 `player_surface_frame` / `surface_video` 的 LayoutParams。
+     * 真机实测（手机首页预览框，容器 1220×686）：它算成 **686×383**，
+     * 即宽度取了容器**高度**的值 → 画面看起来"只有一半、没按比例"。
+     * 压一次不够：它可能在 300ms、1s 后又写回去。
+     *
+     * 所以 attach 之后按 0/250/700/1500ms 各压一次，且每次都重新同步窗口尺寸。
+     */
+    private fun scheduleRefit(vlay: org.videolan.libvlc.util.VLCVideoLayout) {
+        for (delay in longArrayOf(0L, 250L, 700L, 1500L)) {
+            vlay.postDelayed({
+                if (vlay.width <= 0 || vlay.height <= 0) return@postDelayed
+                runCatching {
+                    player?.let { syncWindowSize(it) }
+                    stretchInnerSurface(vlay)
+                }
+                android.util.Log.i(TAG, "refit@${delay}ms：${vlay.width}x${vlay.height}")
+            }, delay)
+        }
+    }
+
+    /**
+     * 布局尺寸变了之后，把**内层渲染区域**重新对齐到容器。
+     *
+     * 真机现象（手机首页预览框）：`videoBox` 是 1220×686，但画面只画在左上角
+     * 一小块，看起来"没有按比例 / 画面没铺满"。
+     *
+     * 原因是 libvlc 的 `updateVideoSurfaces()` 会按它自己算出的尺寸写回
+     * `player_surface_frame` / `surface_video` 的 LayoutParams，
+     * 直播源拿不到正确宽高时就会算成容器的一小部分（代码里早就记录过 680x360）。
+     * `stretchInnerSurface()` 只在 attach 时调过一次（+300ms 一次），
+     * 之后布局再变（改比例、进出全屏）就没人管了。
+     *
+     * 所以这里提供一个可重复调用的对齐入口，由 `PlayerManager.resyncWindow()` 调。
+     */
+    fun refitVideoLayout() {
+        val vlay = videoLayout ?: return
+        val p = player ?: return
+        if (vlay.width <= 0 || vlay.height <= 0) {
+            android.util.Log.w(TAG, "refit: 布局还没测量（${vlay.width}x${vlay.height}），跳过")
+            return
+        }
+        runCatching {
+            p.videoScale = scaleFor(aspect)
+            syncWindowSize(p)
+            stretchInnerSurface(vlay)
+        }.onFailure { android.util.Log.w(TAG, "refit 失败：${it.message}") }
+        // libvlc 可能在我们之后又把尺寸写回去，按几个时间点各压一次
+        scheduleRefit(vlay)
+        android.util.Log.i(TAG, "refit: ${vlay.width}x${vlay.height} scale=${AspectPolicy.of(aspect)}")
+    }
+
+    /**
+     * 当前渲染目标的真实像素尺寸。
+     *
+     * 优先用 `SurfaceHolder.surfaceFrame`（SurfaceView 的真实尺寸，旋转后立即更新），
+     * 退而用 hostView / videoLayout。
+     */
+    private fun currentRenderSize(): Pair<Int, Int>? {
+        runCatching {
+            val f = surfaceHolder?.surfaceFrame
+            if (f != null && f.width() > 0 && f.height() > 0) return f.width() to f.height()
+        }
+        val v = videoLayout ?: hostView ?: return null
+        if (v.width <= 0 || v.height <= 0) return null
+        return v.width to v.height
+    }
+
+    /**
+     * 重挂**之前**把窗口尺寸设成当前尺寸。
+     *
+     * 真机教训（2026-11-17 04:41）：切横屏时窗口被设成 2624×686，
+     * 切回竖屏时若只重挂不改窗口，libVLC 仍按 2624×686 往 1220×1476 上画
+     * → 画面缩成 42%、钉在右下角。而 `ok=true` 只表示调用没抛异常，不代表几何正确。
+     */
+    private fun applyRenderSizeBeforeAttach(mp: MediaPlayer): Boolean {
+        val size = currentRenderSize() ?: return false
+        return runCatching {
+            val m = mp.vlcVout.javaClass.getMethod("setWindowSize", Int::class.java, Int::class.java)
+            m.invoke(mp.vlcVout, size.first, size.second)
+            Log.i(TAG, "setWindowSize(重挂前) ${size.first}x${size.second}")
+            true
+        }.getOrDefault(false)
+    }
+
+    /**
+     * 布局尺寸变了（全屏/旋转）之后，**原地**把视频输出重挂到当前 Surface。
+     *
+     * 为什么不用 `retryNow()` 重建：那等于换台重连，约 1 秒黑屏 ——
+     * 用户切一次全屏就卡一下，体验上就是"每次切屏都顿"。
+     * 这里只 detach → setVideoSurface → attachViews，再用 pause/play 轻推一下出帧。
+     *
+     * 与 [rebindVideo] 的区别：这里**不动窗口尺寸**（`setWindowSize` 在挂上之后
+     * 本来也不生效，改了反而可能把 libVLC 的缩放算错），只重挂。
+     *
+     * @return false 表示当前没法重挂（没播放器 / Surface 无效），调用方再退化到重建
+     */
+    fun reattachVideo(): Boolean {
+        val p = player ?: return false
+        val s = videoSurface ?: return false
+        if (!s.isValid) return false
+        val wasPlaying = runCatching { p.isPlaying }.getOrDefault(false)
+        runCatching { p.vlcVout.detachViews() }
+        // ★ 必须在 attachViews 之前把窗口设成**当前**尺寸，否则旋转后仍按旧尺寸画
+        applyRenderSizeBeforeAttach(p)
+        val ok = runCatching {
+            p.vlcVout.setVideoSurface(s, surfaceHolder)
+            p.vlcVout.attachViews()
+            p.videoScale = scaleFor(aspect)
+        }.isSuccess
+        android.util.Log.i(TAG, "reattachVideo: ok=$ok wasPlaying=$wasPlaying")
+        if (!ok) return false
+        attachedSurface = s
+        if (wasPlaying) {
+            main.postDelayed({
+                runCatching {
+                    p.pause()
+                    p.play()
+                }
+            }, 120)
+        }
+        return true
+    }
+
+    /**
+     * 息屏/开屏后**强制**把视频输出重新绑一遍。
+     *
+     * 为什么不能复用 [attach]：那里有一句
+     * `if (surface === attachedSurface) return`，专防"重复 setVideoSurface 把 vout 搞坏"。
+     * 但息屏唤醒时 SurfaceView 的 Surface **对象还是同一个**、`isValid` 也还是 true，
+     * 而底层缓冲区已经被系统回收 —— 短路成立、什么都不做，结果就是
+     * **音频照常在放、画面永远黑**（真机现象）。
+     *
+     * 所以这里刻意**不去重**：detach → setVideoSurface → attachViews 整套重来，
+     * 再轻推一次 pause/play 让 VLC 重新出帧。不重建播放器，不断流。
+     *
+     * @return false 表示当前没法重绑（没有播放器 / Surface 无效），调用方应退化为重建
+     */
+    fun rebindVideo(): Boolean {
+        val p = player
+        if (p == null) {
+            android.util.Log.w(TAG, "rebindVideo: 跳过，没有播放器实例")
+            return false
+        }
+
+        // ★ 有 VLCVideoLayout 时，视频输出挂在**它内层自己的 SurfaceView** 上
+        //   （prepare() 里是 mp.attachViews(vlcLayout, ...)），
+        //   跟 Activity 那个 surface 字段**没有关系**。
+        //
+        // 真机踩过（03:42）：这里去等 Activity 的 surface，而 VLC 根本不看它 →
+        // 一直"挂起等待"，black 了 54 秒，日志里 1279 条
+        // `libvlc: video output creation failed`。判据用错了对象。
+        val vlay = videoLayout
+        if (vlay != null) {
+            if (vlay.visibility != android.view.View.VISIBLE) vlay.visibility = android.view.View.VISIBLE
+            val wasPlaying = runCatching { p.isPlaying }.getOrDefault(false)
+            runCatching { p.vlcVout.detachViews() }
+            val bound = runCatching {
+                p.attachViews(vlay, null, true, false)
+                p.videoScale = scaleFor(aspect)
+            }.isSuccess
+            android.util.Log.i(TAG, "rebindVideo(layout): bound=$bound wasPlaying=$wasPlaying ${vlay.width}x${vlay.height}")
+            if (!bound) return false
+            syncWindowSize(p)
+            runCatching { stretchInnerSurface(vlay) }
+            vlay.postDelayed({ runCatching { stretchInnerSurface(vlay) } }, 300)
+            if (wasPlaying) {
+                main.postDelayed({
+                    runCatching {
+                        p.pause()
+                        p.play()
+                    }
+                    android.util.Log.i(TAG, "rebindVideo(layout): 已轻推 pause/play 唤醒画面")
+                }, 120)
+            }
+            return true
+        }
+
+        // 没有 VLCVideoLayout 时（老布局）才走 Surface 那条路
+        val s = videoSurface
+        if (s == null) {
+            // 最常见的一种：Surface 已被 force-disconnect/abandoned，
+            // 调用方只能退化为重建（这里没法重绑）。
+            android.util.Log.w(TAG, "rebindVideo: 跳过，videoSurface 已为 null（Surface 被销毁）")
+            return false
+        }
+        if (!s.isValid) {
+            android.util.Log.w(TAG, "rebindVideo: 跳过，Surface 无效")
+            return false
+        }
+
+        val wasPlaying = runCatching { p.isPlaying }.getOrDefault(false)
+        // detach 失败不致命（可能本来就没挂），继续往下走
+        runCatching { p.vlcVout.detachViews() }
+
+        val bound = runCatching {
+            p.vlcVout.setVideoSurface(s, surfaceHolder)
+            p.vlcVout.attachViews()
+            p.videoScale = scaleFor(aspect)
+        }.isSuccess
+
+        android.util.Log.i(TAG, "rebindVideo: bound=$bound wasPlaying=$wasPlaying")
+        if (!bound) return false
+
+        attachedSurface = s
+        syncWindowSize(p)
+        // attachViews 成功后 VLC 不一定会继续送帧（真机：画面定格）。
+        // 轻推一次播放状态即可唤醒，不用重建播放器。
+        if (wasPlaying) {
+            main.postDelayed({
+                runCatching {
+                    p.pause()
+                    p.play()
+                }
+                android.util.Log.i(TAG, "rebindVideo: 已轻推 pause/play 唤醒画面")
+            }, 120)
+        }
+        return true
+    }
+
+    /**
+     * 比例设置 → VLC 的 ScaleType。
+     *
+     * ★ 这里原来有一段注释与代码**相反**的 bug：
+     * 注释写「自动 → 保持原始比例（必要时留黑边）」，但 `else` 分支是
+     * `SURFACE_FILL`，也就是设置里选「自动」时画面被拉伸/裁切填满 ——
+     * 手机上放非 16:9 的台会明显变形。
+     * 现在映射规则收敛到 [AspectPolicy]（带单测）：
+     * **只有显式「铺满」才 FILL，其余一律保持原始比例。**
+     */
+    private fun scaleFor(a: String): MediaPlayer.ScaleType = when (AspectPolicy.of(a)) {
+        AspectMode.RATIO_16_9 -> MediaPlayer.ScaleType.SURFACE_16_9
+        AspectMode.RATIO_4_3 -> MediaPlayer.ScaleType.SURFACE_4_3
+        AspectMode.FILL -> MediaPlayer.ScaleType.SURFACE_FILL
+        AspectMode.BEST_FIT -> MediaPlayer.ScaleType.SURFACE_BEST_FIT
+    }
+
+    /**
      * VLCVideoLayout 内层是 player_surface_frame → surface_video，
      * 尺寸由 libvlc 的 updateVideoSurfaces() 计算后写回 LayoutParams。
      * 直播源常常拿不到正确的视频宽高，算出来是容器的一半（实测 680x360），
@@ -457,22 +743,86 @@ class VlcEngine : PlayerEngine {
         }
     }
 
+    /**
+     * 内层 View 的"防缩回"守卫。
+     *
+     * 真机证据（SurfaceFlinger，2026-11-17）：
+     *   SurfaceView 那层 `activeBuffer=[1920x1088]`、`sourceCrop=[0,0,1920,1080]`（完整画面），
+     *   但 `displayFrame=[267 394 953 780]` = **686×386**，缩放 0.357。
+     *   也就是说 VLC 画的是完整帧，是**承载它的那个 SurfaceView 只有 686×386**。
+     *
+     * 而 `stretchInnerSurface()` 明明把它设成过 MATCH_PARENT（日志里 `tree surface_video 1220x686`），
+     * 之后 libVLC 又按自己算的尺寸（容器高度当边长，得到 686×386）写回去了。
+     *
+     * 所以这里挂一个布局监听：只要内层尺寸和容器不一致，就再压回 MATCH_PARENT。
+     * 加计数上限，防止和 libVLC 互相打架变成死循环。
+     */
+    private val innerFillCount = mutableMapOf<Int, Int>()
+
+    /** 每个内层 View 最多压几次，防止与 libVLC 互相改写导致布局死循环 */
+    private val MAX_INNER_FILL = 20
+
+    private fun guardInnerFill(vlay: org.videolan.libvlc.util.VLCVideoLayout, v: android.view.View) {
+        if (innerFillCount.containsKey(v.id)) return
+        innerFillCount[v.id] = 0
+        v.addOnLayoutChangeListener { view, _, _, _, _, _, _, _, _ ->
+            if (vlay.width <= 0 || vlay.height <= 0) return@addOnLayoutChangeListener
+            if (view.width == vlay.width && view.height == vlay.height) return@addOnLayoutChangeListener
+            val n = innerFillCount[v.id] ?: 0
+            if (n >= MAX_INNER_FILL) return@addOnLayoutChangeListener
+            innerFillCount[v.id] = n + 1
+            runCatching {
+                view.layoutParams = android.widget.FrameLayout.LayoutParams(
+                    android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+                    android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+                )
+            }
+            if (n == 0 || n == MAX_INNER_FILL - 1) {
+                android.util.Log.i(
+                    TAG,
+                    "内层 ${view.id} 被缩到 ${view.width}x${view.height}，" +
+                        "压回 ${vlay.width}x${vlay.height}（第 ${n + 1}/$MAX_INNER_FILL 次）",
+                )
+            }
+        }
+    }
+
+    /**
+     * 找出 VLCVideoLayout 内层的几个 View（player_surface_frame / surface_video / ...）。
+     *
+     * ★ 必须遍历视图树按**资源条目名**匹配，不能再用
+     *   `res.getIdentifier(name, "id", "org.videolan.libvlc")`。
+     *   本项目开了 `nonTransitiveRClass=true`，VLC 的 id 被合并进**应用自己的包**，
+     *   用库包名去查恒为 0 → 循环体直接 `continue` → 「把内层压成 MATCH_PARENT」
+     *   从来没生效过（真机日志里一条「内层 … 已设为铺满」都没有）。
+     *   后果：libVLC 把 surface_video 算成 686×386 后没人纠正，画面只有容器的 56%。
+     */
+    private fun findVlcInnerViews(vlay: android.view.View): List<android.view.View> {
+        val want = setOf("player_surface_frame", "surface_video", "surface_subtitles", "texture_video")
+        val out = ArrayList<android.view.View>(4)
+        fun walk(v: android.view.View) {
+            val name = runCatching { v.resources.getResourceEntryName(v.id) }.getOrNull()
+            if (name != null && name in want) out.add(v)
+            if (v is android.view.ViewGroup) {
+                for (i in 0 until v.childCount) walk(v.getChildAt(i))
+            }
+        }
+        walk(vlay)
+        return out
+    }
+
     private fun stretchInnerSurface(vlay: org.videolan.libvlc.util.VLCVideoLayout) {
         runCatching { dumpTree(vlay) }
         runCatching {
-            val res = vlay.resources
-            val pkg = "org.videolan.libvlc"
-            val ids = listOf("player_surface_frame", "surface_video", "texture_video", "surface_subtitles")
-            for (name in ids) {
-                val id = res.getIdentifier(name, "id", pkg)
-                if (id == 0) continue
-                vlay.findViewById<android.view.View>(id)?.let { v ->
-                    v.layoutParams = android.widget.FrameLayout.LayoutParams(
-                        android.view.ViewGroup.LayoutParams.MATCH_PARENT,
-                        android.view.ViewGroup.LayoutParams.MATCH_PARENT,
-                    )
-                    android.util.Log.i(TAG, "内层 $name 已设为铺满")
-                }
+            val inner = findVlcInnerViews(vlay)
+            android.util.Log.i(TAG, "内层命中 ${inner.size} 个：${inner.map { it.id }}")
+            for (v in inner) {
+                v.layoutParams = android.widget.FrameLayout.LayoutParams(
+                    android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+                    android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+                )
+                guardInnerFill(vlay, v)
+                android.util.Log.i(TAG, "内层 ${v.id} 已设为铺满")
             }
         }.onFailure { android.util.Log.w(TAG, "内层铺满失败：${it.message}") }
     }

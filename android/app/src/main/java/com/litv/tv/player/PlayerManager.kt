@@ -47,6 +47,48 @@ class PlayerManager(
 
     var callback: Callback? = null
 
+    /**
+     * 上一次回到前台之前，是否真的经历过**息屏**。
+     *
+     * 为什么不能只看"离开时长"：用户快速按两下电源键（隔 1 秒）时，
+     * 离开时长不到 1.5 秒阈值，但 Surface 照样会被 force-disconnect/abandoned，
+     * 照样黑屏 —— 只按时间判断会把这种最常见的情况漏掉。
+     * `ACTION_SCREEN_OFF` 是系统广播，比计时可靠。
+     */
+    private var screenOffSeen = false
+
+    private val screenReceiver = object : android.content.BroadcastReceiver() {
+        override fun onReceive(c: Context?, i: android.content.Intent?) {
+            if (i?.action == android.content.Intent.ACTION_SCREEN_OFF) screenOffSeen = true
+        }
+    }
+    private var screenReceiverRegistered = false
+
+    private fun registerScreenReceiver() {
+        if (screenReceiverRegistered) return
+        runCatching {
+            androidx.core.content.ContextCompat.registerReceiver(
+                context,
+                screenReceiver,
+                android.content.IntentFilter(android.content.Intent.ACTION_SCREEN_OFF),
+                androidx.core.content.ContextCompat.RECEIVER_NOT_EXPORTED,
+            )
+            screenReceiverRegistered = true
+        }.onFailure { Log.w(TAG, "息屏广播注册失败：${it.message}") }
+    }
+
+    private fun unregisterScreenReceiver() {
+        if (!screenReceiverRegistered) return
+        runCatching { context.unregisterReceiver(screenReceiver) }
+            .onFailure { Log.w(TAG, "息屏广播反注册失败：${it.message}") }
+        screenReceiverRegistered = false
+    }
+
+    init {
+        // 必须在构造时就注册：息屏发生在任何时候，晚注册就等于漏掉这一次。
+        registerScreenReceiver()
+    }
+
     private val main = Handler(Looper.getMainLooper())
     private var surface: android.view.Surface? = null
     private var container: ViewGroup? = null
@@ -429,19 +471,90 @@ class PlayerManager(
         (current as? VlcEngine)?.attachVideoLayout(l)
     }
 
+    /**
+     * 息屏/开屏后救 VLC 的黑屏。
+     *
+     * 与 [resyncWindow] 的区别：那个是**布局尺寸**变了（全屏/旋转），
+     * 用的是"整体重建"；这里是**Surface 的底层缓冲区**没了、对象却没变，
+     * 重建太重也没必要 —— 单独重绑 vout 就够，不断流。
+     *
+     * @return true 表示已经重绑成功（调用方不用再做别的）；
+     *         false 表示重绑不了，调用方应退化为 [retryNow] 重建
+     */
+    fun rebindVoutOnWake(): Boolean {
+        val v = current as? VlcEngine ?: return false
+        return v.rebindVideo()
+    }
+
+    /**
+     * 宿主 Activity 回到前台时调用（电视端与手机端共用这一处）。
+     *
+     * 把"要不要救"的判定、以及"救不回来怎么办"都收在这里，
+     * 免得两个 Activity 各写一份、其中一份漏掉。
+     *
+     * @param awayMs 离开前台的毫秒数；0 表示没记录到（Activity 被重建等），保守不动
+     */
+    fun onHostResumed(awayMs: Long) {
+        // 息屏标记读完就清，避免"息屏过一次之后每次回前台都重绑"
+        val hadScreenOff = screenOffSeen
+        screenOffSeen = false
+        if (!WakeRebindPolicy.shouldRebindVout(engineKey(), awayMs, hadScreenOff)) return
+
+        // ① 先直接重绑。
+        //    VLC 有 VLCVideoLayout 时，视频输出挂在**布局内层自己的 SurfaceView** 上
+        //    （prepare 里是 attachViews(vlcLayout, ...)），跟 Activity 的 surface 无关。
+        //    所以这一步不该以 surface 是否就绪为前提 —— 03:42 那次就是用错了判据，
+        //    死等一个 VLC 根本不看的 surface，黑了 54 秒。
+        var rebound = rebindVoutOnWake()
+        if (rebound) {
+            Log.i(TAG, "回到前台：重绑成功（离开 ${awayMs}ms，息屏=$hadScreenOff）")
+            return
+        }
+
+        // ② 重绑失败：可能是引擎手里没有 Surface（老布局 / 换过实例）。
+        //    把 Activity 的 Surface 交过去再试一次。
+        val s = surface
+        if (s != null && s.isValid) {
+            current?.attach(context, s, container)
+            rebound = rebindVoutOnWake()
+            if (rebound) {
+                Log.i(TAG, "回到前台：补交 Surface 后重绑成功（离开 ${awayMs}ms）")
+                return
+            }
+        }
+
+        // ③ 仍然不行：没 Surface 就挂起等（**不要重建** —— 没有 vout 的重建只会
+        //    产生"有声音、没画面、不自愈"的播放器）；有 Surface 才重建。
+        if (s == null || !s.isValid) {
+            pendingStartForSurface = true
+            Log.i(TAG, "回到前台：重绑失败且 Surface 未就绪，挂起等待（不重建）")
+            return
+        }
+        Log.w(TAG, "回到前台：重绑失败，改为重建播放")
+        retryNow()
+    }
+
     fun resyncWindow() {
         val v = current as? VlcEngine ?: return
-        if (vlcLayout != null) return   // 官方 helper 自己处理布局变化
+        if (vlcLayout != null) {
+            // ★ 原来这里直接 return，理由是"官方 helper 自己处理布局变化"。
+            //   实测不成立：手机首页的预览框改成 1220×686 之后，
+            //   VLC 内层只画左上角一小块，看起来就是"没按比例/没铺满"。
+            //   改成**主动重排内层 + 同步窗口尺寸**，不重建播放器、不断流。
+            v.refitVideoLayout()
+            return
+        }
         // 布局会连着触发多次（宽度/高度各一次），每次都重建等于连两次重连，
         // 用户看到的就是"全屏后要等很久"。800ms 内只认第一次。
         val now = android.os.SystemClock.elapsedRealtime()
         if (now - lastResyncAt < 800) return
         lastResyncAt = now
-        // VLC 不接受"事后改窗口尺寸 + 重挂 vout"（会报 already attached，画面定格）。
-        // 全屏/旋转后让它按新尺寸重新初始化一次（等价换台重连，约 1 秒）。
-        // 原地重排（detach→size→surface→attach）在真机验证过：attach 成功但视频输出
-        // 已死，pause/play 唤不回来 → 画面定格。可靠性优先，改为重建一次
-        // （约 1 秒黑屏，但两个方向都能恢复）。800ms 去抖避免连重建两次。
+        // VLC 不接受"事后改窗口尺寸 + 重挂 vout"。真机实测（2026-11-17 05:20）：
+        // 用"原地重挂"（detach → setVideoSurface → attachViews）确实不再黑 1 秒，
+        // 但**回竖屏后画面冻结**——像素零变化、音频照常，正是"attach 成功但
+        // 视频输出已死、pause/play 唤不回"的老问题。冻结比卡 1 秒更糟。
+        // 所以仍然重建；`reattachVideo()` 只保留给"息屏唤醒"用（那条路已验证有效，
+        // 且失败会退化到重建）。
         main.postDelayed({
             if (released) return@postDelayed
             Log.i(TAG, "resync: 用新尺寸重建 VLC")
@@ -1012,6 +1125,8 @@ class PlayerManager(
     fun release() {
         // 先置终态：之后任何回调、任何延迟启动都不再执行
         released = true
+        // 广播接收器必须反注册，否则 Activity 销毁后还持有 Manager（泄漏）
+        unregisterScreenReceiver()
         cancelPendingEngineStart()
         removeStartTimers()
         main.removeCallbacks(budgetWatchdog)

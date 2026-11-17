@@ -507,7 +507,10 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
 
         // 竖屏：保持原样（宽度铺满、高度按 16:9）。比例档位只影响全屏，
         // 之前把宽度也改成计算值、还改了父容器 gravity，竖屏布局直接被搞乱。
-        if (!landscape) {
+        // 方向以**当前配置**为准，不信缓存字段（见 onConfigurationChanged 的说明）
+        val isLandscape = resources.configuration.orientation ==
+            android.content.res.Configuration.ORIENTATION_LANDSCAPE
+        if (!isLandscape) {
             lp.width = ViewGroup.LayoutParams.MATCH_PARENT
             if (box.width > 0) videoHeight169 = box.width * 9 / 16
             lp.height = if (videoHeight169 > 0) videoHeight169
@@ -538,11 +541,26 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
         // 按源比例 **同时受宽高约束**：
         // 只按宽度算的话，横屏 2712×9/16=1526 > 屏高 1220，画面会比屏幕还高，
         // 控件被顶到可视区外 —— 就是"全屏控件不见了、画面放大到看不见"。
+        //
+        // ★ 可用高度必须扣掉同容器里的**其它可见子项**（顶部标题栏 playHeader 78px 等）。
+        //   真机实测（2026-11-17）：不扣的话按 parent.height=932 算出 16:9 的 h=932，
+        //   而 LinearLayout 只给 box 854 → 里面的 AspectRatioFrameLayout 仍量成 932 高，
+        //   多出的 78px 落到 tab 栏背后，**字幕被从中间切断**。
+        //   用"父高度 − 兄弟可见高度"是确定性的，不依赖 measure 时序
+        //   （之前用 box.post 读真实高度，post 跑在最终 measure 之前，读到 932 就跳过了）。
+        val siblingsH = (parent as? android.view.ViewGroup)?.let { g ->
+            (0 until g.childCount)
+                .map { g.getChildAt(it) }
+                .filter { it !== box && it.visibility == android.view.View.VISIBLE }
+                .sumOf { it.height.coerceAtLeast(0) }
+        } ?: 0
+        val usableH = (availH - siblingsH).coerceAtLeast(1)
+
         var w = availW
         var h = (availW / ratio).toInt()
-        if (h > availH) {
-            h = availH
-            w = (availH * ratio).toInt()
+        if (h > usableH) {
+            h = usableH
+            w = (usableH * ratio).toInt()
         }
 
         lp.width = w
@@ -562,8 +580,42 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
 
     override fun onConfigurationChanged(newConfig: android.content.res.Configuration) {
         super.onConfigurationChanged(newConfig)
-        // 旋转后宽度变了，16:9 高度要跟着重算
-        findViewById<View>(R.id.videoBox)?.post { applyVideoRatio() }
+        // ★ 必须先把方向状态同步过来，再算尺寸。
+        //   真机 bug（2026-11-17）：`landscape` 只在 App 自己的全屏按钮里翻转，
+        //   系统旋转（或 adb 改 user_rotation）时它还是旧值 →
+        //   applyVideoRatio 按竖屏逻辑算：宽度 MATCH_PARENT + 高度沿用竖屏缓存的 686
+        //   → 容器变成 2624×686，16:9 内容只能左右留 700px 黑边。
+        landscape = newConfig.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
+
+        // ★ 还要等**父容器真的换过尺寸**再算。
+        //   直接 `box.post { applyVideoRatio() }` 会跑在父容器 re-measure 之前，
+        //   `parent.width/height` 还是竖屏旧值（实测拿到 1220×2712）→
+        //   横屏下算出 1220×686 的容器，高度根本没撑开（内容占宽 46.5%）。
+        //   所以挂一个一次性布局监听：尺寸真变了才重算；再加 200ms 兜底。
+        val box = findViewById<View>(R.id.videoBox) ?: return
+        val parent = box.parent as? View ?: run {
+            box.post { applyVideoRatio() }
+            return
+        }
+        val oldW = parent.width
+        val oldH = parent.height
+        val once = object : View.OnLayoutChangeListener {
+            override fun onLayoutChange(
+                v: View, l: Int, t: Int, r: Int, b: Int,
+                ol: Int, ot: Int, or_: Int, ob: Int,
+            ) {
+                if (v.width == oldW && v.height == oldH) return
+                v.removeOnLayoutChangeListener(this)
+                applyVideoRatio()
+            }
+        }
+        parent.addOnLayoutChangeListener(once)
+        parent.postDelayed({
+            runCatching {
+                parent.removeOnLayoutChangeListener(once)
+                applyVideoRatio()
+            }
+        }, 200)
     }
 
     private fun setupList() {
@@ -1283,18 +1335,23 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
 
     override fun onEngineChanged(kind: EngineKind) {
         playEngine.text = kind.label
-        val isVlc = kind == EngineKind.VLC
-        // 视频输出只有一个 SurfaceView（Exo / mpv 都往它上面画）；
-        // VLC 自己需要一块 VLCVideoLayout，所以在 VLC 时把 SurfaceView 让出来。
-        // videoAspect（比例容器）永远可见——它负责 16:9，隐藏它 VLC 也会被藏起来。
-        // 只切里面两个渲染目标：VLC 用 vlcLayout，其余用 SurfaceView。
-        // SurfaceView 用 INVISIBLE 而不是 GONE：GONE 会被销毁，
-        // PlayerManager 手里的 surface 变 null，起播会永远挂在「等 Surface 到来」。
-        findViewById<android.view.View>(R.id.surface)?.visibility =
-            if (isVlc) android.view.View.INVISIBLE else android.view.View.VISIBLE
+        // ★ 首页预览框**不再给 VLC 传 VLCVideoLayout**。
+        //
+        // 真机实测（2026-11-17）：只要用 VLCVideoLayout，librtcp 就把内层
+        // `surface_video` 算成 686×386（把容器高度当成宽度做方窗），
+        // 1220×686 的框里画面只占 56%，居中或贴左上。
+        // 我们把它压成 MATCH_PARENT 也没用 —— 布局压缩成功 1 次后
+        // libVLC 又在下一帧写回 686×386（日志：`压回 1220x686（第 1/20 次）` 之后再没触发）。
+        //
+        // 现在改成和其他内核一样，用布局里那个普通 SurfaceView：
+        // VLC 走 `setVideoSurface` + `attachViews()`，**不接管内层尺寸**，
+        // SurfaceView 是 match_parent 的 1220×686，画面就按它铺满。
+        // 全屏播放页（activity_phone_player.xml）本来就是这个结构，一直是好的。
+        findViewById<android.view.View>(R.id.surface)?.visibility = android.view.View.VISIBLE
         findViewById<org.videolan.libvlc.util.VLCVideoLayout>(R.id.vlcLayout)?.visibility =
-            if (isVlc) android.view.View.VISIBLE else android.view.View.GONE
-        if (isVlc) player.setVlcLayout(findViewById(R.id.vlcLayout))
+            android.view.View.GONE
+        // 显式清掉，避免引擎还握着那块 layout
+        player.setVlcLayout(null)
     }
 
     override fun onPrepared(width: Int, height: Int) = Unit
@@ -1471,17 +1528,12 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
         if (::player.isInitialized) {
             val lbl = player.engineLabel()
             if (lbl.isNotBlank()) playEngine.text = lbl
-            // 渲染目标的可见性也要补：布局里 vlcLayout 默认是 gone，
-            // 只在 onEngineChanged 里被设成可见。冷启动时引擎没有"变化"
-            // （本来就是 VLC），回调不触发 → vlcLayout 一直是 gone →
-            // VLC 报"已开始播放"但渲染到不可见视图，画面永远不出来，
-            // 最后烧完 36 秒起播预算。退后台回来时回调会再触发一次，
-            // 所以"退到后台再进就能播"。
-            val isVlc = player.engineKey() == "vlc"
-            findViewById<android.view.View>(R.id.surface)?.visibility =
-                if (isVlc) android.view.View.INVISIBLE else android.view.View.VISIBLE
-            findViewById<android.view.View>(R.id.vlcLayout)?.visibility =
-                if (isVlc) android.view.View.VISIBLE else android.view.View.GONE
+            // 渲染目标可见性也要补：VLC 现在和别的内核一样用普通 SurfaceView
+            //（不再走 vlcLayout，见 onEngineChanged 的说明），所以这里只要保证
+            // surface 可见、vlcLayout 不可见即可。冷启动时 onEngineChanged 不触发，
+            // 不补这一次就会出现"已经播了但画面不出来"。
+            findViewById<android.view.View>(R.id.surface)?.visibility = android.view.View.VISIBLE
+            findViewById<android.view.View>(R.id.vlcLayout)?.visibility = android.view.View.GONE
         }
         super.onResume()
         // 从遥控器/设置返回时重新应用一次当前 Tab，

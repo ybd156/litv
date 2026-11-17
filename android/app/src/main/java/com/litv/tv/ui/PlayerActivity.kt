@@ -34,6 +34,7 @@ import com.litv.tv.data.TvStream
 import com.litv.tv.player.EngineKind
 import com.litv.tv.player.PlayRequestGate
 import com.litv.tv.player.PlayerManager
+import com.litv.tv.player.WatchClock
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -521,7 +522,8 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
             surface.holder.addCallback(object : android.view.SurfaceHolder.Callback {
                 override fun surfaceCreated(h: android.view.SurfaceHolder) {
                     Log.i(TAG, "SurfaceView 就绪，绑定播放器")
-                    player.attachVideoLayout(findViewById(R.id.vlcLayout))
+                    // 不再给 VLC 传 VLCVideoLayout（见 onEngineChanged 的说明）
+                    player.attachVideoLayout(null)
                     player.attach(surface.holder.surface, findViewById(android.R.id.content))
                     val pending = pendingAutoPlayChannel
                     if (pending != null) {
@@ -2632,27 +2634,22 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         // VLC / mpv 用外部 Surface（TextureView / SurfaceView）。
         // PlayerView 在布局里 z 序最高，给 VLC / mpv 时不隐藏就会盖住画面。
         activeEngine = kind
-        // 电视端现在也有独立的 vlcLayout（和手机一致）：
-        // Exo 渲染到 surface，VLC 渲染到 vlcLayout，互斥显示。
-        // 之前只有 surface，VLC 没有可挂载的 VLCVideoLayout →
-        // VlcEngine.videoLayout 恒为 null → attachViews 从不执行 →
-        // 只有声音没有画面。
+        // ★ 电视端也不再给 VLC 传 VLCVideoLayout（2026-11-17，与手机端同一处改动）。
+        //
+        // 真机实测：只要用 VLCVideoLayout，librtcp 就接管内层 `surface_video` 的尺寸，
+        // 在 1220×686 的框里算出 686×386（把容器高度当宽度做方窗），画面只占 56%，
+        // 而且我们用 MATCH_PARENT 压回去也只生效一帧，下一帧就被它写回。
+        //
+        // 现在统一走布局里那个普通渲染目标（SurfaceView / TextureView，按设置），
+        // VLC 走 `setVideoSurface` + `attachViews()`，不接管内层尺寸。
+        // 手机端已按同样方式改完并真机验证（displayFrame 1220×686，内容占 99.92%）。
         val isVlc = kind == EngineKind.VLC
-        // VlcEngine 认自己的 videoLayout 字段，必须显式给它；
-        // 换引擎时引擎实例是新的，所以每次都要重设。
-        // VLC 时把 vlcLayout 交给引擎；切回 Exo 时置空，让它松手，
-        // 否则 vout 还挂在旧目标上，Exo 的画面会被挤偏。
-        player.attachVideoLayout(if (isVlc) findViewById(R.id.vlcLayout) else null)
-        // 渲染目标要按「渲染方式」设置决定（SurfaceView / TextureView），
-        // 不能无条件把 surface 设成可见——那会覆盖掉用户的选择，
-        // 表现为切回 Exo 时画面偏/错位。
+        player.attachVideoLayout(null)
         val useTex = app.prefs.renderView == "texture"
-        findViewById<android.view.View>(R.id.vlcLayout)?.visibility =
-            if (isVlc) View.VISIBLE else View.GONE
-        surface.visibility =
-            if (isVlc || useTex) View.INVISIBLE else View.VISIBLE
+        findViewById<android.view.View>(R.id.vlcLayout)?.visibility = View.GONE
+        surface.visibility = if (useTex) View.INVISIBLE else View.VISIBLE
         findViewById<android.view.View>(R.id.surfaceTex)?.visibility =
-            if (!isVlc && useTex) View.VISIBLE else View.GONE
+            if (useTex) View.VISIBLE else View.GONE
         if (!isVlc) {
             // 比例清回「自动」，等 Exo 的 onVideoSizeChanged 重新给值，
             // 避免沿用 VLC 那一路的比例导致画面偏。
@@ -3025,7 +3022,7 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         current?.let {
             app.api.reportStats(
                 it.id, "error", 0, message,
-                watchMs = watchedSec(), path = currentPlayKind, engine = player.engineKey(),
+                watchMs = watchedMsNow(), path = currentPlayKind, engine = player.engineKey(),
             )
         }
         // 不自动弹层：只在底部留一行提示，用户按 OK 才展开可操作面板。
@@ -3052,18 +3049,23 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         app.api.reportStats(
             ch.id, "stall", 0, "frozen=${frozenMs}ms",
             stallMs = frozenMs,
-            watchMs = watchedSec(),
+            watchMs = watchedMsNow(),
             // path = 封装（ts/hls/remux），engine = 内核 key（exo/vlc/mpv/avs3）
             path = currentPlayKind,
             engine = player.engineKey(),
         )
     }
 
-    /** 本台已观看的秒数（从第一帧开始算）。未起播过返回 0。 */
-    private fun watchedSec(): Int {
-        if (watchStartAt <= 0L) return 0
-        return ((System.currentTimeMillis() - watchStartAt) / 1000).toInt().coerceAtLeast(0)
-    }
+    /**
+     * 本台已观看的**毫秒**数（从第一帧开始算）。未起播过返回 0。
+     *
+     * ★ 这里一度叫 `watchedSec()` 并返回 `(now - start) / 1000`，
+     * 而字段名、服务端夹取（`maxDurationMs`）、`rebuffer_ratio` 的分母
+     * 全都是毫秒 —— 于是分母小 1000 倍，60 秒看 3.2 秒卡顿会报成 5333%。
+     * 单位规则只有一条，已收敛到 [WatchClock.watchedMs]（带单测）。
+     */
+    private fun watchedMsNow(): Int =
+        WatchClock.watchedMs(watchStartAt, System.currentTimeMillis())
 
     /**
      * 离开页面时上报一次 stop（带 watch_ms）。
@@ -3078,7 +3080,7 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         reportedStop = true
         app.api.reportStats(
             ch.id, "stop", 0, "",
-            watchMs = watchedSec(), path = currentPlayKind, engine = player.engineKey(),
+            watchMs = watchedMsNow(), path = currentPlayKind, engine = player.engineKey(),
         )
     }
 
@@ -3426,17 +3428,57 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         super.onResume()
         // 从后台回来先看是否跨天：盒子上没人会主动重启 App
         checkEpgDayRollover()
+        // 离开前台的时长要在 resumeOrRebuildAfterBackground() 之前取 ——
+        // 那个方法会把 pausedAtMs 清零。
+        val awayMsBeforeResume =
+            if (pausedAtMs > 0L) System.currentTimeMillis() - pausedAtMs else 0L
+        // 渲染目标可见性按设置补一次。
+        // 布局里 surface / vlcLayout 默认都是 gone，只在 onEngineChanged 里才被打开；
+        // 而冷启动时引擎没有"变化"，回调不触发 → 没人打开 → VLC 拿不到 Surface、
+        // 画面永远不出来（手机端早就踩过这个，这里补上同样的一步）。
+        runCatching {
+            val useTex = app.prefs.renderView == "texture"
+            findViewById<android.view.View>(R.id.vlcLayout)?.visibility = View.GONE
+            if (::surface.isInitialized) {
+                surface.visibility = if (useTex) View.INVISIBLE else View.VISIBLE
+            }
+            findViewById<android.view.View>(R.id.surfaceTex)?.visibility =
+                if (useTex) View.VISIBLE else View.GONE
+        }
         // 每次回到前台都重新交一次 Surface。
         // surfaceCreated 只在 Surface 真正重建时才回调；如果它已经回调过、
         // 而 PlayerManager 手里的 surface 被 onSurfaceDestroyed 清空过，
         // 起播就会一直挂在「等 Surface 到来」上（电视上就是黑屏不动）。
-        if (::surface.isInitialized) {
-            val sv = surface.holder.surface
-            if (sv != null && sv.isValid) {
-                player.attach(sv, findViewById(android.R.id.content))
+        //
+        // 交两次：立刻一次，600ms 后再补一次。
+        // 为什么补：息屏唤醒时 Surface 的创建可能晚于 onResume，
+        // 而且个别 ROM 上 surfaceCreated 干脆不回调 ——
+        // PlayerManager.onHostResumed() 在没有 Surface 时会挂起等待，
+        // 若一直没人交，挂起就变成永久黑屏。
+        val rehandSurface = {
+            if (::surface.isInitialized) {
+                val sv = surface.holder.surface
+                if (sv != null && sv.isValid) {
+                    player.attach(sv, findViewById(android.R.id.content))
+                }
             }
         }
+        rehandSurface()
+        main.postDelayed({ rehandSurface() }, 600)
         resumeOrRebuildAfterBackground()
+        // 息屏/开屏救 VLC 的黑屏（判定与兜底都在 PlayerManager.onHostResumed 里，
+        // 电视端与手机端共用同一份逻辑，避免两端修得不一致）。
+        //
+        // 为什么必须单独做一次：VlcEngine.attach() 里有
+        //   if (surface === attachedSurface) return
+        // 用来防"重复 setVideoSurface 把 vout 搞坏"。但息屏唤醒时
+        // SurfaceView 的 Surface **对象还是同一个**、isValid 也还是 true，
+        // 而底层缓冲区已被系统回收 —— 短路成立、什么都不做，
+        // 于是音频照常在放、画面永远黑。
+        //
+        // awayMs 必须在 resumeOrRebuildAfterBackground() **之前**取，
+        // 那个方法会把 pausedAtMs 清零。
+        player.onHostResumed(awayMsBeforeResume)
         // 接管遥控指令：手机发来的按键直接走本页原有的按键逻辑
         app.remote.onCommand = { cmd -> main.post { RemoteKeys.handle(this, cmd) } }
         app.remote.connect()

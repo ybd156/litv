@@ -350,8 +350,37 @@ class PhonePlayerActivity : AppCompatActivity(), PlayerManager.Callback {
 
     override fun onVideoSizeChanged(width: Int, height: Int, frameRate: Float) = Unit
 
-    override fun onPause() { super.onPause(); player.pause() }
-    override fun onResume() { super.onResume(); player.resume() }
+    /** 离开前台的时刻；0 = 没记录（Activity 被重建等）。只用于判断"离开多久"。 */
+    private var pausedAtMs = 0L
+
+    override fun onPause() {
+        super.onPause()
+        pausedAtMs = System.currentTimeMillis()
+        player.pause()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        // 与电视端同一份逻辑：离开前台的时长要在清空 pausedAtMs 之前取
+        val awayMs = if (pausedAtMs > 0L) System.currentTimeMillis() - pausedAtMs else 0L
+        pausedAtMs = 0L
+        player.resume()
+        // 交两次 Surface：本页只在 onCreate 交过一次、没有 SurfaceHolder 回调，
+        // 息屏唤醒后如果 Surface 被销毁，就再也没人交了 ——
+        // PlayerManager 会挂起等待，表现就是永久黑屏。
+        // 立刻交一次，600ms 后再补一次（Surface 重建可能晚于 onResume）。
+        val rehandSurface = {
+            val sv = surface.holder.surface
+            if (sv != null && sv.isValid) {
+                player.attach(sv, findViewById(android.R.id.content))
+            }
+        }
+        rehandSurface()
+        main.postDelayed({ rehandSurface() }, 600)
+        // 手机端同样会遇到「息屏开屏后 VLC 只有声音没有画面」，
+        // 判定与兜底都在 PlayerManager 里，两端共用，避免只修一边。
+        player.onHostResumed(awayMs)
+    }
     override fun onDestroy() {
         main.removeCallbacksAndMessages(null)
         player.release()

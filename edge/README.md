@@ -127,6 +127,12 @@ LITV2 的边缘降级部署：NAS 挂了之后，用 Cloudflare 免费额度顶�
 
 ### 2. 配 Secrets
 
+> **仓库被删除重建过的话，这些 Secret 会一起消失**（Secrets 跟着仓库走，不跟 Cloudflare 账号走）。
+> 表现是 `Edge Deploy` 每次都在「未配置 Secrets，跳过部署」那步直接跳过、只跑 check，
+> 于是 Worker 上还是旧数据、改了源也不生效。照下表重填一遍，再推一次 `edge/**` 触发部署即可。
+> Worker、D1 库、以及在 Worker 上用 `secret put` 写进去的 `BIND_CODE` / `ADMIN_PASSWORD` / `ADMIN_PATH`
+> **不受仓库删除影响**，不需要重建。
+
 本仓库 Settings → Secrets and variables → Actions：
 
 | Secret | 必需 | 说明 |

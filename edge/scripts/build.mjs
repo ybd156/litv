@@ -346,33 +346,19 @@ function registrableHost(host) {
   return last2;
 }
 
-/** 探测一个流地址能不能连上（只读前 1KB） */
-async function probeStream(url) {
-  if (checkFetchTarget(url)) return false;
-  try {
-    const res = await fetchGuarded(url, {
-      headers: { "User-Agent": UA, Range: "bytes=0-1023" },
-      signal: AbortSignal.timeout(8000),
-    });
-    res.body?.cancel().catch(() => {});
-    return res.status >= 200 && res.status < 300;
-  } catch {
-    return false;
-  }
-}
-
 /**
- * 自动跟随：流地址的域名连不上时，改用**源自身的域名**。
+ * 自动跟随：流地址的域名一律改为**源自身的域名**（同主域才动）。
  *
  * 面板常把流域名写死在 m3u 里（如 live.x.com），而订阅入口用的是另一个
  * （如 mursor.x.com）。某些网络上只有入口那个能解析，于是：
  *   · 管理台里"换了源地址"看起来没生效 —— 换的只是入口
  *   · 播放列表里还是旧域名 —— 客户端连不上，黑屏
  *
- * 三重保险，避免瞎改：
- *   1. 只处理与源入口**同主域**的 host（不同家的一律不动）
- *   2. 原地址探测已经能通，就不折腾
- *   3. 换过去必须探测**确实能通**才采用
+ * ⚠️ 这里**不能靠探测决定**：CI 跑在 GitHub runner 上，它能连上 live.x.com，
+ * 而用户家里的网络连不上。用 CI 的探测结果去判断"客户端能不能连"是错的
+ * （这就是第一版没生效的原因）。所以去掉探测，直接跟随。
+ *
+ * 唯一约束是**同主域**：不同家的域名一律不动，避免把别人的源改坏。
  */
 async function followSourceHost(entries, sources) {
   if (!FOLLOW_SOURCE_HOST) return 0;
@@ -395,11 +381,6 @@ async function followSourceHost(entries, sources) {
     );
     if (!target) continue;
 
-    const probeTo = rewriteHost(list[0].url, new Map([[host, target]]));
-    if (!probeTo) continue;
-    if (await probeStream(list[0].url)) continue;   // 原来的还能用，别动
-    if (!(await probeStream(probeTo))) continue;    // 换过去也不行，保持原样
-
     let n = 0;
     for (const e of list) {
       const next = rewriteHost(e.url, new Map([[host, target]]));
@@ -410,7 +391,7 @@ async function followSourceHost(entries, sources) {
     }
     changed += n;
     // 只打条数：public 仓库的 Actions 日志人人可见，不打域名
-    console.log(`[follow] 流域名自动跟随源入口：${n} 条（原域名不可达，改用源自身域名）`);
+    console.log(`[follow] 流域名自动跟随源入口：${n} 条（改用源自身域名）`);
   }
   return changed;
 }

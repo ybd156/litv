@@ -36,7 +36,16 @@ const ALLOW_SHRINK = process.env.ALLOW_SHRINK === "1";
 //                   省掉重建时几千行 DELETE/INSERT（D1 按写入行数计费），
 //                   也让 bootstrap 的响应小很多。
 // 由 .github/workflows/edge-deploy.yml 通过 vars.CHANNELS_MODE 传入。
-const CHANNELS_MODE = (process.env.CHANNELS_MODE || "server").toLowerCase();
+// 默认 client：客户端自己拉源、自己解析（见 docs/design/04-边缘版职责.md）。
+//
+// 为什么改成默认：
+//   · 改源地址**立刻生效**——不用等重建，频道表不由 CI 生成
+//   · 播放地址由客户端自己从面板拉，天然是入口域名——不会出现
+//     "面板写死 live 域名、而该域名在用户网络被污染"这类问题
+//   · 省掉 D1 里几千行频道/线路写入
+//   · 客户端连 /tv/play 都不用调（地址来自本地解析结果）
+// 回退服务端下发：设 CHANNELS_MODE=server 再重建一次。
+const CHANNELS_MODE = (process.env.CHANNELS_MODE || "client").toLowerCase();
 const BUILD_STATE_FILE = process.env.BUILD_STATE_FILE || "";
 const FETCH_TIMEOUT_MS = 30_000;
 // 同时抓几个源。串行的话 N 个源就是 N 次完整握手相加。

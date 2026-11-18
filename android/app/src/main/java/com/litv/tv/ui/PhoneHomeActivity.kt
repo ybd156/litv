@@ -58,6 +58,10 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
     private lateinit var playName: TextView
     private lateinit var playEngine: TextView
     private lateinit var playNow: TextView
+    private lateinit var playProgressRow: View
+    private lateinit var playProgress: android.widget.ProgressBar
+    private lateinit var playProgressPct: TextView
+    private lateinit var playNext: TextView
     private lateinit var playRoute: TextView
     private lateinit var playHint: TextView
     private lateinit var epgList: LinearLayout
@@ -155,6 +159,10 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
         playName = findViewById(R.id.playName)
         playEngine = findViewById(R.id.playEngine)
         playNow = findViewById(R.id.playNow)
+        playProgressRow = findViewById(R.id.playProgressRow)
+        playProgress = findViewById(R.id.playProgress)
+        playProgressPct = findViewById(R.id.playProgressPct)
+        playNext = findViewById(R.id.playNext)
         playRoute = findViewById(R.id.playRoute)
         playHint = findViewById(R.id.playHint)
         epgList = findViewById(R.id.epgList)
@@ -1193,15 +1201,56 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
     private fun renderNow() {
         val now = System.currentTimeMillis() / 1000
         val cur = programs.firstOrNull { it.startAt <= now && it.endAt > now }
-        // 没有节目单时这里不占一行——下面的节目单区域已经会显示「暂无节目单」，
-        // 两处都显示同一句话是重复的。
+        val next = programs.firstOrNull { it.startAt > now }
+        // 没有节目单时这几行都不占位——下面的节目单区域已经会显示「暂无节目单」。
         if (programs.isEmpty()) {
             playNow.visibility = View.GONE
+            playProgressRow.visibility = View.GONE
+            playNext.visibility = View.GONE
         } else {
             playNow.visibility = View.VISIBLE
             playNow.text = cur?.let { "正在播：${it.title}" } ?: "正在播：—"
+
+            // 当前节目进度（iOS 端早就有，安卓一直只有一行标题）
+            if (cur != null && cur.endAt > cur.startAt) {
+                val span = (cur.endAt - cur.startAt).coerceAtLeast(1)
+                val pct = (((now - cur.startAt).toFloat() / span) * 100).toInt().coerceIn(0, 100)
+                playProgressRow.visibility = View.VISIBLE
+                playProgress.progress = pct
+                playProgressPct.text = "$pct%"
+            } else {
+                playProgressRow.visibility = View.GONE
+            }
+
+            // 下一档：时间 + 名字（只有一行，太长就省略）
+            if (next != null) {
+                playNext.visibility = View.VISIBLE
+                playNext.text = "下一档 ${fmtClock(next.startAt)} ${next.title}"
+            } else {
+                playNext.visibility = View.GONE
+            }
         }
         renderEpg()
+    }
+
+    /** 秒级时间戳 → HH:mm */
+    private fun fmtClock(sec: Long): String {
+        val sdf = java.text.SimpleDateFormat("HH:mm", java.util.Locale.getDefault())
+        return sdf.format(java.util.Date(sec * 1000))
+    }
+
+    /**
+     * 每 30 秒刷新一次「正在播 / 进度 / 下一档」。
+     *
+     * 之前这几行只在换台或节目单刷新时更新，节目切换、进度条都会停在旧值——
+     * 用户看到"正在播"写着上一个节目。
+     */
+    private val nowTicker = object : Runnable {
+        override fun run() {
+            if (isFinishing || isDestroyed) return
+            runCatching { if (::playNow.isInitialized) renderNow() }
+            Handler(Looper.getMainLooper()).postDelayed(this, 30_000)
+        }
     }
 
     /** 节目单当前查看的日期偏移（0=今天，1=明天，-1=昨天…）。 */
@@ -1525,8 +1574,14 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
         val cur = currentChannel
         val i = cur?.let { c -> all.indexOfFirst { it.id == c.id } } ?: -1
         val n = all.size
-        val target = if (i < 0) all[0] else all[((i + delta) % n + n) % n]
-        android.util.Log.i(TAG, "stepChannel: delta=$delta ${cur?.name ?: "-"}（$i）-> ${target.name}")
+        // 设置里的「换台方向反转」原来只有电视端读取（PlayerActivity），手机端空转；
+        // 现在手机上同样生效：开=反着走。
+        val dir = if (app.prefs.reverseChannelKeys) -delta else delta
+        val target = if (i < 0) all[0] else all[((i + dir) % n + n) % n]
+        android.util.Log.i(
+            TAG,
+            "stepChannel: delta=$delta(dir=$dir) ${cur?.name ?: "-"}（$i）-> ${target.name}",
+        )
         if (currentTab != TAB_PLAY) switchTab(TAB_PLAY)
         playChannel(target)
         // 切台后让控件再停一会儿：连续切台时不用每次都重新呼出
@@ -1656,6 +1711,9 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
     override fun onResume() {
         bindFsTools()
         resumeOrRebuildAfterBackground()
+        // 「正在播 / 进度 / 下一档」每 30 秒自己刷新（先把旧的摘掉，避免重复排队）
+        Handler(Looper.getMainLooper()).removeCallbacks(nowTicker)
+        Handler(Looper.getMainLooper()).postDelayed(nowTicker, 30_000)
         // Activity 重建后引擎没变，onEngineChanged 不会回调，
         // 右上角的解码器标签就会空着。这里从播放器补一次。
         if (::player.isInitialized) {
@@ -1734,6 +1792,7 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
 
     override fun onPause() {
         super.onPause()
+        Handler(Looper.getMainLooper()).removeCallbacks(nowTicker)
         // 离开前台：解除常亮，允许系统息屏
         window.clearFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         if (suppressPauseForInternalPage) {

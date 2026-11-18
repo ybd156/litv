@@ -223,10 +223,31 @@ class SettingsActivity : AppCompatActivity() {
         findViewById<View>(R.id.rowUnbind).setOnClickListener { confirmUnbind() }
 
         refreshAllLabels()
+
+        // ★ 手机形态下隐藏「只被电视端读取」的三项。
+        //
+        // 2026-11-18 审计发现：`uiScale`（界面缩放）只被电视频道列表 ChannelAdapter 用，
+        // `showPlayStatus`（播放状态叠加）只被 PlayerActivity 用，
+        // `autoPlayLast`（开机自动播放上次频道）手机端也没有读取点。
+        // 留在手机设置页就是"改了完全没反应"——宁可看不到，也不要做假开关。
+        // （「换台方向反转」已在 PhoneHomeActivity.stepChannel 里接上，故保留。）
+        if (!isTvUi()) {
+            listOf(R.id.rowAutoPlay, R.id.rowUiScale, R.id.rowShowStatus).forEach { id ->
+                findViewById<View>(id)?.visibility = View.GONE
+            }
+        }
+
         // 同 PickerDialog：onCreate 里直接 requestFocus 无效（视图还没布局），
         // 整页一个焦点都没有，遥控按了像死机。
         val first = findViewById<View>(R.id.rowEngine)
         first.post { first.requestFocus() }
+    }
+
+    /** 当前实际呈现的是不是电视形态（与 LauncherActivity 的分流规则一致）。 */
+    private fun isTvUi(): Boolean = when (app.prefs.uiMode) {
+        "tv" -> true
+        "phone" -> false
+        else -> DeviceType.isTV(this)
     }
 
     // ---------------------------------------------------------------- 循环切换

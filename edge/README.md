@@ -160,6 +160,10 @@ LITV2 的边缘降级部署：NAS 挂了之后，用 Cloudflare 免费额度顶�
 
 ### 3. 跑一次
 
+> **在管理台「源」页改完源，必须触发一次重建才会生效**（频道表/线路表是构建产物，不是请求时现查的）。
+> 触发方式：管理台「立即重建」（需 `DISPATCH_TOKEN`）、Actions 里手动跑 `Edge Deploy`、
+> 或者往 `edge/**` 推一个提交。只改 D1 不重建，客户端仍拿旧频道。
+
 Actions → `Edge Deploy` → Run workflow。它会先跑 `check`（类型检查 + 自测 + 打包检查），
 全绿才部署。
 

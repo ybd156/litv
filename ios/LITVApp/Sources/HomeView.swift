@@ -200,7 +200,8 @@ struct SettingsView: View {
         NavigationView {
             List {
                 Section("设备") {
-                    // 注意：LabeledContent 是 iOS 16+，这里用 HStack 保持 iOS 15 兼容
+                    // 部署目标已上调到 iOS 16，`LabeledContent` 现在可用；
+                    // 这里仍用 HStack —— 与下面几行写法统一，也方便加自定义副文本。
                     HStack {
                         Text("服务器")
                         Spacer()
@@ -215,7 +216,7 @@ struct SettingsView: View {
                 }
                 Section("播放") {
                     // 解码方式：老设备硬解会花屏/卡住，需要能手动切软解。
-                    // 用 HStack + 点击循环切换，和「关于」的写法保持一致（iOS 15 兼容）。
+                    // 用 HStack + 点击循环切换，和「关于」的写法保持一致。
                     Button {
                         switch session.decodeMode {
                         case "auto": session.decodeMode = "hard"

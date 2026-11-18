@@ -25,9 +25,9 @@ struct RemoteView: View {
             .navigationTitle(selected == nil ? "遥控器" : (selected?.name ?? "遥控器"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                // 注意：不能在 toolbar 里写 `if`——那会用到 buildIf，
-                // 只有 iOS 16+ 才有，而本项目最低支持 iOS 15（CI 会直接编译失败）。
-                // 所以按钮始终存在，靠 disabled + opacity 控制是否可见可点。
+                // 部署目标已上调到 iOS 16（2026-11-18），toolbar 里写 `if` 不会再
+                // 撞 buildIf 的报错。这里仍保留"按钮常驻 + disabled/opacity"的写法：
+                // 布局稳定、不会因为条件分支导致 toolbar 项位置跳动。
                 ToolbarItem(placement: .navigationBarLeading) {
                     Button("设备") { selected = nil }
                         .disabled(selected == nil)

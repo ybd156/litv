@@ -8,7 +8,7 @@
 #
 # 注意：MobileVLCKit 是静态 framework，CI 里用 CODE_SIGNING_ALLOWED=NO 编译没问题。
 
-platform :ios, '15.0'
+platform :ios, '16.0'
 
 target 'LITV' do
   # MobileVLCKit 是静态 framework，显式指定 static linkage，

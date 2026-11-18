@@ -156,11 +156,12 @@ ls -l --time-style=+%H:%M:%S app/build/tmp/kotlin-classes/release/com/.../改过
 
 ### iOS 特有
 
-- **部署目标是 iOS 15。不要用 iOS 16+ 的 API。**
-  踩过的坑：`.toolbar { if ... { ToolbarItem } }` 里的条件内容会编译成
-  `buildIf`，那是 iOS 16 才有的，CI 直接报
-  `'buildIf' is only available in iOS 16.0 or newer`。
-  需要条件显示时，让元素始终存在，用 `.disabled` / `.opacity` 控制
+- **部署目标是 iOS 16**（2026-11-18 由 15 上调，产品决定）。iOS 16+ 的 API 现在可以用了：
+  `NavigationStack`、`.toolbar(.hidden, for: .tabBar)`、`requestGeometryUpdate`、`LabeledContent` 等。
+  历史坑（仍值得知道）：iOS 15 时代 `.toolbar { if ... { ToolbarItem } }` 里的条件内容
+  会编译成 `buildIf`（iOS 16 才有），报 `'buildIf' is only available in iOS 16.0 or newer`；
+  现在最低版本就是 16，这类报错不会再出现，但**条件渲染仍建议用 `.disabled` / `.opacity`
+  而不是在 toolbar 里写 if**，可读性更好
 - `UIViewRepresentable` 里的裸 `UIView` 没有 intrinsic size，
   必须显式 `.frame(maxWidth: .infinity, maxHeight: .infinity)`
   并设 `autoresizingMask`，否则画面会缩成一小块
@@ -242,7 +243,7 @@ ls -l --time-style=+%H:%M:%S app/build/tmp/kotlin-classes/release/com/.../改过
 
 - Go：忘了 `gofmt -w`（build-check 会先查格式）
 - Android：`e:` 开头的 Kotlin 编译错误；`assembleRelease` 才暴露的 R8/JNI 问题
-- iOS：用了 iOS 16+ 的 API（部署目标是 **15**）
+- iOS：API 版本不对（部署目标是 **16**，不要用 iOS 17+ 才有的 API）
 
 ### 不要在仓库里写本机信息
 

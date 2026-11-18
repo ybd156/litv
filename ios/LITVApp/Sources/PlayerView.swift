@@ -2,6 +2,15 @@ import AVKit
 import SwiftUI
 import UIKit
 
+// `techText` 要读 `VLCMediaPlayer.videoSize` 拿分辨率，所以本文件也需要这个模块。
+// 它只在装了 Pod 时才存在，故用条件 import（与 VLCPlayerView.swift 一致）。
+// 2026-11-18 教训：光写 `#if canImport(MobileVLCKit)` 判断是不够的 —— CI 里 Pod 已装、
+// canImport 为真，守卫内的 `VLCMediaPlayer` 就会被编译；本文件没 import 就直接报
+// `cannot find type 'VLCMediaPlayer' in scope`（iOS Build Check #88 红）。
+#if canImport(MobileVLCKit)
+import MobileVLCKit
+#endif
+
 /// 播放页。
 ///
 /// 双内核策略：
@@ -138,10 +147,11 @@ struct PlayerView: View {
             }
         }
         .background(Color.black.ignoresSafeArea())
-        // 全屏时连状态栏一起收起来（安卓那边是 setSystemBarsHidden）。
-        // 注：iOS 15 没有可用的 SwiftUI API 隐藏 TabView 底部标签栏，
-        // 要藏只能整体改成 fullScreenCover 呈现，代价大，暂不做。
+        // 全屏时收起系统栏：状态栏 + 底部标签栏（安卓那边是 setSystemBarsHidden）。
+        // 部署目标已上调到 iOS 16，`.toolbar(.hidden, for: .tabBar)` 可用；
+        // iOS 15 时代没有对应 API，只能整体改 fullScreenCover 呈现。
         .statusBar(hidden: isFullscreen)
+        .toolbar(isFullscreen ? .hidden : .visible, for: .tabBar)
         .navigationTitle(active.name)
         .navigationBarTitleDisplayMode(.inline)
         .onChange(of: switched?.id) { _ in
@@ -353,21 +363,15 @@ struct PlayerView: View {
 
     /// 切换全屏：既改布局，也尽量真的转屏。
     ///
-    /// iOS 15 没有 requestGeometryUpdate，只能走 UIDevice 的 KVC 办法；
+    /// 部署目标已上调到 iOS 16，`requestGeometryUpdate` 可直接用
+    /// （iOS 15 时代只能走 UIDevice 的 KVC 绕法，那段已删掉）。
     /// 转屏失败也不影响——forceFullscreen 已经让布局变成全屏了。
     private func toggleFullscreen() {
         forceFullscreen.toggle()
         let wantLandscape = forceFullscreen
-        if #available(iOS 16.0, *) {
-            if let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene {
-                scene.requestGeometryUpdate(
-                    .iOS(interfaceOrientations: wantLandscape ? .landscapeRight : .portrait))
-            }
-        } else {
-            UIDevice.current.setValue(
-                wantLandscape ? UIInterfaceOrientation.landscapeRight.rawValue
-                              : UIInterfaceOrientation.portrait.rawValue,
-                forKey: "orientation")
+        if let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene {
+            scene.requestGeometryUpdate(
+                .iOS(interfaceOrientations: wantLandscape ? .landscapeRight : .portrait))
         }
     }
 

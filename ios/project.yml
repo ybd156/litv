@@ -7,7 +7,7 @@ name: LITV
 options:
   bundleIdPrefix: com.litv
   deploymentTarget:
-    iOS: "15.0"
+    iOS: "16.0"
   createIntermediateGroups: true
 
 settings:
@@ -21,7 +21,7 @@ targets:
   LITV:
     type: application
     platform: iOS
-    deploymentTarget: "15.0"
+    deploymentTarget: "16.0"
     sources:
       - path: LITVApp/Sources
       # 图标等资源。之前漏了这行，导致 ipa 里根本没有 Assets.car，
@@ -58,7 +58,7 @@ targets:
   LITVSessionTests:
     type: bundle.unit-test
     platform: iOS
-    deploymentTarget: "15.0"
+    deploymentTarget: "16.0"
     sources:
       - path: LITVApp/Sources/Session.swift
       - path: LITVApp/Sources/Api.swift

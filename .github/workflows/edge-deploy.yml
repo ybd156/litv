@@ -218,6 +218,35 @@ jobs:
           npx --yes wrangler@4.158.0 d1 execute DB --remote --file=sql/source-status.sql
           npx --yes wrangler@4.158.0 d1 execute DB --remote --file=sql/meta.sql
 
+      # 把「这次到底灌进去多少」写进运行摘要。
+      #
+      # 起因（2026-11-18）：管理台显示已加第二条源、单源解析 1029 条，但客户端
+      # bootstrap 一直只有 58 个频道、channels_version 停在 30。只能翻完整日志才
+      # 知道灌没灌进去 —— 而 Actions 日志对外不可读。有了这一段，运行页面上直接
+      # 能对账「源数 / 频道数 / 线路数 / 版本号」。
+      - name: 重建结果写进运行摘要
+        if: env.CONFIGURED == 'true'
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          npx --yes wrangler@4.158.0 d1 execute DB --remote --json \
+            --command "SELECT (SELECT COUNT(*) FROM channels) AS channels, (SELECT COUNT(*) FROM streams) AS streams, (SELECT COUNT(*) FROM sources) AS sources, (SELECT v FROM kv WHERE k='channels_version') AS version" \
+            > /tmp/counts.json 2>/tmp/counts.err || true
+          {
+            echo "## 重建结果（D1 实况）"
+            echo '```json'
+            cat /tmp/counts.json 2>/dev/null || echo "(wrangler 没有输出)"
+            echo '```'
+            if [ -s /tmp/counts.err ]; then
+              echo "<details><summary>wrangler stderr</summary>"
+              echo '```'
+              tail -20 /tmp/counts.err
+              echo '```'
+              echo "</details>"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
       # 用 LITV2 自带的管理台（admin/ 的 Vue），不是另写一套。
       # base 改成 /：边缘这边它挂在根路径，这样它内部的相对 api/v1 正好落到
       # Worker 的 /api/v1/*。默认的 /app/litv/ 是给飞牛网关用的。

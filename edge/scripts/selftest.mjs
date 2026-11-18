@@ -95,7 +95,7 @@ function runBuild(env) {
       // 自测用 127.0.0.1 的 fixture 服务器喂数据，而出站校验默认拦截内网地址
       // （这是对的：CI 上抓一个不可信 m3u 能摸到云元数据端点）。
       // 只有这里放行，部署 job 不设这个变量。
-      env: { ...process.env, EDGE_ALLOW_PRIVATE_FETCH: "1", ...env },
+      env: { ...process.env, EDGE_ALLOW_PRIVATE_FETCH: "1", CHANNELS_MODE: "server", ...env },
     });
     let out = "";
     let err = "";
@@ -184,6 +184,28 @@ check("先删后插", seedSql.indexOf("DELETE FROM streams") < seedSql.indexOf("
     "不配 SOURCE_UA 时不把 VLC 默认值写进线路",
     plainRun.code === 0 && !plainSql.includes("VLC/3.0.20"),
     String(plainRun.code),
+  );
+}
+
+// client 模式：频道表交给客户端解析，D1 不写 channels / streams。
+// 这条是默认模式的护栏——默认值改成 client 后，谁把 renderSeed 改回写表，
+// 这里会红。
+{
+  const clientRun = await runBuild({
+    SOURCE_URLS: `${base}/a.m3u`,
+    CHANNELS_MODE: "client",
+  });
+  const clientSql = await readFile("sql/seed.sql", "utf8");
+  check(
+    "client 模式不写频道/线路表",
+    clientRun.code === 0 && !clientSql.includes("INSERT INTO channels") && !clientSql.includes("INSERT INTO streams"),
+    String(clientRun.code),
+  );
+  const clientMeta = await readFile("sql/meta.sql", "utf8");
+  check(
+    "client 模式在 meta 里标明 channels_mode=client",
+    clientRun.code === 0 && clientMeta.includes('"channels_mode":"client"'),
+    clientMeta.slice(0, 120),
   );
 }
 

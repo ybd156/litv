@@ -230,6 +230,33 @@ struct SettingsView: View {
                                 .foregroundColor(.gray)
                         }
                     }
+                    // 缓冲 / 直播延迟：以前在 VLCPlayerView 里写死 1500ms，
+                    // 弱网或源站抖动时只能干等。档位与 Android 设置页对齐。
+                    Button {
+                        let opts = [1000, 1500, 2000, 3000, 5000, 8000]
+                        let i = opts.firstIndex(of: session.bufferMs) ?? 0
+                        session.bufferMs = opts[(i + 1) % opts.count]
+                    } label: {
+                        HStack {
+                            Text("网络缓冲").foregroundColor(.primary)
+                            Spacer()
+                            Text("\(session.bufferMs / 1000) 秒").foregroundColor(.gray)
+                        }
+                    }
+                    Button {
+                        let opts = [0, 2000, 4000, 6000, 8000, 10000]
+                        let i = opts.firstIndex(of: session.liveDelayMs) ?? 0
+                        session.liveDelayMs = opts[(i + 1) % opts.count]
+                    } label: {
+                        HStack {
+                            Text("直播延迟").foregroundColor(.primary)
+                            Spacer()
+                            Text(session.liveDelayMs == 0
+                                 ? "不额外延迟"
+                                 : "\(session.liveDelayMs / 1000) 秒")
+                                .foregroundColor(.gray)
+                        }
+                    }
                 }
 
                 Section {

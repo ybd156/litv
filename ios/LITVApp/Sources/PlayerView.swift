@@ -149,37 +149,13 @@ struct PlayerView: View {
             guard want else { return }
             Task { await fallbackToAVPlayer() }
         }
-        .toolbar {
-            ToolbarItemGroup(placement: .navigationBarTrailing) {
-                // 画面比例：和 Android 设置同名（auto / 16:9 / 4:3 / 拉伸 / 裁切）。
-                // 用 Menu 而不是条件 ToolbarItem —— 后者会编译成 buildIf，
-                // 那是 iOS 16 才有的 API（AGENTS §6 的坑）。
-                Menu {
-                    Button("自动") { aspectMode = "auto" }
-                    Button("16:9") { aspectMode = "16:9" }
-                    Button("4:3") { aspectMode = "4:3" }
-                    Button("拉伸铺满") { aspectMode = "fill" }
-                    Button("裁切铺满") { aspectMode = "zoom" }
-                } label: {
-                    Image(systemName: "rectangle.arrowtriangle.2.outward")
-                }
-                Button {
-                    showEpg = true
-                } label: {
-                    Image(systemName: "list.bullet.rectangle")
-                }
-                Button {
-                    Task { await startTimeshift() }
-                } label: {
-                    Image(systemName: "clock.arrow.circlepath")
-                }
-                Button {
-                    Task { await loadStreams() }
-                } label: {
-                    Image(systemName: "arrow.triangle.2.circlepath")
-                }
-            }
-        }
+        // ★ 原来的四个入口（比例 / 节目单 / 时移 / 换线路）挂在这里的 `.toolbar` 上，
+        //   但 PlayView 由 PlayTab 直接返回、**不在 NavigationView 里**，
+        //   没有导航栏承载 → 四个 `.toolbar` 项全都不呈现，用户根本点不到
+        //   （2026-11-18 审计发现：连画面比例都改不了）。
+        //   现在改为放进控制条的「更多」菜单（见 controls），不依赖导航容器，
+        //   竖屏与全屏都能点到；`.navigationTitle` 留着——将来若给 PlayTab 包上
+        //   NavigationView，它会自然生效，不冲突。
         .sheet(isPresented: $showEpg) { epgSheet }
         .sheet(isPresented: $showCast) { castSheet }
         .onAppear {
@@ -319,6 +295,8 @@ struct PlayerView: View {
             // 参数顺序必须与 VLCPlayerView 的属性声明顺序一致
             // （Swift 的逐成员初始化器按声明顺序传参）
             VLCPlayerView(url: u, decodeMode: session.decodeMode,
+                          bufferMs: session.bufferMs,
+                          liveDelayMs: session.liveDelayMs,
                           userAgent: playUA, headers: playHeaders,
                           control: vlc, aspect: aspectMode) { st in
                 // VLCKit 的状态通知是在它自己的线程上发出的，直接改 @State
@@ -472,6 +450,26 @@ struct PlayerView: View {
                 showCast = true
                 Task { await loadRenderers() }
             }
+            // 「更多」：画面比例 / 节目单 / 时移 / 换线路。
+            // 这四项原先挂在 .toolbar 上（无导航宿主 → 点不到），改到控制条里，
+            // 竖屏与全屏都能用。同一个 Menu 里放，避免控制条被按钮挤爆。
+            Menu {
+                Button("自动") { aspectMode = "auto" }
+                Button("16:9") { aspectMode = "16:9" }
+                Button("4:3") { aspectMode = "4:3" }
+                Button("拉伸铺满") { aspectMode = "fill" }
+                Button("裁切铺满") { aspectMode = "zoom" }
+                Divider()
+                Button("节目单") { showEpg = true }
+                Button("时移回看") { Task { await startTimeshift() } }
+                Button("换线路") { Task { await loadStreams() } }
+            } label: {
+                Image(systemName: "ellipsis.circle")
+                    .font(.system(size: 18))
+                    .frame(minWidth: 44, minHeight: 44)
+            }
+            .foregroundColor(.white)
+            .accessibilityLabel("更多")
         }
         .padding(.horizontal, 4)
         }

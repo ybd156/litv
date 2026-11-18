@@ -62,6 +62,10 @@ struct VLCPlayerView: UIViewRepresentable {
     var autoplay: Bool = true
     /// 解码方式：auto（默认，让 VLC 自己选）/ hard（强制硬件）/ soft（强制软件）
     var decodeMode: String = "auto"
+    /// 网络缓冲（毫秒），0 = 不覆盖（交给 VLCKit 默认）。对齐 Android 的 1/2/3/5/8 秒档。
+    var bufferMs: Int = 1500
+    /// 直播主动延迟（毫秒），0 = 不额外落后。对齐 Android 的 2/4/6/8/10 秒档。
+    var liveDelayMs: Int = 0
     /// 源配置里指定的 User-Agent（空 = 用 VLC 默认）
     var userAgent: String = ""
     /// 这条线路的完整请求头（R09）。VLCKit 只对 UA / Referer 提供专用 option，
@@ -124,8 +128,15 @@ struct VLCPlayerView: UIViewRepresentable {
         // 逐个用 addOption(_:) 更稳妥（不同版本签名不一样）。
         media.addOption("--no-drop-late-frames")
         media.addOption("--no-skip-frames")
-        media.addOption("--network-caching=1500")
-        media.addOption("--live-caching=1500")
+        // 缓冲与直播延迟：以前写死 1500，弱网/源站抖动时用户只能干等。
+        // 现在跟设置里联动（0 表示不覆盖，用 VLCKit 默认）。
+        if bufferMs > 0 {
+            media.addOption("--network-caching=\(bufferMs)")
+        }
+        let liveCaching = max(bufferMs, liveDelayMs)
+        if liveCaching > 0 {
+            media.addOption("--live-caching=\(liveCaching)")
+        }
         // 解码方式：auto 不传参（VLC 自己挑），hard 强制硬解，soft 强制软解。
         // 有些老设备硬解会花屏或卡住，用户需要能手动切软解。
         switch decodeMode {

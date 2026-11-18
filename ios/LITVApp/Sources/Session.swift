@@ -27,6 +27,16 @@ final class Session: ObservableObject {
         didSet { defaults.set(decodeMode, forKey: "decodeMode") }
     }
 
+    /// 网络缓冲（毫秒）。0 表示交给 VLCKit 默认。对齐 Android 的 1/2/3/5/8 秒档。
+    @Published var bufferMs: Int {
+        didSet { defaults.set(bufferMs, forKey: "bufferMs") }
+    }
+
+    /// 直播主动延迟（毫秒，0 = 不额外落后）。对齐 Android 的 2/4/6/8/10 秒档。
+    @Published var liveDelayMs: Int {
+        didSet { defaults.set(liveDelayMs, forKey: "liveDelayMs") }
+    }
+
     // 状态
     @Published var loading = false
     @Published var statusText = ""
@@ -75,6 +85,8 @@ final class Session: ObservableObject {
         isBound = defaults.bool(forKey: "isBound")
         deviceName = defaults.string(forKey: "deviceName") ?? ""
         decodeMode = defaults.string(forKey: "decodeMode") ?? "auto"
+        bufferMs = (defaults.object(forKey: "bufferMs") as? Int) ?? 1500
+        liveDelayMs = (defaults.object(forKey: "liveDelayMs") as? Int) ?? 0
     }
 
     /// 设备 key 进程内恒定；解绑和换服务器不删除这个身份。

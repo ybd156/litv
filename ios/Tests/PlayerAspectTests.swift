@@ -44,11 +44,17 @@ final class PlayerAspectTests: XCTestCase {
         XCTAssertEqual(PlayerLayerUIView.fit(nil, in: rect), rect)
     }
 
-    /// 容器正好是 16:9 时不产生任何黑边（手机竖屏那个 1220×686 的框）。
+    /// 容器正好是 16:9 时不产生**可见**黑边（浮点除法有尾差，按 1 点容差判）。
+    ///
+    /// 这里曾经写成 `XCTAssertEqual(out, rect)`：1220/686 与 16/9 差 0.0006，
+    /// 算出来的宽比容器少 0.4 点，精确比较直接红——比例本身是对的。
     func testSixteenByNineContainerHasNoLetterbox() {
-        let rect = CGRect(x: 0, y: 0, width: 1220, height: 686)
+        let rect = CGRect(x: 0, y: 0, width: 1920, height: 1080)
         let out = PlayerLayerUIView.fit(16.0 / 9.0, in: rect)
-        XCTAssertEqual(out, rect)
+        XCTAssertEqual(out.width, rect.width, accuracy: 1)
+        XCTAssertEqual(out.height, rect.height, accuracy: 1)
+        XCTAssertLessThan(abs(out.minX), 1)
+        XCTAssertLessThan(abs(out.minY), 1)
     }
 
     /// 容器比目标宽 → 高度顶满，左右各留黑边（横屏长屏上看 4:3 源）。

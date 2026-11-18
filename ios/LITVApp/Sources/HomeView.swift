@@ -187,6 +187,21 @@ struct SettingsView: View {
         }
     }
 
+    /// 播放内核的显示文案。
+    ///
+    /// VLCKit 没装时必须把话说清楚（选了也用不上），否则用户会以为设置没生效——
+    /// 这个仓库里已经因为「改了设置但什么都没变」排查过好几轮。
+    static func engineLabel(_ mode: String, vlcAvailable: Bool) -> String {
+        switch mode {
+        case "vlc":
+            return vlcAvailable ? "强制 VLCKit" : "VLCKit 未安装（只能用 AVPlayer）"
+        case "avplayer":
+            return "强制 AVPlayer"
+        default:
+            return vlcAvailable ? "自动（优先 VLCKit）" : "自动（AVPlayer）"
+        }
+    }
+
     static var appVersion: String {
         let v = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "—"
         let b = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "—"
@@ -215,6 +230,23 @@ struct SettingsView: View {
                     }
                 }
                 Section("播放") {
+                    // 播放内核：对齐 Android 设置页的「播放内核」。
+                    // 自动 = VLCKit 优先、AVPlayer 兜底；强制某一项用于排查
+                    // 「同一个台换个内核还能不能播」——没有这个开关时，
+                    // iOS 只能靠卸 Pod 才能见到 AVPlayer 路径。
+                    Button {
+                        let opts = ["auto", "vlc", "avplayer"]
+                        let i = opts.firstIndex(of: session.engineMode) ?? 0
+                        session.engineMode = opts[(i + 1) % opts.count]
+                    } label: {
+                        HStack {
+                            Text("播放内核").foregroundColor(.primary)
+                            Spacer()
+                            Text(Self.engineLabel(session.engineMode,
+                                                  vlcAvailable: VLCPlayerView.isAvailable))
+                                .foregroundColor(.gray)
+                        }
+                    }
                     // 解码方式：老设备硬解会花屏/卡住，需要能手动切软解。
                     // 用 HStack + 点击循环切换，和「关于」的写法保持一致。
                     Button {

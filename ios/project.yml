@@ -68,6 +68,9 @@ targets:
       # 这里必须一起列上，否则报 cannot find 'EpgStore' in scope
       - path: LITVApp/Sources/EpgStore.swift
       - path: LITVApp/Sources/ChannelStore.swift
+      # 画面比例的纯计算（forcedAspect / fit）。PlayerView 依赖 VLCKit，
+      # 但渲染层只依赖 SwiftUI/AVFoundation，可以直接编进测试。
+      - path: LITVApp/Sources/PlayerLayerView.swift
       - path: Tests
         excludes:
           - "*.py"

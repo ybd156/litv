@@ -37,6 +37,16 @@ final class Session: ObservableObject {
         didSet { defaults.set(liveDelayMs, forKey: "liveDelayMs") }
     }
 
+    /// 播放内核：auto（默认）/ vlc / avplayer。与 Android 设置页的同一档语义。
+    ///
+    /// auto = VLCKit 可用就用它（能解 AC3/裸 TS），不可用退回 AVPlayer。
+    /// 强制 avplayer 时**绝不**建 VLC 播放器：排查「VLC 有声音没画面 / 起播卡住」
+    /// 这类问题时需要一个确定的对照。强制 vlc 只决定首选，失败后仍允许回退到
+    /// AVPlayer（与 Android 的 `EngineChain.chainFor` 一致：强制内核打头，不砍掉兜底）。
+    @Published var engineMode: String {
+        didSet { defaults.set(engineMode, forKey: "engineMode") }
+    }
+
     // 状态
     @Published var loading = false
     @Published var statusText = ""
@@ -85,6 +95,7 @@ final class Session: ObservableObject {
         isBound = defaults.bool(forKey: "isBound")
         deviceName = defaults.string(forKey: "deviceName") ?? ""
         decodeMode = defaults.string(forKey: "decodeMode") ?? "auto"
+        engineMode = defaults.string(forKey: "engineMode") ?? "auto"
         bufferMs = (defaults.object(forKey: "bufferMs") as? Int) ?? 1500
         liveDelayMs = (defaults.object(forKey: "liveDelayMs") as? Int) ?? 0
     }

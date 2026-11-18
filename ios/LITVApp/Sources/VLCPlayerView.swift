@@ -176,7 +176,23 @@ struct VLCPlayerView: UIViewRepresentable {
             switch aspect {
             case "16:9": p.videoAspectRatio = strdup("16:9")
             case "4:3": p.videoAspectRatio = strdup("4:3")
-            default: p.videoAspectRatio = nil
+            case "fill":
+                // 拉伸铺满：libVLC 只有「显示比例」一个入口，没有 Android 的
+                // ScaleType.SURFACE_FILL。把显示比例设成**容器**自己的比例，
+                // 等价于拉满容器（画面按容器比例拉伸）。
+                // 注意：容器尺寸在这里取的是当前 bounds；转屏会重走 updateUIView
+                // （sizeClass 变化 → 外层 body 重算），所以不会长期停在旧比例。
+                let b = uiView.bounds.size
+                if b.width >= 2, b.height >= 2 {
+                    p.videoAspectRatio = strdup(String(format: "%.0f:%.0f", b.width, b.height))
+                } else {
+                    p.videoAspectRatio = nil
+                }
+            default:
+                // auto / zoom：VLCKit 3.5 没有暴露裁剪几何（Android 的
+                // ScaleType.SURFACE_ZOOM 用不上），「裁切铺满」在这条路只能是
+                // 按源比例适配。AVPlayer 那条路支持完整的裁切铺满。
+                p.videoAspectRatio = nil
             }
         }
         #endif

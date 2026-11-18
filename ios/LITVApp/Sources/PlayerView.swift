@@ -122,6 +122,18 @@ struct PlayerView: View {
     /// 或者用户点了「全屏」按钮。
     private var isFullscreen: Bool { vSize == .compact || forceFullscreen }
 
+    /// 本次起播是否走 VLCKit。
+    ///
+    /// 设置里的「播放内核」只决定**首选**，两条边界必须守住：
+    ///   - VLCKit 没装时，auto / vlc 都只能走 AVPlayer（`isAvailable` 为假）；
+    ///   - 强制 avplayer 时**绝不**建 VLC 播放器，否则这个开关等于没做
+    ///     （排查「VLC 有声音没画面」时就失去唯一确定的对照组）。
+    /// 强制 vlc 失败后仍允许回退 AVPlayer——与 Android 的 `EngineChain.chainFor`
+    /// 一致：强制内核打头，但不砍掉兜底。
+    private var preferVLC: Bool {
+        session.engineMode == "avplayer" ? false : VLCPlayerView.isAvailable
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             // 竖屏布局：频道名在上，16:9 画面在中间，节目信息在下。
@@ -162,6 +174,14 @@ struct PlayerView: View {
             // VLC 判定失败后由这里接手降级（回调里不能直接 await）
             guard want else { return }
             Task { await fallbackToAVPlayer() }
+        }
+        .onChange(of: session.engineMode) { _ in
+            // 设置里换了播放内核就重起当前台。
+            // Android 靠 `onResume` 比对 `appliedEngine` 触发 `restartCurrent()`,
+            // iOS 没有对应的回前台时机（设置是 sheet/页内切换），直接盯这个值更可靠。
+            // 起播进行中不打断：那次 start() 已经按旧内核在跑了，让它自己走完。
+            guard !loading else { return }
+            Task { await start() }
         }
         // ★ 原来的四个入口（比例 / 节目单 / 时移 / 换线路）挂在这里的 `.toolbar` 上，
         //   但 PlayerView 由 PlayTab 直接返回、**不在 NavigationView 里**，
@@ -402,9 +422,11 @@ struct PlayerView: View {
                 }
             }
             #endif
-            parts.append("VLC")
+            // 设置里强制了这个内核就标出来：排查时「到底是不是我选的那个」
+            // 必须一眼可见，否则又会绕回「改了设置没变化」的老坑。
+            parts.append(session.engineMode == "vlc" ? "VLC（强制）" : "VLC")
         } else {
-            parts.append("AVPlayer")
+            parts.append(session.engineMode == "avplayer" ? "AVPlayer（强制）" : "AVPlayer")
         }
         return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }
@@ -985,9 +1007,16 @@ struct PlayerView: View {
                 playMode = "timeshift"
                 // /live/{id}/timeshift.ts 是裸 TS，所以封装就是 ts
                 playKind = "ts"
-                if VLCPlayerView.isAvailable {
+                if preferVLC {
                     usingVLC = true
                     player = nil
+                } else if session.engineMode == "avplayer" {
+                    // 强制 AVPlayer 时别把裸 TS 丢给它：那是一个永远转圈的黑屏，
+                    // 用户根本看不出是设置选错了。
+                    errorText = "时移（回看）是裸 TS 封装，AVPlayer 无法播放。\n"
+                        + "请在设置里把「播放内核」改回「自动」。"
+                    loading = false
+                    return
                 } else {
                     usingVLC = false
                     startAVPlayer(ts)
@@ -1008,7 +1037,7 @@ struct PlayerView: View {
                 // 本地源表只给地址，没有服务端的 kind。留空 = 不上报 path，
                 // 不要猜（猜错的 path 会污染 by_path 分组，比没有更难查）。
                 playKind = ""
-                if VLCPlayerView.isAvailable {
+                if preferVLC {
                     usingVLC = true
                     player = nil
                 } else {
@@ -1019,7 +1048,7 @@ struct PlayerView: View {
                 return
             }
 
-            let viaVLC = VLCPlayerView.isAvailable
+            let viaVLC = preferVLC
             let info = try await session.api.play(
                 channelId: active.id, streamId: streamId, direct: viaVLC)
             guard let u = session.api.url(info.url) else {

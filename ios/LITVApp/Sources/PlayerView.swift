@@ -456,11 +456,13 @@ struct PlayerView: View {
         // 横向可滚动：按钮已经有 8 个，iPhone 竖屏宽度放不下，
         // 直接塞 HStack 会被压缩变形。用 ScrollView 保证每个按钮都能点到。
         ScrollView(.horizontal, showsIndicators: false) {
-        // 与 Android 手机端对齐：OSD 只留 4 个按钮
-        // （播放暂停 / 静音 / 全屏 / 投屏）。
-        // 切台改成左右滑动手势；节目单和线路在顶部导航栏，不占 OSD。
+        // 与 Android 手机端对齐（2026-11-18）：OSD 上重新给出「上一台 / 下一台」按钮。
+        // 之前是刻意去掉的（只留 4 个按钮、切台靠左右滑），但 Android 端已经把
+        // ⏮ / ⏭ 加了回来（竖屏与全屏共用同一浮层），iOS 跟上，滑动手势仍然保留。
         HStack(spacing: 20) {
+            ctlButton("backward.end.fill", "上一台", size: 18) { switchBy(-1) }
             ctlButton(paused ? "play.fill" : "pause.fill", paused ? "播放" : "暂停", size: 22) { togglePause() }
+            ctlButton("forward.end.fill", "下一台", size: 18) { switchBy(1) }
             ctlButton(muted ? "speaker.slash.fill" : "speaker.wave.2.fill", muted ? "取消静音" : "静音", size: 18) { toggleMute() }
             ctlButton(isFullscreen
                         ? "arrow.down.right.and.arrow.up.left"

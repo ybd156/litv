@@ -169,8 +169,13 @@ struct VLCPlayerView: UIViewRepresentable {
             }
         }
         #endif
-        guard context.coordinator.currentURL != url else { return }
+        // 解码方式是在 buildMedia() 里烘进 media 的选项（--avcodec-hw=any/none），
+        // 改它必须重建 media。这里以前只看 URL，于是"设置里切硬解/软解"永远不生效，
+        // 得换台才会变——和 Android 端当初那个 bug 一样。
+        let decodeChanged = context.coordinator.currentDecode != decodeMode
+        guard context.coordinator.currentURL != url || decodeChanged else { return }
         context.coordinator.currentURL = url
+        context.coordinator.currentDecode = decodeMode
         guard let player = context.coordinator.player else { return }
         player.stop()
         player.media = buildMedia()
@@ -190,6 +195,8 @@ struct VLCPlayerView: UIViewRepresentable {
         var onState: ((VLCPlaybackState) -> Void)?
         /// 当前已加载的 URL。updateUIView 靠它判断是否需要换台重建 media。
         var currentURL: URL?
+        /// 当前 media 用的解码方式。改解码要重建 media，只有 URL 变才重建是不够的。
+        var currentDecode: String = ""
 
         @objc func stateChanged(_ note: Notification) {
             guard let player = player else { return }

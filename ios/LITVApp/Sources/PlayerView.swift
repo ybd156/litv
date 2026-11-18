@@ -138,6 +138,10 @@ struct PlayerView: View {
             }
         }
         .background(Color.black.ignoresSafeArea())
+        // 全屏时连状态栏一起收起来（安卓那边是 setSystemBarsHidden）。
+        // 注：iOS 15 没有可用的 SwiftUI API 隐藏 TabView 底部标签栏，
+        // 要藏只能整体改成 fullScreenCover 呈现，代价大，暂不做。
+        .statusBar(hidden: isFullscreen)
         .navigationTitle(active.name)
         .navigationBarTitleDisplayMode(.inline)
         .onChange(of: switched?.id) { _ in
@@ -150,7 +154,7 @@ struct PlayerView: View {
             Task { await fallbackToAVPlayer() }
         }
         // ★ 原来的四个入口（比例 / 节目单 / 时移 / 换线路）挂在这里的 `.toolbar` 上，
-        //   但 PlayView 由 PlayTab 直接返回、**不在 NavigationView 里**，
+        //   但 PlayerView 由 PlayTab 直接返回、**不在 NavigationView 里**，
         //   没有导航栏承载 → 四个 `.toolbar` 项全都不呈现，用户根本点不到
         //   （2026-11-18 审计发现：连画面比例都改不了）。
         //   现在改为放进控制条的「更多」菜单（见 controls），不依赖导航容器，
@@ -374,6 +378,33 @@ struct PlayerView: View {
     }
 
     /// 标题栏：频道名 + 分组。竖屏时放在画面**上方**。
+    /// 技术信息：分辨率 + 引擎。
+    ///
+    /// 安卓 TV 端 OSD 早就有（FHD/HD/SD + 编码），iOS 这边一直是空的，
+    /// 排查"能播没声 / 花屏 / 是不是回落成 AVPlayer 了"时没有任何抓手。
+    /// VLCKit 只暴露 `videoSize`，**不暴露音频编解码名**（`audioTrackNames` 只是
+    /// "Track 1"），所以这里只报分辨率与引擎，不硬编一个假的音频编码。
+    private var techText: String? {
+        var parts: [String] = []
+        if usingVLC {
+            #if canImport(MobileVLCKit)
+            if let p = vlc.player as? VLCMediaPlayer {
+                let size = p.videoSize
+                if size.width > 0 && size.height > 0 {
+                    let w = Int(size.width)
+                    let h = Int(size.height)
+                    parts.append("\(w)×\(h)")
+                    parts.append(h >= 1080 ? "FHD" : (h >= 720 ? "HD" : "SD"))
+                }
+            }
+            #endif
+            parts.append("VLC")
+        } else {
+            parts.append("AVPlayer")
+        }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
+
     private var osdHeader: some View {
         HStack {
             Text(active.name).font(.headline).foregroundColor(.white)
@@ -385,6 +416,20 @@ struct PlayerView: View {
     /// 节目信息：当前节目 + 进度 + 下一档 + 播放链路。竖屏时放在画面**下方**。
     private var osdDetails: some View {
         VStack(alignment: .leading, spacing: 4) {
+            // 直播 / 回放角标 + 技术信息（分辨率 · 引擎）。
+            // 安卓手机端有「● 直播 / ◀ 回放」角标，iOS 之前完全没有——
+            // 用户点了回看之后看不出自己在看回放还是直播。
+            HStack(spacing: 8) {
+                Text(timeshiftURL == nil ? "● 直播" : "◀ 回放")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundColor(timeshiftURL == nil ? .red : .orange)
+                if let tech = techText {
+                    Text(tech)
+                        .font(.system(size: 10))
+                        .foregroundColor(.gray.opacity(0.85))
+                }
+                Spacer(minLength: 0)
+            }
             if let now = programs.first(where: { $0.isNow }) {
                 Text("\(now.timeText) \(now.title)")
                     .font(.caption).foregroundColor(.gray).lineLimit(1)
@@ -628,6 +673,16 @@ struct PlayerView: View {
         .buttonStyle(.plain)
     }
 
+    /// 从节目单某一档发起回看。
+    ///
+    /// 与 Android 的 `EpgActions.replay` 一致：服务端的时移接口是**按整台**给地址
+    /// （`/api/v1/tv/timeshift/{id}`，不带节目时间），所以这里等于"从这档节目处
+    /// 发起回看"，实际播放的是该台时移缓冲的起点，不按节目精确定位。
+    private func replayProgram(_ p: EpgProgram) async {
+        gestureTip = "回看：\(p.title)"
+        await startTimeshift()
+    }
+
     /// 开始回看（时移）。服务端没开时移时给一句提示，不改播放状态。
     private func startTimeshift() async {
         do {
@@ -710,6 +765,18 @@ struct PlayerView: View {
                                 Text(p.title)
                                     .foregroundColor(p.isNow ? .green : .primary)
                                 Spacer()
+                                // 已经播完的节目给一个「回看」入口。
+                                // 安卓从节目单行就能直接回看，iOS 之前只能点顶栏整台时移。
+                                if p.endAt <= Int64(Date().timeIntervalSince1970) {
+                                    Button {
+                                        Task { await replayProgram(p) }
+                                    } label: {
+                                        Text("回看")
+                                            .font(.caption2)
+                                            .foregroundColor(Color(red: 0.176, green: 0.831, blue: 0.749))
+                                    }
+                                    .buttonStyle(.plain)
+                                }
                             }
                             .padding(.horizontal, 16)
                             .padding(.vertical, 8)

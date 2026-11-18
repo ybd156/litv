@@ -28,6 +28,7 @@
 | [`design/01-API.md`](design/01-API.md) | 信封、错误码、认证三档、92 条路由表（脚本抽取，带行号） | 现状 |
 | [`design/02-iOS构建现状.md`](design/02-iOS构建现状.md) | iOS 工程结构、会话测试目标、C05 修复方式与残留局限 | 现状 |
 | [`design/03-Android模拟器验证.md`](design/03-Android模拟器验证.md) | 本机模拟器（AEHD 加速）的实拍与结果（历史记录：当时还有两个 flavor） | 现状 |
+| [`design/04-边缘版职责.md`](design/04-边缘版职责.md) | 边缘版重新划边界：Worker 只做配置中枢 + 透传，频道/统计/EPG 下沉前端 | **设计稿（未实现）** |
 | [`review/STATUS.md`](review/STATUS.md) | **唯一**的评审项状态源：已确认 / 待验证 / 未复核 | 现状 |
 | [`postmortem/POSTMORTEM_2026-11-12_tv-input.md`](postmortem/POSTMORTEM_2026-11-12_tv-input.md) | 电视输入事故复盘 | 历史 |
 | [`postmortem/POSTMORTEM_2026-11-13_agent-session.md`](postmortem/POSTMORTEM_2026-11-13_agent-session.md) | 文档重写与仓库重建过程中 AI 助手做错的事 | 历史 |

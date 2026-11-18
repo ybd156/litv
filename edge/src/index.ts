@@ -1211,104 +1211,16 @@ async function adminStats(env: Env): Promise<Response> {
   return ok(row ?? {});
 }
 
-// ---------------------------------------------------------------- 管理台的"现拉现解析"
+// ---------------------------------------------------------------- 源解析（客户端模式）
 //
-// CHANNELS_MODE=client 时 D1 里没有频道表，管理台原来读 /admin/channels 会空。
-// 浏览器又**不能**直接拉源 m3u（源站不给 CORS 头），所以由 Worker 现拉现解析、
-// 只把结果 JSON 返回：D1 一行不写，代价是每次打开多一个请求。
-
-function parseExtinfAttrs(head: string): Record<string, string> {
-  const out: Record<string, string> = {};
-  const re = /([A-Za-z0-9_-]+)="([^"]*)"/g;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(head)) !== null) out[m[1].toLowerCase()] = m[2];
-  return out;
-}
-
-/** #EXTINF 的属性段与频道名之间用逗号分隔，但属性值里也可能有逗号 */
-function splitExtinfLine(line: string): [string, string] {
-  let inQuote = false;
-  for (let i = 0; i < line.length; i++) {
-    const c = line[i];
-    if (c === '"') inQuote = !inQuote;
-    else if (c === "," && !inQuote) return [line.slice(0, i), line.slice(i + 1)];
-  }
-  return [line, ""];
-}
-
-function normalizeName(name: string): string {
-  // 与 build.mjs 的 normalizeName 等价：去掉空白与 - _ . · | / 反斜杠。
-  // 这里不用正则，避免反斜杠在多层转义里被吃掉（踩过一次）。
-  let out = "";
-  for (const ch of name.toLowerCase()) {
-    const c = ch.charCodeAt(0);
-    if (c <= 32) continue;                       // 空白 / 控制符
-    if (c === 92) continue;                      // 反斜杠
-    if (c === 47 || c === 124) continue;         // / |
-    if (c === 183) continue;                     // ·
-    if (ch === "-" || ch === "_" || ch === ".") continue;
-    out += ch;
-  }
-  return out;
-}
-
-function dedupeKeyOf(tvgId: string, name: string): string {
-  return tvgId ? `id:${tvgId}` : `name:${normalizeName(name)}`;
-}
-
-type LiveChannel = {
-  stable_key: string;
-  name: string;
-  group: string;
-  logo: string;
-  tvg_id: string;
-  epg_id: string;
-  streams: number;
-};
-
-function parseM3uChannels(text: string): Map<string, LiveChannel> {
-  const out = new Map<string, LiveChannel>();
-  let cur: { name: string; tvgId: string; logo: string; group: string } | null = null;
-  // 不用正则拆行：反斜杠在多层转义里会被吃掉，用字符码更稳
-  const LF = String.fromCharCode(10);
-  const CR = String.fromCharCode(13);
-  for (const chunk of text.split(LF)) {
-    const line = chunk.split(CR).join("").trim();
-    if (!line || line.startsWith("#EXTM3U")) continue;
-    if (line.startsWith("#EXTINF")) {
-      const [head, name] = splitExtinfLine(line);
-      const a = parseExtinfAttrs(head);
-      cur = {
-        name: name.trim(),
-        tvgId: a["tvg-id"] || "",
-        logo: a["tvg-logo"] || "",
-        group: a["group-title"] || "",
-      };
-      continue;
-    }
-    if (line.startsWith("#EXTGRP:")) {
-      if (cur && !cur.group) cur.group = line.slice(8).trim();
-      continue;
-    }
-    if (line.startsWith("#")) continue;
-    if (!cur) continue;
-    const key = dedupeKeyOf(cur.tvgId, cur.name);
-    const prev = out.get(key);
-    if (prev) prev.streams += 1;
-    else
-      out.set(key, {
-        stable_key: key,
-        name: cur.name,
-        group: cur.group,
-        logo: cur.logo,
-        tvg_id: cur.tvgId,
-        epg_id: cur.tvgId,
-        streams: 1,
-      });
-    cur = null;
-  }
-  return out;
-}
+// CHANNELS_MODE=client 时 D1 里没有频道表，管理台读 /admin/channels 会空。
+// 以前是 Worker 现拉现解析 m3u 再把结果当 JSON 返回——但免费版每次请求只有
+// 10ms CPU，解析上千条必然越界（1102），于是「预览解析结果」长期是「共 0 条」。
+//
+// 现在拆成两件事：
+//   · Worker：只把源字节**透传**出去（adminSourceRaw，流式、不解析）
+//   · 浏览器：拿到原文自己解析（有 CPU、有内存、不占 D1 额度）
+// 背景见 docs/design/04-边缘版职责.md。
 
 /** 当前是否客户端解析模式 */
 async function isClientParseMode(env: Env): Promise<boolean> {
@@ -1325,9 +1237,9 @@ async function adminChannelsLive(env: Env): Promise<Response> {
   }
 
   const [{ results }, blockedRow, overrides] = await Promise.all([
-    env.DB.prepare(`SELECT url, ua, referer FROM sources WHERE enabled = 1 ORDER BY sort, id`).all<{
-      url: string; ua: string; referer: string;
-    }>(),
+    env.DB.prepare(
+      `SELECT id, url, ua, referer FROM sources WHERE enabled = 1 ORDER BY sort, id`,
+    ).all<{ id: number; url: string; ua: string; referer: string }>(),
     env.DB.prepare("SELECT v FROM kv WHERE k = 'blocked'").first<{ v: string }>(),
     env.DB.prepare(
       "SELECT stable_key, name, group_name, enabled FROM channel_overrides",
@@ -1342,38 +1254,18 @@ async function adminChannelsLive(env: Env): Promise<Response> {
     if (Array.isArray(o.channels)) channelsHidden = o.channels.map(String);
   } catch { /* 存坏了当没屏蔽 */ }
 
-  const merged = new Map<string, LiveChannel>();
-  for (const src of results ?? []) {
-    try {
-      const res = await fetch(src.url, {
-        headers: {
-          ...(src.ua ? { "User-Agent": src.ua } : {}),
-          ...(src.referer ? { Referer: src.referer } : {}),
-        },
-      });
-      if (!res.ok) continue;
-      const text = await res.text();
-      for (const [k, v] of parseM3uChannels(text)) {
-        const prev = merged.get(k);
-        if (prev) prev.streams += v.streams;
-        else merged.set(k, v);
-      }
-    } catch { /* 单个源失败不影响其它 */ }
-  }
-
-  const ov = new Map((overrides.results ?? []).map((o) => [o.stable_key, o]));
-  const channels: LiveChannel[] = [];
-  for (const ch of merged.values()) {
-    const o = ov.get(ch.stable_key);
-    if (o && o.enabled === 0) continue;                    // 管理台"隐藏"
-    const name = o?.name || ch.name;
-    const group = o?.group_name || ch.group;
-    if (groupsHidden.includes(group)) continue;            // 屏蔽分类
-    if (channelsHidden.includes(name)) continue;           // 屏蔽频道
-    channels.push({ ...ch, name, group });
-  }
-
-  return ok({ client_parse: true, channels, policy: { groups_hidden: groupsHidden, channels_hidden: channelsHidden } });
+  // 不再解析 m3u：只给前端「原文入口 + 规则」，由浏览器拉取并解析。
+  // 这样 Worker 的 CPU 与源规模无关（透传是流式的），D1 也只读几行。
+  return ok({
+    client_parse: true,
+    raw_paths: (results ?? []).map((s) => `sources/${s.id}/raw`),
+    policy: {
+      groups_hidden: groupsHidden,
+      channels_hidden: channelsHidden,
+      overrides: overrides.results ?? [],
+    },
+    note: "解析在浏览器里做（边缘版不再在 Worker 内拉取/解析 m3u）",
+  });
 }
 
 async function adminChannels(env: Env, url: URL): Promise<Response> {
@@ -1820,6 +1712,78 @@ async function adminTestSource(env: Env, id: number): Promise<Response> {
   }
 
   return ok({ status, format, latency_ms: Date.now() - t0 });
+}
+
+/** 透传上游源文件的体积上限。m3u / txt 订阅通常几百 KB，8 MiB 已经非常宽松。 */
+const SOURCE_RAW_MAX_BYTES = 8 * 1024 * 1024;
+
+/**
+ * 把一个源的原始字节透传给管理台：**只读、不解析、不落库**。
+ *
+ * 为什么不在 Worker 里解析：免费版每次请求只有 10ms CPU，解析上千条 m3u
+ * 必然越界（1102）——「预览解析结果」长期是「共 0 条」就是这个原因。
+ * 浏览器有充足的 CPU 和内存，解析放过去，Worker 只搬字节。
+ *
+ * 安全边界：
+ *   · 必须已登录（路由层已 authAdmin）
+ *   · 目标地址走 net.ts 的逐跳校验：挡本机 / 内网 / 链路本地 / 云元数据端点
+ *   · 只 GET，**不转发**浏览器带来的任何请求头（含 Cookie / Authorization）
+ *   · 8 MiB 上限：有 Content-Length 先拒；没有的靠流式计数，超限中断连接
+ *     （响应头已经发出，没法再改成 4xx——这是流式透传的固有限制）
+ */
+async function adminSourceRaw(env: Env, id: number): Promise<Response> {
+  const src = await env.DB.prepare("SELECT id, url, ua, referer FROM sources WHERE id = ?")
+    .bind(id)
+    .first<{ id: number; url: string; ua: string; referer: string }>();
+  if (!src) return fail(2004, "源不存在");
+
+  const headers: Record<string, string> = { Accept: "*/*" };
+  if (src.ua) headers["User-Agent"] = src.ua;
+  if (src.referer) headers["Referer"] = src.referer;
+
+  let upstream: Response;
+  try {
+    upstream = await fetchGuarded(src.url, { headers, signal: AbortSignal.timeout(15000) });
+  } catch (e) {
+    const msg = String((e as Error)?.message || "");
+    // 拦下来和被拒绝要分开报：前者是策略，后者才是网络故障
+    if (msg.startsWith("blocked:")) return fail(1001, `源地址不可用：${msg.slice(8).trim()}`);
+    return fail(4001, "拉取源失败，检查源地址在当前网络下是否可访问");
+  }
+
+  if (!upstream.ok) {
+    upstream.body?.cancel().catch(() => {});
+    return fail(4001, `源站返回 HTTP ${upstream.status}`);
+  }
+
+  const declared = Number(upstream.headers.get("content-length") || "");
+  if (Number.isFinite(declared) && declared > SOURCE_RAW_MAX_BYTES) {
+    upstream.body?.cancel().catch(() => {});
+    return fail(1001, `源文件太大（上限 ${SOURCE_RAW_MAX_BYTES / 1024 / 1024} MiB）`);
+  }
+
+  let seen = 0;
+  const guard = new TransformStream<Uint8Array, Uint8Array>({
+    transform(chunk, controller) {
+      seen += chunk.byteLength;
+      if (seen > SOURCE_RAW_MAX_BYTES) {
+        controller.error(new Error("source too large"));
+        return;
+      }
+      controller.enqueue(chunk);
+    },
+  });
+
+  // 刻意不透传 content-length：超限中断时长度会对不上，让浏览器看到明确失败，
+  // 而不是把截断的半份 m3u 当作完整数据解析。
+  return new Response(upstream.body ? upstream.body.pipeThrough(guard) : null, {
+    status: 200,
+    headers: {
+      "content-type": upstream.headers.get("content-type") || "text/plain; charset=utf-8",
+      "cache-control": "no-store",
+      "x-content-type-options": "nosniff",
+    },
+  });
 }
 
 // ---------------------------------------------------------------- 设置自省
@@ -2697,8 +2661,20 @@ async function compatAdmin(
       return ok(null);
     }
   }
-  if (/^\/api\/v1\/sources\/\d+\/(refresh|preview)$/.test(path)) {
-    // 拉取 + 解析会超免费版的 10ms CPU，只能交给 CI
+  const srcRaw = /^\/api\/v1\/sources\/(\d+)\/raw$/.exec(path);
+  if (srcRaw && method === "GET") return adminSourceRaw(env, Number(srcRaw[1]));
+
+  const srcPreview = /^\/api\/v1\/sources\/(\d+)\/preview$/.exec(path);
+  if (srcPreview && method === "GET") {
+    const id = Number(srcPreview[1]);
+    const exists = await env.DB.prepare("SELECT id FROM sources WHERE id = ?").bind(id).first();
+    if (!exists) return fail(2004, "源不存在");
+    // 只给原文入口，解析在浏览器里做（Worker 不再拉取/解析 m3u）
+    return ok({ raw_path: `sources/${id}/raw`, edge: true });
+  }
+
+  if (/^\/api\/v1\/sources\/\d+\/refresh$/.test(path)) {
+    // 刷新 = 抓取 + 入库，会超免费版的 10ms CPU，只能交给 CI
     return notSupported("在页面里拉取源（请点「立即重建」，抓取和解析在 CI 里做）");
   }
 
@@ -3003,6 +2979,10 @@ export default {
       }
       if (path === "/api/v1/admin/channels") return adminChannels(env, url);
       if (path === "/api/v1/admin/channels-live") return adminChannelsLive(env);
+
+      // 源原文透传：只搬字节，解析在管理台浏览器里做
+      const rawMatch = /^\/api\/v1\/admin\/source\/(\d+)\/raw$/.exec(path);
+      if (rawMatch && method === "GET") return adminSourceRaw(env, Number(rawMatch[1]));
       if (path === "/api/v1/admin/streams") return adminStreams(env, url);
       if (path === "/api/v1/admin/devices") return adminDevices(env);
 

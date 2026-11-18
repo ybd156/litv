@@ -140,6 +140,9 @@ export interface PreviewResult {
   items: PreviewItem[]
   total?: number
   truncated?: boolean
+  /** 源格式（m3u / txt / json / html / empty / unknown）。
+   *  边缘部署在浏览器里嗅探，NAS 服务端不一定回，故可选。 */
+  format?: string
 }
 
 export interface Channel {

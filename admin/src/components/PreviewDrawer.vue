@@ -24,6 +24,20 @@ function isDirty(row: PreviewItem): boolean {
 
 const dirtyCount = computed(() => items.value.filter(isDirty).length)
 
+/**
+ * 空结果时给具体原因。
+ *
+ * 以前不管什么原因都显示「这个源一条都没解析出来」，而最常见的两种
+ * 其实是「填了面板首页」和「填了面板 API」——不点名的话用户会去反复改地址。
+ */
+const emptyHint = computed(() => {
+  const f = result.value?.format
+  if (f === 'json') return '拿到的是 JSON（面板 API 地址），要填「订阅 / 播放列表」地址'
+  if (f === 'html') return '拿到的是网页（面板首页），要填「订阅 / 播放列表」地址'
+  if (f === 'empty') return '源站返回了空内容'
+  return '检查一下地址能不能打开、格式是不是选对了'
+})
+
 const columns: DataTableColumns<PreviewItem> = [
   {
     title: '#',
@@ -118,6 +132,7 @@ watch(
         </p>
         <div class="chips">
           <NTag size="small" :bordered="false">共 {{ result?.total ?? 0 }} 条</NTag>
+          <NTag v-if="result?.format" size="small" :bordered="false">{{ result.format }}</NTag>
           <NTag v-if="result?.truncated" size="small" :bordered="false" type="warning">
             只显示前 50 条
           </NTag>
@@ -131,7 +146,7 @@ watch(
         <StateBlock
           :empty="items.length === 0"
           empty-title="这个源一条都没解析出来"
-          empty-hint="检查一下地址能不能打开、格式是不是选对了"
+          :empty-hint="emptyHint"
           :min-height="240"
         >
           <NDataTable

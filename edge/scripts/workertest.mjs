@@ -516,8 +516,81 @@ await adminCheck("概览 / devices", "GET", "/api/v1/devices", "ok", adminTok3);
 
 // 源管理
 await adminCheck("源管理 / 刷新（走 CI）", "POST", "/api/v1/sources/1/refresh", "unsupported", adminTok3);
-await adminCheck("源管理 / 预览", "GET", "/api/v1/sources/1/preview", "unsupported", adminTok3);
 await adminCheck("源管理 / 更新", "PUT", "/api/v1/sources/1", "ok", adminTok3);
+
+// ---------------------------------------------------------------- 源原文透传
+// 边缘版不在 Worker 里解析 m3u（10ms CPU 撑不住），只把字节透传出去，
+// 解析交给管理台浏览器。下面几条盯住透传本身的语义。
+{
+  const preview1 = await call("GET", "/api/v1/sources/1/preview", undefined, "203.0.113.60", adminTok3);
+  check(
+    "预览只回原文入口（不再由 Worker 解析）",
+    preview1.body?.code === 0 && preview1.body?.data?.raw_path === "sources/1/raw",
+    JSON.stringify(preview1.body),
+  );
+
+  // 原文里有上游地址，必须和管理接口同等级保护
+  const noAuth = await call("GET", "/api/v1/sources/1/raw", undefined, "203.0.113.60");
+  check("源原文透传需要管理台会话", noAuth.body?.code === 2001, JSON.stringify(noAuth.body));
+
+  const realFetch = globalThis.fetch;
+  try {
+    // 源地址来自 D1（用户在管理台填的），属于不可信输入
+    db.prepare("UPDATE sources SET url = ? WHERE id = 1").run("http://127.0.0.1/secret.m3u");
+    const blocked = await call("GET", "/api/v1/sources/1/raw", undefined, "203.0.113.60", adminTok3);
+    check(
+      "源原文透传拒绝内网地址",
+      blocked.body?.code === 1001 && String(blocked.body?.msg ?? "").includes("内网"),
+      JSON.stringify(blocked.body),
+    );
+
+    const BODY = "#EXTM3U\n#EXTINF:-1 group-title=\"测试\",CCTV1\nhttp://up.example/1.ts\n";
+    let seenUa = "";
+    globalThis.fetch = async (input, init) => {
+      const req = new Request(input, init);
+      seenUa = req.headers.get("user-agent") || "";
+      return new Response(BODY, {
+        status: 200,
+        headers: { "content-type": "application/vnd.apple.mpegurl" },
+      });
+    };
+    db.prepare("UPDATE sources SET url = ?, ua = ? WHERE id = 1").run(
+      "http://panel.example/x.m3u",
+      "qqlive",
+    );
+
+    const raw = await call("GET", "/api/v1/sources/1/raw", undefined, "203.0.113.60", adminTok3);
+    check("源原文透传返回原文", raw.status === 200 && raw.text === BODY, JSON.stringify(raw.text?.slice(0, 60)));
+    check("源原文透传用源自己的 UA", seenUa === "qqlive", seenUa);
+    check(
+      "源原文透传保留 content-type",
+      String(raw.headers.get("content-type") || "").includes("mpegurl"),
+      String(raw.headers.get("content-type")),
+    );
+    check("源原文透传不缓存", raw.headers.get("cache-control") === "no-store");
+
+    // 声明超限直接拒（不读 body）
+    globalThis.fetch = async () =>
+      new Response("x", {
+        status: 200,
+        headers: { "content-length": String(9 * 1024 * 1024) },
+      });
+    const tooBig = await call("GET", "/api/v1/sources/1/raw", undefined, "203.0.113.60", adminTok3);
+    check("源原文透传拒绝超过 8 MiB 的源", tooBig.body?.code === 1001, JSON.stringify(tooBig.body));
+
+    // 上游 404 要如实报，不伪装成「0 条」
+    globalThis.fetch = async () => new Response("nope", { status: 404 });
+    const missing = await call("GET", "/api/v1/sources/1/raw", undefined, "203.0.113.60", adminTok3);
+    check(
+      "源原文透传如实返回上游状态",
+      missing.body?.code === 4001 && String(missing.body?.msg ?? "").includes("404"),
+      JSON.stringify(missing.body),
+    );
+  } finally {
+    globalThis.fetch = realFetch;
+    db.prepare("UPDATE sources SET url = ?, ua = '' WHERE id = 1").run("http://panel.example/get.php");
+  }
+}
 
 // 频道管理
 await adminCheck("频道管理 / groups", "GET", "/api/v1/groups", "ok", adminTok3);

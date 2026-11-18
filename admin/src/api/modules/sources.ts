@@ -1,6 +1,10 @@
-import { http } from '../http'
+import { adminToken, apiUrl, http } from '../http'
 import { asArray } from '../normalize'
 import type { PreviewItem, PreviewResult, Source, SourceInput, SourceRefreshResponse } from '../types'
+import { decodeSourceBytes, parseSourceText } from '@/utils/m3u'
+
+/** 预览最多展示多少条（与原有卡片文案一致） */
+const PREVIEW_LIMIT = 50
 
 /**
  * 源列表。
@@ -47,17 +51,67 @@ export function refreshSource(id: number): Promise<SourceRefreshResponse> {
   return http.post<SourceRefreshResponse>(`sources/${id}/refresh`, undefined, { silent: true })
 }
 
-/** 预览：拉取但不入库，只给前 50 条，用来肉眼排查脏数据 */
+/**
+ * 预览：拉取但不入库，只给前 50 条，用来肉眼排查脏数据。
+ *
+ * 两条路：
+ *   · NAS 服务端（Go）：`/preview` 已经把解析结果算好，直接用。
+ *   · 边缘部署（Worker）：`/preview` 只回 `{ raw_path }`——解析在浏览器里做。
+ *     Worker 每次请求只有 10ms CPU，解析上千条 m3u 必然越界（1102）。
+ */
 export async function previewSource(id: number): Promise<PreviewResult> {
   const raw = await http.get<unknown>(`sources/${id}/preview`, undefined, { silent: true })
-  if (Array.isArray(raw)) {
-    return { items: raw as PreviewItem[], total: raw.length, truncated: raw.length >= 50 }
-  }
+
   const obj = (raw ?? {}) as Record<string, unknown>
+  if (typeof obj.raw_path === 'string' && obj.raw_path) {
+    const text = await fetchSourceText(obj.raw_path)
+    const parsed = parseSourceText(text)
+    return {
+      items: parsed.items.slice(0, PREVIEW_LIMIT),
+      total: parsed.items.length,
+      truncated: parsed.items.length > PREVIEW_LIMIT,
+      format: parsed.format,
+    }
+  }
+
+  if (Array.isArray(raw)) {
+    return { items: raw as PreviewItem[], total: raw.length, truncated: raw.length >= PREVIEW_LIMIT }
+  }
   const items = asArray<PreviewItem>(raw)
   return {
     items,
     total: typeof obj.total === 'number' ? obj.total : items.length,
-    truncated: obj.truncated === true || items.length >= 50,
+    truncated: obj.truncated === true || items.length >= PREVIEW_LIMIT,
+    format: typeof obj.format === 'string' ? obj.format : undefined,
   }
+}
+
+/**
+ * 拉一个源的原始字节（边缘部署的 `/sources/{id}/raw`）。
+ *
+ * 走裸 fetch 而不是 `http.get`：后端原样返回文本/字节，不是 `{code,msg,data}` 信封。
+ * 鉴权照旧带 Bearer（边缘管理台登录后存在 localStorage）。
+ */
+async function fetchSourceText(rawPath: string): Promise<string> {
+  const headers: Record<string, string> = { Accept: '*/*' }
+  const tk = adminToken()
+  if (tk) headers.Authorization = `Bearer ${tk}`
+
+  let res: Response
+  try {
+    res = await fetch(apiUrl(rawPath), { method: 'GET', credentials: 'same-origin', headers })
+  } catch (e) {
+    throw new Error(`拉取源失败：${e instanceof Error ? e.message : String(e)}`)
+  }
+
+  if (!res.ok) {
+    // 401 已经由 http 层统一处理；这里只把状态码变成人话
+    throw new Error(
+      res.status === 401
+        ? '登录态已过期，请重新登录后再预览'
+        : `拉取源失败（HTTP ${res.status}）`,
+    )
+  }
+
+  return decodeSourceBytes(await res.arrayBuffer())
 }

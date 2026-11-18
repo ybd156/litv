@@ -40,7 +40,7 @@ LITV2 的边缘降级部署：NAS 挂了之后，用 Cloudflare 免费额度顶�
 | bootstrap 响应体 | `src/bootstrap.sql.js` | 在 SQLite 里直接拼 JSON，Worker 只吐字节（见「频道数」一节） |
 | 管理台 | `public/admin.html` | 单文件、无构建、无外部依赖 |
 | 存储 | D1 | 频道 / 线路 / 设备 / 人工覆盖 / 收藏 / 续播 / 设备配置 |
-| 自测 | `scripts/selftest.mjs` | m3u 链路 + 内存 SQLite 端到端，69 条断言 |
+| 自测 | `scripts/selftest.mjs` · `scripts/workertest.mjs` | m3u 链路 + 内存 SQLite 端到端；workertest 178 条（含循环展开）、selftest 69 条 |
 
 ## 支持情况
 
@@ -247,6 +247,11 @@ EPG 导入与映射、台标抓取/上传、**设备审批**、系统配置、�
 
 - 源存在 D1 里，在「源」页改完就保存
 - 抓取 + 解析要跑 CI（免费版 Worker 单次只有 10ms CPU，解析不了播放列表）
+- **「预览解析结果」不走 Worker**：点预览时 Worker 只把源字节透传出来
+  （`/api/v1/sources/{id}/raw`，8 MiB 上限 + 逐跳 SSRF 校验 + 必须已登录），
+  解析在浏览器里做。以前是 Worker 现拉现解析，越了 10ms CPU 上限，所以
+  预览区永远显示「共 0 条 / 没加载出来」。GBK 源也在浏览器里解码
+  （先按 UTF-8 严格解，失败再退 GBK，与 CI 同一套顺序）。
 - 配了 `DISPATCH_TOKEN` 就能点「立即重建」，否则等每天 03:00（北京时间）
 - **改 UA 不需要重建**：`ua` 是播放时属性，`/tv/play` 会实时读源配置
   （单源部署下立刻生效；多源部署回落到重建时的快照，因为那时才能确定
@@ -484,7 +489,11 @@ wrangler deploy --dry-run --outdir=.wrangler/dry
 `scripts/selftest.mjs` 覆盖抓取与生成逻辑（69 条断言）；`scripts/workertest.mjs`
 直接 import `src/index.ts`，用 `node:sqlite` 顶替 D1，所以限速 SQL、平台校验、
 口令优先级、注销、playlist 鉴权、设备 token 打 `/tv/*` 的主链路**会真的执行**
-（98 处 `check`，含循环展开实跑 135 条）。改 Worker 行为时两边都要看。
+（178 条 `check`，含循环展开）。改 Worker 行为时两边都要看。
+
+源原文透传（`/sources/{id}/raw`）另有 9 条断言：必须登录、拒绝内网地址、
+用源自己的 UA、保留 content-type、不缓存、8 MiB 上限、上游 404 如实上报。
+这几条是「预览能看见东西」这个功能的护栏——它以前正是静默失败的那一环。
 
 自测用的 D1 替身实现了 `batch`（真事务）和 `meta.last_row_id` / `meta.changes`
 ——这两样缺一个，批量操作和"注册返回 device_id"这类链路就等于从没被测过。

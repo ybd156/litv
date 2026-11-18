@@ -49,6 +49,17 @@ const SQL_NOOP = "SELECT 1;";
 // 从 m3u 头里的 x-tvg-url 收集节目单地址
 const epgUrls = new Set();
 
+// 流域名重写（可选）：把被 DNS 污染 / 阻断的域名换成同站可达的域名。
+// 配置走 GitHub Variables，**不写进代码**（仓库不出现任何源域名）：
+//   STREAM_HOST_REWRITE=live.example.com=edge.example.com
+// 不配 = 不重写，行为与以前完全一致。
+const STREAM_HOST_REWRITE = parseHostRewrite(process.env.STREAM_HOST_REWRITE || "");
+
+// 自动跟随源自身的域名（默认开）。关掉：STREAM_HOST_FOLLOW_SOURCE=0
+// 理由见 followSourceHost()：面板常把流域名写死在 m3u 里，而那个域名可能
+// 在部分网络被污染；源入口用的另一个域名通常是通的。
+const FOLLOW_SOURCE_HOST = process.env.STREAM_HOST_FOLLOW_SOURCE !== "0";
+
 // ---------- 解析 ----------
 
 // #EXTINF 的属性段和频道名之间用逗号分隔，但属性值里也可能有逗号
@@ -245,6 +256,163 @@ function redact(s) {
     .replace(/\/\/[^\s"']+/g, "//…")
     .replace(/\b[A-Za-z0-9_-]{24,}\b/g, "…")
     .slice(0, 100);
+}
+
+// ---------- 流域名重写 ----------
+
+/**
+ * 解析 `a.example=b.example,c.example=d.example` 形式的映射。
+ *
+ * 为什么需要这个：有些面板下发的播放地址用的域名会在部分网络被 DNS 污染
+ * （实测同一站点换个域名就能连上，path 与签名参数原样有效）。部署者可以配一条
+ * 映射，把不可达的域名换掉。
+ *
+ * 只接受主机名，避免有人写成整段 URL 时把签名搞坏。
+ */
+function parseHostRewrite(raw) {
+  const map = new Map();
+  for (const pair of String(raw || "").split(",")) {
+    const i = pair.indexOf("=");
+    if (i <= 0) continue;
+    const from = pair.slice(0, i).trim().toLowerCase();
+    const to = pair.slice(i + 1).trim().toLowerCase();
+    const ok = (h) => /^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$/.test(h);
+    if (!ok(from) || !ok(to)) {
+      console.warn(`[rewrite] 忽略非法映射：${from || "(空)"} → ${to || "(空)"}`);
+      continue;
+    }
+    map.set(from, to);
+  }
+  return map;
+}
+
+/**
+ * 只替换 host，**不做 URL 归一化**。
+ *
+ * 签名参数里常有 `%xx` 和 `+`，用 `new URL()` 序列化会改变它们的编码，
+ * 签名立刻失效。所以这里用字符串切片，path / query 一个字节都不动。
+ */
+function rewriteHost(url, map) {
+  const m = /^([a-z][a-z0-9+.-]*:\/\/)([^/?#]*)([\s\S]*)$/i.exec(url);
+  if (!m) return null;
+  const authority = m[2];
+  const at = authority.lastIndexOf("@");
+  const userinfo = at >= 0 ? authority.slice(0, at + 1) : "";
+  const hostport = at >= 0 ? authority.slice(at + 1) : authority;
+  const colon = hostport.lastIndexOf(":");
+  const host = (colon >= 0 ? hostport.slice(0, colon) : hostport).toLowerCase();
+  const port = colon >= 0 ? hostport.slice(colon) : "";
+  const to = map.get(host);
+  if (!to) return null;
+  return m[1] + userinfo + to + port + m[3];
+}
+
+/** 就地重写 entries 里的地址，返回改了多少条 */
+function rewriteStreamHosts(entries) {
+  if (STREAM_HOST_REWRITE.size === 0) return 0;
+  let changed = 0;
+  for (const e of entries) {
+    const next = rewriteHost(e.url, STREAM_HOST_REWRITE);
+    if (!next) continue;
+    e.url = next;
+    changed++;
+  }
+  return changed;
+}
+
+/** 取 URL 的 host（小写）；解析不了返回 "" */
+function hostOf(url) {
+  const m = /^[a-z][a-z0-9+.-]*:\/\/([^/?#]*)/i.exec(String(url || ""));
+  if (!m) return "";
+  const authority = m[1];
+  const at = authority.lastIndexOf("@");
+  const hostport = at >= 0 ? authority.slice(at + 1) : authority;
+  const colon = hostport.lastIndexOf(":");
+  return (colon >= 0 ? hostport.slice(0, colon) : hostport).toLowerCase();
+}
+
+/** 常见二级公共后缀：不识别的话 a.com.cn 与 b.com.cn 会被误判成同一家 */
+const SECOND_LEVEL_SUFFIX = new Set([
+  "com.cn", "net.cn", "org.cn", "gov.cn", "edu.cn",
+  "co.uk", "org.uk", "co.jp", "com.hk", "com.tw", "com.sg",
+]);
+
+/** 主域（同一家站点的判定用）。判断错了也有探测兜底，不会瞎改 */
+function registrableHost(host) {
+  const parts = String(host || "").split(".").filter(Boolean);
+  if (parts.length <= 2) return parts.join(".");
+  const last2 = parts.slice(-2).join(".");
+  if (SECOND_LEVEL_SUFFIX.has(last2) && parts.length >= 3) return parts.slice(-3).join(".");
+  return last2;
+}
+
+/** 探测一个流地址能不能连上（只读前 1KB） */
+async function probeStream(url) {
+  if (checkFetchTarget(url)) return false;
+  try {
+    const res = await fetchGuarded(url, {
+      headers: { "User-Agent": UA, Range: "bytes=0-1023" },
+      signal: AbortSignal.timeout(8000),
+    });
+    res.body?.cancel().catch(() => {});
+    return res.status >= 200 && res.status < 300;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * 自动跟随：流地址的域名连不上时，改用**源自身的域名**。
+ *
+ * 面板常把流域名写死在 m3u 里（如 live.x.com），而订阅入口用的是另一个
+ * （如 mursor.x.com）。某些网络上只有入口那个能解析，于是：
+ *   · 管理台里"换了源地址"看起来没生效 —— 换的只是入口
+ *   · 播放列表里还是旧域名 —— 客户端连不上，黑屏
+ *
+ * 三重保险，避免瞎改：
+ *   1. 只处理与源入口**同主域**的 host（不同家的一律不动）
+ *   2. 原地址探测已经能通，就不折腾
+ *   3. 换过去必须探测**确实能通**才采用
+ */
+async function followSourceHost(entries, sources) {
+  if (!FOLLOW_SOURCE_HOST) return 0;
+  const entryHosts = new Set(sources.map((s) => hostOf(s.url)).filter(Boolean));
+  if (entryHosts.size === 0) return 0;
+
+  const byHost = new Map();
+  for (const e of entries) {
+    const h = hostOf(e.url);
+    if (!h) continue;
+    if (!byHost.has(h)) byHost.set(h, []);
+    byHost.get(h).push(e);
+  }
+
+  let changed = 0;
+  for (const [host, list] of byHost) {
+    if (entryHosts.has(host)) continue;
+    const target = [...entryHosts].find(
+      (eh) => eh !== host && registrableHost(eh) === registrableHost(host),
+    );
+    if (!target) continue;
+
+    const probeTo = rewriteHost(list[0].url, new Map([[host, target]]));
+    if (!probeTo) continue;
+    if (await probeStream(list[0].url)) continue;   // 原来的还能用，别动
+    if (!(await probeStream(probeTo))) continue;    // 换过去也不行，保持原样
+
+    let n = 0;
+    for (const e of list) {
+      const next = rewriteHost(e.url, new Map([[host, target]]));
+      if (next) {
+        e.url = next;
+        n++;
+      }
+    }
+    changed += n;
+    // 只打条数：public 仓库的 Actions 日志人人可见，不打域名
+    console.log(`[follow] 流域名自动跟随源入口：${n} 条（原域名不可达，改用源自身域名）`);
+  }
+  return changed;
 }
 
 // ---------- 源清单 ----------
@@ -1016,6 +1184,22 @@ async function main() {
     all.push(...r.entries);
     statuses.push({ id: sources[i].id, status: r.status, count: r.entries.length });
   });
+
+  // 先自动跟随（改用源自身的域名），再套显式映射（显式配置优先）。
+  const followed = await followSourceHost(all, sources);
+  if (followed > 0) {
+    console.log(`[follow] 共跟随 ${followed} 条地址`);
+  }
+
+  // 流域名重写（可选）。放在合并前：改的是条目本身的 url，
+  // 后面的去重键（tvg-id / 归一化频道名）不受影响。
+  //
+  // 日志只打条数、不打域名：本仓库是 public，Actions 日志人人可见，
+  // 把映射对打出来等于公开"部署者用的是哪个源"。
+  const rewritten = rewriteStreamHosts(all);
+  if (rewritten > 0) {
+    console.log(`[rewrite] 流域名重写 ${rewritten} 条（映射来自 STREAM_HOST_REWRITE，共 ${STREAM_HOST_REWRITE.size} 条规则）`);
+  }
 
   if (all.length === 0) {
     failBuild("所有源都没解析出条目，拒绝生成空播放列表（线上保留上一次的数据）");

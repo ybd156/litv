@@ -47,6 +47,13 @@ http://b.example/1.ts
 http://b.example/2.ts
 `;
 
+// 带签名的地址：用来验证「重写域名不会把签名参数改坏」。
+// %2F 和 + 是重点——用 new URL() 重新序列化会改变它们的编码。
+const SRC_SIG = `#EXTM3U
+#EXTINF:-1 tvg-id="sig1" group-title="测试",带签名台
+http://a.example/sig.m3u8?userid=1&sign=abc%2Fdef+ghi&auth_token=xyz
+`;
+
 // GBK 编码的 TXT：整份文件都是 GBK，这里只有分组名"央视"是非 ASCII，
 // 用它的 GBK 字节（D1 EB CA D3）表示。其余故意保持 ASCII——
 // 真实 GBK 文件不会混着 UTF-8，混了就没法测编码判定了。
@@ -73,6 +80,7 @@ const server = createServer((req, res) => {
   };
   if (req.url === "/a.m3u") { res.writeHead(200); res.end(SRC_A); }
   else if (req.url === "/b.m3u") { res.writeHead(200); res.end(SRC_B); }
+  else if (req.url === "/sig.m3u") { res.writeHead(200); res.end(SRC_SIG); }
   else if (req.url === "/c.txt") { res.writeHead(200); res.end(TXT_GBK); }
   else if (req.url === "/d.html") { res.writeHead(200); res.end(HTML_LOGIN); }
   else { res.writeHead(404); res.end("no"); }
@@ -176,6 +184,48 @@ check("先删后插", seedSql.indexOf("DELETE FROM streams") < seedSql.indexOf("
     "不配 SOURCE_UA 时不把 VLC 默认值写进线路",
     plainRun.code === 0 && !plainSql.includes("VLC/3.0.20"),
     String(plainRun.code),
+  );
+}
+
+// 流域名重写（可选）：把被 DNS 污染 / 阻断的域名换成同站可达的域名。
+// 只替换 host —— path 与签名参数必须原样保留，否则签名立刻失效。
+{
+  const rwRun = await runBuild({
+    SOURCE_URLS: `${base}/sig.m3u`,
+    STREAM_HOST_REWRITE: "a.example=m.example",
+  });
+  const rwSql = await readFile("sql/seed.sql", "utf8");
+  check(
+    "流域名重写生效（只换 host）",
+    rwRun.code === 0 && rwSql.includes("http://m.example/sig.m3u8?userid=1"),
+    String(rwRun.code),
+  );
+  check(
+    "重写后签名参数原样保留（%2F 与 + 未被重新编码）",
+    rwSql.includes("sign=abc%2Fdef+ghi"),
+  );
+
+  const noMatch = await runBuild({
+    SOURCE_URLS: `${base}/sig.m3u`,
+    STREAM_HOST_REWRITE: "zzz.example=m.example",
+  });
+  const noMatchSql = await readFile("sql/seed.sql", "utf8");
+  check(
+    "映射不命中时地址保持原样",
+    noMatch.code === 0 && noMatchSql.includes("http://a.example/sig.m3u8"),
+  );
+
+  const offRun = await runBuild({ SOURCE_URLS: `${base}/sig.m3u` });
+  const offSql = await readFile("sql/seed.sql", "utf8");
+  check(
+    "不配 STREAM_HOST_REWRITE 时行为不变",
+    offRun.code === 0 && offSql.includes("http://a.example/sig.m3u8"),
+  );
+  // 自动跟随的护栏：源入口（127.0.0.1）与流地址（a.example）不同主域，
+  // 必须一条都不改。跨主域瞎换会把别人的源改坏。
+  check(
+    "自动跟随不跨主域改地址",
+    offRun.code === 0 && offSql.includes("http://a.example/sig.m3u8") && !offSql.includes("127.0.0.1/sig"),
   );
 }
 

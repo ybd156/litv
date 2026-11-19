@@ -294,7 +294,9 @@ final class Session: ObservableObject {
         var m: [Int64: String] = [:]
         for n in b.now { m[n.channelId] = n.title }
         nowTitles = m
-        statusText = "\(b.channels.count) 个频道"
+        statusText = clientParse
+            ? "\(b.channels.count) 个频道已就绪，正在解析源…"
+            : "\(b.channels.count) 个频道"
         // 客户端解析模式：用自己的解析结果替换服务端给的（可能为空的）频道表。
         // iOS 目前没有设备级 dl_key，服务端会下发明文信封（v=0），decrypt 直接返回。
         if clientParse {

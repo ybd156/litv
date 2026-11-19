@@ -96,14 +96,39 @@ final class EpgStore {
                 self.lock.lock(); self.loading = false; self.lock.unlock()
             }
             do {
-                let data = try await self.loadData(url: url)
-                let parsed = try EpgParser.parse(data: data)
+                // ① 先试**解析结果缓存**：源 XML 有 6 MB，每次冷启动解析要几百毫秒到数秒，
+                //    用户感知就是「节目单打开要加载一会」。把 parse 的结果（Codable）存成 JSON，
+                //    下次直接 decode，跳过整个 XML 解析。
+                var loaded: (programs: [String: [EpgProgram]], nameToId: [String: String])?
+                if let j = self.parsedCacheFile(),
+                   let attrs = try? FileManager.default.attributesOfItem(atPath: j.path),
+                   let mtime = attrs[.modificationDate] as? Date,
+                   Date().timeIntervalSince(mtime) < self.ttl,
+                   let d = try? Data(contentsOf: j),
+                   let cached = try? JSONDecoder().decode(ParsedCache.self, from: d) {
+                    loaded = (cached.byChannel, cached.byName)
+                    NSLog("EpgStore: 命中解析缓存 \(cached.byChannel.count) 个频道")
+                }
+
+                // ② 没有可用缓存才走 XML（loadData 内部还有一层 24h 的原始 XML 缓存）
+                if loaded == nil {
+                    let data = try await self.loadData(url: url)
+                    let parsed = try EpgParser.parse(data: data)
+                    loaded = parsed
+                    if let j = self.parsedCacheFile(),
+                       let d = try? JSONEncoder().encode(
+                           ParsedCache(byChannel: parsed.programs, byName: parsed.nameToId)) {
+                        try? d.write(to: j)
+                    }
+                }
+
+                guard let result = loaded else { return }
                 self.lock.lock()
-                self.byChannel = parsed.programs
-                self.byName = parsed.nameToId
+                self.byChannel = result.programs
+                self.byName = result.nameToId
                 self.loadedUrl = url
                 self.lock.unlock()
-                NSLog("EpgStore: 节目单就绪 \(parsed.programs.count) 个频道 / \(parsed.nameToId.count) 个频道名")
+                NSLog("EpgStore: 节目单就绪 \(result.programs.count) 个频道 / \(result.nameToId.count) 个频道名")
                 if let completion {
                     await MainActor.run { completion() }
                 }
@@ -119,6 +144,19 @@ final class EpgStore {
         guard let dir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first
         else { return nil }
         return dir.appendingPathComponent("epg.xml")
+    }
+
+    /// 解析结果的缓存文件（跳过 6 MB XML 的解析）。
+    private func parsedCacheFile() -> URL? {
+        guard let dir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first
+        else { return nil }
+        return dir.appendingPathComponent("epg-parsed.json")
+    }
+
+    /// 解析结果的落盘格式。EpgProgram 本身已经是 Codable（带 CodingKeys）。
+    private struct ParsedCache: Codable {
+        let byChannel: [String: [EpgProgram]]
+        let byName: [String: String]
     }
 
     private func loadData(url: String) async throws -> Data {

@@ -200,6 +200,8 @@ struct PlayerView: View {
         .sheet(isPresented: $showEpg) { epgSheet }
         .sheet(isPresented: $showCast) { castSheet }
         .onAppear {
+            // 播放中屏幕常亮：不设的话看直播十几秒就黑屏，用户要不停点屏幕。
+            UIApplication.shared.isIdleTimerDisabled = true
             showControls()
             Task { await start() }
         }
@@ -228,6 +230,8 @@ struct PlayerView: View {
             }
         }
         .onDisappear {
+            // 离开播放页必须恢复系统息屏策略，否则整个 App 都不会自动锁屏。
+            UIApplication.shared.isIdleTimerDisabled = false
             // QoE：离开播放页补一条 stop（带观看时长）
             if startReported, let t0 = playStartedAt {
                 let ms = Int(Date().timeIntervalSince(t0) * 1000)
@@ -366,10 +370,11 @@ struct PlayerView: View {
             // 而裸 UIView 没有 intrinsic size，结果画面缩成一小块。
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else if let p = player {
-            // 全屏时默认用 zoom（resizeAspectFill）：16:9 视频放进 19.5:9 的屏，
-            // 用 auto（resizeAspect）会左右各留一条黑边，用户反馈「两边没适配全面屏」。
-            // 竖屏仍按用户选的档位（竖屏容器本身就是 16:9，不会裁到内容）。
-            PlayerLayerView(player: p, aspect: isFullscreen ? "zoom" : aspectMode)
+            // 全屏也保比例（resizeAspect）：之前为了"铺满"改成 zoom(resizeAspectFill)，
+            // 结果 16:9 的视频被上下裁掉，用户反馈「比例不对」。
+            // 留黑边是正常的——所有播放器看 16:9 内容在更宽的屏上都是这样。
+            // 想要铺满可以在控制条的「比例」里手动切到「裁切」。
+            PlayerLayerView(player: p, aspect: aspectMode)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }
@@ -1155,6 +1160,15 @@ struct PlayerView: View {
                 // 本地表还没就绪时**不能**静默回落到 /tv/play —— 那只会抛一个
                 // 「A server with the specified hostname could not be found」，
                 // 让人以为是网络问题，其实是频道 id 对不上。
+                // 本地表还没就绪（源还在拉/解析）时**自动等**，最多 10 秒。
+                // 以前直接报「本地频道表还没就绪，稍等再点一次」——
+                // 用户第一次打开就撞上这个，还得手动重试一次（实测反馈）。
+                if ChannelStore.shared.url(of: active.id) == nil {
+                    for _ in 0..<20 {
+                        if ChannelStore.shared.url(of: active.id) != nil { break }
+                        try? await Task.sleep(nanoseconds: 500_000_000)
+                    }
+                }
                 guard let direct = ChannelStore.shared.url(of: active.id),
                       let directURL = URL(string: direct) else {
                     // 诊断：把 id、名字、本地表条目数摊出来。

@@ -964,7 +964,29 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
             Log.i(TAG, "bootstrap 后补执行遥控换台: $want")
             switchToChannelById(want)
         }
+
+        // 客户端解析模式（channels_mode=client）：
+        // 服务端只下发源地址信封，频道表和播放地址由客户端自己拉、自己解析。
+        // TV 端以前没实现（只有手机界面有），这里补上。
+        // 只在**网络**那次 bootstrap 触发：缓存里没有 client_parse 字段（读出来是 0），
+        // 否则冷启动会重复下载整份 m3u。
+        if (b.clientParseFlag != 0) {
+            app.prefs.clientParseSeen = true
+            com.litv.tv.data.M3uClient.load(this, app.api, app.prefs.dlKey, app.epg) { parsed ->
+                if (parsed != null && parsed.channels.isNotEmpty()) {
+                    Log.i(TAG, "客户端解析完成：${parsed.channels.size} 个频道")
+                    allChannels = parsed.channels
+                    groups = allChannels.map { it.group }.filter { it.isNotBlank() }.distinct()
+                    applyGroupFilter()
+                    if (::panelAdapter.isInitialized) panelAdapter.notifyDataSetChanged()
+                }
+            }
+        }
     }
+
+    /** 服务端是否处于「客户端解析」模式（频道表由本地 M3uClient 提供） */
+    private fun clientParseEnabled(): Boolean =
+        app.prefs.clientParseSeen || app.prefs.channelSource == "client"
 
     /** 刷新左侧分类列表：全部 / 收藏 / 各分组，并带上数量。 */
     private fun refreshCategories() {
@@ -1171,7 +1193,14 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
             player.play(ch.id, app.api.absolute(cached.url), cached.headers, app.prefs.engine)
         }
 
-        app.api.play(ch.id, streamId,
+        // 客户端解析模式：地址就在本地（M3uClient 解析出来的），直接播，
+        // 省掉 /tv/play 的往返；没有本地地址时回落到服务端取址。
+        val localUrl = if (clientParseEnabled()) com.litv.tv.data.M3uClient.urlOf(ch.id) else null
+        if (localUrl != null && streamId == 0L && !forceRelayOnce) {
+            Log.i(TAG, "客户端直连起播 ${ch.name}（本地解析）")
+            player.directMode = true
+            player.play(ch.id, localUrl, com.litv.tv.data.M3uClient.headersOf(ch.id), app.prefs.engine)
+        } else app.api.play(ch.id, streamId,
             direct = wantDirect,
             onOk = { info ->
                 // 过期回调整段丢弃：连按换台时旧响应可能晚到，

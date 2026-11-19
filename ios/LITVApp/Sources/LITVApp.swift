@@ -1,10 +1,23 @@
 import SwiftUI
+import AVFoundation
 
 @main
 struct LITVApp: App {
     @StateObject private var session = Session()
 
     init() {
+        // 音频会话必须显式设成 .playback，否则默认是 .soloAmbient：
+        //   · 受 iPhone 侧边静音键影响（拨到静音就完全没声音）
+        //   · 锁屏或来电打断后不会自动恢复
+        // 视频播放类 App 必须走 playback（与 Android 的 AudioAttributes USAGE_MEDIA 对应）。
+        do {
+            let audio = AVAudioSession.sharedInstance()
+            try audio.setCategory(.playback, mode: .moviePlayback, options: [])
+            try audio.setActive(true)
+        } catch {
+            NSLog("LITVApp: 配置音频会话失败 \(error.localizedDescription)")
+        }
+
         // 台标（tvg-logo）由 AsyncImage 加载，走的是系统 URLCache。
         // 默认磁盘只有 10MB，几百张台标很容易被挤掉 —— 表现是「台标一会有一会没有」。
         // 调到 32MB 内存 / 256MB 磁盘后，台标基本一次加载就能长期命中。

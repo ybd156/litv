@@ -205,6 +205,12 @@ struct PlayerView: View {
             showControls()
             Task { await start() }
         }
+        .onChange(of: vSize) { nc in
+            // 用户直接**旋转屏幕**退出全屏时，forceFullscreen 还留着 true，
+            // App 仍按全屏布局（竖屏里放 16:9 视频 → 上下大片黑、下方信息区消失）。
+            // 回到竖屏就复位。
+            if nc == .regular { forceFullscreen = false }
+        }
         .onChange(of: loading) { v in
             // QoE：首帧出来（loading 收起且没有错误）时上报起播耗时
             guard v == false, !startReported, errorText == nil else { return }

@@ -979,6 +979,15 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
                     groups = allChannels.map { it.group }.filter { it.isNotBlank() }.distinct()
                     applyGroupFilter()
                     if (::panelAdapter.isInitialized) panelAdapter.notifyDataSetChanged()
+                    // 自动播放往往在解析完成**之前**就发生了，那时只能用服务端
+                    // /tv/play 的地址（构建时抓的域名，可能已被污染）。拿到本地
+                    // 地址后重播一次，把地址切到客户端自己拉到的那个。
+                    current?.let { cur ->
+                        if (com.litv.tv.data.M3uClient.urlOf(cur.id) != null) {
+                            Log.i(TAG, "解析完成，用本地地址重播 ${cur.name}")
+                            playChannel(cur)
+                        }
+                    }
                 }
             }
         }

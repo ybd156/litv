@@ -153,6 +153,9 @@ struct HomeView: View {
                     session.requestPlay(ch)
                 } label: {
                     row(ch)
+                        // 整行可点：默认只能点图标和文字，右侧大片空白没反应（用户实测）。
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .listRowBackground(Color.white.opacity(0.04))

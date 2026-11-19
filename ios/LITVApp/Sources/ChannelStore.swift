@@ -89,7 +89,9 @@ final class ChannelStore {
                                                  ua: u["ua"] as? String ?? "",
                                                  referer: u["referer"] as? String ?? "")
             else { continue }
-            Self.merge(text: text, into: &merged, urlById: &urlById, headersById: &headersById)
+            Self.merge(text: text, into: &merged, urlById: &urlById, headersById: &headersById,
+                       defaultUA: u["ua"] as? String ?? "",
+                       defaultReferer: u["referer"] as? String ?? "")
         }
 
         let kept = merged.values.filter {
@@ -170,11 +172,14 @@ final class ChannelStore {
 
     /// 缓存里的 id 是按哪套算法算出来的。算法一变就不认旧缓存，
     /// 否则会拿到一批永远对不上号的 id。
-    static let cacheAlgo = 2
+    /// 2 → 稳定 id；3 → 频道 headers 加入源级 UA/Referer 兜底。
+    static let cacheAlgo = 3
 
     static func merge(text: String, into merged: inout [String: Channel],
                       urlById: inout [Int64: String],
-                      headersById: inout [Int64: [String: String]]) {
+                      headersById: inout [Int64: [String: String]],
+                      defaultUA: String = "",
+                      defaultReferer: String = "") {
         var name = "", tvgId = "", logo = "", group = "", ua = "", referer = ""
         var pending = false
 
@@ -220,8 +225,13 @@ final class ChannelStore {
                 merged[key] = ch
                 urlById[id] = line
                 var h: [String: String] = [:]
-                if !ua.isEmpty { h["User-Agent"] = ua }
-                if !referer.isEmpty { h["Referer"] = referer }
+                // 频道自己没写 #EXTVLCOPT 时，用**源级别**的 UA/Referer 兜底。
+                // 服务端 build 也是这么做的（把源 UA 继承给每条 stream）——
+                // 少了这一步，同一条流在 edge 能播、在客户端却是「默认 UA」播不了。
+                let effUA = ua.isEmpty ? defaultUA : ua
+                let effRef = referer.isEmpty ? defaultReferer : referer
+                if !effUA.isEmpty { h["User-Agent"] = effUA }
+                if !effRef.isEmpty { h["Referer"] = effRef }
                 if !h.isEmpty { headersById[id] = h }
             }
             pending = false

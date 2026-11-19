@@ -521,13 +521,15 @@ struct PlayerView: View {
     /// 之前是底部一条横向胶囊，和 Android 的分散式布局完全不是一回事。
     private var controls: some View {
         ZStack {
-            // 中央：播放 / 暂停（72pt，和 Android 的 btnPlayPause 同尺寸）
+            // 中央：播放 / 暂停（72pt，与 Android 的 btnPlayPause 一致）
+            // Android 那边是 **无底色** 的半透明图标（alpha 0.85），这里不能加圆底，
+            // 否则在蓝色画面上会变成一个显眼的蓝圆（用户实测指出）。
             Button(action: togglePause) {
                 Text(paused ? "▶" : "⏸")
                     .font(.system(size: 34))
                     .foregroundColor(.white)
                     .frame(width: 72, height: 72)
-                    .background(Circle().fill(Color.black.opacity(0.28)))
+                    .opacity(0.85)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
 
@@ -539,22 +541,48 @@ struct PlayerView: View {
             }
             .padding(.horizontal, 10)
 
-            // 底部：左三枚胶囊 + 右四个按钮
+            // 右上角：投屏（Android 的 btnCast 是 top|end）
             VStack {
-                Spacer()
-                HStack(spacing: 8) {
-                    pillButton("比例 \(aspectLabel)") { cycleAspect() }
-                    pillButton("内核 \(engineLabel)") { cycleEngine() }
-                    pillButton("解码 \(decodeLabel)") { cycleDecode() }
-                    Spacer(minLength: 4)
-                    ctlButton(muted ? "🔇" : "🔊", muted ? "取消静音" : "静音", size: 17) { toggleMute() }
-                    ctlButton("⛶", isFullscreen ? "退出全屏" : "全屏", size: 17) { toggleFullscreen() }
+                HStack {
+                    Spacer()
                     ctlButton("⇪", "投屏", size: 17) {
                         showCast = true
                         Task { await loadRenderers() }
                     }
-                    // 「更多」：节目单 / 时移 / 换线路（比例已经上提到胶囊里）
+                }
+                .padding(.trailing, 10)
+                .padding(.top, 8)
+                Spacer()
+            }
+
+            // 底部：左（全屏时才显示比例/内核/解码）+ 右（静音/全屏/更多）
+            VStack {
+                Spacer()
+                HStack(spacing: 8) {
+                    // Android 的 fsTools 只在全屏出现（visibility=gone）
+                    if isFullscreen {
+                        pillButton("比例 \(aspectLabel)") { cycleAspect() }
+                        pillButton("内核 \(engineLabel)") { cycleEngine() }
+                        pillButton("解码 \(decodeLabel)") { cycleDecode() }
+                    }
+                    Spacer(minLength: 4)
+                    ctlButton(muted ? "🔇" : "🔊", muted ? "取消静音" : "静音", size: 17) { toggleMute() }
+                    ctlButton("⛶", isFullscreen ? "退出全屏" : "全屏", size: 17) { toggleFullscreen() }
+                    // 「更多」：节目单 / 时移 / 换线路
                     Menu {
+                        Button("比例 自动") { aspectMode = "auto" }
+                        Button("比例 16:9") { aspectMode = "16:9" }
+                        Button("比例 4:3") { aspectMode = "4:3" }
+                        Button("比例 拉伸") { aspectMode = "fill" }
+                        Button("比例 裁切") { aspectMode = "zoom" }
+                        Divider()
+                        Button("内核 自动") { session.engineMode = "auto" }
+                        Button("内核 VLC") { session.engineMode = "vlc" }
+                        Button("内核 AVPlayer") { session.engineMode = "avplayer" }
+                        Button("解码 自动") { session.decodeMode = "auto" }
+                        Button("解码 硬解") { session.decodeMode = "hard" }
+                        Button("解码 软解") { session.decodeMode = "soft" }
+                        Divider()
                         Button("节目单") { showEpg = true }
                         Button("时移回看") { Task { await startTimeshift() } }
                         Button("换线路") { Task { await loadStreams() } }

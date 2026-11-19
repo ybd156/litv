@@ -4,6 +4,21 @@ import SwiftUI
 struct LITVApp: App {
     @StateObject private var session = Session()
 
+    init() {
+        // 台标（tvg-logo）由 AsyncImage 加载，走的是系统 URLCache。
+        // 默认磁盘只有 10MB，几百张台标很容易被挤掉 —— 表现是「台标一会有一会没有」。
+        // 调到 32MB 内存 / 256MB 磁盘后，台标基本一次加载就能长期命中。
+        //
+        // 注意：这**不影响播放器**。播放器的「不吃缓存」是在请求头里显式带
+        // `Cache-Control: no-cache`（见 ExoEngine / PlayerView.startAVPlayer），
+        // 和 URLCache 是两套东西。节目单另有自己的文件缓存（EpgStore，24 小时）。
+        URLCache.shared = URLCache(
+            memoryCapacity: 32 * 1024 * 1024,
+            diskCapacity: 256 * 1024 * 1024,
+            diskPath: "litv_http_cache"
+        )
+    }
+
     var body: some Scene {
         WindowGroup {
             RootView()

@@ -49,7 +49,12 @@ struct RootView: View {
             // 注意：不能用 token 是否为空来判断"已登录"。
             // 设备注册后服务端**立刻返回 token**，但状态还是 pending——
             // 拿这个 token 调接口一律被拒（2003）。必须等管理员批准。
-            if session.isBound {
+            //
+            // 但反过来必须看 token：**重签安装会让 Keychain 里的旧 token 读不到**
+            // （Sideloadly 换签名后访问组变了），而 isBound 存在 UserDefaults 会保留下来，
+            // 于是进了主界面却什么都拉不到（「总频道 0」）。
+            // 凭据没了就回绑定页重新绑，别让用户对着空列表猜。
+            if session.isBound && !session.token.isEmpty {
                 // 底部四 tab，与 Android 端保持一致：
                 // 播放 / 频道 / 遥控器 / 设置
                 RootTabs()

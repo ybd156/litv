@@ -243,7 +243,15 @@ final class Session: ObservableObject {
     // ---------------------------------------------------------------- 数据
 
     func bootstrap() {
-        guard !token.isEmpty, !serverBase.isEmpty else { return }
+        guard !token.isEmpty, !serverBase.isEmpty else {
+            // 以前这里是静默 return：重签安装丢了 Keychain token 后，
+            // 界面只显示「还没有频道」，完全看不出是凭据没了。
+            errorText = token.isEmpty
+                ? "设备凭据已丢失（重装/重签会导致），请重新绑定"
+                : "服务器地址为空，请重新绑定"
+            statusText = errorText ?? ""
+            return
+        }
         epoch += 1
         let mine = epoch
         loading = true

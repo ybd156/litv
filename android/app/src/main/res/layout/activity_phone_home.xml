@@ -199,6 +199,9 @@
                         android:layout_height="wrap_content"
                         android:layout_gravity="bottom|center_horizontal"
                         android:layout_marginBottom="30dp"
+                        android:background="@drawable/bg_ctl_bar"
+                        android:paddingHorizontal="6dp"
+                        android:paddingVertical="4dp"
                         android:orientation="horizontal"
                         android:visibility="gone">
 
@@ -225,6 +228,9 @@
                         android:layout_gravity="bottom|end"
                         android:layout_marginBottom="30dp"
                         android:layout_marginEnd="12dp"
+                        android:background="@drawable/bg_ctl_bar"
+                        android:paddingHorizontal="6dp"
+                        android:paddingVertical="4dp"
                         android:gravity="center_vertical"
                         android:orientation="horizontal">
 

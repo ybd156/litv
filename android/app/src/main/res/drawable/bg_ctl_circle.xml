@@ -1,10 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- 播放控件按钮：半透明圆形底，按下去有反馈。 -->
+<!-- 播放控件按钮：半透明底 + 按下反馈。
+     2026-11-19：与 iOS 控制条的毛玻璃统一，从「#33FFFFFF 白」改成
+     「半透明黑 + 细白边」，在亮画面上不会糊成一片。 -->
 <ripple xmlns:android="http://schemas.android.com/apk/res/android"
     android:color="#40FFFFFF">
     <item>
         <shape android:shape="oval">
-            <solid android:color="#33FFFFFF" />
+            <solid android:color="#4D000000" />
+            <stroke android:width="1dp" android:color="#26FFFFFF" />
         </shape>
     </item>
 </ripple>

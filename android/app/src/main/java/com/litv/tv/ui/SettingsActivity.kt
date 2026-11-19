@@ -42,6 +42,7 @@ class SettingsActivity : AppCompatActivity() {
     private lateinit var valueDoh: TextView
     private lateinit var valueDohProvider: TextView
     private lateinit var valueIpMode: TextView
+    private lateinit var valueHlsNoCache: TextView
     private lateinit var valueAutoRelay: TextView
     private lateinit var valueUiScale: TextView
     private lateinit var valueShowStatus: TextView
@@ -92,6 +93,7 @@ class SettingsActivity : AppCompatActivity() {
         valueDoh = findViewById(R.id.valueDoh)
         valueDohProvider = findViewById(R.id.valueDohProvider)
         valueIpMode = findViewById(R.id.valueIpMode)
+        valueHlsNoCache = findViewById(R.id.valueHlsNoCache)
         valueAutoRelay = findViewById(R.id.valueAutoRelay)
         valueUiScale = findViewById(R.id.valueUiScale)
         valueShowStatus = findViewById(R.id.valueShowStatus)
@@ -191,6 +193,15 @@ class SettingsActivity : AppCompatActivity() {
         }
         // bindCycle 初始化时不会调 onPick，这里补一次，保证打开设置就看到当前值
         labelIpMode(app.prefs.ipMode)
+
+        // 直播列表强制刷新：有些源的 m3u8 带 max-age=86400，但里面分片签名只有几分钟有效，
+        // CDN 会把过期列表反复喂给播放器 → 分片 0 字节 →「播一下卡一下」。
+        bindCycle(R.id.rowHlsNoCache, valueHlsNoCache, listOf("on", "off"),
+            if (app.prefs.hlsNoCache) "on" else "off") { v ->
+            app.prefs.hlsNoCache = (v == "on")
+            labelHlsNoCache(v == "on")
+        }
+        labelHlsNoCache(app.prefs.hlsNoCache)
         bindCycle(R.id.rowAutoRelay, valueAutoRelay, listOf("off", "on"),
             if (app.prefs.autoRelay) "on" else "off") { v ->
             app.prefs.autoRelay = (v == "on")
@@ -461,6 +472,10 @@ class SettingsActivity : AppCompatActivity() {
 
     private fun labelIpMode(value: String) {
         valueIpMode.text = com.litv.tv.data.IpModeDns.labelOf(value)
+    }
+
+    private fun labelHlsNoCache(on: Boolean) {
+        valueHlsNoCache.text = if (on) "开（每次回源拿最新列表）" else "关（用 CDN 缓存）"
     }
 
     private fun labelAutoRelay(on: Boolean) {

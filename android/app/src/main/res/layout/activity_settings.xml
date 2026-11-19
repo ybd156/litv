@@ -256,6 +256,19 @@
         </LinearLayout>
 
         <LinearLayout
+            android:id="@+id/rowHlsNoCache"
+            style="@style/SettingRow">
+
+            <TextView
+                style="@style/SettingLabel"
+                android:text="直播列表强制刷新（不吃缓存）" />
+
+            <TextView
+                android:id="@+id/valueHlsNoCache"
+                style="@style/SettingValue" />
+        </LinearLayout>
+
+        <LinearLayout
             android:id="@+id/rowAutoRelay"
             style="@style/SettingRow">
 

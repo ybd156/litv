@@ -87,6 +87,16 @@ class ExoEngine : PlayerEngine {
     @Volatile private var curHeaders: Map<String, String> = emptyMap()
 
     /**
+     * 给所有 HTTP 请求加 `Cache-Control: no-cache`。
+     *
+     * 有些源的 m3u8 响应带 `max-age=86400`，但里面分片 URL 的签名只有几分钟有效：
+     * CDN 会把**过期的那份 m3u8** 反复喂给播放器，分片就请求到 0 字节 ——
+     * 表现是「播一下卡一下」（实测 mursor 源就是这个毛病）。
+     * 直播列表本来就该每次拿新的，默认开；VOD 想省流量可以在设置里关掉。
+     */
+    @Volatile var noCache: Boolean = true
+
+    /**
      * 动态 DataSource 工厂。
      *
      * 播放器复用之后，工厂是在第一次 build 时创建的，而请求头每个频道都不同。
@@ -143,7 +153,13 @@ class ExoEngine : PlayerEngine {
     private val dynamicHttpFactory: androidx.media3.datasource.HttpDataSource.Factory =
         object : androidx.media3.datasource.HttpDataSource.Factory {
             override fun createDataSource(): androidx.media3.datasource.HttpDataSource {
-                val extra = curHeaders.filterKeys { !it.equals("User-Agent", ignoreCase = true) }
+                val extra = curHeaders
+            .filterKeys { !it.equals("User-Agent", ignoreCase = true) }
+            .toMutableMap()
+        // 读 prefs 而不是靠外部接线：createDataSource 可能在任意时刻被调用，
+        // 保证「设置里改完下一次请求就生效」。
+        val noCacheOn = appContext?.let { com.litv.tv.data.Prefs(it).hlsNoCache } ?: noCache
+        if (noCacheOn) extra["Cache-Control"] = "no-cache"
 
                 // DoH 开启时改走 OkHttp 数据源：只有 OkHttp 的 Dns 是我们可以替换的
                 // （Media3 自带的 DefaultHttpDataSource 直接用系统解析，插不进去）。

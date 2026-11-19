@@ -152,6 +152,17 @@ class Prefs(ctx: Context) {
         get() = sp.getString(K_IP_MODE, "auto") ?: "auto"
         set(v) = sp.edit().putString(K_IP_MODE, v).apply()
 
+    /**
+     * 直播列表强制不吃缓存（给 HTTP 请求加 `Cache-Control: no-cache`）。
+     *
+     * 有些源的 m3u8 带 `max-age=86400`，里面分片 URL 的签名却只有几分钟有效，
+     * CDN 会把过期列表反复喂给播放器 → 分片 0 字节 → 「播一下卡一下」。
+     * 只影响 Exo 内核（libVLC 没有自定义请求头的接口）。
+     */
+    var hlsNoCache: Boolean
+        get() = sp.getBoolean(K_HLS_NO_CACHE, true)
+        set(v) = sp.edit().putBoolean(K_HLS_NO_CACHE, v).apply()
+
     /** DoH 服务商：ali | tencent | cloudflare（默认阿里，国内可达性最好）。 */
     var dohProvider: String
         get() = sp.getString(K_DOH_PROVIDER, "ali") ?: "ali"
@@ -376,6 +387,7 @@ class Prefs(ctx: Context) {
         const val K_DOH_MODE = "doh_mode"
         const val K_DOH_PROVIDER = "doh_provider"
         const val K_IP_MODE = "ip_mode"
+        const val K_HLS_NO_CACHE = "hls_no_cache"
         const val K_AUTO_RELAY = "auto_relay"
         const val K_UI_SCALE = "ui_scale"
         const val K_SHOW_PLAY_STATUS = "show_play_status"

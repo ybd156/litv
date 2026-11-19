@@ -180,6 +180,11 @@ struct PlayerView: View {
             guard want else { return }
             Task { await fallbackToAVPlayer() }
         }
+        .onChange(of: session.epgVersion) { _ in
+            // EPG 后台下完了：立刻重算当前台当天的节目单。
+            // 不补这一下，表现就是「首次打开没有节目单，换台才有」。
+            Task { await loadEpg(day: epgDay) }
+        }
         .onChange(of: session.engineMode) { _ in
             // 设置里换了播放内核就重起当前台。
             // Android 靠 `onResume` 比对 `appliedEngine` 触发 `restartCurrent()`,

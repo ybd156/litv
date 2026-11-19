@@ -56,6 +56,13 @@ final class Session: ObservableObject {
         didSet { defaults.set(hlsNoCache, forKey: "hlsNoCache") }
     }
 
+    /// 节目单每就绪一次 +1。
+    ///
+    /// 播放页的节目单只在「起播」和「切日期」时算，EPG 是后台下载的，
+    /// 下完了没人通知它 —— 表现就是「首次打开没有节目单，换台才有」。
+    /// PlayerView 盯这个值重算。
+    @Published var epgVersion: Int = 0
+
     // 状态
     @Published var loading = false
     @Published var statusText = ""
@@ -266,7 +273,10 @@ final class Session: ObservableObject {
         // 拿到地址就后台拉一次：不阻塞界面，解析完本地就有节目单了。
         // 就绪后重算「正在播」——client 模式下服务端不下发 b.now，不补就是空的。
         EpgStore.shared.ensure(url: b.epgUrl) { [weak self] in
-            self?.refreshNowFromEpg()
+            guard let self else { return }
+            self.refreshNowFromEpg()
+            // 通知播放页重算节目单（它不会自己发现 EPG 好了）
+            self.epgVersion += 1
         }
         channels = b.channels
         // 分组从**频道自己**算，不用服务端 b.groups：client 模式下 D1 里没有频道表，

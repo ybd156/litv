@@ -506,8 +506,8 @@ struct PlayerView: View {
             osdDetails
         }
         .padding(12)
-        .background(.ultraThinMaterial)
-        .cornerRadius(10)
+        // 与 Android 一致：**纯文字浮在画面上**，不加半透明卡片底和圆角。
+        // 之前这里是 .ultraThinMaterial + cornerRadius(10)，用户要求去掉。
         .padding(12)
     }
 
@@ -608,7 +608,6 @@ struct PlayerView: View {
                 .foregroundColor(.white)
                 .padding(.horizontal, 9)
                 .frame(height: 30)
-                .background(Capsule().fill(Color.black.opacity(0.36)))
         }
     }
 

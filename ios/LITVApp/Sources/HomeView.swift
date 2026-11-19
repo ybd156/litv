@@ -101,12 +101,40 @@ struct HomeView: View {
         }
     }
 
+    /// 列表为空时的原因。以前只有一句「还没有频道」，
+    /// 分不清是「真没数据」「搜索没命中」还是「分组对不上」——
+    /// 用户反馈过两次「频道都没有了」，两次原因都不同。
+    private var emptyReason: String {
+        if session.loading { return "加载中…" }
+        if session.channels.isEmpty { return "还没有频道，先去管理台导入直播源" }
+        if !keyword.trimmingCharacters(in: .whitespaces).isEmpty { return "搜索没有匹配的频道" }
+        if onlyFav { return "收藏里还没有频道" }
+        return "当前分组没有频道（分组名可能变了）"
+    }
+
     private var list: some View {
         List {
             if filtered.isEmpty {
-                Text(session.loading ? "加载中…" : "还没有频道，先去管理台导入直播源")
-                    .foregroundColor(.gray)
-                    .listRowBackground(Color.clear)
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(emptyReason)
+                        .foregroundColor(.gray)
+                    // 把三个关键值直接摊开：下次再出现白屏，一眼就知道卡在哪
+                    Text("总频道 \(session.channels.count) · 分组 \(session.groups.count) · 选中 \(selectedGroup ?? "全部")")
+                        .font(.caption2)
+                        .foregroundColor(.gray.opacity(0.7))
+                    if !keyword.trimmingCharacters(in: .whitespaces).isEmpty {
+                        Button("清除搜索") { keyword = "" }
+                            .font(.caption)
+                    }
+                    if onlyFav {
+                        Button("看全部频道") { onlyFav = false }
+                            .font(.caption)
+                    } else if !session.channels.isEmpty {
+                        Button("看全部频道") { selectedGroup = nil }
+                            .font(.caption)
+                    }
+                }
+                .listRowBackground(Color.clear)
             }
             ForEach(filtered) { ch in
                 // 不在这里直接 push PlayerView：TabView 会同时保留

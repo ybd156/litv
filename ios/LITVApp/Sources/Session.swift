@@ -348,17 +348,28 @@ final class Session: ObservableObject {
     /// 用本地节目单补「正在播」。
     /// client 模式下服务端不下发 `b.now`，不自己算的话频道列表右侧永远空着。
     /// 匹配规则与 Android 一致：epgId 优先，空了按频道名反查。
+    ///
+    /// **必须在后台算**：65 个频道 × 每个频道几万条节目，而且 EpgStore.programs
+    /// 要拿它自己的锁（解析线程此刻正持锁）—— 放在主线程会直接把 UI 冻住，
+    /// 表现就是「进去一直转圈然后 UI 卡死」（实测反馈）。
     func refreshNowFromEpg() {
         guard !channels.isEmpty else { return }
+        let snapshot = channels
         let now = Int64(Date().timeIntervalSince1970)
-        var m = nowTitles
-        for ch in channels {
-            guard let list = EpgStore.shared.programs(channel: ch, dayOffset: 0) else { continue }
-            if let cur = list.first(where: { $0.startAt <= now && $0.endAt > now }) {
-                m[ch.id] = cur.title
+        let base = nowTitles
+        Task.detached(priority: .utility) { [weak self] in
+            var m = base
+            for ch in snapshot {
+                guard let list = EpgStore.shared.programs(channel: ch, dayOffset: 0) else { continue }
+                if let cur = list.first(where: { $0.startAt <= now && $0.endAt > now }) {
+                    m[ch.id] = cur.title
+                }
+            }
+            guard !m.isEmpty else { return }
+            await MainActor.run { [m] in
+                self?.nowTitles = m
             }
         }
-        if !m.isEmpty { nowTitles = m }
     }
 
     func toggleFavorite(_ ch: Channel) {

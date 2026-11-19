@@ -54,6 +54,8 @@ struct PlayerView: View {
     @State private var fallbackInFlight = false
     /// start() 正在跑。重试按钮连按会并发起多次，互相覆盖 player/loading → 卡死。
     @State private var starting = false
+    /// 本次 start() 的开始时间。用于给上面的防重入加超时放行。
+    @State private var startAt = Date()
     /// VLC 状态回调里只置位，真正取地址的 async 工作交给下面的 onChange 做。
     /// 回调本身不是 async 上下文，直接在里面 await 网络请求编译不过。
     @State private var fallbackRequested = false
@@ -1092,23 +1094,18 @@ struct PlayerView: View {
 
     private func start() async {
         // 防连点：重试按钮连按会并发跑多个 start()，互相覆盖 player/loading → 界面卡死。
-        if starting { return }
+        // 但上一次卡住（网络超时）时不能把重试也锁死，超过 20 秒自动放行。
+        if starting && Date().timeIntervalSince(startAt) < 20 { return }
         starting = true
+        startAt = Date()
         defer { starting = false }
 
         // 冷启动时 lastChannel 已经从 UserDefaults 恢复，PlayerView 立刻 onAppear 起播，
-        // 但此时 bootstrap 还没回来 —— session.clientParse 仍是 false，会走 /tv/play，
-        // 而服务端在 client 模式下没有这个台的流，直接报「该频道没有可用线路」。
-        // 先等频道表就绪（最多 10 秒）再决定走哪条路。
-        if session.channels.isEmpty {
-            for _ in 0..<20 {
-                if !session.channels.isEmpty { break }
-                try? await Task.sleep(nanoseconds: 500_000_000)
-            }
-        }
-        // 同上：client_parse 标记也要等 bootstrap 落地
+        // 但此时 bootstrap 还没回来 —— session.clientParse 仍是 false，会走 /tv/play。
+        // 这里**不等待**（等 10 秒会让首屏看起来像卡死）：只在既没有频道表、
+        // 又不是 client 模式时直接报错，让用户看到原因。
         if session.channels.isEmpty && !session.clientParse {
-            errorText = "服务端还没有返回频道表（检查网络或重新绑定设备）"
+            errorText = "服务端还没有返回频道表\n请检查网络，或在设置里重新绑定设备"
             loading = false
             return
         }

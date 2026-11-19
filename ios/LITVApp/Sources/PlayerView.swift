@@ -52,6 +52,8 @@ struct PlayerView: View {
     /// VLC 失败降级正在进行。VLCKit 一次失败可能连发两个状态回调
     /// （error + ended），不加锁会并发起两次降级请求、开两个 AVPlayer。
     @State private var fallbackInFlight = false
+    /// start() 正在跑。重试按钮连按会并发起多次，互相覆盖 player/loading → 卡死。
+    @State private var starting = false
     /// VLC 状态回调里只置位，真正取地址的 async 工作交给下面的 onChange 做。
     /// 回调本身不是 async 上下文，直接在里面 await 网络请求编译不过。
     @State private var fallbackRequested = false
@@ -1089,6 +1091,27 @@ struct PlayerView: View {
     // ---------------------------------------------------------------- 播放
 
     private func start() async {
+        // 防连点：重试按钮连按会并发跑多个 start()，互相覆盖 player/loading → 界面卡死。
+        if starting { return }
+        starting = true
+        defer { starting = false }
+
+        // 冷启动时 lastChannel 已经从 UserDefaults 恢复，PlayerView 立刻 onAppear 起播，
+        // 但此时 bootstrap 还没回来 —— session.clientParse 仍是 false，会走 /tv/play，
+        // 而服务端在 client 模式下没有这个台的流，直接报「该频道没有可用线路」。
+        // 先等频道表就绪（最多 10 秒）再决定走哪条路。
+        if session.channels.isEmpty {
+            for _ in 0..<20 {
+                if !session.channels.isEmpty { break }
+                try? await Task.sleep(nanoseconds: 500_000_000)
+            }
+        }
+        // 同上：client_parse 标记也要等 bootstrap 落地
+        if session.channels.isEmpty && !session.clientParse {
+            errorText = "服务端还没有返回频道表（检查网络或重新绑定设备）"
+            loading = false
+            return
+        }
         // 记录当前台：底部「播放」tab 下次打开时直接续上
         session.lastChannel = active
         loading = true

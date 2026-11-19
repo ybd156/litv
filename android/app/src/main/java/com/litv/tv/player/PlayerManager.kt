@@ -464,7 +464,7 @@ class PlayerManager(
             budgetExpired = true
             removeStartTimers()
             Log.i(TAG, "起播预算到期，但内核已在播放，按成功处理")
-            com.litv.tv.data.PlayLog.i(TAG, "起播预算到期，但内核已在播放，按成功处理")
+            com.litv.tv.data.PlayLog.w(TAG, "起播预算到期，但内核已在播放，按成功处理")
             return@Runnable
         }
         // 置终态：之后内核再报 Prepared/Playing/首帧 都不再改变状态

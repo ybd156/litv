@@ -384,6 +384,10 @@ final class Session: ObservableObject {
 
     func channels(in group: String?) -> [Channel] {
         guard let g = group else { return channels }
-        return channels.filter { $0.group == g }
+        let hit = channels.filter { $0.group == g }
+        // 分组名对不上时**不要返回空**：从「服务端分组」切到「本地解析分组」
+        // 后名字会有细微差异，而 selectedGroup 还留着旧值 ——
+        // 那会表现成「频道都没有了」（2026-11-19 实际踩到）。
+        return hit.isEmpty ? channels : hit
     }
 }

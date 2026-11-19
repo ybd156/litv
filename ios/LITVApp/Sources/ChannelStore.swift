@@ -97,8 +97,15 @@ final class ChannelStore {
         }
 
         let version = payload["version"] as? String ?? "0"
-        if let cached = readCache(), cached.version == version {
-            NSLog("ChannelStore: 命中缓存 v\(version) \(cached.channels.count) 个")
+        // 缓存必须看年龄：里面存的是**流地址**，签名会过期（几分钟到几小时）。
+        // 只比 version 不够 —— 版本没变但地址早失效了，表现是启动就播不了
+        // （AVPlayer 报 "resource unavailable"）。4 小时后强制重新拉源。
+        if let cached = readCache(), cached.version == version,
+           let cu = cacheURL(),
+           let attrs = try? FileManager.default.attributesOfItem(atPath: cu.path),
+           let mtime = attrs[.modificationDate] as? Date,
+           Date().timeIntervalSince(mtime) < 4 * 3600 {
+            NSLog("ChannelStore: 命中缓存 v\(version) \(cached.channels.count) 个（\(Int(Date().timeIntervalSince(mtime)))s 前）")
             return cached
         }
 

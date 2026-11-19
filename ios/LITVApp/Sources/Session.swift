@@ -20,7 +20,16 @@ final class Session: ObservableObject {
     @Published var groups: [ChannelGroup] = []
     @Published var favorites: Set<Int64> = []
     @Published var nowTitles: [Int64: String] = [:]
-    @Published var lastChannel: Channel?
+    /// 上次看的频道。持久化：否则冷启动后「播放」tab 永远显示「还没有在看的频道」，
+    /// 用户得每次手动去频道页点一遍（Android 端是记住的）。
+    @Published var lastChannel: Channel? {
+        didSet {
+            guard let ch = lastChannel else { return }
+            if let d = try? JSONEncoder().encode(ch) {
+                defaults.set(d, forKey: "lastChannel")
+            }
+        }
+    }
     @Published var playRequest: Channel?
 
     @Published var decodeMode: String {
@@ -113,6 +122,11 @@ final class Session: ObservableObject {
         decodeMode = defaults.string(forKey: "decodeMode") ?? "auto"
         engineMode = defaults.string(forKey: "engineMode") ?? "auto"
         hlsNoCache = (defaults.object(forKey: "hlsNoCache") as? Bool) ?? true
+        // 恢复上次看的频道（冷启动后播放页直接有内容，不用每次去频道页点一遍）
+        if let d = defaults.data(forKey: "lastChannel"),
+           let ch = try? JSONDecoder().decode(Channel.self, from: d) {
+            lastChannel = ch
+        }
         bufferMs = (defaults.object(forKey: "bufferMs") as? Int) ?? 1500
         liveDelayMs = (defaults.object(forKey: "liveDelayMs") as? Int) ?? 0
     }

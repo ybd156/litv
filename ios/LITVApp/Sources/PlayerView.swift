@@ -366,7 +366,10 @@ struct PlayerView: View {
             // 而裸 UIView 没有 intrinsic size，结果画面缩成一小块。
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else if let p = player {
-            PlayerLayerView(player: p, aspect: aspectMode)
+            // 全屏时默认用 zoom（resizeAspectFill）：16:9 视频放进 19.5:9 的屏，
+            // 用 auto（resizeAspect）会左右各留一条黑边，用户反馈「两边没适配全面屏」。
+            // 竖屏仍按用户选的档位（竖屏容器本身就是 16:9，不会裁到内容）。
+            PlayerLayerView(player: p, aspect: isFullscreen ? "zoom" : aspectMode)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }
@@ -543,12 +546,15 @@ struct PlayerView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
 
             // 左右边缘：上一台 / 下一台
+            // 左侧额外留 28pt：横屏时 iPhone 的摄像头/灵动岛在屏幕左端，
+            // 按钮贴边会被挡住（用户实测「左边还会被摄像头遮挡」）。
             HStack {
                 ctlButton("backward.end.fill", "上一台", size: 20) { switchBy(-1) }
                 Spacer()
                 ctlButton("forward.end.fill", "下一台", size: 20) { switchBy(1) }
             }
-            .padding(.horizontal, 10)
+            .padding(.leading, 28)
+            .padding(.trailing, 10)
 
             // 右上角：投屏（Android 的 btnCast 是 top|end）
             VStack {
@@ -581,7 +587,8 @@ struct PlayerView: View {
                               : "arrow.up.left.and.arrow.down.right",
                               isFullscreen ? "退出全屏" : "全屏", size: 17) { toggleFullscreen() }
                 }
-                .padding(.horizontal, 12)
+                .padding(.leading, 28)   // 避开横屏左侧的摄像头/灵动岛
+                .padding(.trailing, 12)
                 .padding(.bottom, 20)
             }
         }
@@ -597,6 +604,7 @@ struct PlayerView: View {
                 .fixedSize(horizontal: true, vertical: false)  // 竖屏窄，不能让「比例 自动」换行
                 .padding(.horizontal, 9)
                 .frame(height: 30)
+                .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
     }
@@ -704,7 +712,10 @@ struct PlayerView: View {
                     .foregroundColor(.white)
                 Text(label).font(.system(size: 10)).foregroundColor(.white)
             }
-            .frame(minWidth: 46)
+            .frame(minWidth: 46, minHeight: 44)
+            // 命中区域必须铺满整块：否则点按钮边缘会穿透到底层「点画面 → 隐藏控件」，
+            // 表现就是「点那些按钮还点不了，一点就隐藏了」（用户实测）。
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
     }

@@ -150,6 +150,28 @@ final class ChannelStore {
         return out
     }
 
+    /// 频道 id 必须**跨进程稳定**。
+    ///
+    /// 以前这里是 `Int64(abs(key.hashValue) % 2_000_000_000) + 1`，而 Swift 的
+    /// `hashValue` 每次进程启动都带随机种子 —— 二次启动时缓存里的 id 与本次解析
+    /// 结果对不上，`url(of:)` 返回 nil，播放就回落到 `/tv/play`（那里是构建时
+    /// 抓的旧域名；域名被污染时表现为「A server with the specified hostname
+    /// could not be found」）。
+    ///
+    /// FNV-1a：同一个 key 永远得到同一个 id。
+    static func stableId(_ key: String) -> Int64 {
+        var h: UInt32 = 2_166_136_261
+        for b in key.utf8 {
+            h ^= UInt32(b)
+            h = h &* 16_777_619
+        }
+        return Int64(h % 2_000_000_000) + 1
+    }
+
+    /// 缓存里的 id 是按哪套算法算出来的。算法一变就不认旧缓存，
+    /// 否则会拿到一批永远对不上号的 id。
+    static let cacheAlgo = 2
+
     static func merge(text: String, into merged: inout [String: Channel],
                       urlById: inout [Int64: String],
                       headersById: inout [Int64: [String: String]]) {
@@ -189,7 +211,7 @@ final class ChannelStore {
             if !pending { continue }
 
             let key = tvgId.isEmpty ? "name:" + normalizeName(name) : "id:" + tvgId
-            let id = Int64(abs(key.hashValue) % 2_000_000_000) + 1
+            let id = Self.stableId(key)
             if merged[key] == nil {
                 var ch = Channel(id: id, number: merged.count + 1, name: name,
                                  group: group.isEmpty ? "未分组" : group,
@@ -244,7 +266,7 @@ final class ChannelStore {
             if let h = p.headersById[ch.id] { o["h"] = h }
             arr.append(o)
         }
-        let root: [String: Any] = ["version": p.version, "channels": arr]
+        let root: [String: Any] = ["version": p.version, "algo": Self.cacheAlgo, "channels": arr]
         guard let url = cacheURL(),
               let data = try? JSONSerialization.data(withJSONObject: root) else { return }
         try? data.write(to: url)
@@ -253,6 +275,7 @@ final class ChannelStore {
     private func readCache() -> Parsed? {
         guard let url = cacheURL(), let data = try? Data(contentsOf: url),
               let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              (root["algo"] as? Int) == Self.cacheAlgo,
               let arr = root["channels"] as? [[String: Any]], !arr.isEmpty else { return nil }
         var list: [Channel] = []
         var urlById: [Int64: String] = [:]

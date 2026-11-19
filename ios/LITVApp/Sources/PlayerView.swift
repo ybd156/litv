@@ -1026,9 +1026,17 @@ struct PlayerView: View {
 
             // 客户端解析模式：地址就是本机解析出来的源地址，不请求 /tv/play。
             // 服务端那边 D1 已经没有频道表了，走它只会拿到 404 或旧签名。
-            if session.clientParse,
-               let direct = ChannelStore.shared.url(of: active.id),
-               let directURL = URL(string: direct) {
+            if session.clientParse {
+                // client 模式下服务端存的地址是构建时抓的旧域名（可能已被污染），
+                // 本地表还没就绪时**不能**静默回落到 /tv/play —— 那只会抛一个
+                // 「A server with the specified hostname could not be found」，
+                // 让人以为是网络问题，其实是频道 id 对不上。
+                guard let direct = ChannelStore.shared.url(of: active.id),
+                      let directURL = URL(string: direct) else {
+                    errorText = "本地频道表还没就绪（或这个台不在源里），稍等再点一次。"
+                    loading = false
+                    return
+                }
                 let h = ChannelStore.shared.headers(of: active.id)
                 playURL = directURL
                 playUA = h["User-Agent"] ?? ""

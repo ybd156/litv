@@ -446,10 +446,21 @@ struct PlayerView: View {
     }
 
     private var osdHeader: some View {
-        HStack {
+        HStack(spacing: 8) {
             Text(active.name).font(.headline).foregroundColor(.white)
+            // 与 Android 一致：频道名后面跟「● 直播」角标
+            Text(timeshiftURL == nil ? "● 直播" : "◀ 回放")
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundColor(timeshiftURL == nil ? .red : .orange)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 2)
+                .background(Capsule().fill(Color.black.opacity(0.45)))
             Spacer()
-            Text(active.group).font(.caption).foregroundColor(.gray)
+            // 与 Android 一致：右上角显示**引擎/解码**（Android 是「系统硬解 (Media3)」），
+            // 不再是分组名 —— 分组名在频道页已经有了，播放时更想知道走的哪条链路。
+            Text(techText ?? active.group)
+                .font(.caption)
+                .foregroundColor(.gray)
         }
     }
 
@@ -508,6 +519,9 @@ struct PlayerView: View {
         .padding(12)
         // 与 Android 一致：**纯文字浮在画面上**，不加半透明卡片底和圆角。
         // 之前这里是 .ultraThinMaterial + cornerRadius(10)，用户要求去掉。
+        // 顶部额外留 40pt：全屏时这个浮层紧贴屏幕顶端，会被 iPhone 的灵动岛/
+        // 圆角遮住（用户实测「没适配全面屏」就是指这个）。
+        .padding(.top, 40)
         .padding(12)
     }
 
@@ -566,7 +580,7 @@ struct PlayerView: View {
                         pillButton("解码 \(decodeLabel)") { cycleDecode() }
                     }
                     Spacer(minLength: 4)
-                    ctlButton(muted ? "🔇" : "🔊", muted ? "取消静音" : "静音", size: 17) { toggleMute() }
+                    ctlButton("♪", muted ? "取消静音" : "静音", size: 20) { toggleMute() }
                     ctlButton("⛶", isFullscreen ? "退出全屏" : "全屏", size: 17) { toggleFullscreen() }
                     // 「更多」：节目单 / 时移 / 换线路
                     Menu {
@@ -861,18 +875,22 @@ struct PlayerView: View {
     /// 全屏时仍然用 sheet（画面优先）。
     private var liveEpgPanel: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 18) {
-                Button { Task { await loadEpg(day: epgDay - 1) } } label: {
-                    Image(systemName: "chevron.left")
+            // 与 Android 一致：**6 天日期行**（今天 ±3），点哪个看哪天。
+            // 之前只有「< 今天 >」左右箭头，看不到有哪些日期可选。
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 18) {
+                    ForEach([-3, -2, -1, 0, 1, 2], id: \.self) { d in
+                        Button { Task { await loadEpg(day: d) } } label: {
+                            Text(dayLabel(d))
+                                .font(.system(size: 14, weight: epgDay == d ? .semibold : .regular))
+                                .foregroundColor(epgDay == d
+                                                 ? Color(red: 0.176, green: 0.831, blue: 0.749)
+                                                 : .gray)
+                        }
+                    }
                 }
-                Text(dayLabel(epgDay))
-                    .font(.subheadline)
-                    .frame(maxWidth: .infinity)
-                Button { Task { await loadEpg(day: epgDay + 1) } } label: {
-                    Image(systemName: "chevron.right")
-                }
+                .padding(.horizontal, 20)
             }
-            .padding(.horizontal, 20)
             .padding(.vertical, 8)
 
             if let tip = epgTip {
@@ -931,20 +949,21 @@ struct PlayerView: View {
             VStack(spacing: 0) {
                 // 按天切换。IPTV 的节目单一般只给前后几天，
                 // 所以这里不限范围，拉不到就是空列表。
-                HStack(spacing: 18) {
-                    Button {
-                        Task { await loadEpg(day: epgDay - 1) }
-                    } label: { Image(systemName: "chevron.left") }
-
-                    Text(dayLabel(epgDay))
-                        .font(.subheadline)
-                        .frame(maxWidth: .infinity)
-
-                    Button {
-                        Task { await loadEpg(day: epgDay + 1) }
-                    } label: { Image(systemName: "chevron.right") }
+                // 与 Android 一致：6 天日期行
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 18) {
+                        ForEach([-3, -2, -1, 0, 1, 2], id: \.self) { d in
+                            Button { Task { await loadEpg(day: d) } } label: {
+                                Text(dayLabel(d))
+                                    .font(.system(size: 14, weight: epgDay == d ? .semibold : .regular))
+                                    .foregroundColor(epgDay == d
+                                                     ? Color(red: 0.176, green: 0.831, blue: 0.749)
+                                                     : .gray)
+                            }
+                        }
+                    }
+                    .padding(.horizontal, 20)
                 }
-                .padding(.horizontal, 20)
                 .padding(.vertical, 10)
 
                 if let tip = epgTip {

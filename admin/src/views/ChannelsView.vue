@@ -25,7 +25,8 @@ import Icon from '@/components/Icon.vue'
 import { useDragSort } from '@/composables/useDragSort'
 import * as channelsApi from '@/api/modules/channels'
 import * as sourcesApi from '@/api/modules/sources'
-import type { Channel, GroupStat } from '@/api/types'
+import { clientGroupStats, mergeClientChannels, type ClientChannelRow } from '@/utils/clientChannels'
+import type { Channel, ClientParsePolicy, GroupStat } from '@/api/types'
 import { toErrorMessage } from '@/api/errors'
 import { confirmDanger, toast } from '@/utils/feedback'
 import { useNarrowScreen } from '@/composables/useNarrow'
@@ -35,6 +36,20 @@ const groups = ref<GroupStat[]>([])
 const rows = ref<Channel[]>([])
 /** 服务端处于客户端解析模式：列表由边缘现拉现解析，改名/隐藏/删线路等写操作不可用 */
 const clientParse = ref(false)
+/**
+ * 客户端解析模式的本地数据集。
+ *
+ * 解析一次、之后筛选与翻页都在本地做——不能每次改关键词都重新拉一遍整包源
+ * （那既有流量又慢，源大时还会让输入框卡顿）。
+ */
+const clientAll = ref<ClientChannelRow[]>([])
+/** 当前页要显示的行 */
+const clientRows = ref<ClientChannelRow[]>([])
+/** 拉取/解析失败的源，界面要如实说明覆盖率 */
+const clientFailed = ref<string[]>([])
+/** 成功解析的源数量 */
+const clientLoaded = ref(0)
+const clientParsing = ref(false)
 const total = ref(0)
 const loading = ref(false)
 const error = ref('')
@@ -116,7 +131,14 @@ async function loadSources(): Promise<void> {
   }
 }
 
-async function loadChannels(silent = false): Promise<void> {
+async function loadChannels(silent = false, force = false): Promise<void> {
+  // 客户端解析模式：数据在浏览器里。已经解析过一次就直接本地筛选，
+  // 不再把整包源重新拉一遍（force=true 才重新解析，用于「刷新」）。
+  if (clientParse.value && !force) {
+    applyClientFilter()
+    return
+  }
+
   // B05：查询序列保护。
   //
   // 快速连续切分组/翻页/改关键词时，先发出的查询可能后返回，
@@ -135,6 +157,11 @@ async function loadChannels(silent = false): Promise<void> {
     // 过期响应：不要动 rows/total/error，也别关 loading（那是新请求的事）
     if (gen !== queryGeneration) return
     clientParse.value = res.clientParse === true
+    if (clientParse.value) {
+      // 服务端只给「源原文入口 + 屏蔽规则」，列表要在浏览器里解析
+      await loadClientChannels(res.rawPaths ?? [], res.policy)
+      return
+    }
     rows.value = res.items
     total.value = res.total
     loaded.value = true
@@ -147,8 +174,62 @@ async function loadChannels(silent = false): Promise<void> {
   }
 }
 
+/**
+ * 客户端解析模式：拉各源原文 → 在浏览器里解析合并。
+ *
+ * `mergeClientChannels` 的规则与电视端 `M3uClient.build()` 一致，
+ * 所以这里算出来的就是「电视上到底有哪些台」。
+ */
+async function loadClientChannels(rawPaths: string[], policy?: ClientParsePolicy): Promise<void> {
+  clientParsing.value = true
+  try {
+    const texts = await Promise.all(
+      rawPaths.map(async (rawPath) => {
+        try {
+          return { rawPath, text: await sourcesApi.fetchSourceText(rawPath) }
+        } catch {
+          // 单个源失败不该把整页打死；交给 mergeClientChannels 记进 failed
+          return { rawPath, text: '' }
+        }
+      }),
+    )
+    const res = mergeClientChannels(texts, policy)
+    clientAll.value = res.rows
+    clientFailed.value = res.failed
+    clientLoaded.value = res.loaded
+    // 客户端解析模式下 D1 里没有频道表，分组侧栏也只能由解析结果算
+    groups.value = clientGroupStats(res.rows)
+    loaded.value = true
+    error.value = ''
+    checkedKeys.value = []
+    page.value = 1
+    applyClientFilter()
+  } finally {
+    clientParsing.value = false
+  }
+}
+
+/** 本地筛选（分组 / 关键词 / 按源，与查询接口同义）。分页交给表格自己切 */
+function applyClientFilter(): void {
+  const kw = keyword.value.trim().toLowerCase()
+  const g = group.value
+  const sid = sourceFilter.value
+  clientRows.value = clientAll.value.filter((row) => {
+    if (g && row.group !== g) return false
+    if (sid !== null && row.sourceId !== sid) return false
+    if (!kw) return true
+    return row.name.toLowerCase().includes(kw) || row.tvgId.toLowerCase().includes(kw)
+  })
+  total.value = clientRows.value.length
+}
+
 async function reloadAll(): Promise<void> {
   checkedKeys.value = []
+  if (clientParse.value) {
+    // 重新拉源并解析（分组侧栏由解析结果重算）
+    await loadChannels(true, true)
+    return
+  }
   await Promise.all([loadGroups(), loadChannels(true)])
 }
 
@@ -601,8 +682,51 @@ const pagination = computed(() => ({
   },
 }))
 
+/**
+ * 客户端解析模式的只读表。
+ *
+ * 没有「操作」列是刻意的：D1 里没有这些行，改名/停用/删线路都改不动。
+ * 能改的只有「源」（源管理）和「屏蔽」（屏蔽页），提示条里写清了。
+ */
+const clientColumns = computed<DataTableColumns<ClientChannelRow>>(() => [
+  {
+    title: '台标',
+    key: 'logo',
+    width: 60,
+    render: (row) =>
+      row.logo
+        ? h('img', { src: row.logo, class: 'logo-thumb', alt: row.name, loading: 'lazy' })
+        : h('span', { class: 'logo-fallback' }, row.name.slice(0, 2)),
+  },
+  { title: '名称', key: 'name', minWidth: 180, ellipsis: { tooltip: true } },
+  { title: '分组', key: 'group', width: 160, ellipsis: { tooltip: true } },
+  {
+    title: '来源',
+    key: 'sourceId',
+    width: 150,
+    ellipsis: { tooltip: true },
+    render: (row) => sourceNameOf(row.sourceId),
+  },
+  {
+    title: '线路',
+    key: 'streams',
+    width: 80,
+    render: (row) => `${row.streams} 条`,
+  },
+  {
+    title: '状态',
+    key: 'enabled',
+    width: 96,
+    render: () => h(NTag, { size: 'small', type: 'success', bordered: false }, { default: () => '在播' }),
+  },
+])
+
 onMounted(async () => {
-  await Promise.all([loadGroups(), loadSources(), loadChannels()])
+  // 先拉主表：它决定当前是不是客户端解析模式。那种模式下分组侧栏由解析结果
+  // 算（D1 里没有频道表，分组接口只会返回空），所以分组要放在它之后。
+  await loadChannels()
+  await loadSources()
+  if (!clientParse.value) await loadGroups()
 })
 
 watch(sourceFilter, () => {
@@ -622,19 +746,27 @@ watch(sourceFilter, () => {
           <template #icon><Icon name="refresh" :size="15" /></template>
           刷新
         </NButton>
-        <NButton size="small" type="primary" :disabled="!canWrite" @click="openCreate">
+        <NButton size="small" type="primary" :disabled="!canWrite || clientParse" @click="openCreate">
           <template #icon><Icon name="plus" :size="15" /></template>
           新增频道
         </NButton>
       </template>
     </PageHeader>
 
-    <!-- 客户端解析模式：数据不在 D1 里，是边缘现拉源解析出来的。
+    <!-- 客户端解析模式：数据不在 D1 里，是浏览器现拉源解析出来的。
          写操作（改名/隐藏/删线路/探活）依赖频道表，这里如实说明。 -->
     <div v-if="clientParse" class="client-parse-tip">
-      当前服务端是<b>客户端解析模式</b>：这份列表由边缘从源实时解析，
-      不写数据库。改名 / 隐藏 / 删除线路请到「源管理」或用频道屏蔽；
-      电视端会自己拉源解析，看到的与这里一致。
+      当前服务端是<b>客户端解析模式</b>：这份列表是浏览器现拉源原文解析出来的，
+      不写数据库，也不占边缘的 CPU 额度。电视端同样自己拉源解析，
+      合并与屏蔽规则一致，所以你看到的与电视上一致。
+      <br />
+      这个模式下<b>改名 / 改分组 / 停用在本页改不了</b>——那些改动存在库里的频道行上，
+      而客户端解析模式不写这些行。要换台请到「源管理」改源，要隐藏分组或频道请用「屏蔽」。
+      <span v-if="clientFailed.length > 0">
+        <br />
+        另有 {{ clientFailed.length }} 个源没解析出频道（地址可能不是订阅文件，或拉取失败），
+        这部分不在下表里。
+      </span>
     </div>
 
     <div class="layout">
@@ -679,7 +811,12 @@ watch(sourceFilter, () => {
             :options="sources.map((s) => ({ label: s.name, value: s.id }))"
           />
 
-          <NPopover trigger="click" placement="bottom-start" style="max-width: 240px">
+          <NPopover
+            v-if="!clientParse"
+            trigger="click"
+            placement="bottom-start"
+            style="max-width: 240px"
+          >
             <template #trigger>
               <NButton size="small" secondary>
                 <template #icon><Icon name="grip" :size="14" /></template>
@@ -699,7 +836,9 @@ watch(sourceFilter, () => {
           </NPopover>
 
           <span class="spacer" />
-          <span class="hint-text">拖动任意一行可以调整顺序</span>
+          <span class="hint-text">
+            {{ clientParse ? '客户端解析模式下这张表只读' : '拖动任意一行可以调整顺序' }}
+          </span>
         </div>
 
         <div v-if="checkedKeys.length > 0" class="batch-bar">
@@ -712,7 +851,7 @@ watch(sourceFilter, () => {
           <NButton size="tiny" quaternary @click="checkedKeys = []">取消选择</NButton>
         </div>
 
-        <div class="card-panel table-wrap">
+        <div v-if="!clientParse" class="card-panel table-wrap">
           <StateBlock
             :loading="loading && !loaded"
             :error="error"
@@ -744,6 +883,37 @@ watch(sourceFilter, () => {
               :bordered="false"
               size="small"
               remote
+              striped
+            />
+          </StateBlock>
+        </div>
+
+        <!-- 客户端解析模式：只读表。数据是浏览器现拉源解析的，库里没有这些行，
+             所以没有「操作」列，翻页/筛选也都在本地做。 -->
+        <div v-else class="card-panel table-wrap">
+          <StateBlock
+            :loading="clientParsing || (loading && !loaded)"
+            :error="error"
+            :empty="loaded && clientRows.length === 0"
+            :min-height="360"
+            @retry="reloadAll"
+          >
+            <template #empty-action>
+              <p class="hint-text">
+                这个模式下列表由浏览器解析源得到。没有频道最常见的原因是：源地址填的是面板首页
+                而不是订阅地址（播放列表），或者源里的分组全被屏蔽了。
+              </p>
+            </template>
+
+            <NDataTable
+              :columns="clientColumns"
+              :data="clientRows"
+              :row-key="(row: ClientChannelRow) => row.key"
+              :pagination="pagination"
+              :loading="clientParsing"
+              :scroll-x="860"
+              :bordered="false"
+              size="small"
               striped
             />
           </StateBlock>

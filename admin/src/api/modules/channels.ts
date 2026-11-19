@@ -7,6 +7,7 @@ import type {
   ChannelPage,
   ChannelPatch,
   ChannelStream,
+  ClientParsePolicy,
   GroupStat,
   StreamInput,
 } from '../types'
@@ -48,6 +49,36 @@ export async function listChannels(query: ChannelQuery = {}): Promise<ChannelPag
     items,
     // 客户端解析模式下服务端会把整份列表一次性给全（D1 里没有表，没法分页）
     clientParse: obj.client_parse === true,
+    rawPaths: Array.isArray(obj.raw_paths) ? obj.raw_paths.map(String) : undefined,
+    policy: parseClientPolicy(obj.policy),
+  }
+}
+
+/**
+ * 解析 `policy`。
+ *
+ * 服务端可能给 `null`、也可能字段缺失（老版本 Worker），这里一律归一成
+ * 一份「空规则」，调用方不用到处判空，也不会因为一个坏字段把整页搞崩。
+ */
+function parseClientPolicy(raw: unknown): ClientParsePolicy | undefined {
+  if (!raw || typeof raw !== 'object') return undefined
+  const obj = raw as Record<string, unknown>
+  const strList = (v: unknown): string[] =>
+    Array.isArray(v) ? v.map((x) => String(x)).filter((x) => x !== '') : []
+  const overrides = Array.isArray(obj.overrides)
+    ? (obj.overrides as Array<Record<string, unknown>>)
+        .filter((o) => o && typeof o.stable_key === 'string')
+        .map((o) => ({
+          stable_key: String(o.stable_key),
+          name: typeof o.name === 'string' ? o.name : null,
+          group_name: typeof o.group_name === 'string' ? o.group_name : null,
+          enabled: typeof o.enabled === 'number' ? o.enabled : null,
+        }))
+    : []
+  return {
+    groups_hidden: strList(obj.groups_hidden),
+    channels_hidden: strList(obj.channels_hidden),
+    overrides,
   }
 }
 

@@ -92,7 +92,16 @@ export async function previewSource(id: number): Promise<PreviewResult> {
  * 走裸 fetch 而不是 `http.get`：后端原样返回文本/字节，不是 `{code,msg,data}` 信封。
  * 鉴权照旧带 Bearer（边缘管理台登录后存在 localStorage）。
  */
-async function fetchSourceText(rawPath: string): Promise<string> {
+/**
+ * 拉一个源的原始字节（边缘部署的 `/sources/{id}/raw`）。
+ *
+ * 走裸 fetch 而不是 `http.get`：后端原样返回文本/字节，不是 `{code,msg,data}` 信封。
+ * 鉴权照旧带 Bearer（边缘管理台登录后存在 localStorage）。
+ *
+ * 频道页在客户端解析模式下也用它：`/admin/channels` 只给 `raw_paths`，
+ * 由浏览器逐个拉原文再解析（Worker 每次请求只有 10ms CPU，解析不了）。
+ */
+export async function fetchSourceText(rawPath: string): Promise<string> {
   const headers: Record<string, string> = { Accept: '*/*' }
   const tk = adminToken()
   if (tk) headers.Authorization = `Bearer ${tk}`

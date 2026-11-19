@@ -190,6 +190,28 @@ export interface ParsedSource {
 }
 
 /**
+ * 频道名归一化：只抹掉空白与常见分隔符。
+ *
+ * ★ 必须与 `edge/scripts/build.mjs` 的 `normalizeName`、Android
+ *   `M3uClient.normalizeName` 完全一致——三处算出的键不一致，就会出现
+ *   「同一个台在管理台和电视上各算一条」或者「改名/屏蔽对不上」。
+ */
+export function normalizeChannelName(name: string): string {
+  return name.toLowerCase().replace(/[\s\-_.·|/\\]+/g, '')
+}
+
+/**
+ * 频道稳定键（= 库里的 `stable_key`）。
+ *
+ * 与 `build.mjs` 的 `dedupeKey`、`M3uClient` 构造频道时的 key 同一条规则：
+ * 有 tvg-id 用 `id:`，否则用 `name:` + 归一化名。
+ */
+export function channelKey(item: { tvg_id?: string; name: string }): string {
+  const id = (item.tvg_id || '').trim()
+  return id ? `id:${id}` : `name:${normalizeChannelName(item.name)}`
+}
+
+/**
  * 解析一份源文本。json / html / empty / unknown 一律返回空列表——
  * 这不是错误，是「你填的可能是面板首页而不是订阅地址」，UI 会据此给提示。
  */

@@ -203,11 +203,41 @@ export type ChannelPatch = Partial<{
   enabled: boolean
 }>
 
+/**
+ * 客户端解析模式下的屏蔽规则（`/admin/channels` 的 `policy`）。
+ *
+ * ★ 语义必须与电视端 `M3uClient.build()` 一致，否则「管理台看到的」和
+ *   「电视上看到的」会变成两份不同的列表：
+ *   · `groups_hidden`：按**分组名精确**命中
+ *   · `channels_hidden`：按**频道显示名精确**命中（不是 tvg-id）
+ */
+export interface ClientParsePolicy {
+  groups_hidden: string[]
+  channels_hidden: string[]
+  /**
+   * 人工改名/改分组/停用的覆盖行（按 stable_key）。
+   *
+   * ⚠️ 客户端解析模式下电视端**不读**这张表（`/tv/channel-src` 下发的 policy
+   *    只有两个 hidden 列表），所以管理台也不据它改显示——两边必须一致。
+   *    保留字段是为了让页面能说清「改名为什么没生效」。
+   */
+  overrides: Array<{
+    stable_key: string
+    name?: string | null
+    group_name?: string | null
+    enabled?: number | null
+  }>
+}
+
 export interface ChannelPage {
   total: number
   items: Channel[]
   /** 服务端处于「客户端解析」模式：列表是现拉的，D1 里没有频道表 */
   clientParse?: boolean
+  /** 客户端解析模式：各源原文入口（`sources/{id}/raw`），由浏览器自己拉取解析 */
+  rawPaths?: string[]
+  /** 客户端解析模式：屏蔽规则 */
+  policy?: ClientParsePolicy
 }
 
 export interface ChannelStream {

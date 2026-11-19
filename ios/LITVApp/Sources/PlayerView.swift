@@ -616,9 +616,12 @@ struct PlayerView: View {
             Text(label)
                 .font(.system(size: 11))
                 .foregroundColor(.white)
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)  // 竖屏窄，不能让「比例 自动」换行
                 .padding(.horizontal, 9)
                 .frame(height: 30)
         }
+        .buttonStyle(.plain)
     }
 
     /// 画面比例的中文标签（与 Android 的 `比例 自动` 一致）
@@ -717,11 +720,16 @@ struct PlayerView: View {
                            _ action: @escaping () -> Void) -> some View {
         Button(action: action) {
             VStack(spacing: 2) {
-                Image(systemName: symbol).font(.system(size: size))
-                Text(label).font(.system(size: 10))
+                // 必须显式给白色：Image 不给颜色会继承 App 的 accentColor（这里是绿色），
+                // 用户实测指出「图标怎么是绿的」。
+                Image(systemName: symbol)
+                    .font(.system(size: size))
+                    .foregroundColor(.white)
+                Text(label).font(.system(size: 10)).foregroundColor(.white)
             }
             .frame(minWidth: 46)
         }
+        .buttonStyle(.plain)
     }
 
     // ---------------------------------------------------------------- 内核 / 解码

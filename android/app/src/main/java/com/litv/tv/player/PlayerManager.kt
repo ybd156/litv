@@ -456,6 +456,17 @@ class PlayerManager(
     private val budgetWatchdog = Runnable {
         if (prepared && firstFrame) return@Runnable
         if (budgetExpired) return@Runnable
+        // VLC / mpv **永远不上报 onFirstFrame**（engineReportsFirstFrame = false），
+        // 所以上面 prepared && firstFrame 这个条件它们永远满足不了，预算一到就误报。
+        // 实测症状：屏幕显示「起播超时」，但电视画面在正常播放。
+        // 内核自己说在播就说明已经起来了，不报超时、也不再停它。
+        if (runCatching { current?.isPlaying() == true }.getOrDefault(false)) {
+            budgetExpired = true
+            removeStartTimers()
+            Log.i(TAG, "起播预算到期，但内核已在播放，按成功处理")
+            com.litv.tv.data.PlayLog.i(TAG, "起播预算到期，但内核已在播放，按成功处理")
+            return@Runnable
+        }
         // 置终态：之后内核再报 Prepared/Playing/首帧 都不再改变状态
         budgetExpired = true
         removeStartTimers()

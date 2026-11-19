@@ -1145,7 +1145,11 @@ struct PlayerView: View {
                 // 让人以为是网络问题，其实是频道 id 对不上。
                 guard let direct = ChannelStore.shared.url(of: active.id),
                       let directURL = URL(string: direct) else {
-                    errorText = "本地频道表还没就绪（或这个台不在源里），稍等再点一次。"
+                    // 诊断：把 id、名字、本地表条目数摊出来。
+                    // 列表有频道但这里查不到，只有两种可能：
+                    //   ① 本地表还没就绪（urlCount = -1）
+                    //   ② active 是旧对象，id 与本地表对不上（urlCount > 0 但缺这个 id）
+                    errorText = "本地频道表未就绪\nid=\(active.id) · \(active.name)\n本地表 \(ChannelStore.shared.urlCount()) 条地址"
                     loading = false
                     return
                 }

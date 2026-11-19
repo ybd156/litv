@@ -38,6 +38,19 @@ final class ChannelStore {
         return current?.headersById[channelId] ?? [:]
     }
 
+    /// 诊断用：本地表里有多少条「id → 地址」。
+    /// -1 = current 还是 nil（解析没成功）。
+    func urlCount() -> Int {
+        lock.lock(); defer { lock.unlock() }
+        return current?.urlById.count ?? -1
+    }
+
+    /// 诊断用：本地表里有没有这个 id
+    func has(_ channelId: Int64) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        return current?.urlById[channelId] != nil
+    }
+
     private func cacheURL() -> URL? {
         FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first?
             .appendingPathComponent("channels_client.json")

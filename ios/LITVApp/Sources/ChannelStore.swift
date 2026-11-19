@@ -22,6 +22,9 @@ final class ChannelStore {
     }
 
     private(set) var current: Parsed?
+    /// 最近一次解析失败的原因。以前失败只回调 nil，界面上完全看不出来
+    /// （表现是「列表有频道但点播报本地表未就绪」），排查只能靠猜。
+    private(set) var lastError: String?
     private var loading = false
     private let lock = NSLock()
 
@@ -68,13 +71,22 @@ final class ChannelStore {
     // MARK: - 内部
 
     private func build(session: Session, dlKey: String) async -> Parsed? {
-        guard let env = try? await session.api.channelSrc() else { return readCache() }
-        guard let payload = decrypt(env: env, dlKey: dlKey) else { return readCache() }
+        guard let env = try? await session.api.channelSrc() else {
+            lastError = "拉取源配置失败（/tv/channel-src 请求出错）"
+            return readCache()
+        }
+        guard let payload = decrypt(env: env, dlKey: dlKey) else {
+            lastError = "解密源配置失败"
+            return readCache()
+        }
 
         let version = payload["version"] as? String ?? "0"
         if let cached = readCache(), cached.version == version { return cached }
 
-        guard let urls = payload["urls"] as? [[String: Any]] else { return nil }
+        guard let urls = payload["urls"] as? [[String: Any]] else {
+            lastError = "源配置里没有 urls 字段"
+            return nil
+        }
         let policy = payload["policy"] as? [String: Any]
         let hiddenGroups = Set((policy?["groups_hidden"] as? [String]) ?? [])
         let hiddenChannels = Set((policy?["channels_hidden"] as? [String]) ?? [])
@@ -82,13 +94,14 @@ final class ChannelStore {
         var merged: [String: Channel] = [:]
         var urlById: [Int64: String] = [:]
         var headersById: [Int64: [String: String]] = [:]
+        var fetchFailed = 0
 
         for u in urls {
             guard let urlStr = u["url"] as? String else { continue }
             guard let text = try? await fetchText(urlStr,
                                                  ua: u["ua"] as? String ?? "",
                                                  referer: u["referer"] as? String ?? "")
-            else { continue }
+            else { fetchFailed += 1; continue }
             Self.merge(text: text, into: &merged, urlById: &urlById, headersById: &headersById,
                        defaultUA: u["ua"] as? String ?? "",
                        defaultReferer: u["referer"] as? String ?? "")
@@ -97,7 +110,11 @@ final class ChannelStore {
         let kept = merged.values.filter {
             !hiddenGroups.contains($0.group) && !hiddenChannels.contains($0.name)
         }
-        if kept.isEmpty { return readCache() }
+        if kept.isEmpty {
+            lastError = "解析后频道为空（拉源失败 \(fetchFailed)/\(urls.count)，或全被屏蔽规则滤掉）"
+            return readCache()
+        }
+        lastError = nil
 
         let keepIds = Set(kept.map { $0.id })
         urlById = urlById.filter { keepIds.contains($0.key) }

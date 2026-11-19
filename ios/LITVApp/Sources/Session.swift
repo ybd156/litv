@@ -291,7 +291,13 @@ final class Session: ObservableObject {
         // iOS 目前没有设备级 dl_key，服务端会下发明文信封（v=0），decrypt 直接返回。
         if clientParse {
             ChannelStore.shared.load(session: self, dlKey: "") { [weak self] parsed in
-                guard let self, let p = parsed else { return }
+                guard let self else { return }
+                guard let p = parsed else {
+                    // 失败必须说出来：以前静默 return，表现是
+                    // 「列表有频道、点播报本地表未就绪」，完全看不出原因。
+                    self.statusText = "客户端解析失败：\(ChannelStore.shared.lastError ?? "未知原因")"
+                    return
+                }
                 self.channels = p.channels
                 self.statusText = "客户端解析 \(p.channels.count) 个频道"
                 self.rebuildGroups()

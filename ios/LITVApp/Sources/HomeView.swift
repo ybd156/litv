@@ -31,6 +31,15 @@ struct HomeView: View {
                 .padding(.horizontal, 14)
                 .padding(.top, 8)
 
+                // 解析状态必须可见：解析失败时列表里显示的是服务端旧频道，
+                // 点播才会报「本地表未就绪」——原因只能从这里看出来。
+                if !session.statusText.isEmpty {
+                    Text(session.statusText)
+                        .font(.caption2)
+                        .foregroundColor(.gray)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 16)
+                }
                 groupBar
                 list
             }

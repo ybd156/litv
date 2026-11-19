@@ -312,7 +312,11 @@ class ExoEngine : PlayerEngine {
         // ERROR_CODE_BEHIND_LIVE_WINDOW → seek 回边缘 → 重新缓冲，
         // 表现就是「越看越卡」。落盘日志里起播 6 秒就掉出去过一次。
         // 社区直播实践是 1.5~3 秒，这里跟随设置并夹在 1~8 秒。
-        val minBufferMs = bufferMs.coerceIn(1_000, 8_000)
+        // 下限从 1 秒抬到 12 秒。实测这个源（mursor）的 HLS 分片间隔接近 10 秒：
+        // minBuffer 如果小于一个分片长度，缓冲刚攒够就掉回阈值以下，
+        // 表现是每 15 秒一次「重缓冲：播放中回到 BUFFERING」+「位置回落」。
+        // 起播不受影响 —— 起播深度由 bufferForPlaybackMs(800ms) 控制，不是这个值。
+        val minBufferMs = bufferMs.coerceIn(12_000, 20_000)
         // 上限原来只有 max(缓冲设置, 12s)。实测 cctv17 这类源：
         // 播放列表（1KB）每次要 880~1450ms、分片（2~3MB）要 870~1213ms，
         // 两分钟里"加载慢"出现 29 次、重缓冲 2 次 —— 12 秒的池子太薄，

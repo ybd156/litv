@@ -517,6 +517,10 @@ struct PlayerView: View {
             ctlButton(paused ? "play.fill" : "pause.fill", paused ? "播放" : "暂停", size: 22) { togglePause() }
             ctlButton("forward.end.fill", "下一台", size: 18) { switchBy(1) }
             ctlButton(muted ? "speaker.slash.fill" : "speaker.wave.2.fill", muted ? "取消静音" : "静音", size: 18) { toggleMute() }
+            // 内核 / 解码：和 Android 全屏工具栏的 `内核 自动` / `解码 自动` 对齐。
+            // 以前只能进设置改，排查「某个台播不了」要来回跳页面。
+            ctlButton("cpu", "内核 \(engineLabel)", size: 18) { cycleEngine() }
+            ctlButton("square.stack.3d.up.fill", "解码 \(decodeLabel)", size: 18) { cycleDecode() }
             ctlButton(isFullscreen
                         ? "arrow.down.right.and.arrow.up.left"
                         : "arrow.up.left.and.arrow.down.right",
@@ -635,6 +639,38 @@ struct PlayerView: View {
             }
             .frame(minWidth: 52)
         }
+    }
+
+    // ---------------------------------------------------------------- 内核 / 解码
+
+    private var engineLabel: String {
+        switch session.engineMode {
+        case "vlc": return "VLC"
+        case "avplayer": return "AV"
+        default: return "自动"
+        }
+    }
+
+    private var decodeLabel: String {
+        switch session.decodeMode {
+        case "hard": return "硬解"
+        case "soft": return "软解"
+        default: return "自动"
+        }
+    }
+
+    /// 点一下切到下一个（与 Android 全屏工具栏的「内核 自动 / 解码 自动」一致）。
+    /// 改的是 session 的 @Published 字段，现有的 onChange 会自动重起当前台。
+    private func cycleEngine() {
+        let order = ["auto", "vlc", "avplayer"]
+        let i = order.firstIndex(of: session.engineMode) ?? 0
+        session.engineMode = order[(i + 1) % order.count]
+    }
+
+    private func cycleDecode() {
+        let order = ["auto", "hard", "soft"]
+        let i = order.firstIndex(of: session.decodeMode) ?? 0
+        session.decodeMode = order[(i + 1) % order.count]
     }
 
     // ---------------------------------------------------------------- 控件浮层

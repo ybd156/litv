@@ -63,5 +63,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: device-apk-${{ inputs.flavor }}
-          path: android/app/build/outputs/apk/*/release/*.apk
+          # 不再分 tv/phone flavor，产物直接在 apk/release/ 下（以前是 apk/<flavor>/release/）。
+          # 用 ** 兼容两种结构，改回 flavor 也不会再挂。
+          path: android/app/build/outputs/apk/**/*.apk
           if-no-files-found: error

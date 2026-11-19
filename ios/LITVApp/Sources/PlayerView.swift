@@ -515,56 +515,90 @@ struct PlayerView: View {
     ///
     /// 之前只有 OSD 显示信息，没有任何操作控件——用户只能靠手势，
     /// 而且不知道能干什么。这里补齐成常规播放器的样子。
+    /// 播放控制层：与 Android 手机端同构（2026-11-19 按用户要求对齐）。
+    ///
+    /// 布局：**中央大播放键 + 左右边缘换台 + 底部左（比例/内核/解码）右（静音/全屏/投屏/更多）**。
+    /// 之前是底部一条横向胶囊，和 Android 的分散式布局完全不是一回事。
     private var controls: some View {
-        // 横向可滚动：按钮已经有 8 个，iPhone 竖屏宽度放不下，
-        // 直接塞 HStack 会被压缩变形。用 ScrollView 保证每个按钮都能点到。
-        ScrollView(.horizontal, showsIndicators: false) {
-        // 与 Android 手机端对齐（2026-11-18）：OSD 上重新给出「上一台 / 下一台」按钮。
-        // 之前是刻意去掉的（只留 4 个按钮、切台靠左右滑），但 Android 端已经把
-        // ⏮ / ⏭ 加了回来（竖屏与全屏共用同一浮层），iOS 跟上，滑动手势仍然保留。
-        HStack(spacing: 14) {
-            ctlButton("⏮", "上一台", size: 20) { switchBy(-1) }
-            ctlButton(paused ? "▶" : "⏸", paused ? "播放" : "暂停", size: 22) { togglePause() }
-            ctlButton("⏭", "下一台", size: 20) { switchBy(1) }
-            ctlButton(muted ? "🔇" : "🔊", muted ? "取消静音" : "静音", size: 18) { toggleMute() }
-            // 内核 / 解码：和 Android 全屏工具栏的 `内核 自动` / `解码 自动` 对齐。
-            // 以前只能进设置改，排查「某个台播不了」要来回跳页面。
-            ctlButton("⚙", "内核 \(engineLabel)", size: 18) { cycleEngine() }
-            ctlButton("▤", "解码 \(decodeLabel)", size: 18) { cycleDecode() }
-            ctlButton("⛶", isFullscreen ? "退出全屏" : "全屏", size: 18) { toggleFullscreen() }
-            ctlButton("⇪", "投屏", size: 18) {
-                showCast = true
-                Task { await loadRenderers() }
+        ZStack {
+            // 中央：播放 / 暂停（72pt，和 Android 的 btnPlayPause 同尺寸）
+            Button(action: togglePause) {
+                Text(paused ? "▶" : "⏸")
+                    .font(.system(size: 34))
+                    .foregroundColor(.white)
+                    .frame(width: 72, height: 72)
+                    .background(Circle().fill(Color.black.opacity(0.28)))
             }
-            // 「更多」：画面比例 / 节目单 / 时移 / 换线路。
-            // 这四项原先挂在 .toolbar 上（无导航宿主 → 点不到），改到控制条里，
-            // 竖屏与全屏都能用。同一个 Menu 里放，避免控制条被按钮挤爆。
-            Menu {
-                Button("自动") { aspectMode = "auto" }
-                Button("16:9") { aspectMode = "16:9" }
-                Button("4:3") { aspectMode = "4:3" }
-                Button("拉伸铺满") { aspectMode = "fill" }
-                Button("裁切铺满") { aspectMode = "zoom" }
-                Divider()
-                Button("节目单") { showEpg = true }
-                Button("时移回看") { Task { await startTimeshift() } }
-                Button("换线路") { Task { await loadStreams() } }
-            } label: {
-                Text("⋯")
-                    .font(.system(size: 20))
-                    .frame(minWidth: 46, minHeight: 44)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+            // 左右边缘：上一台 / 下一台
+            HStack {
+                ctlButton("⏮", "上一台", size: 22) { switchBy(-1) }
+                Spacer()
+                ctlButton("⏭", "下一台", size: 22) { switchBy(1) }
             }
-            .foregroundColor(.white)
-            .accessibilityLabel("更多")
+            .padding(.horizontal, 10)
+
+            // 底部：左三枚胶囊 + 右四个按钮
+            VStack {
+                Spacer()
+                HStack(spacing: 8) {
+                    pillButton("比例 \(aspectLabel)") { cycleAspect() }
+                    pillButton("内核 \(engineLabel)") { cycleEngine() }
+                    pillButton("解码 \(decodeLabel)") { cycleDecode() }
+                    Spacer(minLength: 4)
+                    ctlButton(muted ? "🔇" : "🔊", muted ? "取消静音" : "静音", size: 17) { toggleMute() }
+                    ctlButton("⛶", isFullscreen ? "退出全屏" : "全屏", size: 17) { toggleFullscreen() }
+                    ctlButton("⇪", "投屏", size: 17) {
+                        showCast = true
+                        Task { await loadRenderers() }
+                    }
+                    // 「更多」：节目单 / 时移 / 换线路（比例已经上提到胶囊里）
+                    Menu {
+                        Button("节目单") { showEpg = true }
+                        Button("时移回看") { Task { await startTimeshift() } }
+                        Button("换线路") { Task { await loadStreams() } }
+                    } label: {
+                        Text("⋯")
+                            .font(.system(size: 20))
+                            .foregroundColor(.white)
+                            .frame(minWidth: 40, minHeight: 40)
+                    }
+                    .accessibilityLabel("更多")
+                }
+                .padding(.horizontal, 12)
+                .padding(.bottom, 20)
+            }
         }
-        .padding(.horizontal, 4)
+    }
+
+    /// 底部小胶囊（比例 / 内核 / 解码），与 Android 的 `PhoneCtlPill` 同款。
+    private func pillButton(_ label: String, _ action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(label)
+                .font(.system(size: 11))
+                .foregroundColor(.white)
+                .padding(.horizontal, 9)
+                .frame(height: 30)
+                .background(Capsule().fill(Color.black.opacity(0.36)))
         }
-        .foregroundColor(.white)
-        .padding(.horizontal, 10)
-        .padding(.vertical, 10)
-        .background(.ultraThinMaterial)
-        .cornerRadius(20)
-        .padding(.bottom, 18)
+    }
+
+    /// 画面比例的中文标签（与 Android 的 `比例 自动` 一致）
+    private var aspectLabel: String {
+        switch aspectMode {
+        case "16:9": return "16:9"
+        case "4:3": return "4:3"
+        case "fill": return "拉伸"
+        case "zoom": return "裁切"
+        default: return "自动"
+        }
+    }
+
+    private func cycleAspect() {
+        let order = ["auto", "16:9", "4:3", "fill", "zoom"]
+        let i = order.firstIndex(of: aspectMode) ?? 0
+        aspectMode = order[(i + 1) % order.count]
     }
 
     // ---------------------------------------------------------------- 投屏

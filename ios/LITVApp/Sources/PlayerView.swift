@@ -131,7 +131,12 @@ struct PlayerView: View {
     /// 强制 vlc 失败后仍允许回退 AVPlayer——与 Android 的 `EngineChain.chainFor`
     /// 一致：强制内核打头，但不砍掉兜底。
     private var preferVLC: Bool {
-        session.engineMode == "avplayer" ? false : VLCPlayerView.isAvailable
+        if session.engineMode == "avplayer" { return false }
+        // 开了「直播列表强制刷新」就必须走 AVPlayer：VLCKit 只有 UA/Referer，
+        // 带不了 Cache-Control，会一直被 CDN 的过期 m3u8 喂住（分片 0 字节）。
+        // 裸 TS 是例外——AVPlayer 解不了，只能交给 VLC，那种源也就吃不到这个开关。
+        if session.hlsNoCache && playKind != "ts" { return false }
+        return VLCPlayerView.isAvailable
     }
 
     var body: some View {

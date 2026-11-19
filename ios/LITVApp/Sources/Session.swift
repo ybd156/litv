@@ -253,10 +253,15 @@ final class Session: ObservableObject {
         epgUrl = b.epgUrl
         // 客户端解析模式：频道列表由客户端自己拉源解析（服务端 D1 不存频道表）
         clientParse = b.clientParse != 0
-        // 拿到地址就后台拉一次：不阻塞界面，解析完本地就有节目单了
-        EpgStore.shared.ensure(url: b.epgUrl)
+        // 拿到地址就后台拉一次：不阻塞界面，解析完本地就有节目单了。
+        // 就绪后重算「正在播」——client 模式下服务端不下发 b.now，不补就是空的。
+        EpgStore.shared.ensure(url: b.epgUrl) { [weak self] in
+            self?.refreshNowFromEpg()
+        }
         channels = b.channels
-        groups = b.groups
+        // 分组从**频道自己**算，不用服务端 b.groups：client 模式下 D1 里没有频道表，
+        // 那份 groups 是过期数据（新分组不会出现、数量也不准）。Android 也是这么算的。
+        rebuildGroups()
         favorites = Set(b.favorites)
         var m: [Int64: String] = [:]
         for n in b.now { m[n.channelId] = n.title }
@@ -269,9 +274,41 @@ final class Session: ObservableObject {
                 guard let self, let p = parsed else { return }
                 self.channels = p.channels
                 self.statusText = "客户端解析 \(p.channels.count) 个频道"
+                self.rebuildGroups()
+                // 频道换成本地的了：按本地节目单重新算一遍「正在播」
+                self.refreshNowFromEpg()
             }
         }
         errorText = nil
+    }
+
+    /// 从频道列表重算分组：顺序按首次出现，count 按实际频道数。
+    private func rebuildGroups() {
+        var order: [String] = []
+        var counts: [String: Int] = [:]
+        for ch in channels {
+            let g = ch.group
+            guard !g.isEmpty else { continue }
+            if counts[g] == nil { order.append(g) }
+            counts[g, default: 0] += 1
+        }
+        groups = order.map { ChannelGroup(name: $0, count: counts[$0] ?? 0) }
+    }
+
+    /// 用本地节目单补「正在播」。
+    /// client 模式下服务端不下发 `b.now`，不自己算的话频道列表右侧永远空着。
+    /// 匹配规则与 Android 一致：epgId 优先，空了按频道名反查。
+    func refreshNowFromEpg() {
+        guard !channels.isEmpty else { return }
+        let now = Int64(Date().timeIntervalSince1970)
+        var m = nowTitles
+        for ch in channels {
+            guard let list = EpgStore.shared.programs(channel: ch, dayOffset: 0) else { continue }
+            if let cur = list.first(where: { $0.startAt <= now && $0.endAt > now }) {
+                m[ch.id] = cur.title
+            }
+        }
+        if !m.isEmpty { nowTitles = m }
     }
 
     func toggleFavorite(_ ch: Channel) {

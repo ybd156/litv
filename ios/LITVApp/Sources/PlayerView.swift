@@ -336,15 +336,19 @@ struct PlayerView: View {
                 // VLCKit 的状态通知是在它自己的线程上发出的，直接改 @State
                 // 属于跨线程写 UI 状态；统一切回主线程再处理。
                 Task { @MainActor in
-                    sawPlaybackState = true
                     switch st {
                     case .playing:
+                        // 只有真正出过画面才算"起播过"：以前这句放在 switch 之前，
+                        // 于是第一次 .buffering 就把它置 true，下面那条判断等于失效。
+                        sawPlaybackState = true
                         loading = false
                         // 起播成功必须撤掉超时兜底，否则 8 秒后它会判定"还没起播"
                         // 并弹出一个假超时（正常起播被它盖住）。
                         loadingWatchdog?.cancel()
                     case .buffering:
-                        loading = true
+                        // 直播流在分片边界会反复 buffering。已经出过画面就不要再转圈，
+                        // 否则用户看到的就是「画面在播，中间一直有个加载圈」（实测反馈）。
+                        if !sawPlaybackState { loading = true }
                     case .failed:
                         // 交给 AVPlayer 兜底，转圈改由那条路径控制
                         loadingWatchdog?.cancel()
@@ -918,7 +922,7 @@ struct PlayerView: View {
     private func loadEpg(day: Int) async {
         epgTip = nil
         // 本地节目单优先（服务端只给 xmltv 地址，epg_programs 在 edge 上是空的）
-        let local = EpgStore.shared.programs(epgId: active.epgId, dayOffset: day) ?? []
+        let local = EpgStore.shared.programs(channel: active, dayOffset: day) ?? []
         let list = local.isEmpty
             ? ((try? await session.api.epg(channelId: active.id, day: day)) ?? [])
             : local
@@ -972,7 +976,7 @@ struct PlayerView: View {
         // 之前放在播放成功之后，一旦取流失败（或 VLC 卡住不回调），
         // 节目单就永远是空的——用户看到的就是"视频里没有节目单"。
         epgDay = 0
-        let localNow = EpgStore.shared.programs(epgId: active.epgId, dayOffset: 0) ?? []
+        let localNow = EpgStore.shared.programs(channel: active, dayOffset: 0) ?? []
         programs = localNow.isEmpty
             ? ((try? await session.api.epg(channelId: active.id)) ?? [])
             : localNow

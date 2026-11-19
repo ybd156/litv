@@ -1,0 +1,84 @@
+name: Device IPA
+
+# 出一份**未签名**的 iOS 测试包，作为 artifact 供真机侧载。
+#
+# 和 Release 的区别：不建 tag、不发 Release、不动版本号，改完代码跑一次即可。
+# 免登录下载（nightly.link 代理公开仓库的 artifact）：
+#   https://nightly.link/ybd156/litv/workflows/device-ipa/main/ios-ipa.zip
+#
+# 装的时候用 Sideloadly / AltStore 自签。
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# 同一分支只保留最新一次出包。
+concurrency:
+  group: device-ipa-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: macos-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: 安装工具
+        run: brew install xcodegen
+
+      - name: 生成工程 + 装 Pod
+        working-directory: ios
+        run: |
+          xcodegen generate
+          pod install --repo-update 2>&1 | tail -10
+
+      - name: 编译（不签名）
+        working-directory: ios
+        run: |
+          # ⚠️ pipefail 不能少：否则 xcodebuild 失败会被 tail 的退出码盖掉，
+          #    表现为"构建成功但 ipa 里没有主二进制"（踩过）。
+          set -o pipefail
+          xcodebuild \
+            -workspace LITV.xcworkspace \
+            -scheme LITV \
+            -sdk iphoneos \
+            -configuration Release \
+            -derivedDataPath build \
+            -destination 'generic/platform=iOS' \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGN_ENTITLEMENTS="" \
+            build 2>&1 | tail -60
+
+      - name: 打包未签名 ipa
+        working-directory: ios
+        run: |
+          APP="build/Build/Products/Release-iphoneos/LITV.app"
+          test -d "$APP" || { echo "没找到 LITV.app"; exit 1; }
+          # 主二进制必须存在——防"假成功"（构建失败但产物目录是空的）
+          test -f "$APP/LITV" || { echo "LITV.app 里没有主二进制，构建其实失败了"; exit 1; }
+          rm -rf Payload LITV-dev-unsigned.ipa
+          mkdir -p Payload
+          cp -R "$APP" Payload/
+          rm -rf Payload/LITV.app/_CodeSignature Payload/LITV.app/embedded.mobileprovision
+          zip -qry LITV-dev-unsigned.ipa Payload
+          ls -lh LITV-dev-unsigned.ipa
+
+      - name: 收集 ipa
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          # 版本号直接从 project.yml 读：这个工作流不动版本号，
+          # 也不依赖 release.yml 的 version job。
+          V=$(grep -m1 'CFBundleShortVersionString' ios/project.yml | sed 's/.*"\(.*\)".*/\1/')
+          cp ios/LITV-dev-unsigned.ipa "out/LITV-${V}-dev-unsigned.ipa"
+          echo "版本 $V"
+          ls -lh out/
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ios-ipa
+          path: out/*.ipa

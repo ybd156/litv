@@ -306,10 +306,7 @@ struct PlayerView: View {
 
                 if controlsVisible {
                     VStack {
-                        // 竖屏时信息卡已经在画面下方常显，这里不再重复
-                        if isFullscreen {
-                            osd
-                        }
+                        // 全屏时不显示 OSD 信息层（用户要求：与 Android 一致，全屏画面干净）
                         Spacer()
                         controls
                     }
@@ -401,8 +398,13 @@ struct PlayerView: View {
         forceFullscreen.toggle()
         let wantLandscape = forceFullscreen
         if let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene {
+            // iOS 16+：必须先让系统重新评估支持方向，否则 requestGeometryUpdate 会静默失败——
+            // 表现就是「点了全屏没转屏，竖屏里放 16:9 视频，上下大片黑」。
+            scene.windows.first?.rootViewController?.setNeedsUpdateOfSupportedInterfaceOrientations()
             scene.requestGeometryUpdate(
-                .iOS(interfaceOrientations: wantLandscape ? .landscapeRight : .portrait))
+                .iOS(interfaceOrientations: wantLandscape ? .landscapeRight : .portrait)) { error in
+                NSLog("LITV: 转屏失败 \(error.localizedDescription)")
+            }
         }
     }
 
@@ -578,31 +580,6 @@ struct PlayerView: View {
                               ? "arrow.down.right.and.arrow.up.left"
                               : "arrow.up.left.and.arrow.down.right",
                               isFullscreen ? "退出全屏" : "全屏", size: 17) { toggleFullscreen() }
-                    // 「更多」：节目单 / 时移 / 换线路
-                    Menu {
-                        Button("比例 自动") { aspectMode = "auto" }
-                        Button("比例 16:9") { aspectMode = "16:9" }
-                        Button("比例 4:3") { aspectMode = "4:3" }
-                        Button("比例 拉伸") { aspectMode = "fill" }
-                        Button("比例 裁切") { aspectMode = "zoom" }
-                        Divider()
-                        Button("内核 自动") { session.engineMode = "auto" }
-                        Button("内核 VLC") { session.engineMode = "vlc" }
-                        Button("内核 AVPlayer") { session.engineMode = "avplayer" }
-                        Button("解码 自动") { session.decodeMode = "auto" }
-                        Button("解码 硬解") { session.decodeMode = "hard" }
-                        Button("解码 软解") { session.decodeMode = "soft" }
-                        Divider()
-                        Button("节目单") { showEpg = true }
-                        Button("时移回看") { Task { await startTimeshift() } }
-                        Button("换线路") { Task { await loadStreams() } }
-                    } label: {
-                        Image(systemName: "ellipsis")
-                            .font(.system(size: 20))
-                            .foregroundColor(.white)
-                            .frame(minWidth: 40, minHeight: 40)
-                    }
-                    .accessibilityLabel("更多")
                 }
                 .padding(.horizontal, 12)
                 .padding(.bottom, 20)

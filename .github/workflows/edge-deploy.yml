@@ -180,6 +180,18 @@ jobs:
           # vars 和 secrets 都认：有人习惯放 Variable（值可见，便于排查），
           # 有人习惯放 Secret。两处都读，避免"我明明设了却不生效"。
           CHANNELS_MODE: ${{ vars.CHANNELS_MODE || secrets.CHANNELS_MODE || 'server' }}
+          # 流域名：**默认自动跟随源自身的域名**，不需要任何配置。
+          # 规则见 build.mjs 的 followSourceHost()：流地址的域名与源入口不同、
+          # 但同属一个主域时，直接改成源入口那个域名（只换 host，path 与签名
+          # 参数原样保留）；不同主域一律不动，避免把别人的源改坏。
+          # 这里**不做探测**：CI 跑在 GitHub runner 上，它能连上不代表用户
+          # 家里能连上，用 runner 的探测结果判断客户端可达性是错的。
+          #
+          # 下面这条是可选的高级覆盖：显式 from=to，优先级高于自动跟随。
+          # 用 Variable 不用 Secret：不是机密，值看得见才好排查。
+          STREAM_HOST_REWRITE: ${{ vars.STREAM_HOST_REWRITE }}
+          # 自动跟随开关：不设=开；设 0 关掉（只保留显式映射的行为）。
+          STREAM_HOST_FOLLOW_SOURCE: ${{ vars.STREAM_HOST_FOLLOW_SOURCE }}
         # pipefail：不加的话 `| tee` 会把退出码变成 tee 的 0，
         # 生成失败也显示成功——那比失败更糟。
         run: |

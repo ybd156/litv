@@ -378,7 +378,9 @@ class PlayerManager(
             val b = v2.displayedPictures()
             if (b < 0) return@postDelayed
             val delta = b - a
-            if (delta < 5) {
+            // 阈值从 5 降到 2：实测起播阶段帧率本来就低（缓冲刚结束、关键帧稀疏），
+            // 4 帧被判"没画面"会误触发重建，重建后再缓冲，形成卡顿循环。
+            if (delta < 2) {
                 if (vlcFrameRetried) {
                     Log.w(TAG, "复检：仍无画面（已显示帧 $a -> $b），不再重试，等用户换台")
                     com.litv.tv.data.PlayLog.w(TAG, "VLC 起播后无画面（$a -> $b）")
@@ -1244,10 +1246,20 @@ class PlayerManager(
         const val STALL_CHECK_MS = 4000L
 
         /** VLC 起播/重建后多久开始复检画面（见 vlcFrameRecheck 说明）。 */
-        const val VLC_FRAME_RECHECK_MS = 3000L
+        /**
+         * VLC 起播复检的**起始**延迟。
+         *
+         * 原来 3000ms：VLC 的 bufferMs 默认 8 秒（服务端 config 也下发 8000），
+         * 起播后 3 秒必然还在缓冲，必然 0 帧 → 判"没画面" → 重建 →
+         * 又要重新缓冲 → 每 4 秒重建一次，永远等不到出画。
+         * 实测表现就是「播一下卡一下」。
+         *
+         * 12000ms：覆盖 8 秒缓冲 + 网络握手 + 首次分片。
+         */
+        const val VLC_FRAME_RECHECK_MS = 12000L
 
-        /** 复检的采样窗口：这段时间内已显示帧数增长不到 5 帧即视为没在出画。 */
-        const val VLC_FRAME_SAMPLE_MS = 700L
+        /** 复检的采样窗口：这段时间内已显示帧数增长不到 2 帧即视为没在出画。 */
+        const val VLC_FRAME_SAMPLE_MS = 1000L
 
         /**
          * 播放位置完全不变多久算卡死。

@@ -512,20 +512,17 @@ struct PlayerView: View {
         // 与 Android 手机端对齐（2026-11-18）：OSD 上重新给出「上一台 / 下一台」按钮。
         // 之前是刻意去掉的（只留 4 个按钮、切台靠左右滑），但 Android 端已经把
         // ⏮ / ⏭ 加了回来（竖屏与全屏共用同一浮层），iOS 跟上，滑动手势仍然保留。
-        HStack(spacing: 20) {
-            ctlButton("backward.end.fill", "上一台", size: 18) { switchBy(-1) }
-            ctlButton(paused ? "play.fill" : "pause.fill", paused ? "播放" : "暂停", size: 22) { togglePause() }
-            ctlButton("forward.end.fill", "下一台", size: 18) { switchBy(1) }
-            ctlButton(muted ? "speaker.slash.fill" : "speaker.wave.2.fill", muted ? "取消静音" : "静音", size: 18) { toggleMute() }
+        HStack(spacing: 14) {
+            ctlButton("⏮", "上一台", size: 20) { switchBy(-1) }
+            ctlButton(paused ? "▶" : "⏸", paused ? "播放" : "暂停", size: 22) { togglePause() }
+            ctlButton("⏭", "下一台", size: 20) { switchBy(1) }
+            ctlButton(muted ? "🔇" : "🔊", muted ? "取消静音" : "静音", size: 18) { toggleMute() }
             // 内核 / 解码：和 Android 全屏工具栏的 `内核 自动` / `解码 自动` 对齐。
             // 以前只能进设置改，排查「某个台播不了」要来回跳页面。
-            ctlButton("cpu", "内核 \(engineLabel)", size: 18) { cycleEngine() }
-            ctlButton("square.stack.3d.up.fill", "解码 \(decodeLabel)", size: 18) { cycleDecode() }
-            ctlButton(isFullscreen
-                        ? "arrow.down.right.and.arrow.up.left"
-                        : "arrow.up.left.and.arrow.down.right",
-                      isFullscreen ? "退出全屏" : "全屏", size: 18) { toggleFullscreen() }
-            ctlButton("airplayvideo", "投屏", size: 18) {
+            ctlButton("⚙", "内核 \(engineLabel)", size: 18) { cycleEngine() }
+            ctlButton("▤", "解码 \(decodeLabel)", size: 18) { cycleDecode() }
+            ctlButton("⛶", isFullscreen ? "退出全屏" : "全屏", size: 18) { toggleFullscreen() }
+            ctlButton("⇪", "投屏", size: 18) {
                 showCast = true
                 Task { await loadRenderers() }
             }
@@ -543,9 +540,9 @@ struct PlayerView: View {
                 Button("时移回看") { Task { await startTimeshift() } }
                 Button("换线路") { Task { await loadStreams() } }
             } label: {
-                Image(systemName: "ellipsis.circle")
-                    .font(.system(size: 18))
-                    .frame(minWidth: 44, minHeight: 44)
+                Text("⋯")
+                    .font(.system(size: 20))
+                    .frame(minWidth: 46, minHeight: 44)
             }
             .foregroundColor(.white)
             .accessibilityLabel("更多")
@@ -630,14 +627,17 @@ struct PlayerView: View {
     }
 
     /// 图标 + 文字两行。只有图标的话不看说明书不知道哪个是换台、哪个是静音。
-    private func ctlButton(_ icon: String, _ label: String, size: CGFloat,
+    ///
+    /// 2026-11-19：与 Android 手机端统一成**符号**风格（⏮ ⏯ ⏭ ⇪ 🔇 ⛶），
+    /// 不再用 SF Symbols —— 两端同一个 App，图标语言应该一致。
+    private func ctlButton(_ symbol: String, _ label: String, size: CGFloat,
                            _ action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            VStack(spacing: 3) {
-                Image(systemName: icon).font(.system(size: size))
+            VStack(spacing: 2) {
+                Text(symbol).font(.system(size: size))
                 Text(label).font(.system(size: 10))
             }
-            .frame(minWidth: 52)
+            .frame(minWidth: 46)
         }
     }
 

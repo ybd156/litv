@@ -149,10 +149,7 @@ struct PlayerView: View {
                     .padding(.bottom, 10)
             }
 
-            if !isFullscreen {
-                groupChips
-            }
-
+            // 分组 chip 只在「频道」页出现，播放页不重复（用户圈出来过）
             videoArea
 
             if !isFullscreen {
@@ -474,11 +471,7 @@ struct PlayerView: View {
                 Text(timeshiftURL == nil ? "● 直播" : "◀ 回放")
                     .font(.system(size: 10, weight: .semibold))
                     .foregroundColor(timeshiftURL == nil ? .red : .orange)
-                if let tech = techText {
-                    Text(tech)
-                        .font(.system(size: 10))
-                        .foregroundColor(.gray.opacity(0.85))
-                }
+                // techText（分辨率/引擎）已在顶部 osdHeader 显示，这里不重复
                 Spacer(minLength: 0)
             }
             if let now = programs.first(where: { $0.isNow }) {
@@ -539,7 +532,7 @@ struct PlayerView: View {
             // Android 那边是 **无底色** 的半透明图标（alpha 0.85），这里不能加圆底，
             // 否则在蓝色画面上会变成一个显眼的蓝圆（用户实测指出）。
             Button(action: togglePause) {
-                Text(paused ? "▶" : "⏸")
+                Image(systemName: paused ? "play.fill" : "pause.fill")
                     .font(.system(size: 34))
                     .foregroundColor(.white)
                     .frame(width: 72, height: 72)
@@ -549,9 +542,9 @@ struct PlayerView: View {
 
             // 左右边缘：上一台 / 下一台
             HStack {
-                ctlButton("⏮", "上一台", size: 22) { switchBy(-1) }
+                ctlButton("backward.end.fill", "上一台", size: 20) { switchBy(-1) }
                 Spacer()
-                ctlButton("⏭", "下一台", size: 22) { switchBy(1) }
+                ctlButton("forward.end.fill", "下一台", size: 20) { switchBy(1) }
             }
             .padding(.horizontal, 10)
 
@@ -559,7 +552,7 @@ struct PlayerView: View {
             VStack {
                 HStack {
                     Spacer()
-                    ctlButton("⇪", "投屏", size: 17) {
+                    ctlButton("airplayvideo", "投屏", size: 17) {
                         showCast = true
                         Task { await loadRenderers() }
                     }
@@ -580,8 +573,11 @@ struct PlayerView: View {
                         pillButton("解码 \(decodeLabel)") { cycleDecode() }
                     }
                     Spacer(minLength: 4)
-                    ctlButton("♪", muted ? "取消静音" : "静音", size: 20) { toggleMute() }
-                    ctlButton("⛶", isFullscreen ? "退出全屏" : "全屏", size: 17) { toggleFullscreen() }
+                    ctlButton(muted ? "speaker.slash.fill" : "speaker.wave.2.fill", muted ? "取消静音" : "静音", size: 18) { toggleMute() }
+                    ctlButton(isFullscreen
+                              ? "arrow.down.right.and.arrow.up.left"
+                              : "arrow.up.left.and.arrow.down.right",
+                              isFullscreen ? "退出全屏" : "全屏", size: 17) { toggleFullscreen() }
                     // 「更多」：节目单 / 时移 / 换线路
                     Menu {
                         Button("比例 自动") { aspectMode = "auto" }
@@ -601,7 +597,7 @@ struct PlayerView: View {
                         Button("时移回看") { Task { await startTimeshift() } }
                         Button("换线路") { Task { await loadStreams() } }
                     } label: {
-                        Text("⋯")
+                        Image(systemName: "ellipsis")
                             .font(.system(size: 20))
                             .foregroundColor(.white)
                             .frame(minWidth: 40, minHeight: 40)
@@ -711,15 +707,17 @@ struct PlayerView: View {
         }
     }
 
-    /// 图标 + 文字两行。只有图标的话不看说明书不知道哪个是换台、哪个是静音。
+    /// 图标 + 文字两行。
     ///
-    /// 2026-11-19：与 Android 手机端统一成**符号**风格（⏮ ⏯ ⏭ ⇪ 🔇 ⛶），
-    /// 不再用 SF Symbols —— 两端同一个 App，图标语言应该一致。
+    /// 2026-11-19：**用 SF Symbols，不用 Unicode 符号**。
+    /// `⏮ ⏸ ⏭ ⇪` 这些在 iOS 上会被渲染成 **emoji**（自带蓝色方块底），
+    /// 看起来就像给按钮加了圆底——这正是用户圈出来的「有颜色」。
+    /// SF Symbols 是单色矢量，`.foregroundColor(.white)` 后就是纯白。
     private func ctlButton(_ symbol: String, _ label: String, size: CGFloat,
                            _ action: @escaping () -> Void) -> some View {
         Button(action: action) {
             VStack(spacing: 2) {
-                Text(symbol).font(.system(size: size))
+                Image(systemName: symbol).font(.system(size: size))
                 Text(label).font(.system(size: 10))
             }
             .frame(minWidth: 46)

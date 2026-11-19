@@ -32,6 +32,7 @@ class RemoteClient(private val prefs: Prefs) {
     private var retry = 0
 
     private val client = OkHttpClient.Builder()
+        .dns(IpModeDns { prefs.ipMode })
         .pingInterval(30, TimeUnit.SECONDS)
         .connectTimeout(10, TimeUnit.SECONDS)
         .readTimeout(0, TimeUnit.MILLISECONDS)

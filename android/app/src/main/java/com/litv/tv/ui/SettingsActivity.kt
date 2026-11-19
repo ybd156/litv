@@ -41,6 +41,7 @@ class SettingsActivity : AppCompatActivity() {
     private lateinit var valueRetry: TextView
     private lateinit var valueDoh: TextView
     private lateinit var valueDohProvider: TextView
+    private lateinit var valueIpMode: TextView
     private lateinit var valueAutoRelay: TextView
     private lateinit var valueUiScale: TextView
     private lateinit var valueShowStatus: TextView
@@ -90,6 +91,7 @@ class SettingsActivity : AppCompatActivity() {
         valueRetry = findViewById(R.id.valueRetry)
         valueDoh = findViewById(R.id.valueDoh)
         valueDohProvider = findViewById(R.id.valueDohProvider)
+        valueIpMode = findViewById(R.id.valueIpMode)
         valueAutoRelay = findViewById(R.id.valueAutoRelay)
         valueUiScale = findViewById(R.id.valueUiScale)
         valueShowStatus = findViewById(R.id.valueShowStatus)
@@ -180,6 +182,15 @@ class SettingsActivity : AppCompatActivity() {
             DohDns.configure(app.prefs.dohEnabled(), v)
             labelDohProvider(v)
         }
+        // IP 协议偏好：不少电视盒子 IPv6 半通（走 IPv6 连 Cloudflare 时 TCP 卡在
+        // SYN_SENT，IPv4 正常），系统 DNS 同时给 A/AAAA、OkHttp 不保证先试哪个。
+        bindCycle(R.id.rowIpMode, valueIpMode,
+            com.litv.tv.data.IpModeDns.LABELS.map { it.first }, app.prefs.ipMode) { v ->
+            app.prefs.ipMode = v
+            labelIpMode(v)
+        }
+        // bindCycle 初始化时不会调 onPick，这里补一次，保证打开设置就看到当前值
+        labelIpMode(app.prefs.ipMode)
         bindCycle(R.id.rowAutoRelay, valueAutoRelay, listOf("off", "on"),
             if (app.prefs.autoRelay) "on" else "off") { v ->
             app.prefs.autoRelay = (v == "on")
@@ -446,6 +457,10 @@ class SettingsActivity : AppCompatActivity() {
 
     private fun labelDohProvider(key: String) {
         valueDohProvider.text = DohDns.Provider.from(key).label
+    }
+
+    private fun labelIpMode(value: String) {
+        valueIpMode.text = com.litv.tv.data.IpModeDns.labelOf(value)
     }
 
     private fun labelAutoRelay(on: Boolean) {

@@ -243,6 +243,19 @@
         </LinearLayout>
 
         <LinearLayout
+            android:id="@+id/rowIpMode"
+            style="@style/SettingRow">
+
+            <TextView
+                style="@style/SettingLabel"
+                android:text="IP 协议偏好" />
+
+            <TextView
+                android:id="@+id/valueIpMode"
+                style="@style/SettingValue" />
+        </LinearLayout>
+
+        <LinearLayout
             android:id="@+id/rowAutoRelay"
             style="@style/SettingRow">
 

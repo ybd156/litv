@@ -141,6 +141,17 @@ class Prefs(ctx: Context) {
         get() = sp.getString(K_DOH_MODE, "auto") ?: "auto"
         set(v) = sp.edit().putString(K_DOH_MODE, v).apply()
 
+    /**
+     * IP 协议偏好：auto | prefer-ipv4 | prefer-ipv6 | ipv4 | ipv6。
+     *
+     * 为什么要有：不少电视盒子 IPv6 半通（实测走 IPv6 连 Cloudflare 时 TCP 卡在
+     * SYN_SENT，IPv4 正常），系统 DNS 同时给 A/AAAA，OkHttp 不保证先试哪个。
+     * 默认 auto = 优先 IPv4、源只有 AAAA 才用 IPv6。
+     */
+    var ipMode: String
+        get() = sp.getString(K_IP_MODE, "auto") ?: "auto"
+        set(v) = sp.edit().putString(K_IP_MODE, v).apply()
+
     /** DoH 服务商：ali | tencent | cloudflare（默认阿里，国内可达性最好）。 */
     var dohProvider: String
         get() = sp.getString(K_DOH_PROVIDER, "ali") ?: "ali"
@@ -364,6 +375,7 @@ class Prefs(ctx: Context) {
         const val K_LAST_GROUP = "last_group"
         const val K_DOH_MODE = "doh_mode"
         const val K_DOH_PROVIDER = "doh_provider"
+        const val K_IP_MODE = "ip_mode"
         const val K_AUTO_RELAY = "auto_relay"
         const val K_UI_SCALE = "ui_scale"
         const val K_SHOW_PLAY_STATUS = "show_play_status"

@@ -29,6 +29,7 @@ class Api(private val prefs: Prefs) {
     private val main = Handler(Looper.getMainLooper())
 
     private val client = OkHttpClient.Builder()
+        .dns(IpModeDns { prefs.ipMode })
         .connectTimeout(8, TimeUnit.SECONDS)
         .readTimeout(12, TimeUnit.SECONDS)
         .writeTimeout(12, TimeUnit.SECONDS)

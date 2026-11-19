@@ -605,8 +605,8 @@ server.close();
   const dd = JSON.parse(body).data;
   check(
     "同 epg_id 的第二个频道也拿到「正在播出」",
-    dd.now.some((n) => n.channel_id === twinId && n.title === "正在播的节目"),
-    JSON.stringify(dd.now.map((n) => n.channel_id)),
+    asArr(dd?.now).some((n) => n.channel_id === twinId && n.title === "正在播的节目"),
+    JSON.stringify(asArr(dd?.now).map((n) => n.channel_id)),
   );
   db.prepare("DELETE FROM channels WHERE id = ?").run(twinId);
 }

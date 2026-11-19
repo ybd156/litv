@@ -84,22 +84,30 @@ final class ChannelStore {
     // MARK: - 内部
 
     private func build(session: Session, dlKey: String) async -> Parsed? {
+        NSLog("ChannelStore: build 开始")
         guard let env = try? await session.api.channelSrc() else {
             lastError = "拉取源配置失败（/tv/channel-src 请求出错）"
+            NSLog("ChannelStore: 拉取 channel-src 失败")
             return readCache()
         }
         guard let payload = decrypt(env: env, dlKey: dlKey) else {
             lastError = "解密源配置失败"
+            NSLog("ChannelStore: 解密失败")
             return readCache()
         }
 
         let version = payload["version"] as? String ?? "0"
-        if let cached = readCache(), cached.version == version { return cached }
+        if let cached = readCache(), cached.version == version {
+            NSLog("ChannelStore: 命中缓存 v\(version) \(cached.channels.count) 个")
+            return cached
+        }
 
         guard let urls = payload["urls"] as? [[String: Any]] else {
             lastError = "源配置里没有 urls 字段"
+            NSLog("ChannelStore: 没有 urls 字段")
             return nil
         }
+        NSLog("ChannelStore: v\(version) 源数 \(urls.count)")
         let policy = payload["policy"] as? [String: Any]
         let hiddenGroups = Set((policy?["groups_hidden"] as? [String]) ?? [])
         let hiddenChannels = Set((policy?["channels_hidden"] as? [String]) ?? [])
@@ -111,18 +119,25 @@ final class ChannelStore {
 
         for u in urls {
             guard let urlStr = u["url"] as? String else { continue }
-            guard let text = try? await fetchText(urlStr,
-                                                 ua: u["ua"] as? String ?? "",
-                                                 referer: u["referer"] as? String ?? "")
-            else { fetchFailed += 1; continue }
-            Self.merge(text: text, into: &merged, urlById: &urlById, headersById: &headersById,
-                       defaultUA: u["ua"] as? String ?? "",
-                       defaultReferer: u["referer"] as? String ?? "")
+            let t0 = Date()
+            do {
+                let text = try await fetchText(urlStr,
+                                               ua: u["ua"] as? String ?? "",
+                                               referer: u["referer"] as? String ?? "")
+                NSLog("ChannelStore: 源 #\(u["id"] ?? "?") 拉到 \(text.count) 字节，耗时 \(Int(Date().timeIntervalSince(t0) * 1000))ms")
+                Self.merge(text: text, into: &merged, urlById: &urlById, headersById: &headersById,
+                           defaultUA: u["ua"] as? String ?? "",
+                           defaultReferer: u["referer"] as? String ?? "")
+            } catch {
+                fetchFailed += 1
+                NSLog("ChannelStore: 源 #\(u["id"] ?? "?") 拉取失败 \(error.localizedDescription)，耗时 \(Int(Date().timeIntervalSince(t0) * 1000))ms")
+            }
         }
 
         let kept = merged.values.filter {
             !hiddenGroups.contains($0.group) && !hiddenChannels.contains($0.name)
         }
+        NSLog("ChannelStore: merge \(merged.count) 个，保留 \(kept.count) 个（屏蔽组 \(hiddenGroups.count) 条，拉源失败 \(fetchFailed)/\(urls.count)）")
         if kept.isEmpty {
             lastError = "解析后频道为空（拉源失败 \(fetchFailed)/\(urls.count)，或全被屏蔽规则滤掉）"
             return readCache()
@@ -162,7 +177,13 @@ final class ChannelStore {
     private func fetchText(_ url: String, ua: String, referer: String) async throws -> String {
         guard let u = URL(string: url) else { throw URLError(.badURL) }
         var req = URLRequest(url: u)
-        req.timeoutInterval = 20
+        // 40 秒：m3u 有 90+ KB，手机网络下 20 秒不一定够（实测有超时）。
+        req.timeoutInterval = 40
+        // **必须强制回源**：源 m3u 的响应头是 `cache-control: max-age=86400`，
+        // 但里面分片 URL 的 timestamp 签名只有几分钟有效。
+        // 用默认策略会一直拿到 CDN 缓存里的过期列表 → 分片 0 字节 →「播一下卡一下」。
+        // 和 Android 的 `Cache-Control: no-cache` 是同一件事。
+        req.cachePolicy = .reloadIgnoringLocalCacheData
         if !ua.isEmpty { req.setValue(ua, forHTTPHeaderField: "User-Agent") }
         if !referer.isEmpty { req.setValue(referer, forHTTPHeaderField: "Referer") }
         let (data, _) = try await URLSession.shared.data(for: req)

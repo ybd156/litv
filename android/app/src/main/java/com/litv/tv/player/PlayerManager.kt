@@ -689,9 +689,19 @@ class PlayerManager(
     }
 
     fun play(channelId: Long, url: String, headers: Map<String, String>, preferredEngine: String) {
+        // 绕过 CDN 对 m3u8 的缓存。
+        // 源的 m3u8 响应带 cache-control: max-age=86400，但里面分片 URL 的签名
+        // 只有几分钟有效 —— CDN 会把过期列表反复喂回来，分片请求拿到 0 字节，
+        // 表现就是「播一下卡一下」。
+        // Exo 还能用 Cache-Control 头，但 libVLC 3 只支持 UA/Referer，
+        // 所以在入口给 URL 加一次性参数：CDN 按 URL 缓存，新 URL 必然回源。
+        val bustedUrl = if (url.contains("_t=")) url else {
+            val sep = if (url.contains('?')) '&' else '?'
+            "$url${sep}_t=${System.currentTimeMillis()}"
+        }
         failLog.clear()
         pendingChannelId = channelId
-        pendingUrl = url
+        pendingUrl = bustedUrl
         pendingHeaders = headers
 
         val remembered = prefs.engineFor(channelId).ifBlank { null }

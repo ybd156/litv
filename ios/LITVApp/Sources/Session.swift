@@ -47,6 +47,15 @@ final class Session: ObservableObject {
         didSet { defaults.set(engineMode, forKey: "engineMode") }
     }
 
+    /// 直播列表强制不吃缓存（AVPlayer 路径会带 `Cache-Control: no-cache`）。
+    ///
+    /// 有些源的 m3u8 带 `max-age=86400`，但里面分片 URL 的签名只有几分钟有效：
+    /// CDN 会把过期列表反复喂给播放器，分片就 0 字节 —— 表现「播一下卡一下」。
+    /// 只对 AVPlayer 生效（VLCKit 只有 UA/Referer，没有自定义头的接口）。
+    @Published var hlsNoCache: Bool {
+        didSet { defaults.set(hlsNoCache, forKey: "hlsNoCache") }
+    }
+
     // 状态
     @Published var loading = false
     @Published var statusText = ""
@@ -96,6 +105,7 @@ final class Session: ObservableObject {
         deviceName = defaults.string(forKey: "deviceName") ?? ""
         decodeMode = defaults.string(forKey: "decodeMode") ?? "auto"
         engineMode = defaults.string(forKey: "engineMode") ?? "auto"
+        hlsNoCache = (defaults.object(forKey: "hlsNoCache") as? Bool) ?? true
         bufferMs = (defaults.object(forKey: "bufferMs") as? Int) ?? 1500
         liveDelayMs = (defaults.object(forKey: "liveDelayMs") as? Int) ?? 0
     }

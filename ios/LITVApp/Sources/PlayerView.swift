@@ -1190,9 +1190,14 @@ struct PlayerView: View {
         // R09：AVPlayer 支持一次带多个自定义请求头。
         // 以前只带 User-Agent，遇到校验 Referer / Origin 的源就 403。
         // AVURLAssetHTTPHeaderFieldsKey 是 AVFoundation 未公开但长期稳定的用法。
-        let hdrs = playHeaders.filter { k, v in
+        var hdrs = playHeaders.filter { k, v in
             !k.isEmpty && !v.isEmpty && !v.contains("\n") && !v.contains("\r")
         }
+        // 直播列表强制刷新：与 Android 的 prefs.hlsNoCache 对齐。
+        // 源 m3u8 带 max-age=86400、分片签名却几分钟就过期，CDN 会把过期列表
+        // 反复喂回来，分片请求拿到 0 字节 →「播一下卡一下」。
+        // 只有 AVPlayer 这条路能带自定义头；VLCKit 只有 UA/Referer。
+        if session.hlsNoCache { hdrs["Cache-Control"] = "no-cache" }
         if hdrs.isEmpty {
             item = AVPlayerItem(url: u)
         } else {

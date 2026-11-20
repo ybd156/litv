@@ -120,6 +120,21 @@ object LocalHlsProxy {
 
     private val replayCursors = ConcurrentHashMap<String, ReplayCursor>()
 
+    /**
+     * 最近几个分片的字节缓存（LRU）。
+     *
+     * 为什么需要：分片 URL 带 `svrtime` 签名、时效很短。而 playurl 每 15 秒换一次，
+     * 新 playlist 的分片地址和旧的完全不同 —— 播放器缓冲里那些**旧地址**再去拉就 403，
+     * 每 403 一次画面就停一下（真机 120 秒里出现 2 次）。
+     *
+     * 这里把最近拉过的分片留一份，命中就直接给，不再打 CDN，403 自然消失。
+     * 只留 3 个：一个分片 2~3MB，3 个约 6~8MB；够覆盖播放器的重试窗口，又不会撑爆内存。
+     */
+    private val segCache = object : LinkedHashMap<String, ByteArray>(4, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, ByteArray>): Boolean =
+            size > 6
+    }
+
     /** /rp/{id}/{start}/{end}.m3u8 —— 代取回看 playlist 并改写分片地址。 */
     private fun serveReplay(path: String, out: OutputStream) {
         val parts = path.removePrefix("/rp/").substringBefore(".m3u8").split('/')
@@ -347,6 +362,10 @@ object LocalHlsProxy {
             writeStatus(out, 400, "bad segment")
             return
         }
+        synchronized(segCache) { segCache[real] }?.let { hit ->
+            writeBody(out, hit, "video/mp2t")
+            return
+        }
         val bytes = try {
             fetchBytesSmart(real)
         } catch (e: Throwable) {
@@ -366,15 +385,18 @@ object LocalHlsProxy {
                 //   所以这里必须把 lineCache 一起清掉，强制重新 ticket+取流。
                 val n = cache.size
                 cache.clear()
-                // 清哪个台的？分片 URL 里没有频道 id，全清代价也低（最多 27 条）
                 val m = lineCache.size
                 lineCache.clear()
-                Log.i(TAG, "分片 403（地址已过期），清 playlist=$n 条、线路=$m 条，下次重取")
+                // ★ 千万别清 segCache：403 说明「这个地址现在打不开了」，
+                //   但之前已经拉到的字节仍在缓存里，播放器重试时正好能从这里拿到。
+                //   第一版把缓存一起清了，等于把唯一的救命稻草扔掉 —— 403 之后还是 403。
+                Log.i(TAG, "分片 403（地址已过期），清 playlist=$n、线路=$m，分片缓存保留")
             }
             writeStatus(out, 502, "segment failed: " + (msg.ifBlank { e.javaClass.simpleName }))
             return
         }
         Log.i(TAG, "SEG bytes=" + bytes.size)
+        synchronized(segCache) { segCache[real] = bytes }
         writeBody(out, bytes, "video/mp2t")
     }
 

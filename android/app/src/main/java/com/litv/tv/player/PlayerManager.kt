@@ -340,6 +340,14 @@ class PlayerManager(
     private var firstFrame = false
 
     /**
+     * 上一次等首帧检查时的缓冲位置。
+     *
+     * 只用来判断「还有没有进展」：分片大、下载慢时缓冲位置会持续增长，
+     * 此时不该判「有数据无画面」（见 noFrameWatchdog）。
+     */
+    private var lastFrameCheckBufferedMs = 0L
+
+    /**
      * 当前内核是否会上报首帧。false 时**不排首帧看门狗**——
      * VLC / mpv 永远不发 onFirstFrame，开了只会把正常播放误判成失败。
      */
@@ -433,7 +441,9 @@ class PlayerManager(
         return pm.isInteractive
     }
 
-    private val noFrameWatchdog = Runnable {
+    // 显式标注 Runnable：初始化表达式里会引用自己（重新排队等下一轮），
+    // 不标类型会让 Kotlin 报 "Type checking has run into a recursive problem"。
+    private val noFrameWatchdog: Runnable = Runnable {
         if (!prepared || firstFrame) return@Runnable
         // 保险：内核本来就不报首帧，这个判定没有依据
         if (!engineReportsFirstFrame) return@Runnable
@@ -443,15 +453,34 @@ class PlayerManager(
             com.litv.tv.data.PlayLog.w(TAG, "屏幕已熄灭，跳过首帧判定")
             return@Runnable
         }
+        // ★ 还在下载就别判死（真机事故 2026-11-21，MiTV-ASTP0）：
+        // 该源 HLS 单分片 1.9MB、下载 4-5 秒，首帧必然超过 8 秒的判定窗口。
+        // 到点就判"有数据无画面" → 切软解（更慢）→ 再降 VLC → VLC 输出撕裂，
+        // 用户看到的是"一卡一卡"。缓冲位置在涨说明链路正常，再给一轮。
+        val buf: Long = runCatching { current?.bufferedMs() ?: 0L }.getOrDefault(0L)
+        if (buf > lastFrameCheckBufferedMs + 200L) {
+            lastFrameCheckBufferedMs = buf
+            val wait: Long = minOf(
+                PlaybackDefaults.START_FRAME_MS.toLong(),
+                remainingBudgetMs(),
+            )
+            if (wait > 0) {
+                Log.i(TAG, "等首帧：缓冲还在增长（${buf}ms），再等 ${wait}ms 不判失败")
+                com.litv.tv.data.PlayLog.w(TAG, "等首帧：缓冲仍在增长，不判失败")
+                main.removeCallbacks(noFrameWatchdog)
+                main.postDelayed(noFrameWatchdog, wait)
+                return@Runnable
+            }
+        }
         if (currentKind == EngineKind.EXO && !exoForceSoftwareDecode) {
-            Log.w(TAG, "已起播但 5 秒没有画面，改用软解")
+            Log.w(TAG, "已起播但 ${PlaybackDefaults.START_FRAME_MS / 1000} 秒没有画面，改用软解")
             exoForceSoftwareDecode = true
             retried = 0
             startCurrent()
             return@Runnable
         }
         failLog += "${currentKind?.key ?: "?"}: 有数据无画面"
-        Log.w(TAG, "已起播但 5 秒没有画面，换下一个内核")
+        Log.w(TAG, "已起播但 ${PlaybackDefaults.START_FRAME_MS / 1000} 秒没有画面，换下一个内核")
         tryNext("有数据无画面")
     }
 
@@ -744,6 +773,7 @@ class PlayerManager(
         // 起播阶段：清掉上一次的所有计时器，重置第一帧标志，并设一个硬预算。
         removeStartTimers()
         firstFrame = false
+        lastFrameCheckBufferedMs = 0L
         budgetExpired = false
         released = false
         budgetDeadlineAt = android.os.SystemClock.elapsedRealtime() + PlaybackDefaults.START_BUDGET_MS
@@ -937,6 +967,7 @@ class PlayerManager(
         // 两条看门狗同时不管 → 画面永远卡着，日志里一条错误都没有，用户只能换台。
         prepared = false
         firstFrame = false
+        lastFrameCheckBufferedMs = 0L
         // 阶段一：4 秒还没有"字节/READY"就直接重试或换内核。
         // （原来的 frameWatchdog 只盯 EXO 的首帧，且只在 5 秒后看一次；
         //  现在由阶段二 noFrameWatchdog 统一覆盖三个内核，这里不再重复排。）

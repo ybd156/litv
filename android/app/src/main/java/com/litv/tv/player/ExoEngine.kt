@@ -695,6 +695,13 @@ class ExoEngine : PlayerEngine {
 
     override fun isPlaying(): Boolean = player?.isPlaying == true
 
+    /**
+     * ExoPlayer 已缓冲到的位置。起播阶段它随分片下载持续增长，
+     * 用来区分「卡死不动」和「分片大、正在慢慢下」——见 PlayerEngine.bufferedMs()。
+     */
+    override fun bufferedMs(): Long =
+        runCatching { player?.bufferedPosition ?: 0L }.getOrDefault(0L)
+
     override fun stats(): EngineStats {
         val p = player ?: return EngineStats()
         val vf = p.videoFormat

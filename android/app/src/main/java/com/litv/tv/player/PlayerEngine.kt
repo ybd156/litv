@@ -104,6 +104,19 @@ interface PlayerEngine {
     /** 当前是否已经可以出画面（用于判断"起播成功"）。 */
     fun isPlaying(): Boolean
 
+    /**
+     * 已缓冲到的播放位置（毫秒）。0 表示拿不到。
+     *
+     * 只用于**起播阶段的“有没有进展”判断**，不参与任何界面显示。
+     *
+     * 为什么需要它（真机事故 2026-11-21，MiTV-ASTP0）：
+     * 央视频/IPTV 的 HLS 单分片能到 1.9MB、下载 4-5 秒，首帧自然超过
+     * [PlaybackDefaults.START_FRAME_MS]（8 秒）。旧的“有数据无画面”判据只看时间，
+     * 到点就判死 → 先切软解（更慢）、再降 VLC，而 VLC 在该源上输出撕裂，
+     * 用户看到的是“一卡一卡”。这个值在涨就说明还在正常下载，不该判死。
+     */
+    fun bufferedMs(): Long = 0L
+
     /** 内核能力自检：比如 libmpv.so 不存在时返回 false。 */
     fun isAvailable(context: Context): Boolean
 

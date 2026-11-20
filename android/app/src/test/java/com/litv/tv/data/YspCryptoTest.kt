@@ -65,6 +65,23 @@ class YspCryptoTest {
     }
 
     /**
+     * 打印加密前的 pkt（确定性，逐字节可对比）。
+     * 分块输出避免 CI 日志被截断。
+     */
+    @Test
+    fun debugPacket_isPrintable() {
+        val pkt = YspCrypto.debugPacket(
+            channelId = "2024078201",
+            ts = 1_760_000_000L,
+            guid = "00112233445566778899aabbccddeeff",
+            uid = "AABBCCDD",
+        )
+        println("YSP_PKT_LEN=" + pkt.size)
+        val hex = pkt.joinToString("") { "%02x".format(it.toInt() and 0xFF) }
+        hex.chunked(120).forEachIndexed { i, part -> println("YSP_PKT_$i=" + part) }
+    }
+
+    /**
      * 交叉验证：把 Kotlin 算出的真实 cKey 打印出来（输出在 `gradle testDebugUnitTest --info` 日志里），
      * 然后用它直接请求央视频看 iretcode，或喂给 Python 参考实现比对。
      *

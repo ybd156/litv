@@ -87,6 +87,49 @@ object YspCrypto {
 
     // ---------------------------------------------------------------- 绠楁硶
 
+    /**
+     * For cross-validation only: the exact pkt bytes BEFORE TEA encryption
+     * (cksum already back-filled). Deterministic, so it can be compared
+     * byte-for-byte against the Python reference implementation.
+     */
+    internal fun debugPacket(
+        channelId: String,
+        ts: Long,
+        guid: String,
+        uid: String,
+    ): ByteArray {
+        val guard = ckGuard(ts, guid)
+        val body = concat(
+            hex("0000004200000004000004d2"),
+            be32(PLATFORM),
+            be32(0),
+            be32(ts),
+            lp("dcgh"),
+            lp("_zj1A5Gh6QYcxWjIUGos2w=="),
+            lp(APP_VER),
+            lp(channelId),
+            lp(guid),
+            be32(1),
+            be32(1),
+            lp(uid),
+            lp("nil"),
+            lp("57eab0c4-2c58-44c6-8ae9-dd2757525dc5"),
+            lp("nil"),
+            lp("v0.1.000"),
+            lp("com.cctv.yangshipin.app.iphone"),
+            lp(PLATFORM.toString()),
+            lp("ex_json_bus"),
+            lp("ex_json_vs"),
+            lp(guard),
+        )
+        val pkt = ByteArray(2 + body.size)
+        pkt[0] = ((body.size ushr 8) and 0xFF).toByte()
+        pkt[1] = (body.size and 0xFF).toByte()
+        body.copyInto(pkt, 2)
+        be32(cksum(pkt)).copyInto(pkt, 18)
+        return pkt
+    }
+
     internal fun teaBlock(block: ByteArray, key: ByteArray): ByteArray {
         var y = be32At(block, 0)
         var z = be32At(block, 4)

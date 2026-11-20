@@ -145,18 +145,21 @@ object YspCrypto {
     }
 
     /** 閾惧紡 XOR 鍓嶅潡锛圕BC-like锛夛紝涓?YSP 鐨?TEA 鍖呮牸寮忎竴鑷淬€?*/
-    internal fun teaPkt(data: ByteArray, key: ByteArray): ByteArray {
+    internal fun teaPkt(data: ByteArray, key: ByteArray): ByteArray = teaPkt(data, key, null)
+
+    /**
+     * @param rndBytes 可注入的随机源（测试用固定实现）。null 走真随机。
+     *                 调用顺序是 rand(1) → rand(pad) → rand(2)，与 Python 参考实现一致。
+     */
+    internal fun teaPkt(data: ByteArray, key: ByteArray, rndBytes: ((Int) -> ByteArray)?): ByteArray {
+        val rand: (Int) -> ByteArray = rndBytes ?: { n -> ByteArray(n).also { rnd.nextBytes(it) } }
         val pad = (8 - ((data.size + 10) % 8)) % 8
         val plain = ByteArray(1 + pad + 2 + data.size + 7)
-        plain[0] = (((rnd.nextInt() and 0xF8) or pad) and 0xFF).toByte()
+        plain[0] = (((rand(1)[0].toInt() and 0xF8) or pad) and 0xFF).toByte()
         // 注意：不能写 rnd.nextBytes(plain.copyOfRange(..)) —— copyOfRange 返回副本，
         // 填的是副本，原数组仍是全 0。必须先生成到临时数组再 copyInto。
-        if (pad > 0) {
-            val salt = ByteArray(pad).also { rnd.nextBytes(it) }
-            salt.copyInto(plain, 1)
-        }
-        val salt2 = ByteArray(2).also { rnd.nextBytes(it) }
-        salt2.copyInto(plain, 1 + pad)
+        rand(pad).copyInto(plain, 1)
+        rand(2).copyInto(plain, 1 + pad)
         data.copyInto(plain, 3 + pad)
 
         val out = ByteArray(plain.size)

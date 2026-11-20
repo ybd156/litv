@@ -82,6 +82,24 @@ class YspCryptoTest {
     }
 
     /**
+     * 用固定随机源跑 teaPkt，输出密文 hex，与 Python 参考实现逐字节比对。
+     *
+     * 随机源规则：rand(n) = ByteArray(n) { (it + n).toByte() }
+     * 调用顺序：rand(1) → rand(pad) → rand(2)
+     */
+    @Test
+    fun teaPkt_isPrintableWithFixedRandom() {
+        val data = "HELLO-YSP-0123456789".toByteArray()
+        val key = hex("59b2f7cf725ef43c34fdd7c123411ed3")
+        val fixed: (Int) -> ByteArray = { n -> ByteArray(n) { i -> (i + n).toByte() } }
+        val enc = YspCrypto.teaPkt(data, key, fixed)
+        println("YSP_TEAPKT_IN=" + data.joinToString("") { "%02x".format(it.toInt() and 0xFF) })
+        println("YSP_TEAPKT_LEN=" + enc.size)
+        val hex = enc.joinToString("") { "%02x".format(it.toInt() and 0xFF) }
+        hex.chunked(120).forEachIndexed { i, part -> println("YSP_TEAPKT_$i=" + part) }
+    }
+
+    /**
      * 交叉验证：把 Kotlin 算出的真实 cKey 打印出来（输出在 `gradle testDebugUnitTest --info` 日志里），
      * 然后用它直接请求央视频看 iretcode，或喂给 Python 参考实现比对。
      *

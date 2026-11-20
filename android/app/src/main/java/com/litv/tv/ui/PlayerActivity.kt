@@ -936,7 +936,12 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
     private fun epgIdOf(ch: Channel): String {
         if (ch.epgId.isNotBlank()) return ch.epgId
         if (!com.litv.tv.data.YspClient.isYspChannel(ch.id)) return ""
-        return runCatching { app.epg.idByName(ch.name) }.getOrDefault("")
+        val hit = runCatching { app.epg.idByName(ch.name) }.getOrDefault("")
+        // 排障用（仅 debug）：区分「名字匹配不上」和「xmltv 里这个台真没节目」
+        if (hit.isBlank()) {
+            android.util.Log.d(TAG, "epgIdOf: name=${ch.name} 匹配不到 xmltv 频道")
+        }
+        return hit
     }
 
     private fun withBuiltin(list: List<Channel>): List<Channel> {

@@ -843,7 +843,8 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
         val nowSec = System.currentTimeMillis() / 1000
         val fresh = HashMap<Long, String>()
         for (ch in all) {
-            val epgId = ch.epgId ?: continue
+            val epgId = epgIdOf(ch)
+            if (epgId.isBlank()) continue
             val list = app.epg.programsFor(epgId) ?: continue
             val cur = list.firstOrNull { nowSec >= it.start && nowSec < it.end } ?: continue
             fresh[ch.id] = cur.title
@@ -1009,6 +1010,19 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
     /** 等待解析时记下想播的台名，解析完成后按名字找回 */
     private var pendingChannelName: String = ""
 
+    /**
+     * 取频道对应的 xmltv id。
+     *
+     * 内置源（央视频）的 Channel 是现构造的，epgId 为空，必须按名字现查：
+     * 「CCTV-10 科教」→ 去 -/空格 → `cctv10科教` → 前缀匹配 → `CCTV10`。
+     * 之前手机版全用 ch.epgId，内置源永远是空 → 节目单一直「暂无」。
+     */
+    private fun epgIdOf(ch: Channel): String {
+        if (ch.epgId.isNotBlank()) return ch.epgId
+        if (!com.litv.tv.data.YspClient.isYspChannel(ch.id)) return ""
+        return runCatching { app.epg.idByName(ch.name) }.getOrDefault("")
+    }
+
     private fun playChannel(ch: Channel) {
         controlsFlashedForChannel = false
         playingTimeshift = false
@@ -1120,7 +1134,7 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
                             ch.id, line, mapOf("User-Agent" to "qqlive"),
                             app.prefs.engine, bustCache = false,
                         )
-                        val local = if (ch.epgId.isBlank()) null else app.epg.programsFor(ch.epgId)
+                        val local = epgIdOf(ch).takeIf { it.isNotBlank() }?.let { app.epg.programsFor(it) }
                         programs = local?.map {
                             com.litv.tv.data.EpgProgram(
                                 startAt = it.start, endAt = it.end, title = it.title,
@@ -1143,8 +1157,8 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
             // ★ 这里 return 会跳过下面那段"本地节目单优先"的加载，
             //   于是 programs 一直是空的 → 界面永远「暂无节目单」。
             //   客户端模式下必须在这里自己把节目单填上。
-            val epgId = ch.epgId
-            val local = if (epgId.isBlank()) null else app.epg.programsFor(epgId)
+            val epgId = epgIdOf(ch)
+            val local = epgId.takeIf { it.isNotBlank() }?.let { app.epg.programsFor(it) }
             programs = local?.map {
                 com.litv.tv.data.EpgProgram(
                     startAt = it.start, endAt = it.end, title = it.title,
@@ -1216,7 +1230,7 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
 
         // ★ 本地节目单优先。服务端的 epg_programs 在 edge 重建后是空的，
         //   只靠 app.api.epg 就永远显示「暂无节目单」。
-        val localEpg = ch.epgId?.takeIf { it.isNotBlank() }?.let { app.epg.programsFor(it) }
+        val localEpg = epgIdOf(ch).takeIf { it.isNotBlank() }?.let { app.epg.programsFor(it) }
         if (!localEpg.isNullOrEmpty()) {
             programs = localEpg.map {
                 com.litv.tv.data.EpgProgram(

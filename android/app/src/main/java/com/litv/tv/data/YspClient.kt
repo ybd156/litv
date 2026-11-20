@@ -159,8 +159,9 @@ object YspClient {
 
         val body = httpGet(ENDPOINT + q, timeoutMs)
         if (com.litv.tv.BuildConfig.DEBUG) {
-            // 只显示参数形状，cKey 打码（AGENTS.md：Release 不带详细 HTTP 日志）
-            android.util.Log.d("YspClient", "params=" + q.replace(t.cKey, "<CKEY>"))
+            // 诊断期：debug 包输出完整参数（含 cKey）。
+            // cKey 是几十秒内失效的短时效票据，且只在 debug 包打；Release 永远不会走到这里。
+            android.util.Log.d("YspClient", "params=" + q)
         }
         val json = JSONObject(body)
         val code = json.optInt("iretcode", -1)

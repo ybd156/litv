@@ -56,6 +56,13 @@ class LitvApp : Application() {
         DohDns.attach(this)
         DohDns.configure(prefs.dohEnabled(), prefs.dohProvider)
 
+        // 内置源（央视频）的频道表支持远程更新：sid/pid 会变，不该为几个数字发版。
+        // 先吃本地缓存（立刻生效），再后台拉远程；失败就用编译进包里的默认表。
+        // 注意必须在后台线程：这里有两次网络往返。
+        Thread({
+            runCatching { com.litv.tv.data.YspClient.refreshFromRemoteAsync(this) }
+        }, "ysp-config").apply { isDaemon = true }.start()
+
         // 整个应用退到后台就停播。
         //
         // 为什么不能只靠 Activity 的 onPause：打开设置/遥控器时 PhoneHomeActivity

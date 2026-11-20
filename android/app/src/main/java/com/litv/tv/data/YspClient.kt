@@ -1,6 +1,8 @@
 package com.litv.tv.data
 
+import android.content.Context
 import org.json.JSONObject
+import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
@@ -131,7 +133,79 @@ object YspClient {
      * 这些 sid/pid 是央视频的频道标识，不是流地址——流地址每次现算。
      * 上游改版时这张表也要跟着改，所以集中放在这里。
      */
-    val CHANNELS: List<Channel> = listOf(
+    /**
+     * 当前生效的频道表。
+     *
+     * 默认是下面这份内置表；[refreshFromRemoteAsync] 拉到远程配置后会被整体替换。
+     * 央视频的 sid/pid 会变（换号、临时下架、新增频道），把它做成可远程更新的，
+     * 就不用为了改几个数字发版。
+     */
+    @Volatile
+    var CHANNELS: List<Channel> = emptyList()
+        private set
+
+
+    /** 远程配置地址。走 jsDelivr 读 GitHub 仓库，@main 跟随最新。 */
+    private const val REMOTE_CONFIG =
+        "https://cdn.jsdelivr.net/gh/ybd156/litv@main/config/ysp-channels.json"
+
+    /** 本地缓存文件名：拉到过一次之后，断网也能用上次的配置。 */
+    private const val CACHE_FILE = "ysp-channels.json"
+
+    /** 远程配置的 schema 版本，不匹配就忽略（防止老客户端吃到新格式）。 */
+    private const val CONFIG_SCHEMA = 1
+
+    /**
+     * 从远程拉一次频道表。**必须在后台线程调用**，失败静默保留现有值。
+     *
+     * 顺序：内存默认 → 本地缓存（上次成功的结果）→ 远程（成功则覆盖并写缓存）。
+     */
+    fun refreshFromRemoteAsync(ctx: Context) {
+        // 先吃本地缓存，让本次启动立刻用上上次的配置
+        runCatching {
+            val f = File(ctx.filesDir, CACHE_FILE)
+            if (f.exists() && f.length() > 0) {
+                applyConfig(f.readText(), fromRemote = false)
+            }
+        }
+        // 再拉远程
+        runCatching {
+            val body = httpGet(REMOTE_CONFIG, 12000)
+            if (applyConfig(body, fromRemote = true)) {
+                runCatching {
+                    File(ctx.filesDir, CACHE_FILE).writeText(body)
+                }
+            }
+        }
+    }
+
+    /** 解析并应用配置；返回是否生效。 */
+    private fun applyConfig(text: String, fromRemote: Boolean): Boolean {
+        val root = runCatching { JSONObject(text) }.getOrNull() ?: return false
+        if (root.optInt("schema", 0) != CONFIG_SCHEMA) return false
+        val arr = root.optJSONArray("channels") ?: return false
+        if (arr.length() == 0) return false
+
+        val list = ArrayList<Channel>(arr.length())
+        for (i in 0 until arr.length()) {
+            val o = arr.optJSONObject(i) ?: continue
+            val slug = o.optString("slug").trim()
+            val sid = o.optString("sid").trim()
+            val pid = o.optString("pid").trim()
+            if (slug.isBlank() || sid.isBlank() || pid.isBlank()) continue
+            val name = o.optString("name").trim().ifBlank { slug }
+            val defn = o.optString("defn").trim().ifBlank { "fhd" }
+            list += Channel(slug, name, sid, pid, defn)
+        }
+        if (list.isEmpty()) return false
+        CHANNELS = list
+        android.util.Log.i("YspClient", "频道表已更新：" + list.size + " 路（" +
+            (if (fromRemote) "远程" else "本地缓存") + "）")
+        return true
+    }
+
+    /** 编译进包里的默认频道表。远程配置拉不到时用它。 */
+    private val HARDCODED_CHANNELS: List<Channel> = listOf(
         Channel("cctv1", "CCTV-1 综合", "2024078201", "600001859"),
         Channel("cctv2", "CCTV-2 财经", "2024075401", "600001800"),
         Channel("cctv3", "CCTV-3 综艺", "2024068501", "600001801"),
@@ -160,6 +234,12 @@ object YspClient {
         Channel("cgtnes", "CGTN 西班牙语", "2024182101", "600084744"),
         Channel("cgtndoc", "CGTN 纪录", "2024182301", "600084781"),
     )
+
+    // object 的属性按声明顺序初始化，所以只能在这里（HARDCODED_CHANNELS 已就绪之后）
+    // 把它赋给 CHANNELS。远程配置拉到前，CHANNELS 就是这份内置表。
+    init {
+        CHANNELS = HARDCODED_CHANNELS
+    }
 
     /** h264 能力声明（原实现里是 base64 的 "H(30:1080,60:1080|30:1080,60:1080)"）。 */
     private val SPVCODE: String =

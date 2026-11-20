@@ -44,6 +44,45 @@ object YspClient {
     }
 
     /**
+     * 台标地址。
+     *
+     * 图源：https://github.com/fanmingming/live 的 `tv/` 目录（933 张，含 23 张 CCTV + 8 张 CGTN），
+     * CDN 域名取自该仓库的 CNAME（live.fanmingming.com）。
+     * 文件名规则是「CCTV+台号」，没有连字符；`CCTV5+` 里的 `+` 在 URL 里要写成 `%2B`，
+     * 否则会被当成空格。
+     */
+    private fun logoOf(slug: String): String {
+        val file = when (slug) {
+            "cctv1", "cctv2", "cctv3", "cctv4", "cctv5", "cctv6", "cctv7",
+            "cctv8", "cctv9", "cctv10", "cctv11", "cctv12", "cctv13",
+            "cctv14", "cctv15", "cctv16", "cctv17" -> "CCTV" + slug.removePrefix("cctv") + ".png"
+            "cctv5p" -> "CCTV5%2B.png"
+            // 仓库里没有 CCTV164K.png，退到 CCTV16 的台标
+            "cctv164k" -> "CCTV16.png"
+            "cctv4k" -> "CCTV4K.png"
+            "cctv8k" -> "CCTV8K.png"
+            "cgtn" -> "CGTN.png"
+            "cgtnfr" -> "CGTN法语.png"
+            "cgtnru" -> "CGTN俄语.png"
+            "cgtnar" -> "CGTN阿语.png"
+            "cgtnes" -> "CGTN西语.png"
+            "cgtndoc" -> "CGTNDoc.png"
+            else -> return ""
+        }
+        return LOGO_BASE + file
+    }
+
+    /**
+     * 台标 CDN。
+     *
+     * 不用仓库自带的 `live.fanmingming.com`：那个域名解析到 Cloudflare 任播
+     * （104.244.43.6），国内 TLS 握手直接超时（本机和手机实测都超时）。
+     * 改用 jsDelivr 直接读 GitHub 仓库，`@main` 表示跟随上游最新内容 ——
+     * 仓库更新台标后客户端自动用新的，不需要发版。
+     */
+    private const val LOGO_BASE = "https://cdn.jsdelivr.net/gh/fanmingming/live@main/tv/"
+
+    /**
      * 把内置频道表转成 App 的 [com.litv.tv.data.Channel]，供频道列表直接使用。
      *
      * 注意：这里**不产生流地址**。地址在每次起播时由 [lines] 现算，
@@ -56,7 +95,7 @@ object YspClient {
                 number = i + 1,
                 name = c.name,
                 group = groupOf(c.slug),
-                logo = "",
+                logo = logoOf(c.slug),
                 tvgId = "",
                 epgId = "",
                 enabled = true,
@@ -159,9 +198,8 @@ object YspClient {
 
         val body = httpGet(ENDPOINT + q, timeoutMs)
         if (com.litv.tv.BuildConfig.DEBUG) {
-            // 诊断期：debug 包输出完整参数（含 cKey）。
-            // cKey 是几十秒内失效的短时效票据，且只在 debug 包打；Release 永远不会走到这里。
-            android.util.Log.d("YspClient", "params=" + q)
+            // 只打参数形状，cKey 打码（AGENTS.md：日志不留凭据类串）
+            android.util.Log.d("YspClient", "params=" + q.replace(t.cKey, "<CKEY>"))
         }
         val json = JSONObject(body)
         val code = json.optInt("iretcode", -1)

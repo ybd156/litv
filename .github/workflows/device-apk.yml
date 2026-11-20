@@ -30,7 +30,7 @@ concurrency:
   cancel-in-progress: true
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build:
@@ -73,3 +73,27 @@ jobs:
           # 用 ** 兼容两种结构，改回 flavor 也不会再挂。
           path: android/app/build/outputs/apk/**/*.apk
           if-no-files-found: error
+
+      # 自动更新 test tag 的 prerelease：下载链接恒定不变，内容跟着 main 走。
+      # 这样改完代码不用发版，设备端重新下载同一个链接就是新包。
+      - name: 发布到 test 文件柜
+        if: github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+          TAG=test
+          NOTE="自动构建 · $(date -u +'%Y-%m-%d %H:%M UTC') · ${GITHUB_SHA:0:8}"
+          # 首次运行时建一个 prerelease
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            gh release create "$TAG" --prerelease --title "测试构建（自动更新）" \
+              --notes "$NOTE"
+          fi
+          # 覆盖同名资产（--clobber）
+          find android/app/build/outputs/apk/release -name "*.apk" | while read -r f; do
+            echo "上传 $(basename "$f")"
+            gh release upload "$TAG" "$f" --clobber
+          done
+          gh release edit "$TAG" --notes "$NOTE" >/dev/null
+          echo "已更新 test 文件柜"
+

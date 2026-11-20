@@ -198,7 +198,10 @@ dependencies {
     // 手机打开管理台直接批准这台设备。
     implementation("com.google.zxing:core:3.5.3")
 
-    debugImplementation("com.squareup.leakcanary:leakcanary-android:2.14")
+    // LeakCanary 会在桌面额外装一个 "leaks" 入口，且 debug 包的 launcher
+    // 会被它抢占（实测 monkey 启动打开的是它而不是主界面）。调试内存泄漏时
+    // 临时打开即可，日常不保留。
+    // debugImplementation("com.squareup.leakcanary:leakcanary-android:2.14")
 
     // ---- 单元测试（纯 JVM，不要 Robolectric）----
     // 只测不依赖 Android 框架的纯函数：地址拼接、缓存过期判定、默认值一致性、

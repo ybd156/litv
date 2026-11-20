@@ -809,7 +809,45 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
      * 服务端只在「有人看过这个台」时才有缓冲，所以先问 available_seconds；
      * 没有缓冲就明确告诉用户，而不是切过去黑屏。
      */
-    private fun openTimeshiftFor(ch: Channel) {
+    /**
+     * 内置源（央视频）回看。
+     *
+     * 播放地址指向本地代理的 /rp/ 路由，真实取流由代理用 Cronet/OkHttp 代发：
+     * 那个回看 CDN 对 TLS 栈敏感，HttpURLConnection 一律 Connection reset。
+     *
+     * 节目单给的是 xmltv 时间（本地时区的 Unix 秒），正好就是央视频接口要的
+     * starttime/endtime，不用换算。
+     */
+    private fun openYspReplay(ch: Channel, p: com.litv.tv.data.EpgProgram?) {
+        val now = System.currentTimeMillis() / 1000
+        val start = p?.startAt ?: return
+        val end = p?.endAt ?: (start + 1800)
+        // 央视频只提供 7 天内的回看
+        if (start < now - 7 * 86400) {
+            toastTip("央视频只提供最近 7 天的回看")
+            return
+        }
+        val url = com.litv.tv.data.LocalHlsProxy.replayUrlFor(ch.id, start, end)
+        if (url == null) {
+            toastTip("回看不可用：本地代理未启动")
+            return
+        }
+        toastTip("回看：" + (p?.title ?: "所选时段"))
+        player.directMode = false
+        player.play(
+            ch.id, url,
+            mapOf("User-Agent" to "qqlive"),
+            app.prefs.engine, bustCache = false,
+        )
+    }
+
+    private fun openTimeshiftFor(ch: Channel, p: com.litv.tv.data.EpgProgram? = null) {
+        // 内置源（央视频）走自己的回看：服务端的 timeshift 只认它自己的频道表，
+        // 央视频这 27 个台它根本不知道，调过去必然失败。
+        if (com.litv.tv.data.YspClient.isYspChannel(ch.id)) {
+            openYspReplay(ch, p)
+            return
+        }
         app.api.timeshift(ch.id,
             onOk = { info ->
                 if (!info.enabled || info.availableSeconds <= 0) {
@@ -852,7 +890,7 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
 
             p.endAt in 1 until now -> {
                 // 已播完：直接回看
-                openTimeshiftFor(ch)
+                openTimeshiftFor(ch, p)
             }
 
             else -> {

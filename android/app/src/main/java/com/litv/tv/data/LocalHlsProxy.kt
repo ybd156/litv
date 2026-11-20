@@ -376,13 +376,47 @@ object LocalHlsProxy {
      * 没必要让直播也承担 Cronet 的初始化开销。
      */
     private fun fetchBytesSmart(url: String): ByteArray {
-        val useCronet = url.contains("playback-cdn", ignoreCase = true) ||
+        val isReplay = url.contains("playback-cdn", ignoreCase = true) ||
             url.contains("tlivecloud", ignoreCase = true)
+        if (!isReplay) return fetchBytes(url)
         val ctx = appCtx
-        if (useCronet && ctx != null) {
-            return CronetFetcher.fetch(ctx, url)
+        // 回看这条链路已经试过两个 TLS 栈：
+        //   HttpURLConnection（Conscrypt）→ 连 m3u8 都 Connection reset
+        //   Cronet（Chromium BoringSSL）→ m3u8 过了，分片仍 ERR_CONNECTION_RESET
+        // 再试第三个：OkHttp 自带的 TLS（和上面两个都不同）。
+        var last: Throwable? = null
+        if (ctx != null) {
+            try {
+                return CronetFetcher.fetch(ctx, url)
+            } catch (e: Throwable) {
+                last = e
+                Log.w(TAG, "Cronet 失败，改试 OkHttp：" + e.message)
+            }
         }
-        return fetchBytes(url)
+        try {
+            return okHttpFetch(url)
+        } catch (e: Throwable) {
+            last?.let { e.addSuppressed(it) }
+            throw e
+        }
+    }
+
+    /** 用 OkHttp 取字节。强制 HTTP/1.1（回看 CDN 在 h2 上会 RST）。 */
+    private fun okHttpFetch(url: String): ByteArray {
+        val client = okhttp3.OkHttpClient.Builder()
+            .protocols(listOf(okhttp3.Protocol.HTTP_1_1))
+            .connectTimeout(15, java.util.concurrent.TimeUnit.SECONDS)
+            .readTimeout(60, java.util.concurrent.TimeUnit.SECONDS)
+            .retryOnConnectionFailure(true)
+            .build()
+        val req = okhttp3.Request.Builder()
+            .url(url)
+            .header("User-Agent", "qqlive")
+            .build()
+        client.newCall(req).execute().use { resp ->
+            if (!resp.isSuccessful) throw java.io.IOException("OkHttp HTTP " + resp.code)
+            return resp.body?.bytes() ?: throw java.io.IOException("OkHttp 空响应")
+        }
     }
 
     private fun fetchTextSmart(url: String): String {

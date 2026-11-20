@@ -879,12 +879,26 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
 
 
     /** 存全量频道 + 分组名 + 收藏，供「列表内左右键切分组」用。 */
+    /**
+     * 服务端频道 + 内置源（央视频）。
+     *
+     * 内置源的频道表在客户端本地，服务端完全不知道它们，
+     * 所以只要拿到服务端频道列表，就得在这里补一次。
+     * （client_parse 模式下 M3uClient.adopt 已经补过，那边不会走这里。）
+     */
+    private fun withBuiltin(list: List<Channel>): List<Channel> {
+        // client_parse 模式下 M3uClient.adopt 已经补过一次，这里按 id 去重，
+        // 避免「解析完成后又走一次 applyBootstrap」时出现两份央视频。
+        val ids = list.mapTo(HashSet()) { it.id }
+        return list + com.litv.tv.data.YspClient.toChannels().filterNot { it.id in ids }
+    }
+
     private fun applyBootstrap(b: Bootstrap) {
         // 记下服务端当前的频道指纹作为基线：之后心跳里发现不一样才重拉，
         // 避免每次心跳都白拉一次列表。
         if (b.channelsVersion.isNotBlank()) knownChannelsVersion = b.channelsVersion
         lastListRefreshAt = System.currentTimeMillis()
-        allChannels = b.channels
+        allChannels = withBuiltin(b.channels)
         favoriteIds.clear()
         favoriteIds.addAll(b.favorites)
         // 当前节目：列表行右边显示"正在播什么"，数据本来就在响应里
@@ -3395,7 +3409,7 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
             onOk = { b ->
                 if (b.channelsVersion.isNotBlank()) knownChannelsVersion = b.channelsVersion
                 lastListRefreshAt = System.currentTimeMillis()
-                allChannels = b.channels
+                allChannels = withBuiltin(b.channels)
                 favoriteIds.clear()
                 favoriteIds.addAll(b.favorites)
                 groups = allChannels.map { it.group }.filter { it.isNotBlank() }.distinct()

@@ -375,9 +375,17 @@ object M3uClient {
         }
     }
 
-    /** 记到内存（播放时按 id 取地址）。 */
+    /**
+     * 记到内存（播放时按 id 取地址）。
+     *
+     * 这里统一追加**央视频内置源**：
+     * - 它是静态频道表 + 起播时现算地址，所以不进磁盘缓存（缓存只存 m3u 解析结果）；
+     * - 放在 adopt 里追加，[build] 与 [readCache] 两条路径一次覆盖；
+     * - 频道 id 用负数（见 YspClient.SOURCE_ID），不会与服务端分配的 id 冲突。
+     */
     fun adopt(p: Parsed): Parsed {
-        current = p
-        return p
+        val withBuiltin = p.copy(channels = p.channels + com.litv.tv.data.YspClient.toChannels())
+        current = withBuiltin
+        return withBuiltin
     }
 }

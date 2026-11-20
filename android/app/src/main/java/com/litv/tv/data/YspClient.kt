@@ -18,6 +18,57 @@ object YspClient {
     /** 一条可播的直播线路。 */
     data class Line(val url: String, val label: String)
 
+    /**
+     * 央视频内置源的 id。
+     *
+     * 用负数避开服务端分配的源 id（它们从 1 起），这样客户端可以安全地把
+     * 央视频频道混进同一份频道表，靠 [Channel.sourceId] 区分「这个台怎么起播」。
+     */
+    const val SOURCE_ID = -1000L
+
+    /** 频道 id 偏移：央视频第 i 个频道的 Channel.id = SOURCE_ID - 1 - i。 */
+    private const val ID_BASE = SOURCE_ID - 1
+
+    /** 频道分组名（电视端「源 / 分组」两级的展示文案）。 */
+    private fun groupOf(slug: String): String = when {
+        slug.startsWith("cgtn") -> "央视频 · CGTN"
+        slug.endsWith("4k") || slug.endsWith("8k") -> "央视频 · 超高清"
+        else -> "央视频 · 央视"
+    }
+
+    /**
+     * 把内置频道表转成 App 的 [com.litv.tv.data.Channel]，供频道列表直接使用。
+     *
+     * 注意：这里**不产生流地址**。地址在每次起播时由 [lines] 现算，
+     * 所以不会出现过期签名被缓存住的问题。
+     */
+    fun toChannels(): List<com.litv.tv.data.Channel> =
+        CHANNELS.mapIndexed { i, c ->
+            com.litv.tv.data.Channel(
+                id = ID_BASE - i,
+                number = i + 1,
+                name = c.name,
+                group = groupOf(c.slug),
+                logo = "",
+                tvgId = "",
+                epgId = "",
+                enabled = true,
+                sort = i,
+                streamCount = 1,
+                sourceId = SOURCE_ID,
+            )
+        }
+
+    /** 按 Channel.id 反查内置频道；不是央视频的台返回 null。 */
+    fun channelOf(id: Long): Channel? {
+        if (id > ID_BASE) return null
+        val idx = (ID_BASE - id).toInt()
+        return CHANNELS.getOrNull(idx)
+    }
+
+    /** 某个 id 是否属于央视频内置源。 */
+    fun isYspChannel(id: Long): Boolean = id <= ID_BASE
+
     /** 取流失败的原因（区分「风控」与「网络」，便于上层重试策略）。 */
     class YspException(val code: Int, val detail: String) :
         Exception("YSP 取流失败 code=$code $detail")

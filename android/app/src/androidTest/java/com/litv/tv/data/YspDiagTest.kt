@@ -37,6 +37,19 @@ class YspDiagTest {
             val rh = realPkt.joinToString("") { "%02x".format(it.toInt() and 0xFF) }
             rh.chunked(200).forEachIndexed { i, part -> android.util.Log.w("YSP_DIAG", "REALPKT_$i=$part") }
             android.util.Log.w("YSP_DIAG", "REALPKT_LEN=" + realPkt.size)
+
+            // 自解密闭环：Kotlin 解密自己的 cKey，应与 lastPacketForTest 完全一致
+            val dec = YspCrypto.decryptForTest(t.cKey)
+            if (dec == null) {
+                android.util.Log.w("YSP_DIAG", "SELFDEC=null")
+            } else {
+                val same = dec.contentEquals(realPkt)
+                android.util.Log.w("YSP_DIAG", "SELFDEC_LEN=" + dec.size + " SAME_AS_PKT=" + same)
+                if (!same) {
+                    val diff = (0 until minOf(dec.size, realPkt.size)).filter { dec[it] != realPkt[it] }
+                    android.util.Log.w("YSP_DIAG", "SELFDEC_DIFF_COUNT=" + diff.size + " FIRST=" + diff.take(8))
+                }
+            }
         } else {
             android.util.Log.w("YSP_DIAG", "REALPKT_LEN=null")
         }

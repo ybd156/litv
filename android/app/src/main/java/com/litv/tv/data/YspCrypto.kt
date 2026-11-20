@@ -135,6 +135,86 @@ object YspCrypto {
         return pkt
     }
 
+    /** 仅供诊断：解密自己产出的 cKey，验证加解密闭环。 */
+    internal fun decryptForTest(cKey: String): ByteArray? {
+        val body = cKey.removePrefix("--01")
+        val enc2 = b64urlDecode(body) ?: return null
+        if (enc2.size < 4) return null
+        val enc1 = ByteArray(enc2.size) { i -> (enc2[i].toInt() xor XOR_16[i and 15].toInt()).toByte() }
+        val ct = enc1.copyOfRange(0, enc1.size - 4)
+        val plain = teaPktDecrypt(ct, TEA_KEY)
+        if (plain.isEmpty()) return null
+        val pad = plain[0].toInt() and 7
+        val from = 1 + pad + 2
+        val to = plain.size - 7
+        if (to <= from) return null
+        return plain.copyOfRange(from, to)
+    }
+
+    private fun teaPktDecrypt(ct: ByteArray, key: ByteArray): ByteArray {
+        if (ct.size % 8 != 0) return ByteArray(0)
+        val out = ByteArray(ct.size)
+        var pp = ByteArray(8)
+        var pc = ByteArray(8)
+        var off = 0
+        while (off < ct.size) {
+            val cipher = ct.copyOfRange(off, off + 8)
+            val enc = ByteArray(8) { i -> (cipher[i].toInt() xor pp[i].toInt()).toByte() }
+            val mixed = teaBlockDecrypt(enc, key)
+            ByteArray(8) { i -> (mixed[i].toInt() xor pc[i].toInt()).toByte() }.copyInto(out, off)
+            pp = mixed
+            pc = cipher
+            off += 8
+        }
+        return out
+    }
+
+    private fun teaBlockDecrypt(block: ByteArray, key: ByteArray): ByteArray {
+        var y = be32At(block, 0)
+        var z = be32At(block, 4)
+        val k0 = be32At(key, 0); val k1 = be32At(key, 4)
+        val k2 = be32At(key, 8); val k3 = be32At(key, 12)
+        var sum = (0x9e3779b9L * 16) and 0xFFFFFFFFL
+        repeat(16) {
+            z = (z - ((((y shl 4) + k2) xor (y + sum) xor ((y ushr 5) + k3)) and 0xFFFFFFFFL)) and 0xFFFFFFFFL
+            y = (y - ((((z shl 4) + k0) xor (z + sum) xor ((z ushr 5) + k1)) and 0xFFFFFFFFL)) and 0xFFFFFFFFL
+            sum = (sum - 0x9e3779b9L) and 0xFFFFFFFFL
+        }
+        return be32(y) + be32(z)
+    }
+
+    private fun b64urlDecode(s: String): ByteArray? {
+        var n = 0
+        for (c in s) {
+            val idx = B64.indexOf(c)
+            if (idx < 0) return null
+            n++
+        }
+        val out = ByteArray(n * 3 / 4)
+        var o = 0; var i = 0
+        while (i + 3 < n) {
+            val a = B64.indexOf(s[i]); val b = B64.indexOf(s[i+1])
+            val c = B64.indexOf(s[i+2]); val d = B64.indexOf(s[i+3])
+            val v = (a shl 18) or (b shl 12) or (c shl 6) or d
+            out[o++] = ((v ushr 16) and 0xFF).toByte()
+            out[o++] = ((v ushr 8) and 0xFF).toByte()
+            out[o++] = (v and 0xFF).toByte()
+            i += 4
+        }
+        val rem = n - i
+        if (rem == 2) {
+            val a = B64.indexOf(s[i]); val b = B64.indexOf(s[i+1])
+            val v = (a shl 18) or (b shl 12)
+            out[o] = ((v ushr 16) and 0xFF).toByte()
+        } else if (rem == 3) {
+            val a = B64.indexOf(s[i]); val b = B64.indexOf(s[i+1]); val c = B64.indexOf(s[i+2])
+            val v = (a shl 18) or (b shl 12) or (c shl 6)
+            out[o] = ((v ushr 16) and 0xFF).toByte()
+            out[o + 1] = ((v ushr 8) and 0xFF).toByte()
+        }
+        return out.copyOf(o + (if (rem == 2) 1 else if (rem == 3) 2 else 0))
+    }
+
     internal fun teaBlock(block: ByteArray, key: ByteArray): ByteArray {
         var y = be32At(block, 0)
         var z = be32At(block, 4)

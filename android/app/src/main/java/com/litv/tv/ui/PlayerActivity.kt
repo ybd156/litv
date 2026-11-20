@@ -1061,15 +1061,22 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
     private fun refreshCategories() {
         if (!::grpList.isInitialized) return
         val rows = ArrayList<GroupAdapter.Row>()
-        rows.add(GroupAdapter.Row("全部", allChannels.size))
+        // 分组只在**当前源范围内**统计：
+        // 选了「内置源」却还列出自建源的分组，点进去必然是空列表。
+        val scope = when {
+            selSource == 0L -> allChannels
+            selSource == SRC_SELF -> allChannels.filter { it.sourceId > 0 }
+            else -> allChannels.filter { it.sourceId == selSource }
+        }
+        rows.add(GroupAdapter.Row("全部", scope.size))
         // C1：收藏行**始终显示**。
         // 以前是 if (favoriteIds.isNotEmpty()) 才加：全新设备上这一行根本不存在，
         // 用户既看不到「收藏」这个分类，也不知道有这个功能（反馈原话"没有收藏"）。
-        rows.add(GroupAdapter.Row("收藏", favoriteIds.size))
-        allChannels.map { it.group }
+        rows.add(GroupAdapter.Row("收藏", scope.count { favoriteIds.contains(it.id) }))
+        scope.map { it.group }
             .filter { it.isNotBlank() }
             .distinct()
-            .forEach { g -> rows.add(GroupAdapter.Row(g, allChannels.count { it.group == g })) }
+            .forEach { g -> rows.add(GroupAdapter.Row(g, scope.count { it.group == g })) }
         grpAdapter.submit(rows, if (selGroup.isEmpty()) "全部" else selGroup)
         refreshSourceList()
     }
@@ -3709,12 +3716,24 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         }
     }
 
+    /** 把焦点放到当前选中的源行上。 */
+    private fun focusSelectedSource() {
+        if (!::srcList.isInitialized) return
+        srcList.post {
+            val pos = srcAdapter.selectedPosition()
+            val vh = srcList.findViewHolderForAdapterPosition(pos)
+            if (vh != null) vh.itemView.requestFocus() else srcList.requestFocus()
+        }
+    }
+
     private fun movePanelFocus(dir: Int) {
         when {
-            // 分类列已经是最左，再按左键 = 关面板回到全屏。
-            // 之前这里是死键（落到 else 分支 requestFocus 自己），
-            // 想退出去只能按返回，很反直觉。
-            grpList.hasFocus() && dir < 0 -> closePanel()
+            // 源列已经是最左，再按左键 = 关面板回到全屏。
+            srcList.hasFocus() && dir < 0 -> closePanel()
+            // 源列右键：进分组列，落在当前选中的分组上。
+            srcList.hasFocus() && dir > 0 -> focusSelectedGroup()
+            // 分组列左键：退回源列（不是关面板）。
+            grpList.hasFocus() && dir < 0 -> focusSelectedSource()
             // 分类列右键：进频道列，并落在**当前正在播的那个台**上
             // （不在本分类里就落在第一项）。直接 requestFocus() 只会给列表首项，
             // 用户选完分类按右键会跑到第一个台，跟"进到这个分类"的预期不符。

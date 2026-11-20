@@ -4,18 +4,12 @@ import java.security.SecureRandom
 import java.util.UUID
 
 /**
- * 央视频（YSP）取流签名。
- *
- * 链路：cKey（TEA 加密的鉴权票据）→ bkliveinfo 换 m3u8 直链。
- * 算法与常量来自公开实现（akiralereal/iptv 的 ckey.js、funwukong/ysp-live 的 Python 版），
- * 已用 Python 实测通过：CCTV-1 / CCTV-13 均返回 iretcode=0 且分片可下载。
- *
- * 常量会随央视频改版失效，届时需要更新 [PLATFORM] / [APP_VER] / 三组密钥。
- * 设计上刻意全部集中在本文件顶层，方便替换。
- */
+ * 澶棰戯紙YSP锛夊彇娴佺鍚嶃€? *
+ * 閾捐矾锛歝Key锛圱EA 鍔犲瘑鐨勯壌鏉冪エ鎹級鈫?bkliveinfo 鎹?m3u8 鐩撮摼銆? * 绠楁硶涓庡父閲忔潵鑷叕寮€瀹炵幇锛坅kiralereal/iptv 鐨?ckey.js銆乫unwukong/ysp-live 鐨?Python 鐗堬級锛? * 宸茬敤 Python 瀹炴祴閫氳繃锛欳CTV-1 / CCTV-13 鍧囪繑鍥?iretcode=0 涓斿垎鐗囧彲涓嬭浇銆? *
+ * 甯搁噺浼氶殢澶棰戞敼鐗堝け鏁堬紝灞婃椂闇€瑕佹洿鏂?[PLATFORM] / [APP_VER] / 涓夌粍瀵嗛挜銆? * 璁捐涓婂埢鎰忓叏閮ㄩ泦涓湪鏈枃浠堕《灞傦紝鏂逛究鏇挎崲銆? */
 object YspCrypto {
 
-    // ---------------------------------------------------------------- 常量
+    // ---------------------------------------------------------------- 甯搁噺
 
     const val PLATFORM = 4330403L
     const val APP_VER = "V8.22.1035.3031"
@@ -27,9 +21,9 @@ object YspCrypto {
 
     private val rnd = SecureRandom()
 
-    // ---------------------------------------------------------------- 对外
+    // ---------------------------------------------------------------- 瀵瑰
 
-    /** 一次 cKey 生成的全部产物。 */
+    /** 涓€娆?cKey 鐢熸垚鐨勫叏閮ㄤ骇鐗┿€?*/
     data class Ticket(
         val cKey: String,
         val guid: String,
@@ -40,11 +34,9 @@ object YspCrypto {
     fun ticket(channelId: String): Ticket = ticket(channelId, null, null, null)
 
     /**
-     * 可注入随机源的版本，仅供交叉验证用（生产走上面的单参重载）。
-     *
-     * 固定 guid / ts / uid 后 cKey 完全确定，可以拿给 Python 参考实现比对，
-     * 也可以直接把这个 cKey 丢给央视频看 iretcode 是否为 0。
-     */
+     * 鍙敞鍏ラ殢鏈烘簮鐨勭増鏈紝浠呬緵浜ゅ弶楠岃瘉鐢紙鐢熶骇璧颁笂闈㈢殑鍗曞弬閲嶈浇锛夈€?     *
+     * 鍥哄畾 guid / ts / uid 鍚?cKey 瀹屽叏纭畾锛屽彲浠ユ嬁缁?Python 鍙傝€冨疄鐜版瘮瀵癸紝
+     * 涔熷彲浠ョ洿鎺ユ妸杩欎釜 cKey 涓㈢粰澶棰戠湅 iretcode 鏄惁涓?0銆?     */
     fun ticket(
         channelId: String,
         tsOverride: Long?,
@@ -84,8 +76,7 @@ object YspCrypto {
         pkt[0] = ((body.size ushr 8) and 0xFF).toByte()
         pkt[1] = (body.size and 0xFF).toByte()
         body.copyInto(pkt, 2)
-        // 18..22 处回填校验（覆盖整包）
-        be32(cksum(pkt)).copyInto(pkt, 18)
+        // 18..22 澶勫洖濉牎楠岋紙瑕嗙洊鏁村寘锛?        be32(cksum(pkt)).copyInto(pkt, 18)
 
         val enc1 = teaPkt(pkt, TEA_KEY) + be32(cksum(pkt))
         val enc2 = ByteArray(enc1.size) { i -> (enc1[i].toInt() xor XOR_16[i and 15].toInt()).toByte() }
@@ -94,7 +85,7 @@ object YspCrypto {
         return Ticket("--01$b64", guid, ts, flowId)
     }
 
-    // ---------------------------------------------------------------- 算法
+    // ---------------------------------------------------------------- 绠楁硶
 
     internal fun teaBlock(block: ByteArray, key: ByteArray): ByteArray {
         var y = be32At(block, 0)
@@ -110,13 +101,19 @@ object YspCrypto {
         return be32(y) + be32(z)
     }
 
-    /** 链式 XOR 前块（CBC-like），与 YSP 的 TEA 包格式一致。 */
+    /** 閾惧紡 XOR 鍓嶅潡锛圕BC-like锛夛紝涓?YSP 鐨?TEA 鍖呮牸寮忎竴鑷淬€?*/
     internal fun teaPkt(data: ByteArray, key: ByteArray): ByteArray {
         val pad = (8 - ((data.size + 10) % 8)) % 8
         val plain = ByteArray(1 + pad + 2 + data.size + 7)
         plain[0] = (((rnd.nextInt() and 0xF8) or pad) and 0xFF).toByte()
-        rnd.nextBytes(plain.copyOfRange(1, 1 + pad))
-        rnd.nextBytes(plain.copyOfRange(1 + pad, 3 + pad))
+        // 注意：不能写 rnd.nextBytes(plain.copyOfRange(..)) —— copyOfRange 返回副本，
+        // 填的是副本，原数组仍是全 0。必须先生成到临时数组再 copyInto。
+        if (pad > 0) {
+            val salt = ByteArray(pad).also { rnd.nextBytes(it) }
+            salt.copyInto(plain, 1)
+        }
+        val salt2 = ByteArray(2).also { rnd.nextBytes(it) }
+        salt2.copyInto(plain, 1 + pad)
         data.copyInto(plain, 3 + pad)
 
         val out = ByteArray(plain.size)
@@ -135,7 +132,7 @@ object YspCrypto {
         return out
     }
 
-    /** 0x83 多项式滚动校验。 */
+    /** 0x83 澶氶」寮忔粴鍔ㄦ牎楠屻€?*/
     internal fun cksum(buf: ByteArray): Long {
         var v = 0L
         for (b in buf) v = (0x83L * v + (b.toInt() and 0xFF)) and 0x7fffffffL
@@ -157,8 +154,7 @@ object YspCrypto {
         return enc2.toHex().uppercase()
     }
 
-    // ---------------------------------------------------------------- 小工具
-
+    // ---------------------------------------------------------------- 灏忓伐鍏?
     private fun hex(s: String): ByteArray =
         ByteArray(s.length / 2) { i -> s.substring(i * 2, i * 2 + 2).toInt(16).toByte() }
 
@@ -175,10 +171,10 @@ object YspCrypto {
             ((b[at + 2].toLong() and 0xFF) shl 8) or
             (b[at + 3].toLong() and 0xFF)
 
-    /** 长度前缀字符串（2 字节大端长度 + UTF-8）。 */
+    /** 闀垮害鍓嶇紑瀛楃涓诧紙2 瀛楄妭澶х闀垮害 + UTF-8锛夈€?*/
     private fun lp(s: String): ByteArray = lp(s.toByteArray(Charsets.UTF_8))
 
-    /** 长度前缀字节块（ckGuard 里要把已拼好的 body 再包一层）。 */
+    /** 闀垮害鍓嶇紑瀛楄妭鍧楋紙ckGuard 閲岃鎶婂凡鎷煎ソ鐨?body 鍐嶅寘涓€灞傦級銆?*/
     private fun lp(d: ByteArray): ByteArray =
         byteArrayOf(((d.size ushr 8) and 0xFF).toByte(), (d.size and 0xFF).toByte()) + d
 
@@ -191,14 +187,12 @@ object YspCrypto {
     }
 
     /**
-     * base64url（无填充）。
-     *
-     * 刻意手写而不用 android.util.Base64：这样整个 YspCrypto 在 JVM 单测里可直接跑，
-     * 能把「真实的 cKey」算出来喂给 Python 参考实现做交叉验证。
-     */
-    private val B64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_".toCharArray()
+     * base64url锛堟棤濉厖锛夈€?     *
+     * 鍒绘剰鎵嬪啓鑰屼笉鐢?android.util.Base64锛氳繖鏍锋暣涓?YspCrypto 鍦?JVM 鍗曟祴閲屽彲鐩存帴璺戯紝
+     * 鑳芥妸銆岀湡瀹炵殑 cKey銆嶇畻鍑烘潵鍠傜粰 Python 鍙傝€冨疄鐜板仛浜ゅ弶楠岃瘉銆?     */
+    internal val B64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_".toCharArray()
 
-    private fun b64url(data: ByteArray): String {
+    internal fun b64url(data: ByteArray): String {
         val sb = StringBuilder((data.size * 4 + 2) / 3)
         var i = 0
         while (i + 2 < data.size) {

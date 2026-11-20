@@ -48,6 +48,22 @@ class YspCryptoTest {
         assertEquals(203761096L, YspCrypto.cksum(ByteArray(16) { it.toByte() }))
     }
 
+    /** 手写的 base64url 必须与 JDK 的 URL 编码器逐字节一致。 */
+    @Test
+    fun b64url_matchesJdkUrlEncoder() {
+        val enc = java.util.Base64.getUrlEncoder().withoutPadding()
+        val cases = listOf(
+            ByteArray(0), ByteArray(1), ByteArray(2), ByteArray(3), ByteArray(4),
+            ByteArray(5) { it.toByte() },
+            ByteArray(16) { (it * 17).toByte() },
+            ByteArray(31) { (it * 7 + 3).toByte() },
+            ByteArray(64) { (it * 31).toByte() },
+        )
+        for (c in cases) {
+            assertEquals("b64url 长度 ${c.size} 不一致", enc.encodeToString(c), YspCrypto.b64url(c))
+        }
+    }
+
     /**
      * 交叉验证：把 Kotlin 算出的真实 cKey 打印出来（输出在 `gradle testDebugUnitTest --info` 日志里），
      * 然后用它直接请求央视频看 iretcode，或喂给 Python 参考实现比对。
@@ -69,7 +85,9 @@ class YspCryptoTest {
         println("YSP_FLOWID=" + t.flowId)
 
         assertEquals("cKey 前缀", "--01", t.cKey.take(4))
-        assertTrue("cKey 太短: ${t.cKey.length}", t.cKey.length > 100)
+        // Python 参考实现产出的 cKey 恒为 479 字符（长度只由结构体决定，与随机 padding 无关）。
+        // 长度不一致 ⇒ 字节结构搭错了（字段漏了/多包了一层/长度前缀写成 4 字节等）。
+        assertEquals("cKey 长度应与 Python 参考实现一致", 479, t.cKey.length)
         assertTrue("cKey 含非法字符", t.cKey.drop(4).none { it == '+' || it == '/' || it == '=' })
         assertEquals(32, t.guid.length)
         assertEquals(1_760_000_000L, t.ts)

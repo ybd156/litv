@@ -210,6 +210,16 @@ dependencies {
     // 不开则会直接抛 "Method ... not mocked" —— 我们要的就是这个响声。
     testImplementation("junit:junit:4.13.2")
 
+    // 让单测的断言消息与 println 出现在 CI 日志里
+    // （央视频取流那类联网测试失败时，必须看到 iretcode 才能定位）
+    tasks.withType<Test>().configureEach {
+        testLogging {
+            events("passed", "failed", "skipped")
+            exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL
+            showStandardStreams = true
+        }
+    }
+
     // instrumented test（只在设备/模拟器上跑，不进发布包）
     androidTestImplementation("androidx.test:runner:1.5.2")
     androidTestImplementation("androidx.test.ext:junit:1.1.5")

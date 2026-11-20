@@ -63,7 +63,8 @@ class ChannelAdapter(
         notifyDataSetChanged()
     }
 
-    private val executor = Executors.newFixedThreadPool(2)
+    // 4 个线程：面板一屏 5~6 行，2 个线程时首屏台标要分两三批才出齐
+    private val executor = Executors.newFixedThreadPool(4)
     private val main = Handler(Looper.getMainLooper())
 
     fun submit(list: List<Channel>, now: Map<Long, com.litv.tv.data.NowPlaying>, favs: Set<Long> = favorites) {
@@ -300,21 +301,29 @@ class ChannelAdapter(
                 }
             }
             val bmp = try {
+                // ★ 只开一次连接，把字节读全再解码两次（先量尺寸、再按比例解码）。
+                //
+                // 原来这里开了**两次** openConnection：第一次只用来读图片尺寸，
+                // 读完流就空了，于是又开第二次真正下载 —— 而第二次**没有设任何超时**，
+                // 某个 CDN 一旦卡住就无限等，executor 里排队的台标全部堵死。
+                // 表现就是「只有前几个台标能出来，后面的全是占位方块」（真机实测）。
                 val conn = (URL(url).openConnection() as HttpURLConnection).apply {
-                    connectTimeout = 5000
-                    readTimeout = 5000
+                    connectTimeout = 6000
+                    readTimeout = 6000
                     instanceFollowRedirects = true
+                    // jsDelivr 对没有 UA 的请求偶尔会慢，带上更稳
+                    setRequestProperty("User-Agent", "LITV/1.0 (Android)")
                 }
-                conn.inputStream.use { input ->
-                    val opts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-                    BitmapFactory.decodeStream(input, null, opts)
-                    val scale = maxOf(1, minOf(opts.outWidth, opts.outHeight) / logoMaxPx)
-                    BitmapFactory.decodeStream(
-                        (URL(url).openConnection() as HttpURLConnection).inputStream,
-                        null,
-                        BitmapFactory.Options().apply { inSampleSize = scale },
-                    )
-                }
+                val bytes = conn.inputStream.use { it.readBytes() }
+                val opts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opts)
+                val scale = maxOf(1, minOf(opts.outWidth, opts.outHeight) / logoMaxPx)
+                BitmapFactory.decodeByteArray(
+                    bytes,
+                    0,
+                    bytes.size,
+                    BitmapFactory.Options().apply { inSampleSize = scale },
+                )
             } catch (t: Throwable) {
                 // 打域名而不是完整 URL：台标地址里偶尔带签名参数。
                 // 有这条日志才能区分"图挂了"和"这个源根本没有 logo"——

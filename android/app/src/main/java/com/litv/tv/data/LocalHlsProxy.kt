@@ -336,7 +336,17 @@ object LocalHlsProxy {
             // 把真实原因暴露出来：这段原来用 runCatching 吞掉了异常，
             // 只留下一个 "segment failed"，根本不知道是 403、超时还是解码问题。
             Log.w(TAG, "分片拉取失败（${real.take(90)}…）：${e.javaClass.simpleName}: ${e.message}")
-            writeStatus(out, 502, "segment failed: " + (e.message ?: e.javaClass.simpleName))
+            // ★ 403 几乎都是「分片地址过期」：playlist 里带的是签名 URL，有时效，
+            //   而我们缓存了 m3u8。播放器重试时会拿着旧 playlist 里的旧地址反复打 403。
+            //   这里直接清掉全部 playlist 缓存，下次请求就会重新取流、拿到新地址。
+            //   （缓存很小，清全部的代价远低于精确追踪「这个分片属于哪个频道」）
+            val msg = e.message ?: ""
+            if (msg.contains("403")) {
+                val n = cache.size
+                cache.clear()
+                Log.i(TAG, "分片 403（地址已过期），已清 $n 个 playlist 缓存，下次重取")
+            }
+            writeStatus(out, 502, "segment failed: " + (msg.ifBlank { e.javaClass.simpleName }))
             return
         }
         Log.i(TAG, "SEG bytes=" + bytes.size)

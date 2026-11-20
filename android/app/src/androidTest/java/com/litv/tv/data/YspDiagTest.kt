@@ -101,6 +101,54 @@ class YspDiagTest {
         }
     }
 
+    /**
+     * 方案 B 可行性验证：用 App 自己的 HttpURLConnection 拉 m3u8 + 首个分片。
+     *
+     * 已知：播放器（Exo 的极简数据源、VLC 的 ffmpeg）拉同一个 m3u8 都是 403，
+     * 而 YspClient 里用 HttpURLConnection 拉是 200。如果分片也能这样拉下来，
+     * 就可以在 App 内做一个极简 HLS 代理喂给播放器。
+     */
+    @Test
+    fun probeSegmentViaPlainHttp() {
+        fun fetch(u: String, timeoutMs: Int = 15000): Pair<Int, ByteArray> {
+            val c = java.net.URL(u).openConnection() as java.net.HttpURLConnection
+            c.connectTimeout = timeoutMs
+            c.readTimeout = timeoutMs
+            c.instanceFollowRedirects = true
+            c.setRequestProperty("User-Agent", "qqlive")
+            val code = c.responseCode
+            val body = if (code in 200..299) c.inputStream.readBytes() else ByteArray(0)
+            c.disconnect()
+            return code to body
+        }
+
+        val ch = YspClient.CHANNELS.first()
+        val m3u8Url = YspClient.lines(ch).first().url
+        android.util.Log.w("YSP_DIAG", "PROBE_B m3u8=" + m3u8Url.takeLast(70))
+
+        val (c1, m3u8) = fetch(m3u8Url)
+        android.util.Log.w("YSP_DIAG", "PROBE_B m3u8 -> code=$c1 bytes=${m3u8.size}")
+        if (c1 != 200 || m3u8.isEmpty()) return
+
+        val text = String(m3u8, Charsets.UTF_8)
+        val base = java.net.URI(m3u8Url)
+        val segs = text.lineSequence()
+            .map { it.trim() }
+            .filter { it.isNotEmpty() && !it.startsWith("#") }
+            .map { if (it.startsWith("http")) it else base.resolve(it).toString() }
+            .toList()
+        android.util.Log.w("YSP_DIAG", "PROBE_B 分片数=" + segs.size)
+        if (segs.isEmpty()) return
+
+        val seg = segs.last()
+        android.util.Log.w("YSP_DIAG", "PROBE_B seg=" + seg.takeLast(60))
+        val (c2, data) = fetch(seg, 25000)
+        android.util.Log.w(
+            "YSP_DIAG",
+            "PROBE_B seg -> code=$c2 bytes=${data.size}（" + (data.size / 1024) + " KB）",
+        )
+    }
+
     /** 把 App 拿到的 m3u8 地址与拉取结果打印出来（定位 403）。 */
     @Test
     fun probeM3u8Exactly() {

@@ -1307,7 +1307,13 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
                 return
             }
             Thread {
-                val line = runCatching { com.litv.tv.data.YspClient.firstLine(yspCh) }
+                // 不走直连：该 CDN 对播放器发的请求一律 403（Exo/VLC 都试过），
+                // 但 App 自己的 HttpURLConnection 能拉（m3u8 200、分片 2135KB 实测）。
+                // 所以把播放地址指向本地代理，真实请求由代理代发。
+                val proxyUrl = runCatching { com.litv.tv.data.LocalHlsProxy.urlFor(ch.id) }
+                    .getOrNull()
+                // 代理起不来就退回直连，至少不会比现在更差
+                val line = proxyUrl ?: runCatching { com.litv.tv.data.YspClient.firstLine(yspCh) }
                     .getOrElse { e ->
                         Log.w(TAG, "YSP 取流失败: ${e.message}")
                         null
@@ -1319,7 +1325,7 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
                         switchTip.text = "央视频取流失败（网络或 IP 限制），可换其他源"
                         switchTip.visibility = View.VISIBLE
                     } else {
-                        Log.i(TAG, "内置源起播 ${ch.name}（央视频现算地址）")
+                        Log.i(TAG, "内置源起播 ${ch.name}（" + (if (proxyUrl != null) "本地代理" else "直连") + "）")
                         player.directMode = true
                         // 央视频按 URL 签名校验：不能加 _t 缓存参数，否则 CDN 直接 403
                         player.play(ch.id, line, mapOf("User-Agent" to "qqlive"), app.prefs.engine, bustCache = false)

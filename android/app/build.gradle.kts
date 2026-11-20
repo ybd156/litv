@@ -192,6 +192,16 @@ dependencies {
     // ---- 播放内核 4/4：AVS3 —— 由带 libuavs3d 的 libmpv 承担，不额外引依赖 ----
 
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
+
+    // Cronet：Chromium 的 HTTP/TLS 栈。
+    //
+    // 为什么需要它：央视频**回看**的 CDN（tlivecloud-playback-cdn.ysp.cctv.cn）
+    // 对发起请求的 TLS 栈敏感 —— 同一个 URL，Python urllib 拉是 200，
+    // 而 Android 的 HttpURLConnection 一律 SocketException: Connection reset
+    // （加 Connection: close / Accept-Encoding: identity 都无效）。
+    // 直播 CDN 没这个问题，所以只有回看这条链路要用 Cronet。
+    // 体积：每个 ABI 约 3MB；本工程本来就按 ABI 拆包，单包只增这一份。
+    implementation("org.chromium.net:cronet-embedded:119.6045.31")
     implementation("com.google.code.gson:gson:2.11.0")
 
     // 二维码：TV 上打字太痛苦，绑定页显示二维码让手机扫，

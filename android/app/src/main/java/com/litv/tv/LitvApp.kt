@@ -63,6 +63,9 @@ class LitvApp : Application() {
             runCatching { com.litv.tv.data.YspClient.refreshFromRemoteAsync(this) }
         }, "ysp-config").apply { isDaemon = true }.start()
 
+        // 本地 HLS 代理要用 Cronet 拉回看（该 CDN 对 TLS 栈敏感），先给上下文。
+        com.litv.tv.data.LocalHlsProxy.attach(this)
+
         // 整个应用退到后台就停播。
         //
         // 为什么不能只靠 Activity 的 onPause：打开设置/遥控器时 PhoneHomeActivity

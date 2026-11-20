@@ -58,6 +58,14 @@ object LocalHlsProxy {
     private val lineCache = ConcurrentHashMap<Long, CachedLine>()
     private val pool = Executors.newFixedThreadPool(6)
 
+    /** Application context：Cronet 建 Engine 需要。 */
+    @Volatile private var appCtx: android.content.Context? = null
+
+    /** 必须在起播前调一次（PlayerActivity/PhoneHomeActivity 里）。 */
+    fun attach(ctx: android.content.Context) {
+        if (appCtx == null) appCtx = ctx.applicationContext
+    }
+
     @Volatile private var serverSocket: ServerSocket? = null
     @Volatile private var port = 0
     @Volatile private var running = false
@@ -150,7 +158,7 @@ object LocalHlsProxy {
             return
         }
         val text = try {
-            fetchText(realUrl!!)
+            fetchTextSmart(realUrl!!)
         } catch (e: Throwable) {
             Log.w(TAG, "回看 playlist 拉取失败 from=$from：" + e.javaClass.simpleName + ": " + e.message)
             writeStatus(out, 502, "replay-playlist-failed")
@@ -323,7 +331,7 @@ object LocalHlsProxy {
             return
         }
         val bytes = try {
-            fetchBytes(real)
+            fetchBytesSmart(real)
         } catch (e: Throwable) {
             // 把真实原因暴露出来：这段原来用 runCatching 吞掉了异常，
             // 只留下一个 "segment failed"，根本不知道是 403、超时还是解码问题。
@@ -358,6 +366,27 @@ object LocalHlsProxy {
         } finally {
             runCatching { c.disconnect() }
         }
+    }
+
+    /**
+     * 回看的 CDN 用 Cronet（Chromium TLS 栈），其余用 HttpURLConnection。
+     *
+     * 为什么分开：`tlivecloud-playback-cdn.ysp.cctv.cn` 对 TLS 栈敏感，
+     * HttpURLConnection 一律 Connection reset；而直播 CDN 用 HttpURLConnection 没问题，
+     * 没必要让直播也承担 Cronet 的初始化开销。
+     */
+    private fun fetchBytesSmart(url: String): ByteArray {
+        val useCronet = url.contains("playback-cdn", ignoreCase = true) ||
+            url.contains("tlivecloud", ignoreCase = true)
+        val ctx = appCtx
+        if (useCronet && ctx != null) {
+            return CronetFetcher.fetch(ctx, url)
+        }
+        return fetchBytes(url)
+    }
+
+    private fun fetchTextSmart(url: String): String {
+        return fetchBytesSmart(url).toString(Charsets.UTF_8)
     }
 
     private fun fetchBytes(url: String): ByteArray {

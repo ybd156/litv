@@ -1,15 +1,21 @@
-﻿package com.litv.tv.data
+package com.litv.tv.data
 
 import java.security.SecureRandom
 import java.util.UUID
 
 /**
- * 澶棰戯紙YSP锛夊彇娴佺鍚嶃€? *
- * 閾捐矾锛歝Key锛圱EA 鍔犲瘑鐨勯壌鏉冪エ鎹級鈫?bkliveinfo 鎹?m3u8 鐩撮摼銆? * 绠楁硶涓庡父閲忔潵鑷叕寮€瀹炵幇锛坅kiralereal/iptv 鐨?ckey.js銆乫unwukong/ysp-live 鐨?Python 鐗堬級锛? * 宸茬敤 Python 瀹炴祴閫氳繃锛欳CTV-1 / CCTV-13 鍧囪繑鍥?iretcode=0 涓斿垎鐗囧彲涓嬭浇銆? *
- * **甯搁噺浼氶殢澶棰戞敼鐗堝け鏁?*锛屽眾鏃堕渶瑕佹洿鏂?[PLATFORM] / [APP_VER] / 涓夌粍瀵嗛挜銆? * 璁捐涓婂埢鎰忓叏閮ㄩ泦涓湪鏈枃浠堕《灞傦紝鏂逛究鏇挎崲銆? */
+ * 央视频（YSP）取流签名。
+ *
+ * 链路：cKey（TEA 加密的鉴权票据）→ bkliveinfo 换 m3u8 直链。
+ * 算法与常量来自公开实现（akiralereal/iptv 的 ckey.js、funwukong/ysp-live 的 Python 版），
+ * 已用 Python 实测通过：CCTV-1 / CCTV-13 均返回 iretcode=0 且分片可下载。
+ *
+ * 常量会随央视频改版失效，届时需要更新 [PLATFORM] / [APP_VER] / 三组密钥。
+ * 设计上刻意全部集中在本文件顶层，方便替换。
+ */
 object YspCrypto {
 
-    // ---------------------------------------------------------------- 甯搁噺
+    // ---------------------------------------------------------------- 常量
 
     const val PLATFORM = 4330403L
     const val APP_VER = "V8.22.1035.3031"
@@ -21,9 +27,9 @@ object YspCrypto {
 
     private val rnd = SecureRandom()
 
-    // ---------------------------------------------------------------- 瀵瑰
+    // ---------------------------------------------------------------- 对外
 
-    /** 涓€娆?cKey 鐢熸垚鐨勫叏閮ㄤ骇鐗┿€?*/
+    /** 一次 cKey 生成的全部产物。 */
     data class Ticket(
         val cKey: String,
         val guid: String,
@@ -65,7 +71,8 @@ object YspCrypto {
         pkt[0] = ((body.size ushr 8) and 0xFF).toByte()
         pkt[1] = (body.size and 0xFF).toByte()
         body.copyInto(pkt, 2)
-        // 18..22 澶勫洖濉牎楠岋紙瑕嗙洊鏁村寘锛?        be32(cksum(pkt)).copyInto(pkt, 18)
+        // 18..22 处回填校验（覆盖整包）
+        be32(cksum(pkt)).copyInto(pkt, 18)
 
         val enc1 = teaPkt(pkt, TEA_KEY) + be32(cksum(pkt))
         val enc2 = ByteArray(enc1.size) { i -> (enc1[i].toInt() xor XOR_16[i and 15].toInt()).toByte() }
@@ -74,7 +81,7 @@ object YspCrypto {
         return Ticket("--01$b64", guid, ts, flowId)
     }
 
-    // ---------------------------------------------------------------- 绠楁硶
+    // ---------------------------------------------------------------- 算法
 
     internal fun teaBlock(block: ByteArray, key: ByteArray): ByteArray {
         var y = be32At(block, 0)
@@ -90,7 +97,7 @@ object YspCrypto {
         return be32(y) + be32(z)
     }
 
-    /** 閾惧紡 XOR 鍓嶅潡锛圕BC-like锛夛紝涓?atta TEA 鍖呮牸寮忎竴鑷淬€?*/
+    /** 链式 XOR 前块（CBC-like），与 YSP 的 TEA 包格式一致。 */
     internal fun teaPkt(data: ByteArray, key: ByteArray): ByteArray {
         val pad = (8 - ((data.size + 10) % 8)) % 8
         val plain = ByteArray(1 + pad + 2 + data.size + 7)
@@ -115,7 +122,7 @@ object YspCrypto {
         return out
     }
 
-    /** 0x83 澶氶」寮忔粴鍔ㄦ牎楠屻€?*/
+    /** 0x83 多项式滚动校验。 */
     internal fun cksum(buf: ByteArray): Long {
         var v = 0L
         for (b in buf) v = (0x83L * v + (b.toInt() and 0xFF)) and 0x7fffffffL
@@ -137,7 +144,8 @@ object YspCrypto {
         return enc2.toHex().uppercase()
     }
 
-    // ---------------------------------------------------------------- 灏忓伐鍏?
+    // ---------------------------------------------------------------- 小工具
+
     private fun hex(s: String): ByteArray =
         ByteArray(s.length / 2) { i -> s.substring(i * 2, i * 2 + 2).toInt(16).toByte() }
 
@@ -154,11 +162,12 @@ object YspCrypto {
             ((b[at + 2].toLong() and 0xFF) shl 8) or
             (b[at + 3].toLong() and 0xFF)
 
-    /** 闀垮害鍓嶇紑瀛楃涓诧紙2 瀛楄妭澶х闀垮害 + UTF-8锛夈€?*/
-    private fun lp(s: String): ByteArray {
-        val d = s.toByteArray(Charsets.UTF_8)
-        return byteArrayOf(((d.size ushr 8) and 0xFF).toByte(), (d.size and 0xFF).toByte()) + d
-    }
+    /** 长度前缀字符串（2 字节大端长度 + UTF-8）。 */
+    private fun lp(s: String): ByteArray = lp(s.toByteArray(Charsets.UTF_8))
+
+    /** 长度前缀字节块（ckGuard 里要把已拼好的 body 再包一层）。 */
+    private fun lp(d: ByteArray): ByteArray =
+        byteArrayOf(((d.size ushr 8) and 0xFF).toByte(), (d.size and 0xFF).toByte()) + d
 
     private fun concat(vararg parts: ByteArray): ByteArray {
         val n = parts.sumOf { it.size }

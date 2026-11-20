@@ -1,6 +1,7 @@
 package com.litv.tv.data
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
@@ -45,5 +46,32 @@ class YspCryptoTest {
         assertEquals(0L, YspCrypto.cksum(byteArrayOf(0)))
         assertEquals(1677554L, YspCrypto.cksum("abc".toByteArray()))
         assertEquals(203761096L, YspCrypto.cksum(ByteArray(16) { it.toByte() }))
+    }
+
+    /**
+     * 交叉验证：把 Kotlin 算出的真实 cKey 打印出来（输出在 `gradle testDebugUnitTest --info` 日志里），
+     * 然后用它直接请求央视频看 iretcode，或喂给 Python 参考实现比对。
+     *
+     * 注意：cKey **不是**确定性的——TEA 包里的 padding 是随机的，
+     * 只要解密结果一致就算正确，所以这里只校验形状与能否生成，不做等值断言。
+     */
+    @Test
+    fun ticket_isGeneratedAndWellFormed() {
+        val t = YspCrypto.ticket(
+            channelId = "2024078201",
+            tsOverride = 1_760_000_000L,
+            guidOverride = "00112233445566778899aabbccddeeff",
+            uidOverride = "AABBCCDD",
+        )
+        println("YSP_CKEY=" + t.cKey)
+        println("YSP_GUID=" + t.guid)
+        println("YSP_TS=" + t.ts)
+        println("YSP_FLOWID=" + t.flowId)
+
+        assertEquals("cKey 前缀", "--01", t.cKey.take(4))
+        assertTrue("cKey 太短: ${t.cKey.length}", t.cKey.length > 100)
+        assertTrue("cKey 含非法字符", t.cKey.drop(4).none { it == '+' || it == '/' || it == '=' })
+        assertEquals(32, t.guid.length)
+        assertEquals(1_760_000_000L, t.ts)
     }
 }

@@ -37,11 +37,24 @@ object YspCrypto {
         val flowId: String,
     )
 
-    fun ticket(channelId: String): Ticket {
-        val ts = System.currentTimeMillis() / 1000
-        val guid = ByteArray(16).also { rnd.nextBytes(it) }.toHex()
+    fun ticket(channelId: String): Ticket = ticket(channelId, null, null, null)
+
+    /**
+     * 可注入随机源的版本，仅供交叉验证用（生产走上面的单参重载）。
+     *
+     * 固定 guid / ts / uid 后 cKey 完全确定，可以拿给 Python 参考实现比对，
+     * 也可以直接把这个 cKey 丢给央视频看 iretcode 是否为 0。
+     */
+    fun ticket(
+        channelId: String,
+        tsOverride: Long?,
+        guidOverride: String?,
+        uidOverride: String?,
+    ): Ticket {
+        val ts = tsOverride ?: (System.currentTimeMillis() / 1000)
+        val guid = guidOverride ?: ByteArray(16).also { rnd.nextBytes(it) }.toHex()
         val guard = ckGuard(ts, guid)
-        val uid = ByteArray(4).also { rnd.nextBytes(it) }.toHex().uppercase()
+        val uid = uidOverride ?: ByteArray(4).also { rnd.nextBytes(it) }.toHex().uppercase()
 
         val body = concat(
             hex("0000004200000004000004d2"),
@@ -177,9 +190,42 @@ object YspCrypto {
         return out
     }
 
-    private fun b64url(data: ByteArray): String =
-        android.util.Base64.encodeToString(data, android.util.Base64.NO_WRAP)
-            .replace('+', '_').replace('/', '-').trimEnd('=')
+    /**
+     * base64url（无填充）。
+     *
+     * 刻意手写而不用 android.util.Base64：这样整个 YspCrypto 在 JVM 单测里可直接跑，
+     * 能把「真实的 cKey」算出来喂给 Python 参考实现做交叉验证。
+     */
+    private val B64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_".toCharArray()
+
+    private fun b64url(data: ByteArray): String {
+        val sb = StringBuilder((data.size * 4 + 2) / 3)
+        var i = 0
+        while (i + 2 < data.size) {
+            val n = ((data[i].toInt() and 0xFF) shl 16) or
+                ((data[i + 1].toInt() and 0xFF) shl 8) or
+                (data[i + 2].toInt() and 0xFF)
+            sb.append(B64[(n ushr 18) and 0x3F])
+            sb.append(B64[(n ushr 12) and 0x3F])
+            sb.append(B64[(n ushr 6) and 0x3F])
+            sb.append(B64[n and 0x3F])
+            i += 3
+        }
+        when (data.size - i) {
+            1 -> {
+                val n = (data[i].toInt() and 0xFF) shl 16
+                sb.append(B64[(n ushr 18) and 0x3F])
+                sb.append(B64[(n ushr 12) and 0x3F])
+            }
+            2 -> {
+                val n = ((data[i].toInt() and 0xFF) shl 16) or ((data[i + 1].toInt() and 0xFF) shl 8)
+                sb.append(B64[(n ushr 18) and 0x3F])
+                sb.append(B64[(n ushr 12) and 0x3F])
+                sb.append(B64[(n ushr 6) and 0x3F])
+            }
+        }
+        return sb.toString()
+    }
 
     private fun ByteArray.toHex(): String {
         val sb = StringBuilder(size * 2)

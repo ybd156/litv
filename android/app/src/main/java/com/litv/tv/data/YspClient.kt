@@ -311,6 +311,82 @@ object YspClient {
     fun firstLine(ch: Channel): String = lines(ch).firstOrNull()?.url
         ?: throw YspException(-1, "没有任何可用线路")
 
+    // ---------------------------------------------------------------- 回看
+
+    /**
+     * 回看某时段（7 天内）。返回可播的 m3u8 地址。
+     *
+     * 协议实测（2026-11-21）：**复用直播的同一个接口**，只是
+     *   · `cmd` 仍然是 `2`（传 1 会得到 `iretcode=21 无效命令字`）；
+     *   · 额外带 `starttime` / `endtime` / `playbacktime`（playbacktime 取 starttime）。
+     * 返回里 `playback.playbacktime` 是**可回看窗口长度**，实测 604800 秒 = 7 天。
+     * m3u8 落在 `tlivecloud-playback-cdn.ysp.cctv.cn`，与直播的 CDN 不是一套。
+     *
+     * 注意：这里必须走 [JSONObject] 解析 —— 服务端返回的 URL 里有 `\u0026`（`&` 的转义），
+     * 用正则从原始文本抠出来会把 `&svrtime=…` 当成路径的一部分，CDN 直接 403。
+     *
+     * @param startSec 起播时刻（Unix 秒）
+     * @param endSec   结束时刻（Unix 秒），一般给 startSec + 节目时长
+     */
+    fun replayLines(ch: Channel, startSec: Long, endSec: Long, timeoutMs: Int = 15000): List<Line> {
+        val t = YspCrypto.ticket(ch.sid)
+        val q = buildString {
+            fun p(k: String, v: String) {
+                if (isNotEmpty()) append('&')
+                append(URLEncoder.encode(k, "UTF-8")).append('=').append(URLEncoder.encode(v, "UTF-8"))
+            }
+            p("atime", "120"); p("livepid", ch.pid); p("cnlid", ch.sid)
+            p("appVer", YspCrypto.APP_VER); p("app_version", "300090")
+            p("caplv", "1"); p("cmd", "2"); p("defn", ch.defn)
+            p("device", "iPhone"); p("encryptVer", "4.2"); p("getpreviewinfo", "0")
+            p("hevclv", "0"); p("lang", "zh-Hans_CN"); p("livequeue", "0")
+            p("logintype", "1"); p("nettype", "1"); p("newnettype", "1")
+            p("newplatform", YspCrypto.PLATFORM.toString())
+            p("platform", YspCrypto.PLATFORM.toString())
+            p("sdtfrom", "v3021"); p("spacode", "23"); p("spaudio", "1")
+            p("spdemuxer", "6"); p("spdrm", "2"); p("spdynamicrange", "1")
+            p("spflv", "1"); p("spflvaudio", "1"); p("sphdrfps", "60"); p("sphttps", "1")
+            p("spvcode", SPVCODE); p("spvideo", "4"); p("stream", "1"); p("system", "1")
+            p("sysver", "ios18.2.1"); p("uhd_flag", "0")
+            p("cKey", t.cKey); p("guid", t.guid); p("fntick", t.ts.toString())
+            p("flowid", t.flowId)
+            // 回看三件套
+            p("playbacktime", startSec.toString())
+            p("starttime", startSec.toString())
+            p("endtime", endSec.toString())
+        }
+        val body = httpGet(ENDPOINT + q, timeoutMs)
+        val json = JSONObject(body)
+        val code = json.optInt("iretcode", -1)
+        if (code != 0) throw YspException(code, json.optString("errinfo", ""))
+
+        // JSONObject 已经帮我们把 \u0026 解成 &，这里不用再手工替换
+        val out = LinkedHashSet<String>()
+        json.optString("playurl").takeIf { it.isNotBlank() }?.let { out.add(it) }
+        val bu = json.opt("backurl_list") ?: json.opt("backurlList") ?: json.opt("backurl")
+        when (bu) {
+            is org.json.JSONArray -> for (i in 0 until bu.length()) {
+                val it = bu.opt(i)
+                val u = when (it) {
+                    is String -> it
+                    is JSONObject -> it.optString("url").ifBlank { it.optString("playurl") }
+                    else -> ""
+                }
+                if (u.isNotBlank()) out.add(u)
+            }
+            is String -> bu.split(';', ',').map { it.trim() }.filter { it.isNotBlank() }.forEach { out.add(it) }
+        }
+        return out
+            .filter { it.contains(".cctv.") }
+            .filterNot { it.contains("liverecord.video.cloud.cctv.com") }
+            .mapIndexed { i, u -> Line(u, "回看线路 ${i + 1}") }
+    }
+
+    /** 第一条可用回看线路（失败抛 [YspException]）。 */
+    fun firstReplayLine(ch: Channel, startSec: Long, endSec: Long): String =
+        replayLines(ch, startSec, endSec).firstOrNull()?.url
+            ?: throw YspException(-1, "该时段没有可用的回看地址")
+
     // ---------------------------------------------------------------- HTTP
 
     private fun httpGet(url: String, timeoutMs: Int): String {

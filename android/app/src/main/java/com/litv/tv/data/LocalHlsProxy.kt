@@ -94,6 +94,98 @@ object LocalHlsProxy {
         return "http://127.0.0.1:$p/ch/$channelId.m3u8"
     }
 
+    /**
+     * 回看地址。`startSec`/`endSec` 是 Unix 秒。
+     *
+     * 央视频回看的 playlist 是**按窗口**给的（实测一次只回 5 个分片 ≈ 20 秒，
+     * 不管 endtime 给多大）。要连续播放，只能靠播放器定期重拉 playlist、
+     * 我们在每次重拉时把窗口往前推一格（见 serveReplay 里的游标）。
+     */
+    fun replayUrlFor(channelId: Long, startSec: Long, endSec: Long): String? {
+        val p = ensureStarted()
+        if (p <= 0) return null
+        return "http://127.0.0.1:$p/rp/$channelId/$startSec/$endSec.m3u8"
+    }
+
+    /** 回看游标：每个 (频道, 起播时刻) 记"已经发到哪一窗"。 */
+    private data class ReplayCursor(var nextStart: Long, var issued: Int)
+
+    private val replayCursors = ConcurrentHashMap<String, ReplayCursor>()
+
+    /** /rp/{id}/{start}/{end}.m3u8 —— 代取回看 playlist 并改写分片地址。 */
+    private fun serveReplay(path: String, out: OutputStream) {
+        val parts = path.removePrefix("/rp/").substringBefore(".m3u8").split('/')
+        if (parts.size < 3) {
+            writeStatus(out, 400, "bad replay path")
+            return
+        }
+        val id = parts[0].toLongOrNull()
+        val startSec = parts[1].toLongOrNull()
+        val endSec = parts[2].toLongOrNull()
+        if (id == null || startSec == null || endSec == null) {
+            writeStatus(out, 400, "bad replay args")
+            return
+        }
+        val ch = YspClient.channelOf(id)
+        if (ch == null) {
+            writeStatus(out, 404, "unknown channel")
+            return
+        }
+        val span = (endSec - startSec).coerceAtLeast(300L)
+        val key = "$id/$startSec"
+        val cur = replayCursors.getOrPut(key) { ReplayCursor(startSec, 0) }
+        // 第二次以后的请求才推进窗口；第一次一定要从用户点的那档节目开头起播
+        val from = if (cur.issued == 0) startSec else cur.nextStart
+
+        var realUrl: String? = null
+        for ((i, wait) in longArrayOf(0L, 300L, 800L).withIndex()) {
+            if (wait > 0) Thread.sleep(wait)
+            realUrl = runCatching { YspClient.firstReplayLine(ch, from, from + span) }.getOrNull()
+            if (!realUrl.isNullOrBlank()) break
+            Log.w(TAG, "回看取流第 ${i + 1} 次失败（ch=$id from=$from）")
+        }
+        if (realUrl.isNullOrBlank()) {
+            Log.w(TAG, "回看取流彻底失败 ch=$id from=$from")
+            writeStatus(out, 502, "replay-failed")
+            return
+        }
+        val text = try {
+            fetchText(realUrl!!)
+        } catch (e: Throwable) {
+            Log.w(TAG, "回看 playlist 拉取失败 from=$from：" + e.javaClass.simpleName + ": " + e.message)
+            writeStatus(out, 502, "replay-playlist-failed")
+            return
+        }
+
+        val base = runCatching { java.net.URI(realUrl!!) }.getOrNull()
+        val rewritten = buildString {
+            for (raw in text!!.lineSequence()) {
+                val line = raw.trim()
+                when {
+                    line.isEmpty() -> append('\n')
+                    line.startsWith("#") -> append(line).append('\n')
+                    else -> {
+                        val abs = if (line.startsWith("http")) line
+                        else base?.resolve(line)?.toString() ?: line
+                        val enc = Base64.encodeToString(
+                            abs.toByteArray(Charsets.UTF_8),
+                            Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING,
+                        )
+                        append("/seg/").append(enc).append('\n')
+                    }
+                }
+            }
+        }
+        val windowSec = runCatching {
+            Regex("#EXTINF:([0-9.]+)").findAll(text!!).sumOf { it.groupValues[1].toDouble() }.toLong()
+        }.getOrDefault(20L).coerceAtLeast(5L)
+
+        cur.nextStart = from + windowSec
+        cur.issued += 1
+        Log.i(TAG, "回看 ch=$id from=$from window=${windowSec}s 第${cur.issued}次")
+        writeBody(out, rewritten.toByteArray(Charsets.UTF_8), "application/vnd.apple.mpegurl")
+    }
+
     fun stop() {
         running = false
         runCatching { serverSocket?.close() }
@@ -120,6 +212,7 @@ object LocalHlsProxy {
                 val out = BufferedOutputStream(c.getOutputStream())
                 when {
                     path.startsWith("/ch/") -> servePlaylist(path, out)
+                    path.startsWith("/rp/") -> serveReplay(path, out)
                     path.startsWith("/seg/") -> serveSegment(path, out)
                     else -> writeStatus(out, 404, "not found")
                 }
@@ -229,9 +322,13 @@ object LocalHlsProxy {
             writeStatus(out, 400, "bad segment")
             return
         }
-        val bytes = runCatching { fetchBytes(real) }.getOrNull()
-        if (bytes == null) {
-            writeStatus(out, 502, "segment failed")
+        val bytes = try {
+            fetchBytes(real)
+        } catch (e: Throwable) {
+            // 把真实原因暴露出来：这段原来用 runCatching 吞掉了异常，
+            // 只留下一个 "segment failed"，根本不知道是 403、超时还是解码问题。
+            Log.w(TAG, "分片拉取失败（${real.take(90)}…）：${e.javaClass.simpleName}: ${e.message}")
+            writeStatus(out, 502, "segment failed: " + (e.message ?: e.javaClass.simpleName))
             return
         }
         Log.i(TAG, "SEG bytes=" + bytes.size)
@@ -246,6 +343,10 @@ object LocalHlsProxy {
         c.readTimeout = timeoutMs
         c.instanceFollowRedirects = true
         c.setRequestProperty("User-Agent", "qqlive")
+        // 回看的 CDN（tlivecloud-playback-cdn）会主动 `Connection reset`，
+        // 加上这两条让它走最朴素的一问一答：不复用连接、不要压缩。
+        c.setRequestProperty("Connection", "close")
+        c.setRequestProperty("Accept-Encoding", "identity")
         return c
     }
 

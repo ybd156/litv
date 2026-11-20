@@ -100,6 +100,22 @@ class YspCryptoTest {
     }
 
     /**
+     * 多块（>4 块）下的 teaPkt 输出：337 字节数据恰好和真实 pkt 同长，
+     * 用来暴露「短样本测不出来」的 CBC 链问题。
+     */
+    @Test
+    fun teaPkt_long_isPrintableWithFixedRandom() {
+        val data = ByteArray(337) { (it * 7 + 11).toByte() }
+        val key = hex("59b2f7cf725ef43c34fdd7c123411ed3")
+        val fixed: (Int) -> ByteArray = { n -> ByteArray(n) { i -> (i + n).toByte() } }
+        val enc = YspCrypto.teaPkt(data, key, fixed)
+        println("YSP_LONG_IN_LEN=" + data.size)
+        println("YSP_LONG_LEN=" + enc.size)
+        val hex = enc.joinToString("") { "%02x".format(it.toInt() and 0xFF) }
+        hex.chunked(240).forEachIndexed { i, part -> println("YSP_LONG_$i=" + part) }
+    }
+
+    /**
      * 交叉验证：把 Kotlin 算出的真实 cKey 打印出来（输出在 `gradle testDebugUnitTest --info` 日志里），
      * 然后用它直接请求央视频看 iretcode，或喂给 Python 参考实现比对。
      *

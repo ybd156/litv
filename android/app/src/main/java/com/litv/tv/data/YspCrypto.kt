@@ -76,7 +76,8 @@ object YspCrypto {
         pkt[0] = ((body.size ushr 8) and 0xFF).toByte()
         pkt[1] = (body.size and 0xFF).toByte()
         body.copyInto(pkt, 2)
-        // 18..22 澶勫洖濉牎楠岋紙瑕嗙洊鏁村寘锛?        be32(cksum(pkt)).copyInto(pkt, 18)
+        // 18..22 澶勫洖濉牎楠岋紙瑕嗙洊鏁村寘锛?
+        be32(cksum(pkt)).copyInto(pkt, 18)
 
         val enc1 = teaPkt(pkt, TEA_KEY) + be32(cksum(pkt))
         val enc2 = ByteArray(enc1.size) { i -> (enc1[i].toInt() xor XOR_16[i and 15].toInt()).toByte() }

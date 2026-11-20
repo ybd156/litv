@@ -1088,6 +1088,46 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
             return
         }
 
+        // 内置源（央视频）：和电视端一致，走本地 HLS 代理。
+        // 该 CDN 对播放器发出的请求一律 403，但 App 自己的 HttpURLConnection 能拉，
+        // 所以播放器只连 127.0.0.1，真实请求由 LocalHlsProxy 代发。
+        if (com.litv.tv.data.YspClient.isYspChannel(ch.id)) {
+            val yspCh = com.litv.tv.data.YspClient.channelOf(ch.id)
+            if (yspCh != null) {
+                Thread {
+                    val proxyUrl = runCatching { com.litv.tv.data.LocalHlsProxy.urlFor(ch.id) }
+                        .getOrNull()
+                    val line = proxyUrl
+                        ?: runCatching { com.litv.tv.data.YspClient.firstLine(yspCh) }.getOrNull()
+                    runOnUiThread {
+                        if (line == null) {
+                            loading.visibility = View.GONE
+                            playRoute.text = "央视频取流失败（可换其他源）"
+                            playHint.visibility = View.VISIBLE
+                            playHint.text = "该频道可能未提供直播授权"
+                            return@runOnUiThread
+                        }
+                        playRoute.text = if (proxyUrl != null) "内置源（本地代理）" else "内置源（直连）"
+                        player.directMode = proxyUrl == null
+                        player.play(
+                            ch.id, line, mapOf("User-Agent" to "qqlive"),
+                            app.prefs.engine, bustCache = false,
+                        )
+                        val local = if (ch.epgId.isBlank()) null else app.epg.programsFor(ch.epgId)
+                        programs = local?.map {
+                            com.litv.tv.data.EpgProgram(
+                                startAt = it.start, endAt = it.end, title = it.title,
+                                description = it.description, category = it.category,
+                            )
+                        } ?: emptyList()
+                        dayInit = false
+                        renderNow()
+                    }
+                }.start()
+                return
+            }
+        }
+
         val directUrl = com.litv.tv.data.M3uClient.urlOf(ch.id)
         if (directUrl != null) {
             // 地址是客户端自己从源 m3u 里解析出来的

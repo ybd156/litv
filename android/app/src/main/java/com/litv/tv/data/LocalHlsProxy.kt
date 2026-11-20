@@ -43,7 +43,7 @@ object LocalHlsProxy {
      *
      * 取一次流约 400ms（bkliveinfo + playlist），播放器 8 秒才问一次，够用。
      */
-    private const val M3U8_TTL_MS = 2_000L
+    private const val M3U8_TTL_MS = 4_000L
 
     /** 线路（playurl）缓存：央视的 playurl 约 30~40 秒失效，这里取 25 秒保守值。
      *  m3u8 **内容**仍然每次都拉（保证 MEDIA-SEQUENCE 推进），只是不再每次重取线路。 */
@@ -273,16 +273,33 @@ object LocalHlsProxy {
             }
             return
         }
-        var text: String? = null
-        for ((i, wait) in longArrayOf(0L, 200L, 500L).withIndex()) {
-            if (wait > 0) Thread.sleep(wait)
-            text = runCatching { fetchText(realUrl!!) }.getOrNull()
-            if (!text.isNullOrBlank()) break
-            Log.w(TAG, "拉 playlist 第 ${i + 1} 次失败，继续重试")
+        // ★ 只有第一次给足超时；失败时若有缓存就直接用缓存，不再重试。
+        //   原来最多重试 3 次、每次都可能等满超时 —— 播放器那边早就判死了
+        //   （真机日志「加载慢 6088ms / 2KB」「加载慢 16367ms / 2KB」就是这么来的）。
+        //   直播 playlist 只是「有哪些分片」的清单，用上一份旧的顶一下完全能播。
+        var text: String? = runCatching { fetchText(realUrl!!) }.getOrNull()
+        if (text.isNullOrBlank()) {
+            // ★ 这一句必须有：playurl 会过期（央视约 30~40 秒），
+            //   不清 lineCache 的话下次还从缓存里取同一个死链，
+            //   表现是「一直用旧 playlist 顶着、分片全是过期地址」→ 播不动。
+            //   （上面「用缓存顶」只是为了让播放器这次别干等，不是让线路永远不换。）
+            lineCache.remove(id)
+            if (cached != null) {
+                Log.w(TAG, "拉 playlist 失败，用缓存顶（ch=$id，缓存 ${System.currentTimeMillis() - cached.at}ms 前）；已清线路缓存")
+                writeBody(out, cached.text.toByteArray(Charsets.UTF_8), "application/vnd.apple.mpegurl")
+                return
+            }
         }
         if (text.isNullOrBlank()) {
-            // 线路可能已失效，下次重取
+            text = runCatching { fetchText(realUrl!!) }.getOrNull()
+        }
+        if (text.isNullOrBlank()) {
+            // ★ 线路（playurl）失效时必须**同时**清掉 lineCache。
+            //   原来只清了 playlist 缓存，3 次重试全打在同一个失效地址上，
+            //   每次撞满 fetchText 的超时 → 一次卡顿 16 秒（真机实测：
+            //   「加载慢 16367ms / 2KB」→ 判死 → 自动恢复）。
             lineCache.remove(id)
+            Log.w(TAG, "playlist 三次都失败，已清线路缓存（ch=$id）")
         }
         if (text.isNullOrBlank()) {
             if (cached != null) {
@@ -355,7 +372,7 @@ object LocalHlsProxy {
 
     // ---------------------------------------------------------------- HTTP
 
-    private fun open(url: String, timeoutMs: Int = 15000): HttpURLConnection {
+    private fun open(url: String, timeoutMs: Int = 3000): HttpURLConnection {
         val c = URL(url).openConnection() as HttpURLConnection
         c.connectTimeout = timeoutMs
         c.readTimeout = timeoutMs
@@ -420,7 +437,7 @@ object LocalHlsProxy {
     }
 
     private fun fetchBytes(url: String): ByteArray {
-        val c = open(url, 25000)
+        val c = open(url, 12000)
         return try {
             if (c.responseCode !in 200..299) throw java.io.IOException("HTTP ${c.responseCode}")
             c.inputStream.readBytes()

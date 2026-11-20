@@ -379,26 +379,12 @@ object LocalHlsProxy {
         val isReplay = url.contains("playback-cdn", ignoreCase = true) ||
             url.contains("tlivecloud", ignoreCase = true)
         if (!isReplay) return fetchBytes(url)
-        val ctx = appCtx
-        // 回看这条链路已经试过两个 TLS 栈：
-        //   HttpURLConnection（Conscrypt）→ 连 m3u8 都 Connection reset
-        //   Cronet（Chromium BoringSSL）→ m3u8 过了，分片仍 ERR_CONNECTION_RESET
-        // 再试第三个：OkHttp 自带的 TLS（和上面两个都不同）。
-        var last: Throwable? = null
-        if (ctx != null) {
-            try {
-                return CronetFetcher.fetch(ctx, url)
-            } catch (e: Throwable) {
-                last = e
-                Log.w(TAG, "Cronet 失败，改试 OkHttp：" + e.message)
-            }
-        }
-        try {
-            return okHttpFetch(url)
-        } catch (e: Throwable) {
-            last?.let { e.addSuppressed(it) }
-            throw e
-        }
+        // 回看 CDN 对 TLS 栈敏感，实测结论：
+        //   HttpURLConnection（Conscrypt）   → 连 m3u8 都 Connection reset
+        //   Cronet（Chromium BoringSSL）     → m3u8 能过，分片 ERR_CONNECTION_RESET
+        //   **OkHttp（自带 TLS + 强制 h1.1）→ m3u8 和分片都 200**
+        // 所以回看统一走 OkHttp，Cronet 已移除（省下每 ABI 约 3MB）。
+        return okHttpFetch(url)
     }
 
     /** 用 OkHttp 取字节。强制 HTTP/1.1（回看 CDN 在 h2 上会 RST）。 */

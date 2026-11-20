@@ -47,7 +47,7 @@ object LocalHlsProxy {
 
     /** 线路（playurl）缓存：央视的 playurl 约 30~40 秒失效，这里取 25 秒保守值。
      *  m3u8 **内容**仍然每次都拉（保证 MEDIA-SEQUENCE 推进），只是不再每次重取线路。 */
-    private const val LINE_TTL_MS = 25_000L
+    private const val LINE_TTL_MS = 15_000L
 
     private data class CachedM3u8(val text: String, val at: Long, val realBase: String)
 
@@ -359,9 +359,17 @@ object LocalHlsProxy {
             //   （缓存很小，清全部的代价远低于精确追踪「这个分片属于哪个频道」）
             val msg = e.message ?: ""
             if (msg.contains("403")) {
+                // ★ 关键：过期的是**线路（playurl）**，不是 playlist。
+                //   playlist 的 TTL 只有 4 秒，通常早就空了 —— 真机上日志是
+                //   「已清 0 个 playlist 缓存」然后继续 403，因为下次仍然拿
+                //   同一个旧 playurl 去取流，取回来的还是同一批过期分片地址。
+                //   所以这里必须把 lineCache 一起清掉，强制重新 ticket+取流。
                 val n = cache.size
                 cache.clear()
-                Log.i(TAG, "分片 403（地址已过期），已清 $n 个 playlist 缓存，下次重取")
+                // 清哪个台的？分片 URL 里没有频道 id，全清代价也低（最多 27 条）
+                val m = lineCache.size
+                lineCache.clear()
+                Log.i(TAG, "分片 403（地址已过期），清 playlist=$n 条、线路=$m 条，下次重取")
             }
             writeStatus(out, 502, "segment failed: " + (msg.ifBlank { e.javaClass.simpleName }))
             return

@@ -1034,7 +1034,7 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
     /** 源列当前应显示的名字（用于适配器选中态）。 */
     private fun sourceLabel(src: Long): String = when {
         src == SRC_SELF -> "自建源"
-        src == com.litv.tv.data.YspClient.SOURCE_ID -> "内置源 · 央视频"
+        src == com.litv.tv.data.YspClient.SOURCE_ID -> "内置源"
         src == 0L -> "全部源"
         else -> srcNames[src] ?: "全部源"
     }
@@ -1052,7 +1052,7 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         rows.add(GroupAdapter.Row("全部源", allChannels.size))
         rows.add(GroupAdapter.Row("自建源", allChannels.count { it.sourceId > 0 }))
         val yspCount = allChannels.count { it.sourceId == com.litv.tv.data.YspClient.SOURCE_ID }
-        if (yspCount > 0) rows.add(GroupAdapter.Row("内置源 · 央视频", yspCount))
+        if (yspCount > 0) rows.add(GroupAdapter.Row("内置源", yspCount))
         srcAdapter.submit(rows, sourceLabel(selSource))
     }
 
@@ -1060,7 +1060,7 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
     private fun onPickSource(name: String?) {
         selSource = when (name) {
             "自建源" -> SRC_SELF
-            "内置源 · 央视频" -> com.litv.tv.data.YspClient.SOURCE_ID
+            "内置源" -> com.litv.tv.data.YspClient.SOURCE_ID
             else -> 0L
         }
         // 换源后原来的分组多半不存在了，不清掉会出现「这个分组里没有频道」的假空列表

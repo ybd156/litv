@@ -1326,7 +1326,10 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
                         switchTip.visibility = View.VISIBLE
                     } else {
                         Log.i(TAG, "内置源起播 ${ch.name}（" + (if (proxyUrl != null) "本地代理" else "直连") + "）")
-                        player.directMode = true
+                        // 走本地代理时不置 directMode：那条标志的语义是「播放器直接连源站」，
+                        // 一旦为 true，停滞两次就会判「直连失败」并跳过其余内核，
+                        // 而代理链路偶发取流失败会被误判成源站连不上。
+                        player.directMode = proxyUrl == null
                         // 央视频按 URL 签名校验：不能加 _t 缓存参数，否则 CDN 直接 403
                         player.play(ch.id, line, mapOf("User-Agent" to "qqlive"), app.prefs.engine, bustCache = false)
                     }

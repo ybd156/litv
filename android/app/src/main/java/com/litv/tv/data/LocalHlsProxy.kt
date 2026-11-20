@@ -127,8 +127,13 @@ object LocalHlsProxy {
             return
         }
 
-        // 现场取流（这一步是 App 自己的 HttpURLConnection，能过 CDN）
-        val realUrl = runCatching { YspClient.firstLine(ch) }.getOrNull()
+        // 现场取流（这一步是 App 自己的 HttpURLConnection，能过 CDN）。
+        // 取流偶发失败（iretcode 抖动/版权接口超时），重试一次再放弃，减少播放器侧的 502。
+        var realUrl = runCatching { YspClient.firstLine(ch) }.getOrNull()
+        if (realUrl.isNullOrBlank()) {
+            Thread.sleep(300)
+            realUrl = runCatching { YspClient.firstLine(ch) }.getOrNull()
+        }
         if (realUrl.isNullOrBlank()) {
             // 已有缓存就先用旧的顶着，别让播放器直接断
             if (cached != null) {
@@ -138,7 +143,11 @@ object LocalHlsProxy {
             }
             return
         }
-        val text = runCatching { fetchText(realUrl) }.getOrNull()
+        var text = runCatching { fetchText(realUrl) }.getOrNull()
+        if (text.isNullOrBlank()) {
+            Thread.sleep(200)
+            text = runCatching { fetchText(realUrl) }.getOrNull()
+        }
         if (text.isNullOrBlank()) {
             if (cached != null) {
                 writeBody(out, cached.text.toByteArray(Charsets.UTF_8), "application/vnd.apple.mpegurl")

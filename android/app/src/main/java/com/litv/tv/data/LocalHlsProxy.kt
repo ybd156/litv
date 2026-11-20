@@ -347,6 +347,7 @@ object LocalHlsProxy {
         }
         cache[id] = CachedM3u8(rewritten, System.currentTimeMillis(), realUrl)
         Log.i(TAG, "M3U8 ch=$id bytes=" + rewritten.length + " segs=" + rewritten.count { it == '/' } )
+        PlayLog.w(TAG, "M3U8 ch=$id bytes=" + rewritten.length)
         writeBody(out, rewritten.toByteArray(Charsets.UTF_8), "application/vnd.apple.mpegurl")
     }
 
@@ -366,6 +367,7 @@ object LocalHlsProxy {
             writeBody(out, hit, "video/mp2t")
             return
         }
+        val t0 = System.currentTimeMillis()
         val bytes = try {
             fetchBytesSmart(real)
         } catch (e: Throwable) {
@@ -391,11 +393,15 @@ object LocalHlsProxy {
                 //   但之前已经拉到的字节仍在缓存里，播放器重试时正好能从这里拿到。
                 //   第一版把缓存一起清了，等于把唯一的救命稻草扔掉 —— 403 之后还是 403。
                 Log.i(TAG, "分片 403（地址已过期），清 playlist=$n、线路=$m，分片缓存保留")
+                PlayLog.w(TAG, "分片 403，清 playlist=$n 条")
             }
             writeStatus(out, 502, "segment failed: " + (msg.ifBlank { e.javaClass.simpleName }))
             return
         }
+        val cost = System.currentTimeMillis() - t0
         Log.i(TAG, "SEG bytes=" + bytes.size)
+        // 只在慢的时候落盘：正常分片 1~2 秒，超过 3 秒就是 CDN 抖动，正是要抓的东西
+        if (cost > 3000) PlayLog.w(TAG, "分片慢 ${cost}ms / ${bytes.size / 1024}KB")
         synchronized(segCache) { segCache[real] = bytes }
         writeBody(out, bytes, "video/mp2t")
     }

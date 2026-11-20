@@ -21,7 +21,14 @@ import java.util.Locale
  */
 object PlayLog {
 
-    private const val MAX_BYTES = 512 * 1024L
+    /**
+     * 上限。512KB 大约只够 3~4 小时（实测每分钟 5~10 条），
+     * 要跑 24 小时观察就把上限放到 2MB，轮转时保留的行数同步放大。
+     */
+    private const val MAX_BYTES = 2 * 1024 * 1024L
+
+    /** 轮转时保留的行数（约 2MB / 60 字节每行）。 */
+    private const val KEEP_LINES = 24_000
 
     @Volatile private var file: File? = null
     private val fmt = SimpleDateFormat("MM-dd HH:mm:ss.SSS", Locale.US)
@@ -86,7 +93,7 @@ object PlayLog {
             runCatching {
                 if (f.length() > MAX_BYTES) {
                     // 简单轮转：留后半段
-                    val keep = f.readLines().takeLast(2000)
+                    val keep = f.readLines().takeLast(KEEP_LINES)
                     f.writeText(keep.joinToString("\n", postfix = "\n"))
                 }
                 f.appendText(line)

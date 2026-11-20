@@ -29,11 +29,18 @@ object YspClient {
     /** 频道 id 偏移：央视频第 i 个频道的 Channel.id = SOURCE_ID - 1 - i。 */
     private const val ID_BASE = SOURCE_ID - 1
 
-    /** 频道分组名（电视端「源 / 分组」两级的展示文案）。 */
+    /**
+     * 频道分组名。
+     *
+     * 两个约束：
+     * 1. 要短 —— 分组列约 220 权重宽，长名会被省略号截断成「央视频…」，三组看起来一样；
+     * 2. 不能与自建源的分组重名 —— 「全部源」视图下 `group == selGroup` 会把两边的台混在一起，
+     *    所以统一加「内置」前缀。
+     */
     private fun groupOf(slug: String): String = when {
-        slug.startsWith("cgtn") -> "央视频 · CGTN"
-        slug.endsWith("4k") || slug.endsWith("8k") -> "央视频 · 超高清"
-        else -> "央视频 · 央视"
+        slug.startsWith("cgtn") -> "内置CGTN"
+        slug.endsWith("4k") || slug.endsWith("8k") -> "内置超高清"
+        else -> "内置央视"
     }
 
     /**

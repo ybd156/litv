@@ -83,6 +83,9 @@ android {
         versionCode = 34
         versionName = "0.1.24"
 
+        // instrumented test 需要一个 runner（模拟器验证央视频取流用）
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
         // 架构过滤走下面的 splits.abi —— 两者互斥，不能同时用。
     }
 
@@ -206,4 +209,8 @@ dependencies {
     // 开了之后调用未实现的 android.* 方法会静默返回默认值，测试会变成假绿；
     // 不开则会直接抛 "Method ... not mocked" —— 我们要的就是这个响声。
     testImplementation("junit:junit:4.13.2")
+
+    // instrumented test（只在设备/模拟器上跑，不进发布包）
+    androidTestImplementation("androidx.test:runner:1.5.2")
+    androidTestImplementation("androidx.test.ext:junit:1.1.5")
 }

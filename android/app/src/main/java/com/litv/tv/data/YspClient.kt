@@ -39,7 +39,7 @@ object YspClient {
      */
     private fun groupOf(slug: String): String = when {
         slug.startsWith("cgtn") -> "内置CGTN"
-        slug.endsWith("4k") || slug.endsWith("8k") -> "内置超高清"
+        slug.endsWith("4k") || slug.endsWith("8k") -> "内置4K"
         else -> "内置央视"
     }
 

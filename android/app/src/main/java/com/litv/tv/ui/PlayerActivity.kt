@@ -886,19 +886,30 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
      * 所以只要拿到服务端频道列表，就得在这里补一次。
      * （client_parse 模式下 M3uClient.adopt 已经补过，那边不会走这里。）
      */
+    /**
+     * 取频道对应的 xmltv id。
+     *
+     * 内置源（央视频）的 Channel 构造时 xmltv 可能还没加载完，所以 epgId 是空的；
+     * 这里在**用到的时候**再按频道名查一次：
+     * 「CCTV-1 综合」→ normalizeName 去掉 -/空格 → `cctv1综合`，
+     * 而 xmltv 里是 `CCTV1`，idByName 的前缀匹配能对上。
+     * 查不到就返回空，不影响播放。
+     */
+    private fun epgIdOf(ch: Channel): String {
+        if (ch.epgId.isNotBlank()) return ch.epgId
+        if (!com.litv.tv.data.YspClient.isYspChannel(ch.id)) return ""
+        return runCatching { app.epg.idByName(ch.name) }.getOrDefault("")
+    }
+
     private fun withBuiltin(list: List<Channel>): List<Channel> {
         // client_parse 模式下 M3uClient.adopt 已经补过一次，这里按 id 去重，
         // 避免「解析完成后又走一次 applyBootstrap」时出现两份央视频。
         val ids = list.mapTo(HashSet()) { it.id }
         val builtin = com.litv.tv.data.YspClient.toChannels()
             .filterNot { it.id in ids }
-            .map { ch ->
-                // 节目单复用 xmltv：央视频的名称是「CCTV-1 综合」，
-                // xmltv 里是「CCTV1」，XmltvEpg.normalizeName 会去掉 -/空格，
-                // idByName 再用前缀匹配，两边能对上。匹配不到就留空，不影响播放。
-                val epg = runCatching { app.epg.idByName(ch.name) }.getOrDefault("")
-                if (epg.isBlank() || epg == ch.epgId) ch else ch.copy(epgId = epg)
-            }
+            // 这里**不**预先算 epgId：withBuiltin 往往在 xmltv 还没加载完时就执行了，
+            // 那时 idByName 只会返回空，算出来的空值会被永久缓存进 Channel。
+            // 改为渲染时懒查（见 epgIdOf）。
         return list + builtin
     }
 
@@ -1523,8 +1534,9 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         // 优先用**本地解析的 xmltv**（服务端只下发地址，不存节目数据）。
         // 本地还没就绪时才回落到服务端接口——那条路在旧的灌库模式下仍然有效，
         // 也覆盖「客户端刚装上、xmltv 还没下完」的那几秒。
-        val epgId = allChannels.firstOrNull { it.id == channelId }?.epgId
-            ?: current?.takeIf { it.id == channelId }?.epgId
+        val curCh = allChannels.firstOrNull { it.id == channelId }
+            ?: current?.takeIf { it.id == channelId }
+        val epgId = curCh?.let { epgIdOf(it) } ?: ""
             ?: ""
 
         val local = app.epg.programsFor(epgId)
@@ -3046,7 +3058,8 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         val nowSec = System.currentTimeMillis() / 1000
         val fresh = HashMap<Long, com.litv.tv.data.NowPlaying>()
         for (ch in allChannels) {
-            val epgId = ch.epgId ?: continue
+            val epgId = epgIdOf(ch)
+            if (epgId.isBlank()) continue
             val props = app.epg.programsFor(epgId) ?: continue
             val cur = props.firstOrNull { nowSec >= it.start && nowSec < it.end } ?: continue
             fresh[ch.id] = com.litv.tv.data.NowPlaying(

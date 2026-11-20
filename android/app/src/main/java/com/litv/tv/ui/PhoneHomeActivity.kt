@@ -1035,7 +1035,14 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
         btnPlayPause.setImageResource(R.drawable.ic_pause)
 
         // ---- 客户端解析模式：地址就在本地，直接播，不请求 /tv/play ----
-        if (clientMode() && com.litv.tv.data.M3uClient.urlOf(ch.id) == null) {
+        // ★ 内置源（央视频）要排除在外：M3uClient.urlOf 对它必然返回 null（地址是现算的），
+        //   以前没排除，于是它一头栽进下面「等解析」的分支并 return，
+        //   永远走不到后面那段 ysp 起播逻辑 —— 真机表现就是「手机版换不了内置源的台」，
+        //   一直停在「正在解析频道地址…」。
+        if (clientMode() &&
+            !com.litv.tv.data.YspClient.isYspChannel(ch.id) &&
+            com.litv.tv.data.M3uClient.urlOf(ch.id) == null
+        ) {
             // 客户端模式：地址只能来自本地解析。
             // 解析还没完成就**等**——绝不能退回服务端签名地址，
             // 否则同一个版本里两套地址混用，用户看到"一会儿服务端一会儿客户端"。

@@ -1381,6 +1381,13 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
                         player.directMode = proxyUrl == null
                         // 央视频按 URL 签名校验：不能加 _t 缓存参数，否则 CDN 直接 403
                         player.play(ch.id, line, mapOf("User-Agent" to "qqlive"), app.prefs.engine, bustCache = false)
+                        // ★ 内置源不走 app.api.play 的 onOk 回调，而 refreshEpg 只挂在那条路上 ——
+                        //   漏了这一句，换台后节目单会一直留着上一个台的（真机反馈「每个节目单内容都一样」）。
+                        //   先清空再重取，避免重取完成前旧数据继续显示；OSD 也一并刷。
+                        programs = emptyList()
+                        epgProgramsChannelId = ch.id
+                        refreshEpg(ch.id)
+                        renderInfoBar()
                     }
                 }
             }.start()

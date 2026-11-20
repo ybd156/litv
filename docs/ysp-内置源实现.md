@@ -164,6 +164,39 @@ playbacktime=<starttime>
 
 ---
 
+## 8.5 这套实现是根据什么做的（重要，别含糊）
+
+**参考对象**：GitHub `300737/ysp-live-go` 的 Docker 镜像 `656688515/ysp-live:1.0`。
+
+详细逆向记录见 [`ysp-live-协议逆向.md`](ysp-live-协议逆向.md)。要点：
+
+| 项 | 内容 |
+|---|---|
+| 分发形态 | Docker 镜像 8.2 MB（`linux/amd64` + `linux/arm64`） |
+| 镜像内容 | Alpine 基础层 + 单个 `app/ysp-live`（11 MB，`CGO_ENABLED=0` 静态 Go 二进制） |
+| **源码** | 仓库**只有 README + LICENSE，不含源码**（程序包在 QQ 群发放） |
+| 分析方法 | Docker Registry API 直取 layer → `tarfile` 解包 → Go 二进制提符号（**未 strip，符号完整**） |
+| 签名实现 | 内嵌 **WASM**（27,680 字节，Rust + wasm-bindgen 编译），Go 侧经 `wazero` 调用 |
+| 关键函数名 | `sortKeysLocaleCI` / `formEncodeValue` / `BuildCKey` / `pkcs7Pad` / `md5HexOf` / `BuildTicket` / `Keygen` |
+
+**所以：本项目的 `YspCrypto` 是按这份逆向**重写**的 Kotlin 实现，不是源码拷贝**（那边根本没有 Go 源码可拷）。
+
+### 一处记录缺失（如实写下来）
+
+`YspCrypto` 里那几个常量 —— `TEA_KEY = 59b2f7cf…`、`GTEA_KEY`、`XOR_16`、`GXOR_8`、`PLATFORM = 4330403`、`APP_VER = V8.22.1035.3031` —— **当时是从镜像里取出来的，但具体取法没有写进任何文档**。
+
+这与逆向文档 §5.3 的说法要对上：**密钥不是硬编码常量，而是存在 `YSP_KEY_DB` 本地库、由程序定时向上游抓取**（对应它的 `/keys` 端点）。也就是说这些常量**可能来自上游 `/keys` 的返回**，也可能来自对镜像的静态提取 —— **两种都可能，我无法从现有记录里确证**。
+
+**下次要做的事**：如果哪天 `iretcode` 突然开始返回 32（= 票据验证失败），先按下面顺序查：
+
+1. 这些常量是不是过期了（央视换密钥）
+2. 如果是，去 `ysp-live` 镜像的 `/keys` 端点拿新的一套
+3. 拿到后**同时**把「从哪拿的、怎么验的」补进本文档
+
+> 这条写在这儿，是因为「知道怎么修」比「看起来完整」重要。
+
+---
+
 ## 9. 如果哪天又坏了，按这个顺序查
 
 1. **`iretcode` 是多少**：32 = cKey 算法/常量过期；12 = 该台无授权；0 = 正常

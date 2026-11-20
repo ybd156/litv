@@ -250,6 +250,33 @@
             android:layout_weight="1"
             android:orientation="horizontal">
 
+            <!-- 0. 源列表（全部源 / 自建源 / 内置源）
+                 自建源走服务端 /tv/play；内置源（央视频）由客户端现算地址。
+                 两层分开列，用户能一眼看出这个台是怎么来的。 -->
+            <LinearLayout
+                android:layout_width="0dp"
+                android:layout_weight="180"
+                android:layout_height="match_parent"
+                android:background="@drawable/bg_panel_zone"
+                android:clipToOutline="true"
+                android:orientation="vertical"
+                android:paddingHorizontal="0dp"
+                android:paddingVertical="4dp">
+
+                <androidx.recyclerview.widget.RecyclerView
+                    android:id="@+id/srcList"
+                    android:layout_width="match_parent"
+                    android:layout_height="0dp"
+                    android:layout_weight="1"
+                    android:scrollbars="none" />
+            </LinearLayout>
+
+            <View
+                android:layout_width="1dp"
+                android:layout_height="match_parent"
+                android:layout_marginVertical="8dp"
+                android:background="@drawable/divider_vertical" />
+
             <!-- 1. 分类列表（全部 / 收藏 / 各分组）
                  之前这里是个竖排文字的 TextView，只能点一下循环切分组，
                  既看不出有哪些分类，也不知道当前在哪一类。

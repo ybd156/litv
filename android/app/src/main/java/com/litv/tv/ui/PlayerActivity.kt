@@ -105,6 +105,18 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
     private lateinit var panelList: RecyclerView
     private lateinit var grpList: RecyclerView
     private val grpAdapter = GroupAdapter()
+
+    /** 源列：全部源 / 自建源 / 内置源（央视频）。 */
+    private lateinit var srcList: RecyclerView
+    private val srcAdapter = GroupAdapter()
+
+    /**
+     * 自建源的筛选用值。
+     *
+     * 服务端分配的源 id 从 1 起，所以负数可以安全地当「虚拟源」用：
+     * 0 = 全部源，[SRC_SELF] = 只看服务端源，[com.litv.tv.data.YspClient.SOURCE_ID] = 只看内置源。
+     */
+    private val SRC_SELF = -1L
     /** 当前选中的源 id，0 = 全部 */
     private var selSource = 0L
     /** 当前选中的分组，空 = 全部 */
@@ -757,6 +769,12 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         // 界面缩放档位在设置里改完立刻生效（下次进面板就能看到）
         panelAdapter.setUiScale(app.prefs.uiScale)
 
+        // 最左侧源列表：全部源 / 自建源 / 内置源
+        srcList = findViewById(R.id.srcList)
+        srcList.layoutManager = LinearLayoutManager(this)
+        srcList.adapter = srcAdapter
+        srcAdapter.onPick = { name -> onPickSource(name) }
+
         // 左侧分类列表
         grpList = findViewById(R.id.grpList)
         grpList.layoutManager = LinearLayoutManager(this)
@@ -997,6 +1015,48 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
     private fun clientParseEnabled(): Boolean =
         app.prefs.clientParseSeen || app.prefs.channelSource == "client"
 
+    // ---------------------------------------------------------------- 源层
+
+    /** 源列当前应显示的名字（用于适配器选中态）。 */
+    private fun sourceLabel(src: Long): String = when {
+        src == SRC_SELF -> "自建源"
+        src == com.litv.tv.data.YspClient.SOURCE_ID -> "内置源 · 央视频"
+        src == 0L -> "全部源"
+        else -> srcNames[src] ?: "全部源"
+    }
+
+    /**
+     * 刷新源列。
+     *
+     * 刻意只分三类，不把每个 m3u 源都列出来：
+     * 家里通常只有几个源，逐个列反而把左栏撑得很长；
+     * 而用户真正想区分的是「哪些台走服务端 / 哪些是客户端现算的内置台」。
+     */
+    private fun refreshSourceList() {
+        if (!::srcList.isInitialized) return
+        val rows = ArrayList<GroupAdapter.Row>()
+        rows.add(GroupAdapter.Row("全部源", allChannels.size))
+        rows.add(GroupAdapter.Row("自建源", allChannels.count { it.sourceId > 0 }))
+        val yspCount = allChannels.count { it.sourceId == com.litv.tv.data.YspClient.SOURCE_ID }
+        if (yspCount > 0) rows.add(GroupAdapter.Row("内置源 · 央视频", yspCount))
+        srcAdapter.submit(rows, sourceLabel(selSource))
+    }
+
+    /** 点了源列某一行。 */
+    private fun onPickSource(name: String?) {
+        selSource = when (name) {
+            "自建源" -> SRC_SELF
+            "内置源 · 央视频" -> com.litv.tv.data.YspClient.SOURCE_ID
+            else -> 0L
+        }
+        // 换源后原来的分组多半不存在了，不清掉会出现「这个分组里没有频道」的假空列表
+        selGroup = ""
+        refreshCategories()
+        applyChannelFilter()
+        index = 0
+        if (::panelList.isInitialized) panelList.scrollToPosition(0)
+    }
+
     /** 刷新左侧分类列表：全部 / 收藏 / 各分组，并带上数量。 */
     private fun refreshCategories() {
         if (!::grpList.isInitialized) return
@@ -1011,6 +1071,7 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
             .distinct()
             .forEach { g -> rows.add(GroupAdapter.Row(g, allChannels.count { it.group == g })) }
         grpAdapter.submit(rows, if (selGroup.isEmpty()) "全部" else selGroup)
+        refreshSourceList()
     }
 
     private fun applyGroupFilter() {
@@ -1200,6 +1261,41 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         if (cacheUsable) {
             Log.i(TAG, "缓存起播 ${ch.name}，签名还剩 ${cached!!.expires - nowSec}s")
             player.play(ch.id, app.api.absolute(cached.url), cached.headers, app.prefs.engine)
+        }
+
+        // 内置源（央视频）：地址由客户端现算（cKey 签名 + bkliveinfo 换流），
+        // 既没有本地缓存地址、也没有 /tv/play 可用，所以必须在这里单独分支。
+        //
+        // 取流是一整轮 DNS + TLS + HTTP，必须放后台线程：主线程上做会直接把
+        // 换台卡住（用户看到的是「按了没反应」）。
+        if (com.litv.tv.data.YspClient.isYspChannel(ch.id)) {
+            val yspCh = com.litv.tv.data.YspClient.channelOf(ch.id)
+            if (yspCh == null) {
+                hideLoading()
+                switchTip.text = "内置源频道信息缺失，请重启 App"
+                switchTip.visibility = View.VISIBLE
+                return
+            }
+            Thread {
+                val line = runCatching { com.litv.tv.data.YspClient.firstLine(yspCh) }
+                    .getOrElse { e ->
+                        Log.w(TAG, "YSP 取流失败: ${e.message}")
+                        null
+                    }
+                runOnUiThread {
+                    if (!playGate.isCurrent(seq)) return@runOnUiThread
+                    if (line == null) {
+                        hideLoading()
+                        switchTip.text = "央视频取流失败（网络或 IP 限制），可换其他源"
+                        switchTip.visibility = View.VISIBLE
+                    } else {
+                        Log.i(TAG, "内置源起播 ${ch.name}（央视频现算地址）")
+                        player.directMode = true
+                        player.play(ch.id, line, mapOf("User-Agent" to "qqlive"), app.prefs.engine)
+                    }
+                }
+            }.start()
+            return
         }
 
         // 客户端解析模式：地址就在本地（M3uClient 解析出来的），直接播，
@@ -3655,7 +3751,12 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
 
     /** 按当前源+分组过滤，刷到频道列表 */
     private fun applyChannelFilter() {
-        var list = if (selSource == 0L) allChannels else allChannels.filter { it.sourceId == selSource }
+        var list = when {
+            selSource == 0L -> allChannels
+            // 自建源：服务端分配的 id 都是正数；内置源（央视频）用负数
+            selSource == SRC_SELF -> allChannels.filter { it.sourceId > 0 }
+            else -> allChannels.filter { it.sourceId == selSource }
+        }
         list = when {
             selGroup == "收藏" -> list.filter { favoriteIds.contains(it.id) }
             selGroup.isNotEmpty() -> list.filter { it.group == selGroup }

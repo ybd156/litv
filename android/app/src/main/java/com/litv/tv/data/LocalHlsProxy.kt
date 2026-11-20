@@ -32,7 +32,18 @@ import java.util.concurrent.Executors
 object LocalHlsProxy {
 
     private const val TAG = "HlsProxy"
-    private const val M3U8_TTL_MS = 15_000L
+    /**
+     * playlist 缓存时长。
+     *
+     * ★ 不能设长（真机事故 2026-11-21）：直播 m3u8 每 5 秒左右推进一次，
+     * 播放器按 `#EXT-X-MEDIA-SEQUENCE` 判断有没有新分片。缓存 15 秒时，
+     * 播放器每 8 秒来问一次，两次都拿到同一份 sequence → 它认为没有新内容
+     * → 不再请求分片 → 16 秒后 `PlayerManager` 判定卡死、反复自动恢复。
+     * 实际表现就是「播一会儿一卡一卡」。
+     *
+     * 取一次流约 400ms（bkliveinfo + playlist），播放器 8 秒才问一次，够用。
+     */
+    private const val M3U8_TTL_MS = 2_000L
 
     private data class CachedM3u8(val text: String, val at: Long, val realBase: String)
 

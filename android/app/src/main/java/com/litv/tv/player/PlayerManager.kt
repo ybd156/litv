@@ -1210,6 +1210,12 @@ class PlayerManager(
             "io_network", "unable to connect", "connection", "connect", "refused",
             "reset", "handshake", "ssl", "timeout", "超时", "unreachable",
             "unknownhost", "no address", "解析", "连不上", "网络",
+            // 5xx 一律按网络层处理：本地 HLS 代理首次取流较慢时会先回 502，
+            // 这是"上游暂时拿不到"，重试一次就好。以前它不在名单里，
+            // Exo 一拿到 502 就当场降级到 VLC，用户看到的是「exo 播不了」。
+            // 注意真实文本是 "InvalidResponseCodeException: Response code: 502"，
+            // 不含 "HTTP" 字样，所以要按 "response code: 50" 匹配。
+            "response code: 50", "http 500", "http 502", "http 503", "http 504",
         )
         return marks.any { r.contains(it) }
     }

@@ -45,9 +45,17 @@ object LocalHlsProxy {
      */
     private const val M3U8_TTL_MS = 2_000L
 
+    /** 线路（playurl）缓存：央视的 playurl 约 30~40 秒失效，这里取 25 秒保守值。
+     *  m3u8 **内容**仍然每次都拉（保证 MEDIA-SEQUENCE 推进），只是不再每次重取线路。 */
+    private const val LINE_TTL_MS = 25_000L
+
     private data class CachedM3u8(val text: String, val at: Long, val realBase: String)
 
+    /** 线路地址缓存：bkliveinfo 不能每 2 秒调一次，会被限流。 */
+    private data class CachedLine(val url: String, val at: Long)
+
     private val cache = ConcurrentHashMap<Long, CachedM3u8>()
+    private val lineCache = ConcurrentHashMap<Long, CachedLine>()
     private val pool = Executors.newFixedThreadPool(6)
 
     @Volatile private var serverSocket: ServerSocket? = null
@@ -140,30 +148,46 @@ object LocalHlsProxy {
 
         // 现场取流（这一步是 App 自己的 HttpURLConnection，能过 CDN）。
         // 取流偶发失败（iretcode 抖动/版权接口超时），重试一次再放弃，减少播放器侧的 502。
-        var realUrl = runCatching { YspClient.firstLine(ch) }.getOrNull()
+        // 线路地址有缓存：bkliveinfo 不能每 2 秒调一次（会被限流，表现为满屏 502）。
+        // 缓存 25 秒，过期或拉 m3u8 失败时才重新取流。
+        val now = System.currentTimeMillis()
+        var realUrl: String? = lineCache[id]
+            ?.takeIf { now - it.at < LINE_TTL_MS }
+            ?.url
         if (realUrl.isNullOrBlank()) {
-            Thread.sleep(300)
-            realUrl = runCatching { YspClient.firstLine(ch) }.getOrNull()
+            for ((i, wait) in longArrayOf(0L, 300L, 700L, 1500L).withIndex()) {
+                if (wait > 0) Thread.sleep(wait)
+                realUrl = runCatching { YspClient.firstLine(ch) }.getOrNull()
+                if (!realUrl.isNullOrBlank()) break
+                Log.w(TAG, "取流第 ${i + 1} 次失败，继续重试")
+            }
+            if (!realUrl.isNullOrBlank()) lineCache[id] = CachedLine(realUrl!!, System.currentTimeMillis())
         }
         if (realUrl.isNullOrBlank()) {
             // 已有缓存就先用旧的顶着，别让播放器直接断
             if (cached != null) {
                 writeBody(out, cached.text.toByteArray(Charsets.UTF_8), "application/vnd.apple.mpegurl")
             } else {
-                writeStatus(out, 502, "no line")
+                writeStatus(out, 502, "no-line")
             }
             return
         }
-        var text = runCatching { fetchText(realUrl) }.getOrNull()
+        var text: String? = null
+        for ((i, wait) in longArrayOf(0L, 200L, 500L).withIndex()) {
+            if (wait > 0) Thread.sleep(wait)
+            text = runCatching { fetchText(realUrl!!) }.getOrNull()
+            if (!text.isNullOrBlank()) break
+            Log.w(TAG, "拉 playlist 第 ${i + 1} 次失败，继续重试")
+        }
         if (text.isNullOrBlank()) {
-            Thread.sleep(200)
-            text = runCatching { fetchText(realUrl) }.getOrNull()
+            // 线路可能已失效，下次重取
+            lineCache.remove(id)
         }
         if (text.isNullOrBlank()) {
             if (cached != null) {
                 writeBody(out, cached.text.toByteArray(Charsets.UTF_8), "application/vnd.apple.mpegurl")
             } else {
-                writeStatus(out, 502, "fetch failed")
+                writeStatus(out, 502, "fetch-failed")
             }
             return
         }

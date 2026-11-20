@@ -1059,7 +1059,7 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         if (!::srcList.isInitialized) return
         val rows = ArrayList<GroupAdapter.Row>()
         rows.add(GroupAdapter.Row("全部源", allChannels.size))
-        rows.add(GroupAdapter.Row("自建源", allChannels.count { it.sourceId > 0 }))
+        rows.add(GroupAdapter.Row("自建源", allChannels.count { it.sourceId >= 0 }))
         val yspCount = allChannels.count { it.sourceId == com.litv.tv.data.YspClient.SOURCE_ID }
         if (yspCount > 0) rows.add(GroupAdapter.Row("内置源", yspCount))
         srcAdapter.submit(rows, sourceLabel(selSource))
@@ -1088,7 +1088,7 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         // 选了「内置源」却还列出自建源的分组，点进去必然是空列表。
         val scope = when {
             selSource == 0L -> allChannels
-            selSource == SRC_SELF -> allChannels.filter { it.sourceId > 0 }
+            selSource == SRC_SELF -> allChannels.filter { it.sourceId >= 0 }
             else -> allChannels.filter { it.sourceId == selSource }
         }
         rows.add(GroupAdapter.Row("全部", scope.size))
@@ -3805,8 +3805,11 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
     private fun applyChannelFilter() {
         var list = when {
             selSource == 0L -> allChannels
-            // 自建源：服务端分配的 id 都是正数；内置源（央视频）用负数
-            selSource == SRC_SELF -> allChannels.filter { it.sourceId > 0 }
+            // 自建源：服务端分配的 id 是正数，但**客户端解析模式**下
+            // M3uClient 造出来的 Channel 没带上 sourceId，默认是 0 —— 所以这里
+            // 必须用 >= 0，否则「自建源」永远是空列表（真机反馈「自建源没有东西」）。
+            // 内置源（央视频）用负数，不会混进来。
+            selSource == SRC_SELF -> allChannels.filter { it.sourceId >= 0 }
             else -> allChannels.filter { it.sourceId == selSource }
         }
         list = when {

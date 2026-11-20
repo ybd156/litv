@@ -21,6 +21,9 @@ object YspCrypto {
 
     private val rnd = SecureRandom()
 
+    /** 诊断用：ticket() 最近一次加密前的 pkt（定位 pkt 与 debugPacket 的差异）。 */
+    internal var lastPacketForTest: ByteArray? = null
+
     // ---------------------------------------------------------------- 瀵瑰
 
     /** 涓€娆?cKey 鐢熸垚鐨勫叏閮ㄤ骇鐗┿€?*/
@@ -42,6 +45,15 @@ object YspCrypto {
         tsOverride: Long?,
         guidOverride: String?,
         uidOverride: String?,
+    ): Ticket = ticket(channelId, tsOverride, guidOverride, uidOverride, null)
+
+    /** 仅供诊断：额外接受一个固定随机源，使 pkt 与 cKey 完全可复现。 */
+    internal fun ticket(
+        channelId: String,
+        tsOverride: Long?,
+        guidOverride: String?,
+        uidOverride: String?,
+        rndBytes: ((Int) -> ByteArray)?,
     ): Ticket {
         val ts = tsOverride ?: (System.currentTimeMillis() / 1000)
         val guid = guidOverride ?: ByteArray(16).also { rnd.nextBytes(it) }.toHex()
@@ -78,8 +90,9 @@ object YspCrypto {
         body.copyInto(pkt, 2)
         // 18..22 澶勫洖濉牎楠岋紙瑕嗙洊鏁村寘锛?
         be32(cksum(pkt)).copyInto(pkt, 18)
+        lastPacketForTest = pkt.copyOf()
 
-        val enc1 = teaPkt(pkt, TEA_KEY) + be32(cksum(pkt))
+        val enc1 = teaPkt(pkt, TEA_KEY, rndBytes) + be32(cksum(pkt))
         val enc2 = ByteArray(enc1.size) { i -> (enc1[i].toInt() xor XOR_16[i and 15].toInt()).toByte() }
         val b64 = b64url(enc2)
         val flowId = UUID.randomUUID().toString().replace("-", "").uppercase() + "_" + PLATFORM
@@ -129,6 +142,12 @@ object YspCrypto {
         body.copyInto(pkt, 2)
         be32(cksum(pkt)).copyInto(pkt, 18)
         return pkt
+    }
+
+    /** 仅供诊断：用固定随机源算 guard，与 Python 参考实现逐字节比对。 */
+    internal fun debugGuardForTest(ts: Long, guid: String): String {
+        val fixed: (Int) -> ByteArray = { n -> ByteArray(n) { i -> (i + n).toByte() } }
+        return ckGuard(ts, guid, fixed)
     }
 
     /** 仅供诊断：解密自己产出的 cKey，验证加解密闭环。 */
@@ -266,7 +285,7 @@ object YspCrypto {
         return v
     }
 
-    private fun ckGuard(ts: Long, guid: String): String {
+    private fun ckGuard(ts: Long, guid: String, rndBytes: ((Int) -> ByteArray)? = null): String {
         fun tail(v: String) = if (v.length >= 5) v.takeLast(5) else ""
         val body = concat(
             be32(ts),
@@ -276,7 +295,7 @@ object YspCrypto {
             lp("-1"),
         )
         val plain = lp(body)
-        val enc1 = teaPkt(plain, GTEA_KEY) + be32(cksum(plain))
+        val enc1 = teaPkt(plain, GTEA_KEY, rndBytes) + be32(cksum(plain))
         val enc2 = ByteArray(enc1.size) { i -> (enc1[i].toInt() xor GXOR_8[i and 7].toInt()).toByte() }
         return enc2.toHex().uppercase()
     }
@@ -317,7 +336,18 @@ object YspCrypto {
      * base64url锛堟棤濉厖锛夈€?     *
      * 鍒绘剰鎵嬪啓鑰屼笉鐢?android.util.Base64锛氳繖鏍锋暣涓?YspCrypto 鍦?JVM 鍗曟祴閲屽彲鐩存帴璺戯紝
      * 鑳芥妸銆岀湡瀹炵殑 cKey銆嶇畻鍑烘潵鍠傜粰 Python 鍙傝€冨疄鐜板仛浜ゅ弶楠岃瘉銆?     */
-    internal val B64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_".toCharArray()
+    /**
+     * 央视频的 base64 变体字符表。
+     *
+     * ★ 末尾两个字符的顺序是 `_`(62) 再 `-`(63)，**与标准 base64url 相反**。
+     *
+     * 这不是笔误：服务端就是按这个表解的。写成标准的 `-_` 时，
+     * 凡是编码结果里出现值 62/63 的位置都会解成另一个字符（`_` ↔ `-`），
+     * 密文有一个字节错 → TEA 的 CBC 链从那一块起全错 →
+     * 服务端验签失败，返回 iretcode=32「权限验证失败」。
+     * 排查代价：算法各处都与参考实现逐字节一致，只有这里差两位。
+     */
+    internal val B64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-".toCharArray()
 
     internal fun b64url(data: ByteArray): String {
         val sb = StringBuilder((data.size * 4 + 2) / 3)

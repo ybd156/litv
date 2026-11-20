@@ -48,10 +48,17 @@ class YspCryptoTest {
         assertEquals(203761096L, YspCrypto.cksum(ByteArray(16) { it.toByte() }))
     }
 
-    /** 手写的 base64url 必须与 JDK 的 URL 编码器逐字节一致。 */
+    /**
+     * 手写的 base64 必须与 JDK 的 URL 编码器一致，**但要互换 `-` 与 `_`**。
+     *
+     * 央视频用的不是标准 base64url：它把值 62 编成 `_`、63 编成 `-`，
+     * 正好与标准相反（见 YspCrypto.B64 的注释）。写成标准表时服务端会 iretcode=32。
+     */
     @Test
     fun b64url_matchesJdkUrlEncoder() {
         val enc = java.util.Base64.getUrlEncoder().withoutPadding()
+        // 互换 - 与 _，对齐央视频的非标准表
+        fun swap(s: String) = s.replace('-', '\u0000').replace('_', '-').replace('\u0000', '_')
         val cases = listOf(
             ByteArray(0), ByteArray(1), ByteArray(2), ByteArray(3), ByteArray(4),
             ByteArray(5) { it.toByte() },
@@ -60,7 +67,7 @@ class YspCryptoTest {
             ByteArray(64) { (it * 31).toByte() },
         )
         for (c in cases) {
-            assertEquals("b64url 长度 ${c.size} 不一致", enc.encodeToString(c), YspCrypto.b64url(c))
+            assertEquals("b64 长度 ${c.size} 不一致", swap(enc.encodeToString(c)), YspCrypto.b64url(c))
         }
     }
 

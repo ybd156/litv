@@ -730,16 +730,35 @@ class PlayerManager(
         return if (msg.length > 120) msg.take(117) + "…" else msg
     }
 
-    fun play(channelId: Long, url: String, headers: Map<String, String>, preferredEngine: String) {
+    /**
+     * @param bustCache 是否给 URL 追加一次性参数绕过 CDN 缓存。
+     *
+     * 央视频这类**按 URL 签名校验**的源必须传 false：多一个 `_t=` 参数，
+     * CDN 就判定签名不匹配，直接 403（实测 iretcode=0、m3u8 刚拿到就 403）。
+     * 普通 IPTV 源保持 true——它们的 m3u8 会被 CDN 缓存一天，
+     * 而里面分片签名只有几分钟，不加参数会反复播到过期列表。
+     */
+    fun play(
+        channelId: Long,
+        url: String,
+        headers: Map<String, String>,
+        preferredEngine: String,
+        bustCache: Boolean = true,
+    ) {
         // 绕过 CDN 对 m3u8 的缓存。
         // 源的 m3u8 响应带 cache-control: max-age=86400，但里面分片 URL 的签名
         // 只有几分钟有效 —— CDN 会把过期列表反复喂回来，分片请求拿到 0 字节，
         // 表现就是「播一下卡一下」。
         // Exo 还能用 Cache-Control 头，但 libVLC 3 只支持 UA/Referer，
         // 所以在入口给 URL 加一次性参数：CDN 按 URL 缓存，新 URL 必然回源。
-        val bustedUrl = if (url.contains("_t=")) url else {
-            val sep = if (url.contains('?')) '&' else '?'
-            "$url${sep}_t=${System.currentTimeMillis()}"
+        // 签名校验型的源由调用方传 bustCache=false 关掉（见参数说明）。
+        val bustedUrl = when {
+            !bustCache -> url
+            url.contains("_t=") -> url
+            else -> {
+                val sep = if (url.contains('?')) '&' else '?'
+                "$url${sep}_t=${System.currentTimeMillis()}"
+            }
         }
         failLog.clear()
         pendingChannelId = channelId

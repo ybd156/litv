@@ -1312,7 +1312,8 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
                     } else {
                         Log.i(TAG, "内置源起播 ${ch.name}（央视频现算地址）")
                         player.directMode = true
-                        player.play(ch.id, line, mapOf("User-Agent" to "qqlive"), app.prefs.engine)
+                        // 央视频按 URL 签名校验：不能加 _t 缓存参数，否则 CDN 直接 403
+                        player.play(ch.id, line, mapOf("User-Agent" to "qqlive"), app.prefs.engine, bustCache = false)
                     }
                 }
             }.start()

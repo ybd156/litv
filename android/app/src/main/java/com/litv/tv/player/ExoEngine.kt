@@ -86,6 +86,9 @@ class ExoEngine : PlayerEngine {
     @Volatile private var curUa: String = UA
     @Volatile private var curHeaders: Map<String, String> = emptyMap()
 
+    /** true 时用极简数据源（只发 UA）。内置源/签名 URL 类源用得上。 */
+    @Volatile private var rawHttpMode = false
+
     /**
      * 给所有 HTTP 请求加 `Cache-Control: no-cache`。
      *
@@ -176,8 +179,26 @@ class ExoEngine : PlayerEngine {
                 .build()
         }
 
-        override fun open(dataSpec: androidx.media3.datasource.DataSpec): Long =
-            delegate.open(sanitize(dataSpec))
+        override fun open(dataSpec: androidx.media3.datasource.DataSpec): Long {
+            val s = sanitize(dataSpec)
+            // 诊断：ExoPlayer 到底发了什么。只看 m3u8，且只在 debug 包打。
+            if (com.litv.tv.BuildConfig.DEBUG &&
+                dataSpec.uri.toString().contains(".m3u8", ignoreCase = true)
+            ) {
+                android.util.Log.w(
+                    "ExoSpec",
+                    "orig[method=" + dataSpec.httpMethod +
+                        " pos=" + dataSpec.position +
+                        " len=" + dataSpec.length +
+                        " flags=" + dataSpec.flags +
+                        " key=" + dataSpec.key +
+                        "] send[method=" + s.httpMethod +
+                        " pos=" + s.position +
+                        " len=" + s.length + "]",
+                )
+            }
+            return delegate.open(s)
+        }
 
         override fun close() = delegate.close()
 
@@ -279,6 +300,9 @@ class ExoEngine : PlayerEngine {
         // 建连接时现读这两个字段，所以必须先写进去。
         curUa = headers["User-Agent"]?.takeIf { it.isNotBlank() } ?: UA
         curHeaders = headers
+        // 央视频的 CDN 对 Media3 默认数据源发出的请求判 403（同 URL 裸连接是 200），
+        // 这类签名 URL 源改走只发 UA 的极简数据源。
+        rawHttpMode = url.contains("ysp.cctv.cn", ignoreCase = true)
 
         // 换台时复用播放器实例。
         //
@@ -413,7 +437,11 @@ class ExoEngine : PlayerEngine {
         //   写死的 UA 会把请求头里的源 UA 覆盖掉，表现为"硬解时源站校验 UA 失败"。
         // 用动态工厂：播放器会被复用，而请求头每个频道都不一样，
         // 不能在 build 时写死。
-        val dsFactory = DefaultDataSource.Factory(ctx, dynamicHttpFactory)
+        // rawHttpMode 时绕开 Media3 的默认数据源，改用只发 UA 的极简实现。
+        // 见 RawHttpDataSource 的注释：签名 URL 型 CDN 对默认数据源的请求判 403。
+        val dsFactory: androidx.media3.datasource.DataSource.Factory =
+            if (rawHttpMode) RawHttpDataSource.Factory({ curUa }, { curHeaders })
+            else DefaultDataSource.Factory(ctx, dynamicHttpFactory)
 
         // 关键：硬解失败必须能自动回退到下一个解码器（最终是软解）。
         // 这台电视的 Amlogic AVC 硬解会抛

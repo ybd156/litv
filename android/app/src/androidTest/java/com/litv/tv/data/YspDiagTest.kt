@@ -51,6 +51,56 @@ class YspDiagTest {
         android.util.Log.w("YSP_DIAG", "SELFDEC_OK=" + selfOk)
     }
 
+    /**
+     * 用 ExoPlayer 同一个数据源（DefaultHttpDataSource）请求 App 拿到的 m3u8，
+     * 与裸 HttpURLConnection 的结果对比，定位 403 的来源。
+     */
+    @Test
+    fun probeM3u8WithExoDataSource() {
+        val ch = YspClient.CHANNELS.first()
+        val url = YspClient.lines(ch).first().url
+        android.util.Log.w("YSP_DIAG", "PROBE_URL_LEN=" + url.length)
+
+        fun tryFetch(label: String, block: () -> String) {
+            val r = runCatching(block).getOrElse { e -> "EX=" + (e.message ?: e.toString()).take(120) }
+            android.util.Log.w("YSP_DIAG", "$label -> $r")
+        }
+
+        // 1) 裸 HttpURLConnection（已知 200）
+        tryFetch("plain") {
+            val c = java.net.URL(url).openConnection() as java.net.HttpURLConnection
+            c.connectTimeout = 15000; c.readTimeout = 15000
+            c.setRequestProperty("User-Agent", "qqlive")
+            val code = c.responseCode
+            val n = if (code == 200) c.inputStream.readBytes().size else -1
+            "code=$code bytes=$n"
+        }
+
+        // 2) 带 Range（ExoPlayer 拉媒体时可能带）
+        tryFetch("range0-") {
+            val c = java.net.URL(url).openConnection() as java.net.HttpURLConnection
+            c.connectTimeout = 15000; c.readTimeout = 15000
+            c.setRequestProperty("User-Agent", "qqlive")
+            c.setRequestProperty("Range", "bytes=0-")
+            val code = c.responseCode
+            "code=$code"
+        }
+
+        // 3) ExoPlayer 的 DefaultHttpDataSource
+        tryFetch("exoDataSource") {
+            val f = androidx.media3.datasource.DefaultHttpDataSource.Factory()
+                .setUserAgent("qqlive")
+                .setAllowCrossProtocolRedirects(true)
+            val ds = f.createDataSource()
+            val spec = androidx.media3.datasource.DataSpec.Builder()
+                .setUri(android.net.Uri.parse(url))
+                .build()
+            val n = ds.open(spec)
+            ds.close()
+            "bytes=$n"
+        }
+    }
+
     /** 把 App 拿到的 m3u8 地址与拉取结果打印出来（定位 403）。 */
     @Test
     fun probeM3u8Exactly() {

@@ -238,6 +238,11 @@ class ExoEngine : PlayerEngine {
             runCatching {
                 existing.stop()
                 existing.clearMediaItems()
+                // ★ 必须把位置归零：复用实例时若 currentPosition 还停在上一台的位置，
+                //   新数据源的首次请求就会带 `Range: bytes=N-`。
+                //   央视频的 CDN 对带 Range 的请求直接 403（实测同 URL 裸拉 200、
+                //   加 `Range: bytes=0-` 就 403），表现为「所有内核都播不了」。
+                existing.seekTo(0L)
             }
             p = existing
         } else {
@@ -248,6 +253,11 @@ class ExoEngine : PlayerEngine {
         }
 
         exoFirstFrameRendered = false
+
+        // 诊断：只打 URL 尾部（含 query），不打完整签名地址
+        if (com.litv.tv.BuildConfig.DEBUG) {
+            Log.i(TAG, "prepare url tail=…" + url.takeLast(90) + "  len=" + url.length)
+        }
 
         player = p
         // 统一契约：视频输出永远是 Activity 交过来的 Surface。

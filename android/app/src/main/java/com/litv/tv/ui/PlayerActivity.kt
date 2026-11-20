@@ -890,7 +890,16 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         // client_parse 模式下 M3uClient.adopt 已经补过一次，这里按 id 去重，
         // 避免「解析完成后又走一次 applyBootstrap」时出现两份央视频。
         val ids = list.mapTo(HashSet()) { it.id }
-        return list + com.litv.tv.data.YspClient.toChannels().filterNot { it.id in ids }
+        val builtin = com.litv.tv.data.YspClient.toChannels()
+            .filterNot { it.id in ids }
+            .map { ch ->
+                // 节目单复用 xmltv：央视频的名称是「CCTV-1 综合」，
+                // xmltv 里是「CCTV1」，XmltvEpg.normalizeName 会去掉 -/空格，
+                // idByName 再用前缀匹配，两边能对上。匹配不到就留空，不影响播放。
+                val epg = runCatching { app.epg.idByName(ch.name) }.getOrDefault("")
+                if (epg.isBlank() || epg == ch.epgId) ch else ch.copy(epgId = epg)
+            }
+        return list + builtin
     }
 
     private fun applyBootstrap(b: Bootstrap) {

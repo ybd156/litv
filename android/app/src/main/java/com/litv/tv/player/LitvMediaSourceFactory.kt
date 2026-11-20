@@ -37,6 +37,8 @@ class LitvMediaSourceFactory(
         if (av3aEnabled) setExtractorFactory(Av3aHlsExtractorFactory())
         // 允许"无分片准备"：起播时不必先把每个变体的 playlist 全拉一遍，
         // 少一个网络往返。IPTV 只有一个变体，这个优化是纯赚。
+        //
+        // 2026-11-21 曾为定位央视频 403 临时关过，确认无关后恢复 open。
         setAllowChunklessPreparation(true)
     }
 

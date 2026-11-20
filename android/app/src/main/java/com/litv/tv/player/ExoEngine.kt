@@ -150,6 +150,62 @@ class ExoEngine : PlayerEngine {
         return root.javaClass.simpleName + (if (msg.isEmpty()) "" else ": $msg")
     }
 
+    /**
+     * 把 m3u8 请求的 `position` 强制归零的数据源包装。
+     *
+     * 为什么需要（真机实测 2026-11-21，央视频）：
+     * 该 CDN 对带 `Range: bytes=N-` 的请求直接 403，而裸请求同 URL 是 200。
+     * ExoPlayer 在拉 HLS 直播 playlist 时，只要 DataSpec.position 不为 0 就会带上 Range
+     * （复用播放器、起播追边、部分 seek 之后都可能出现），于是整条链路间歇性 403，
+     * 表现是「播几秒断流 + 弹所有内核均失败」。
+     *
+     * 只对 `.m3u8` 生效：直播 playlist 永远是整份重拉，置零是安全的；
+     * 分片本身就是 position=0，普通点播源的 seek 完全不受影响。
+     */
+    private class PositionZeroingDataSource(
+        private val delegate: androidx.media3.datasource.HttpDataSource,
+    ) : androidx.media3.datasource.HttpDataSource {
+
+        private fun sanitize(spec: androidx.media3.datasource.DataSpec): androidx.media3.datasource.DataSpec {
+            val uri = spec.uri.toString()
+            if (!uri.contains(".m3u8", ignoreCase = true)) return spec
+            if (spec.position == 0L && spec.length == androidx.media3.common.C.LENGTH_UNSET.toLong()) return spec
+            return spec.buildUpon()
+                .setPosition(0L)
+                .setLength(androidx.media3.common.C.LENGTH_UNSET.toLong())
+                .build()
+        }
+
+        override fun open(dataSpec: androidx.media3.datasource.DataSpec): Long =
+            delegate.open(sanitize(dataSpec))
+
+        override fun close() = delegate.close()
+
+        override fun read(buffer: ByteArray, offset: Int, length: Int): Int =
+            delegate.read(buffer, offset, length)
+
+        override fun getUri(): android.net.Uri? = delegate.uri
+
+        override fun getResponseHeaders(): Map<String, List<String>> = delegate.responseHeaders
+
+        override fun getResponseCode(): Int = delegate.responseCode
+
+        override fun setRequestProperty(name: String, value: String) =
+            delegate.setRequestProperty(name, value)
+
+        override fun clearRequestProperty(name: String) =
+            delegate.clearRequestProperty(name)
+
+        override fun clearAllRequestProperties() =
+            delegate.clearAllRequestProperties()
+
+        override fun addTransferListener(
+            transferListener: androidx.media3.datasource.TransferListener,
+        ) {
+            delegate.addTransferListener(transferListener)
+        }
+    }
+
     private val dynamicHttpFactory: androidx.media3.datasource.HttpDataSource.Factory =
         object : androidx.media3.datasource.HttpDataSource.Factory {
             override fun createDataSource(): androidx.media3.datasource.HttpDataSource {
@@ -170,7 +226,7 @@ class ExoEngine : PlayerEngine {
                     //   Request，塞进 headers 会被 OkHttp 的 User-Agent 覆盖掉。
                     okF.setUserAgent(curUa)
                     if (extra.isNotEmpty()) okF.setDefaultRequestProperties(extra)
-                    return okF.createDataSource()
+                    return PositionZeroingDataSource(okF.createDataSource())
                 }
 
                 // ★ 源配置里的 UA 必须走 setUserAgent，不能只塞进请求头。
@@ -183,7 +239,7 @@ class ExoEngine : PlayerEngine {
                     .setConnectTimeoutMs(8000)
                     .setReadTimeoutMs(15000)
                 if (extra.isNotEmpty()) f.setDefaultRequestProperties(extra)
-                return f.createDataSource()
+                return PositionZeroingDataSource(f.createDataSource())
             }
 
             override fun setDefaultRequestProperties(

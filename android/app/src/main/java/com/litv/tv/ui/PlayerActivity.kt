@@ -1551,14 +1551,20 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         // ★ 缓存键必须用"被请求的那个台"，不能用 current（正在播的台）——
         // 否则 A 台的节目单会被存到 B 台名下，之后查 B 台拿到的就是 A 的数据。
         if (list.isEmpty()) {
-            // 请求的台没有节目单：清掉旧数据，别让上一个台的节目继续挂在界面上
-            if (epgProgramsChannelId == channelId) {
+            // ★ 判据必须是「这个台是不是**现在正在播**的台」，不能拿 epgProgramsChannelId 比。
+            //   换台时 epgProgramsChannelId 还停在上一个台，于是「新台没有节目单」这条分支
+            //   永远不成立 → 上一个台的节目继续挂在界面上（真机反馈「每个节目单内容都一样」）。
+            if (current?.id == channelId) {
                 programs = emptyList()
+                epgProgramsChannelId = channelId
                 renderOsdNow()
                 if (panelVisible || epgVisible) refreshEpgColumn()
             }
             return
         }
+        // 同理：异步结果回来时可能已经换台了，不是当前台就直接丢掉，
+        // 否则 A 台的节目单会覆盖到 B 台上。
+        if (current?.id != channelId) return
         programs = list.distinctBy { it.startAt }.sortedBy { it.startAt }
         epgProgramsChannelId = channelId
         if (channelId > 0) serverEpgCache[channelId] = programs.toMutableList()
@@ -1575,7 +1581,6 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         val curCh = allChannels.firstOrNull { it.id == channelId }
             ?: current?.takeIf { it.id == channelId }
         val epgId = curCh?.let { epgIdOf(it) } ?: ""
-            ?: ""
 
         val local = app.epg.programsFor(epgId)
         if (local != null && local.isNotEmpty()) {
@@ -1595,7 +1600,6 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
             // ★ 有本地数据就直接用，**不再按天回源**。
             // 之前每次换台都发 1~3 个请求 + Gson 解析，纯属浪费：
             // 节目单是启动时一次性下载的 xml/gz，换台只是换一个 channel 的切片。
-            return
             return
         }
 

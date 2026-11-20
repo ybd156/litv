@@ -21,6 +21,9 @@ object YspCrypto {
 
     private val rnd = SecureRandom()
 
+    /** 仅供诊断：最近一次 ticket() 加密前的 pkt。 */
+    internal var lastPacketForTest: ByteArray? = null
+
     // ---------------------------------------------------------------- 瀵瑰
 
     /** 涓€娆?cKey 鐢熸垚鐨勫叏閮ㄤ骇鐗┿€?*/
@@ -78,6 +81,7 @@ object YspCrypto {
         body.copyInto(pkt, 2)
         // 18..22 澶勫洖濉牎楠岋紙瑕嗙洊鏁村寘锛?
         be32(cksum(pkt)).copyInto(pkt, 18)
+        lastPacketForTest = pkt.copyOf()
 
         val enc1 = teaPkt(pkt, TEA_KEY) + be32(cksum(pkt))
         val enc2 = ByteArray(enc1.size) { i -> (enc1[i].toInt() xor XOR_16[i and 15].toInt()).toByte() }

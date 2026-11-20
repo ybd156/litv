@@ -27,11 +27,19 @@ class YspDiagTest {
         val uid = "AABBCCDD"
         val t = YspCrypto.ticket("2024078201", ts, guid, uid)
         val pkt = YspCrypto.debugPacket("2024078201", ts, guid, uid)
+        val realPkt = YspCrypto.lastPacketForTest
         android.util.Log.w("YSP_DIAG", "CKEY=" + t.cKey)
         android.util.Log.w("YSP_DIAG", "GUID=" + t.guid)
         android.util.Log.w("YSP_DIAG", "TS=" + t.ts)
         val h = pkt.joinToString("") { "%02x".format(it.toInt() and 0xFF) }
         h.chunked(200).forEachIndexed { i, part -> android.util.Log.w("YSP_DIAG", "PKT_$i=$part") }
+        if (realPkt != null) {
+            val rh = realPkt.joinToString("") { "%02x".format(it.toInt() and 0xFF) }
+            rh.chunked(200).forEachIndexed { i, part -> android.util.Log.w("YSP_DIAG", "REALPKT_$i=$part") }
+            android.util.Log.w("YSP_DIAG", "REALPKT_LEN=" + realPkt.size)
+        } else {
+            android.util.Log.w("YSP_DIAG", "REALPKT_LEN=null")
+        }
         println("YSP_DIAG_CKEY=" + t.cKey)
         println("YSP_DIAG_GUID=" + t.guid)
         println("YSP_DIAG_TS=" + t.ts)

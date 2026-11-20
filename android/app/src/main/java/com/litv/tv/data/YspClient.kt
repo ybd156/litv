@@ -100,6 +100,10 @@ object YspClient {
         }
 
         val body = httpGet(ENDPOINT + q, timeoutMs)
+        if (com.litv.tv.BuildConfig.DEBUG) {
+            // 只显示参数形状，cKey 打码（AGENTS.md：Release 不带详细 HTTP 日志）
+            android.util.Log.d("YspClient", "params=" + q.replace(t.cKey, "<CKEY>"))
+        }
         val json = JSONObject(body)
         val code = json.optInt("iretcode", -1)
         if (code != 0) throw YspException(code, json.optString("errinfo", ""))

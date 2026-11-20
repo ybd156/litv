@@ -56,8 +56,14 @@ jobs:
             *)     gradle --no-daemon assembleRelease ;;
           esac
 
+      # 模拟器验证：x86 debug 包 + androidTest 包。
+      # 只为「不上真机先验证」服务，不进 Release。
+      - name: 编译模拟器测试包（x86 debug + androidTest）
+        working-directory: android
+        run: gradle --no-daemon assembleDebug assembleDebugAndroidTest
+
       - name: 列出产物
-        run: find android/app/build/outputs/apk -name "*-release.apk" | sort
+        run: find android/app/build/outputs/apk -name "*.apk" | sort
 
       - name: 上传产物
         uses: actions/upload-artifact@v7

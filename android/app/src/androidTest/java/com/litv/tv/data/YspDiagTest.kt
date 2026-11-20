@@ -21,14 +21,21 @@ class YspDiagTest {
 
     @Test
     fun dumpCkeyForOfflineDecrypt() {
-        val sid = "2024078201"
-        val t = YspCrypto.ticket(sid)
+        // 固定输入，便于 Python 侧解密后逐字段核对
+        val ts = 1_760_000_000L
+        val guid = "00112233445566778899aabbccddeeff"
+        val uid = "AABBCCDD"
+        val t = YspCrypto.ticket("2024078201", ts, guid, uid)
+        val pkt = YspCrypto.debugPacket("2024078201", ts, guid, uid)
         android.util.Log.w("YSP_DIAG", "CKEY=" + t.cKey)
         android.util.Log.w("YSP_DIAG", "GUID=" + t.guid)
         android.util.Log.w("YSP_DIAG", "TS=" + t.ts)
+        val h = pkt.joinToString("") { "%02x".format(it.toInt() and 0xFF) }
+        h.chunked(200).forEachIndexed { i, part -> android.util.Log.w("YSP_DIAG", "PKT_$i=$part") }
         println("YSP_DIAG_CKEY=" + t.cKey)
         println("YSP_DIAG_GUID=" + t.guid)
         println("YSP_DIAG_TS=" + t.ts)
+        println("YSP_DIAG_PKTLEN=" + pkt.size)
     }
 
     @Test

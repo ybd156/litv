@@ -419,7 +419,10 @@ class ExoEngine : PlayerEngine {
         //   而 maxBufferMs 上限是 40 秒 —— 比整个窗口还大。
         //   播放器囤满 40 秒，播放位置就在窗口外，必然掉出去。
         //   这跟本文件上面那段注释里早写过的坑是同一个：缓冲不能贴窗口边缘。
-        val minBufferMs = bufferMs.coerceIn(10_000, 16_000)
+        // 下限 14 秒：实测央视频分片约 6 秒，14 秒 = 2.3 个分片，才抗得住一次抖动；
+        // 同时必须 < 直播窗口的一半（窗口 6 片 ≈ 36 秒，一半是 18 秒），
+        // 否则播放位置贴边 → BEHIND_LIVE_WINDOW（这个坑上面刚踩过）。
+        val minBufferMs = bufferMs.coerceIn(14_000, 16_000)
         // 上限原来只有 max(缓冲设置, 12s)。实测 cctv17 这类源：
         // 播放列表（1KB）每次要 880~1450ms、分片（2~3MB）要 870~1213ms，
         // 两分钟里"加载慢"出现 29 次、重缓冲 2 次 —— 12 秒的池子太薄，
@@ -433,7 +436,7 @@ class ExoEngine : PlayerEngine {
         // ★ 上限必须**明显小于**直播窗口（这里窗口约 36 秒）。
         //   原来 max = min*4 夹到 40 秒，比窗口还大，必然掉出直播窗口。
         //   改成 min + 8 秒（10~16 秒的 min 对应 18~24 秒上限），留足余量。
-        val maxBufferMs = (minBufferMs + 8_000).coerceIn(minBufferMs + 2_000, 24_000)
+        val maxBufferMs = (minBufferMs + 4_000).coerceIn(minBufferMs + 2_000, 20_000)
         // bufferForPlayback 从 300 提到 800：
         // 实测音频 HAL 的欠载告警全部集中在起播那 4 秒（19 条在 20:42:49~53，
         // 之后 55 秒安静）。300ms 就开播时管线还没填满，第一秒最容易破音。

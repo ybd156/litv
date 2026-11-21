@@ -406,7 +406,13 @@ class ExoEngine : PlayerEngine {
         // minBuffer 如果小于一个分片长度，缓冲刚攒够就掉回阈值以下，
         // 表现是每 15 秒一次「重缓冲：播放中回到 BUFFERING」+「位置回落」。
         // 起播不受影响 —— 起播深度由 bufferForPlaybackMs(800ms) 控制，不是这个值。
-        val minBufferMs = bufferMs.coerceIn(12_000, 20_000)
+        // ★ 2026-11-21 改：下限 12s → 20s。
+        //   依据是电视 18.6 小时的播放日志：自建源（分片间隔接近 10 秒）
+        //   在 04~16 时仍有 17~29 次/小时的重缓冲，而同期「加载慢」实测只有
+        //   833~1205ms（属正常波动）——说明不是网络慢，是缓冲攒不住：
+        //   12 秒在 10 秒分片下只剩 1 个分片余量，一抖就跌破阈值。
+        //   提到 20 秒覆盖 2 个分片。代价是直播延迟增加约 8 秒（比卡顿划算）。
+        val minBufferMs = bufferMs.coerceIn(20_000, 30_000)
         // 上限原来只有 max(缓冲设置, 12s)。实测 cctv17 这类源：
         // 播放列表（1KB）每次要 880~1450ms、分片（2~3MB）要 870~1213ms，
         // 两分钟里"加载慢"出现 29 次、重缓冲 2 次 —— 12 秒的池子太薄，
@@ -430,6 +436,13 @@ class ExoEngine : PlayerEngine {
             .setBackBuffer(0, true)                     // 直播不回退缓冲，省内存
             .setPrioritizeTimeOverSizeThresholds(false) // 优先按字节封顶，防低端盒子 OOM
             .build()
+
+        // 落一行到 play.log：事后能确认这台设备实际用的缓冲参数，
+        // 不用再靠猜（之前排查卡顿时最缺的就是这个数）。
+        com.litv.tv.data.PlayLog.w(
+            TAG,
+            "缓冲参数 min=${minBufferMs}ms max=${maxBufferMs}ms 起播=800ms 恢复=1000ms",
+        )
 
         // ★ 源配置里的 UA 必须走 setUserAgent，不能只塞进请求头。
         //   ExoPlayer 的 DefaultHttpDataSource 是「先应用 defaultRequestProperties、

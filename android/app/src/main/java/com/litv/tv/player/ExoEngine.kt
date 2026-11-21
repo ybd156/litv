@@ -353,12 +353,24 @@ class ExoEngine : PlayerEngine {
         //
         // targetOffset 只在 HLS 的直播 playlist 上生效；VOD / 点播没有影响。
         // 服务器分片窗口不够长时会退化成"贴着边缘"，不会报错。
-        val offsetMs = com.litv.tv.data.Prefs(ctx).liveOffsetMs.toLong()
+        // ★ 2026-11-21：offset 必须给缓冲留够余量。
+        //
+        // 播放位置离直播边缘的距离 =
+        //     targetOffsetMs（主动落后） + minBufferMs（背后还要垫的缓冲）
+        //
+        // 原来 offset=20s、min=14s → 合计 34s，而 HLS 窗口只有约 36s，
+        // 余量仅 2 秒，网络一抖就 ERROR_CODE_BEHIND_LIVE_WINDOW → seek → 重缓冲。
+        // 真机日志里起播 8 秒就出现，随后每 50 秒一次。
+        //
+        // 改成 offset 上限 10 秒：10 + 14 = 24s，窗口留 12 秒余量。
+        val offsetMs = com.litv.tv.data.Prefs(ctx).liveOffsetMs.toLong().coerceIn(4_000L, 10_000L)
         val liveCfg = androidx.media3.common.MediaItem.LiveConfiguration.Builder()
             .setTargetOffsetMs(offsetMs)
-            // 不追帧：速度快了会主动丢帧，直播观感更差
-            .setMinPlaybackSpeed(1.0f)
-            .setMaxPlaybackSpeed(1.0f)
+            // 允许极小幅度变速追帧：落后时 0.98 倍慢放追回，超前时 1.02 倍。
+            // 幅度这么小，肉眼看不出来，但足以把漂移慢慢拉回 target，
+            // 避免每次漂移都走到「seek 回边缘」那条最重的路上。
+            .setMinPlaybackSpeed(0.98f)
+            .setMaxPlaybackSpeed(1.02f)
             .build()
         p.setMediaItem(
             MediaItem.Builder()

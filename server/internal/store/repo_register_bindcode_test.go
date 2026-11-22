@@ -2,8 +2,11 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"errors"
+	"path/filepath"
 	"testing"
+	"time"
 )
 
 // TestRegisterWithBindCodeOnPendingDevice 是本轮 O02 的核心回归。
@@ -210,5 +213,145 @@ func TestReRegisterDoesNotRenewPending(t *testing.T) {
 	}
 	if expires != 0 {
 		t.Errorf("pending 设备被写了会话有效期（%d），续期只该发生在 bound 设备上", expires)
+	}
+}
+
+// holdWriteLockElsewhere 用**另一条数据库连接**开一个写事务并真的写一行，
+// 确认写锁已经握在手里之后返回；hold 之后自动回滚释放。
+//
+// 返回的 channel 在锁释放后关闭，调用方据此可以断言"等待真的发生过"。
+// 直接往 kv 写一行是最小的取锁动作：语句返回 = 这条连接已持有写锁，
+// 不依赖任何 store 层代码，不会把"被测实现"混进测试装置里。
+func holdWriteLockElsewhere(t *testing.T, dbPath string, hold time.Duration) <-chan struct{} {
+	t.Helper()
+	raw, err := sql.Open("sqlite", "file:"+dbPath)
+	if err != nil {
+		t.Fatalf("打开第二条连接失败: %v", err)
+	}
+	ctx := context.Background()
+	tx, err := raw.BeginTx(ctx, nil)
+	if err != nil {
+		_ = raw.Close()
+		t.Fatalf("第二条连接开事务失败: %v", err)
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO kv(k,v) VALUES('test-lock','holder')`); err != nil {
+		_ = tx.Rollback()
+		_ = raw.Close()
+		t.Fatalf("第二条连接取写锁失败: %v", err)
+	}
+	released := make(chan struct{})
+	go func() {
+		time.Sleep(hold)
+		_ = tx.Rollback()
+		_ = raw.Close()
+		close(released)
+	}()
+	return released
+}
+
+// TestRegisterWithBindCodeWaitsForWriteLock 是「deferred 事务先读后写」修复的核心回归。
+//
+// 构造：另一条连接先写一行并**持续持有写锁**，然后调用 RegisterWithBindCode。
+//
+// 旧实现（deferred 事务）：BEGIN 不取锁 → 第一条 SELECT 是读，WAL 下不被阻塞 →
+// 随后的 INSERT 需要把读事务升级成写事务，而这种升级一旦撞上别的写者，
+// SQLite **立即**返回 SQLITE_BUSY 且**不调用** busy handler，
+// 于是 busy_timeout(8s) 完全不起作用，第一次调用就失败。
+//
+// 现在事务是 BEGIN IMMEDIATE：BEGIN 自己会等写锁，busy handler 生效，
+// 别人一释放就继续，第一次调用即成功。
+//
+// 两条判据都要满足：
+//  1. 第一次调用就成功——**不允许重试**。重试正是老代码里藏住缺陷的方式
+//     （每次重试都重新读一遍、再撞同一把锁）。
+//  2. 耗时 ≥ 100ms——证明它**真的等了**那把锁。否则若锁根本没被占住，
+//     这条测试会在空档里跑完还假绿。
+func TestRegisterWithBindCodeWaitsForWriteLock(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "lock.db")
+	st, err := openWithBusyTimeout(path, 8000)
+	if err != nil {
+		t.Fatalf("打开库失败: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+
+	released := holdWriteLockElsewhere(t, path, 250*time.Millisecond)
+
+	ctx := context.Background()
+	t0 := time.Now()
+	id, status, err := st.RegisterWithBindCode(ctx, "key-lock", "hash-lock", "电视", "android", "TV", "")
+	elapsed := time.Since(t0)
+	<-released
+
+	if err != nil {
+		t.Fatalf("写锁被占期间首次注册就失败（应当等待而非报错）: %v", err)
+	}
+	if elapsed < 100*time.Millisecond {
+		t.Fatalf("注册只用了 %v：调用时写锁显然没被占住，这条测试没测到东西", elapsed)
+	}
+	if id == 0 || status != "pending" {
+		t.Fatalf("注册结果不对：id=%d status=%q", id, status)
+	}
+	var n int
+	if err := st.DB().QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM devices WHERE device_key=?`, "key-lock").Scan(&n); err != nil {
+		t.Fatalf("查设备失败: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("设备没有落库（count=%d）", n)
+	}
+}
+
+// TestChannelWritesWaitForWriteLock 把同样的判据套到另两处「先读后写」的写事务上。
+//
+// 两处的读都不是可有可无的：
+//   - ReorderChannels 要先读现有 sort 值当槽位，再按新顺序写回；
+//   - batchDeleteChannels 要先 COUNT 才删（返回值是"删了几个"）。
+//
+// 读挪到事务外会变成「基于过期值计算」，所以只能靠 BEGIN IMMEDIATE 预留写锁。
+func TestChannelWritesWaitForWriteLock(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "lock2.db")
+	st, err := openWithBusyTimeout(path, 8000)
+	if err != nil {
+		t.Fatalf("打开库失败: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	ctx := context.Background()
+
+	id1, err := st.CreateChannel(ctx, Channel{Number: 1, Name: "甲", Group: "组", Enabled: true})
+	if err != nil {
+		t.Fatalf("建频道失败: %v", err)
+	}
+	id2, err := st.CreateChannel(ctx, Channel{Number: 2, Name: "乙", Group: "组", Enabled: true})
+	if err != nil {
+		t.Fatalf("建频道失败: %v", err)
+	}
+
+	// 1) 重排：先读槽位再写回
+	released := holdWriteLockElsewhere(t, path, 250*time.Millisecond)
+	t0 := time.Now()
+	err = st.ReorderChannels(ctx, []int64{id2, id1})
+	elapsed := time.Since(t0)
+	<-released
+	if err != nil {
+		t.Fatalf("写锁被占期间重排失败（应当等待而非报错）: %v", err)
+	}
+	if elapsed < 100*time.Millisecond {
+		t.Fatalf("重排只用了 %v：写锁没被占住，这条测试没测到东西", elapsed)
+	}
+
+	// 2) 批量删除：先 COUNT 再删
+	released = holdWriteLockElsewhere(t, path, 250*time.Millisecond)
+	t0 = time.Now()
+	n, err := st.batchDeleteChannels(ctx, []int64{id1})
+	elapsed = time.Since(t0)
+	<-released
+	if err != nil {
+		t.Fatalf("写锁被占期间批量删除失败（应当等待而非报错）: %v", err)
+	}
+	if elapsed < 100*time.Millisecond {
+		t.Fatalf("批量删除只用了 %v：写锁没被占住，这条测试没测到东西", elapsed)
+	}
+	if n != 1 {
+		t.Fatalf("返回值应为 1（删掉的频道数），实际 %d", n)
 	}
 }

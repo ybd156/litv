@@ -489,9 +489,10 @@ func TestImportDoesNotBlockConcurrentWrites(t *testing.T) {
 	// **只允许一次**：这里守的就是「刷新不会因为并发上报而失败」。
 	//
 	// 早期版本允许重试 3 次，本意是躲开"调度噪声"，实际藏住的是一个真缺陷：
-	// 分块事务是 deferred 的，里面先 SELECT 再 INSERT，WAL 下这种升级写锁
+	// 当时的分块事务是 deferred 的，里面先 SELECT 再 INSERT，WAL 下这种升级写锁
 	// 冲突会立即返回 SQLITE_BUSY 且不理会 busy_timeout——所以重试多少次都
-	// 打在同一个瞬间上，三次全红。现在事务的第一条语句就是写，第一次就必须成功。
+	// 打在同一个瞬间上，三次全红。现在事务是 BEGIN IMMEDIATE（DSN 的
+	// _txlock=immediate），且第一条语句就是写，第一次就必须成功。
 	_, ierr := st.ImportChannels(ctx, srcID, items, ImportOptions{Align: true, ChunkSize: chunk})
 	endWall := time.Now()
 

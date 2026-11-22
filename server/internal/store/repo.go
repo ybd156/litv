@@ -595,6 +595,10 @@ func (s *Store) ReorderChannels(ctx context.Context, ids []int64) error {
 	if len(ids) == 0 {
 		return nil
 	}
+	// 事务以 BEGIN IMMEDIATE 开始（DSN 里的 _txlock=immediate，见 db.go）。
+	// 下面的 SELECT 与随后的 UPDATE 必须看到同一份快照，所以读**不能**挪到事务外；
+	// 也不能指望 deferred 事务在写时升级锁——WAL 下升级冲突会立即 BUSY、
+	// 不理会 busy_timeout。
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -717,6 +721,9 @@ func (s *Store) BatchChannels(ctx context.Context, ids []int64, action, value st
 
 // batchDeleteChannels 在事务里批量删除频道及其依赖数据，返回实际删掉的频道数。
 func (s *Store) batchDeleteChannels(ctx context.Context, ids []int64) (int64, error) {
+	// BEGIN IMMEDIATE（DSN 的 _txlock=immediate，见 db.go）：
+	// 返回值是"删掉了几个"，靠先 COUNT 再删得到，两者必须是同一份快照。
+	// 把 COUNT 挪到事务外就会在并发删除下算错数（破坏性操作说错影响范围）。
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return 0, err
@@ -1076,18 +1083,21 @@ func (s *Store) loadImportSnapshot(ctx context.Context, sourceID int64) (*import
 // applyImportChunk 在一个写事务里处理一批 item。
 //
 // 它只读 snap（内存），**每个 item 零查询**；事务之外只取一次源 UA。
-// 事务的**第一条语句必须是写**（见函数体内的注释），否则会踩到
-// WAL 下「deferred 事务升级写锁不发等待」的坑。
+// 事务是 BEGIN IMMEDIATE（DSN 的 _txlock=immediate，见 db.go），BEGIN 时就已经
+// 持有写锁——所以「第一条语句必须是写」不再是正确性要求，但"事务里不做多余查询"
+// 仍然是：IMMEDIATE 下事务里每多一条语句，别的写者就多等一会儿。
 func (s *Store) applyImportChunk(ctx context.Context, sourceID int64, items []Channel, snap *importSnapshot, stats *ImportStats) error {
 	// 这个源专属的 UA，导入时写进每条线路的 headers_json。
 	//
-	// **必须在事务外读**：本事务是 deferred（`BEGIN`，不是 `BEGIN IMMEDIATE`），
-	// 一旦先 SELECT 再 INSERT，事务就从"读"升级成"写"；而 SQLite 在 WAL 下
-	// 对这种升级冲突是**立即**返回 SQLITE_BUSY、并且**不调用** busy handler
-	// 的（避免死锁），busy_timeout(8s) 等于没设。后果就是：刷新正好撞上 TV
-	// 上报 play_events 的那一刻，分块事务瞬间失败——`TestImportDoesNotBlock
+	// **留在事务外读**：事务是 BEGIN IMMEDIATE，BEGIN 时已持有写锁，
+	// 这条 SELECT 若放进事务里，只是让别的写者（TV 上报 play_events）多等一次往返。
+	//
+	// 历史上这条读原本在事务内，那会踩到"deferred 事务先读后写"的坑：WAL 下
+	// 写锁升级冲突是**立即**返回 SQLITE_BUSY 且**不调用** busy handler 的
+	// （避免死锁），busy_timeout(8s) 等于没设；刷新正好撞上 TV 上报
+	// play_events 的那一刻分块事务瞬间失败，`TestImportDoesNotBlock
 	// ConcurrentWrites` 在 CI 上因此红过两次，重试 3 次也全是同一个瞬间。
-	// 把读挪到事务之外，事务的第一条语句就是写，抢不到写锁时会正常等待。
+	// 改成 IMMEDIATE 之后坑本身不在了，但把读留在外面仍然划算。
 	var srcUA string
 	_ = s.db.QueryRowContext(ctx, `SELECT COALESCE(user_agent,'') FROM sources WHERE id=?`, sourceID).Scan(&srcUA)
 	headersJSON := "{}"
@@ -1827,6 +1837,12 @@ func (s *Store) RegisterWithBindCode(ctx context.Context, key, tokenHash, name, 
 		return 0, "", ErrReservedDevicePlatform
 	}
 
+	// BEGIN IMMEDIATE（DSN 的 _txlock=immediate，见 db.go）。
+	//
+	// 这里是设备注册/换发 token 的路径，写锁冲突最容易被用户直接感受到
+	// （客户端"注册失败，请重试"）。事务必须先 SELECT 出设备当前状态再决定
+	// 是否批准/换 token，读不能挪到事务外（会基于过期状态做提权判断），
+	// 所以只能让 BEGIN 就把写锁拿下来，让 busy_timeout 真正生效。
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return 0, "", err

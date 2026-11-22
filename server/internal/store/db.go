@@ -34,7 +34,23 @@ func openWithBusyTimeout(path string, busyMS int) (*Store, error) {
 		busyMS = 8000
 	}
 	// WAL 提升并发读性能；busy_timeout 避免瞬时锁冲突直接报错。
-	dsn := fmt.Sprintf("file:%s?_pragma=journal_mode(WAL)&_pragma=busy_timeout(%d)&_pragma=foreign_keys(1)&_pragma=synchronous(NORMAL)", path, busyMS)
+	//
+	// _txlock=immediate：让事务在 BEGIN 时就取写锁，而不是等第一条写语句再升级。
+	//
+	// 为什么必须：deferred 事务「先 SELECT 再写」时，写锁升级一撞上别的写者，
+	// SQLite 会**立即**返回 SQLITE_BUSY 且**不调用** busy handler——busy_timeout(8s)
+	// 形同虚设，调用方看到的是"偶发失败"，重试还会打在同一瞬间（每次重试都重新
+	// 读一遍、再撞一次升级）。IMMEDIATE 让 BEGIN 自己去等锁，busy handler 因此生效。
+	// 代价是写事务的持锁区间从"第一条写语句"提前到 BEGIN，写事务之间本来也是串行的。
+	//
+	// 参数按连接生效：modernc 把它记在 conn.beginMode 上，BEGIN 时按
+	// `if !opts.ReadOnly && c.beginMode != ""` 决定用哪种模式（sqlite.go 的 newTx）。
+	// 所以只能写在 DSN 上，没有"只对某几个事务生效"的写法。
+	//
+	// 本包现有的事务都是写事务。以后若新增**只读**事务，请用
+	// BeginTx(ctx, &sql.TxOptions{ReadOnly: true})——驱动会退回 deferred BEGIN，
+	// 避免一条纯读事务白占写锁。
+	dsn := fmt.Sprintf("file:%s?_pragma=journal_mode(WAL)&_pragma=busy_timeout(%d)&_pragma=foreign_keys(1)&_pragma=synchronous(NORMAL)&_txlock=immediate", path, busyMS)
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("打开数据库失败: %w", err)

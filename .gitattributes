@@ -11,6 +11,11 @@
 packaging/fnos/**   text eol=lf
 build/test/*.sh     text eol=lf
 
+# 仓库里的 .mjs 是构建/自测脚本，跑在 CI（Linux）与本地两边。
+# 混用会让每次改动都产生整文件行尾噪声（edge/scripts 里就出现过
+# workertest 是 LF、selftest 是 CRLF），diff 不可读、review 也会漏看。
+*.mjs               text eol=lf
+
 # 二进制与图片不要参与行尾转换
 *.png   binary
 *.PNG   binary

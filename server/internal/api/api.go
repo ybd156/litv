@@ -310,9 +310,14 @@ func viaGatewayFrom(ctx context.Context) bool {
 func (a *API) Handler(viaGateway bool) http.Handler {
 	r := chi.NewRouter()
 	r.Use(middleware.Recoverer)
-	// 必须在 RealIP 之前捕获原始 socket 对端；TCP 入口绝不能信任转发头。
+	// 先捕获原始 socket 对端（网关入口记为 "gateway"），审计只认这个值。
+	//
+	// ★ 这里**刻意不挂 middleware.RealIP**：它会按 X-Forwarded-For 改写
+	// r.RemoteAddr，且**无视 trust_proxy 配置**——于是任何客户端带一个
+	// XFF 头就能让审计里的"谁干的"指向任意地址（repudiation），
+	// 设备列表里的 IP 也变成假的。需要识别真实客户端时走 clientIP()，
+	// 那个函数只有在 trust_proxy + 受信网段同时满足时才采信转发头。
 	r.Use(a.peerIPMiddleware(viaGateway))
-	r.Use(middleware.RealIP)
 	r.Use(a.accessLog)
 	r.Use(a.identityMiddleware(viaGateway))
 

@@ -237,7 +237,7 @@ func (a *API) putConfig(w http.ResponseWriter, r *http.Request) {
 		restartNeeded = append(restartNeeded, "epg_refresh_hour")
 	}
 
-	a.st.Audit(r.Context(), 0, "config.update", "system", strings.Join(restartNeeded, ","), r.RemoteAddr)
+	a.st.Audit(r.Context(), 0, "config.update", "system", strings.Join(restartNeeded, ","), peerIPFrom(r.Context()))
 	ok(w, map[string]any{
 		"saved":          true,
 		"restart_needed": restartNeeded,
@@ -262,7 +262,7 @@ func (a *API) runProbe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.st.Audit(r.Context(), 0, "probe.run", "streams",
-		formatErr("检测 %d 条，可用 %d，失效 %d", res.Checked, res.Healthy, res.Failed), r.RemoteAddr)
+		formatErr("检测 %d 条，可用 %d，失效 %d", res.Checked, res.Healthy, res.Failed), peerIPFrom(r.Context()))
 
 	// 手动探测也走一遍告警判定，方便用户立刻验证 webhook 配得对不对
 	a.checkDeadChannels(r.Context(), res)
@@ -982,7 +982,7 @@ func (a *API) updateEPGSource(w http.ResponseWriter, r *http.Request) {
 		fail(w, http.StatusInternalServerError, 5001, err.Error())
 		return
 	}
-	a.st.Audit(r.Context(), 0, "epg.source.update", fmt.Sprint(id), src.Name, r.RemoteAddr)
+	a.st.Audit(r.Context(), 0, "epg.source.update", fmt.Sprint(id), src.Name, peerIPFrom(r.Context()))
 	ok(w, map[string]any{"saved": true})
 }
 
@@ -1064,7 +1064,7 @@ func (a *API) importEPG(w http.ResponseWriter, r *http.Request) {
 	}
 	// 导入即刷新，用户不用再点一次
 	res, _ := a.RefreshOneEPG(r.Context(), id)
-	a.st.Audit(r.Context(), 0, "epg.import", fmt.Sprint(id), srcName, r.RemoteAddr)
+	a.st.Audit(r.Context(), 0, "epg.import", fmt.Sprint(id), srcName, peerIPFrom(r.Context()))
 	ok(w, map[string]any{"id": id, "result": res})
 }
 
@@ -1166,7 +1166,7 @@ func (a *API) approveDevice(w http.ResponseWriter, r *http.Request) {
 		fail(w, http.StatusInternalServerError, 5001, err.Error())
 		return
 	}
-	a.st.Audit(r.Context(), 0, "device.approve", fmt.Sprint(id), "", r.RemoteAddr)
+	a.st.Audit(r.Context(), 0, "device.approve", fmt.Sprint(id), "", peerIPFrom(r.Context()))
 	ok(w, map[string]any{"approved": true})
 }
 
@@ -1200,7 +1200,7 @@ func (a *API) revokeDevice(w http.ResponseWriter, r *http.Request) {
 		fail(w, http.StatusInternalServerError, 5001, err.Error())
 		return
 	}
-	a.st.Audit(r.Context(), 0, "device.delete", fmt.Sprint(id), "", r.RemoteAddr)
+	a.st.Audit(r.Context(), 0, "device.delete", fmt.Sprint(id), "", peerIPFrom(r.Context()))
 	ok(w, map[string]any{"deleted": true})
 }
 
@@ -1224,7 +1224,7 @@ func (a *API) setDeviceConfig(w http.ResponseWriter, r *http.Request) {
 		fail(w, http.StatusInternalServerError, 5001, err.Error())
 		return
 	}
-	a.st.Audit(r.Context(), 0, "device.config", fmt.Sprint(id), string(b), r.RemoteAddr)
+	a.st.Audit(r.Context(), 0, "device.config", fmt.Sprint(id), string(b), peerIPFrom(r.Context()))
 	ok(w, map[string]any{
 		"saved":          true,
 		"config_version": ver,
@@ -1339,7 +1339,7 @@ func (a *API) createRecording(w http.ResponseWriter, r *http.Request) {
 		fail(w, http.StatusInternalServerError, 5001, err.Error())
 		return
 	}
-	a.st.Audit(r.Context(), 0, "record.create", fmt.Sprint(id), name, r.RemoteAddr)
+	a.st.Audit(r.Context(), 0, "record.create", fmt.Sprint(id), name, peerIPFrom(r.Context()))
 	ok(w, map[string]any{"id": id, "start_at": start, "end_at": start + int64(durSec)})
 }
 

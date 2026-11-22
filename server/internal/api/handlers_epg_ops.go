@@ -59,7 +59,7 @@ func (a *API) epgCleanup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.st.Audit(r.Context(), 0, "epg.cleanup", fmt.Sprint(days),
-		fmt.Sprintf("删除 %d 条过期节目", n), r.RemoteAddr)
+		fmt.Sprintf("删除 %d 条过期节目", n), peerIPFrom(r.Context()))
 	ok(w, map[string]any{
 		"deleted":   n,
 		"keep_days": days,
@@ -107,7 +107,7 @@ func (a *API) auditEPGRefresh(r *http.Request, scope string, results []EPGRefres
 	}
 	detail := fmt.Sprintf("成功 %d / 失败 %d；频道 %d，节目 %d",
 		okCount, failCount, channels, programs)
-	a.st.Audit(r.Context(), 0, "epg.refresh."+scope, "", detail, r.RemoteAddr)
+	a.st.Audit(r.Context(), 0, "epg.refresh."+scope, "", detail, peerIPFrom(r.Context()))
 }
 
 // epgAutomap 按频道名自动匹配（B1/B2），返回完整报告。
@@ -119,7 +119,7 @@ func (a *API) epgAutomap(w http.ResponseWriter, r *http.Request) {
 	}
 	a.st.Audit(r.Context(), 0, "epg.automap", "",
 		fmt.Sprintf("扫描 %d，匹配 %d，未匹配 %d", rep.Scanned, rep.Matched, len(rep.Unmatched)),
-		r.RemoteAddr)
+		peerIPFrom(r.Context()))
 	ok(w, rep)
 }
 
@@ -161,7 +161,7 @@ func (a *API) epgMapBatch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.st.Audit(r.Context(), 0, "epg.map.batch", body.EpgID,
-		fmt.Sprintf("更新 %d 个频道", n), r.RemoteAddr)
+		fmt.Sprintf("更新 %d 个频道", n), peerIPFrom(r.Context()))
 	ok(w, map[string]any{"updated": n})
 }
 
@@ -173,7 +173,7 @@ func (a *API) epgMapByNumber(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.st.Audit(r.Context(), 0, "epg.map.number", "",
-		fmt.Sprintf("扫描 %d，匹配 %d", rep.Scanned, rep.Matched), r.RemoteAddr)
+		fmt.Sprintf("扫描 %d，匹配 %d", rep.Scanned, rep.Matched), peerIPFrom(r.Context()))
 	ok(w, rep)
 }
 

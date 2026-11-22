@@ -167,6 +167,6 @@ func (a *API) tvCreateRecording(w http.ResponseWriter, r *http.Request) {
 		fail(w, http.StatusInternalServerError, 5001, err.Error())
 		return
 	}
-	a.st.Audit(r.Context(), 0, "record.create.device", fmt.Sprint(id), name, r.RemoteAddr)
+	a.st.Audit(r.Context(), 0, "record.create.device", fmt.Sprint(id), name, peerIPFrom(r.Context()))
 	ok(w, map[string]any{"id": id, "name": name, "start_at": start, "end_at": start + int64(dur)})
 }

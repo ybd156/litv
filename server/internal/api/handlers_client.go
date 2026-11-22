@@ -503,7 +503,7 @@ func (a *API) tvPlay(w http.ResponseWriter, r *http.Request) {
 			"expires":   exp,
 			"stream_id": st.ID,
 		})
-		a.st.Audit(r.Context(), 0, "play.direct", fmt.Sprint(id), ch.Name, r.RemoteAddr)
+		a.st.Audit(r.Context(), 0, "play.direct", fmt.Sprint(id), ch.Name, peerIPFrom(r.Context()))
 		return
 	}
 
@@ -523,7 +523,7 @@ func (a *API) tvPlay(w http.ResponseWriter, r *http.Request) {
 	})
 
 	// 记一次播放，供概览页的「今日起播次数」统计
-	a.st.Audit(r.Context(), 0, "play", fmt.Sprint(id), ch.Name, r.RemoteAddr)
+	a.st.Audit(r.Context(), 0, "play", fmt.Sprint(id), ch.Name, peerIPFrom(r.Context()))
 }
 
 // ---------- 手机当遥控 ----------

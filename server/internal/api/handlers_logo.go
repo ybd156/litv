@@ -121,7 +121,7 @@ func (a *API) uploadLogo(w http.ResponseWriter, r *http.Request) {
 		fail(w, http.StatusInternalServerError, 5001, err.Error())
 		return
 	}
-	a.st.Audit(r.Context(), 0, "channel.logo", strconv.FormatInt(id, 10), local, r.RemoteAddr)
+	a.st.Audit(r.Context(), 0, "channel.logo", strconv.FormatInt(id, 10), local, peerIPFrom(r.Context()))
 	ok(w, map[string]any{"logo": local})
 }
 

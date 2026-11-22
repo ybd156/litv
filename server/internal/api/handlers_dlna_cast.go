@@ -192,7 +192,7 @@ func (a *API) tvDLNACast(w http.ResponseWriter, r *http.Request) {
 		fail(w, http.StatusBadGateway, 5002, "投屏失败: "+err.Error())
 		return
 	}
-	a.st.Audit(r.Context(), 0, "dlna.cast", body.Name, ch.Name, r.RemoteAddr)
+	a.st.Audit(r.Context(), 0, "dlna.cast", body.Name, ch.Name, peerIPFrom(r.Context()))
 	ok(w, map[string]any{
 		"cast":       true,
 		"channel":    ch.Name,

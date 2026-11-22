@@ -30,7 +30,7 @@
 用法：
     python3 tools/checks/check-playback-security.py [--root DIR]
 
-退出码：0 = 通过；1 = 有违规。
+退出码：0 = 通过；1 = 有违规，**或扫描范围本身有问题**（目录不存在 / 一个文件都没扫到）。
 """
 
 from __future__ import annotations
@@ -56,16 +56,26 @@ SKIP_DIR_PARTS = {"build", ".gradle", "node_modules", "generated", "intermediate
 
 
 def walk(root: str):
+    """返回 (命中的源文件列表, 不存在的扫描目录列表)。
+
+    **不存在的目录必须回报**，不能静默跳过：如果只是 `continue`，
+    那么哪天目录被改名/搬家（这个仓库真的发生过两次大拆分），
+    这个门禁就会"扫了 0 个文件"然后一路绿灯——比没有门禁更糟。
+    """
+    files = []
+    missing = []
     for rel in SCAN_DIRS:
         base = os.path.join(root, rel)
         if not os.path.isdir(base):
+            missing.append(rel)
             continue
         for dirpath, dirnames, filenames in os.walk(base):
             dirnames[:] = [d for d in dirnames if d not in SKIP_DIR_PARTS]
             for name in filenames:
                 if os.path.splitext(name)[1] not in TEXT_EXT:
                     continue
-                yield os.path.join(dirpath, name)
+                files.append(os.path.join(dirpath, name))
+    return files, missing
 
 
 # ---------------------------------------------------------------- 规则
@@ -145,7 +155,8 @@ def main() -> int:
 
     hits: list[tuple[str, str, str, int, str, str]] = []
     scanned = 0
-    for path in walk(root):
+    files, missing = walk(root)
+    for path in files:
         scanned += 1
         rel = os.path.relpath(path, root).replace("\\", "/")
         try:
@@ -165,6 +176,18 @@ def main() -> int:
     print(f"  根目录：{root}")
     print(f"  扫描：{scanned} 个源文件（{'、'.join(SCAN_DIRS)}）")
     print()
+
+    # 「零个文件 = 零个结论」：这两条必须在判 hits 之前，否则空树也会绿灯。
+    if missing:
+        print("❌ 扫描目录不存在，这个门禁等于没跑：")
+        for rel in missing:
+            print(f"     - {rel}")
+        print("   如果目录是改名/搬家了，请同步更新本脚本的 SCAN_DIRS；")
+        print("   不要为了让 CI 变绿而把这里改成 continue（那就成了空转绿灯）。")
+        return 1
+    if scanned == 0:
+        print("❌ 一个源文件都没扫到：判据没有任何输入，不能当作通过。")
+        return 1
 
     if not hits:
         print("✅ 未发现违规（S1-S6 全部通过）")

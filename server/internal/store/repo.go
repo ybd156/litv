@@ -1335,17 +1335,31 @@ func (s *Store) dedupeSourceStreams(ctx context.Context, streamsByCh map[int64][
 			keep[k] = st.id
 		}
 	}
+	if len(drop) == 0 {
+		return nil
+	}
+	// 多记录删除必须「整体成功或整体失败」（AGENTS §6）。
+	//
+	// 以前每块各自 Exec，中途失败会留下「删了一半」的库：
+	// 线路数比导入前少，却没有任何地方报错——用户看到的是
+	// 「刷新后少了几个台」，而日志里什么都没有。
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
 	for _, part := range chunkIDs(drop, 400) {
 		ph := placeholders(len(part))
 		args := make([]any, 0, len(part))
 		for _, id := range part {
 			args = append(args, id)
 		}
-		if _, err := s.db.ExecContext(ctx, `DELETE FROM streams WHERE id IN (`+ph+`)`, args...); err != nil {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM streams WHERE id IN (`+ph+`)`, args...); err != nil {
 			return err
 		}
 	}
-	return nil
+	return tx.Commit()
 }
 
 // groupKey 是 name+group 的复合键。
@@ -1450,9 +1464,22 @@ func (s *Store) AddStream(ctx context.Context, channelID int64, url, quality str
 }
 
 // DeleteStream 删除线路。
+//
+// 影响 0 行必须报 ErrNotFound：handler 据此回 404。
+// 以前这里直接返回 err（nil），前端拿到「已删除」，其实什么都没删。
 func (s *Store) DeleteStream(ctx context.Context, id int64) error {
-	_, err := s.db.ExecContext(ctx, `DELETE FROM streams WHERE id=?`, id)
-	return err
+	res, err := s.db.ExecContext(ctx, `DELETE FROM streams WHERE id=?`, id)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return ErrNotFound
+	}
+	return nil
 }
 
 // UpdateStreamHealth 更新探测结果。
@@ -1572,16 +1599,36 @@ func (s *Store) GetDeviceByToken(ctx context.Context, tokenHash string, ttlHours
 	return &d, nil
 }
 
-// ApproveDevice 批准绑定。
+// ApproveDevice 批准绑定。影响 0 行（id 不存在）返回 ErrNotFound。
 func (s *Store) ApproveDevice(ctx context.Context, id int64) error {
-	_, err := s.db.ExecContext(ctx, `UPDATE devices SET status='bound', bound_at=? WHERE id=?`, Now(), id)
-	return err
+	res, err := s.db.ExecContext(ctx, `UPDATE devices SET status='bound', bound_at=? WHERE id=?`, Now(), id)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return ErrNotFound
+	}
+	return nil
 }
 
-// RevokeDevice 吊销设备。
+// RevokeDevice 吊销设备。影响 0 行（id 不存在）返回 ErrNotFound。
 func (s *Store) RevokeDevice(ctx context.Context, id int64) error {
-	_, err := s.db.ExecContext(ctx, `UPDATE devices SET status='revoked' WHERE id=?`, id)
-	return err
+	res, err := s.db.ExecContext(ctx, `UPDATE devices SET status='revoked' WHERE id=?`, id)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return ErrNotFound
+	}
+	return nil
 }
 
 // DeleteDevice 真正删除一台设备及其关联数据。
@@ -1608,8 +1655,13 @@ func (s *Store) DeleteDevice(ctx context.Context, id int64) error {
 		`DELETE FROM bind_codes WHERE device_id=? AND used=0`,
 	} {
 		if _, e := tx.ExecContext(ctx, stmt, id); e != nil {
-			// 表可能不存在（老库升级），跳过但继续
-			continue
+			// 老库升级时这些表可能还不存在——**只**放过这一种。
+			// 其它错误（锁超时、磁盘满、约束冲突）必须回滚并上报，
+			// 否则会出现「设备删了、收藏还在」，同一 id 被复用时会串数据。
+			if strings.Contains(strings.ToLower(e.Error()), "no such table") {
+				continue
+			}
+			return e
 		}
 	}
 
@@ -1665,12 +1717,6 @@ func (s *Store) UpdateDeviceClientInfo(ctx context.Context, id int64, ip, appVer
 			app_version=CASE WHEN ?<>'' THEN ? ELSE app_version END
 		 WHERE id=?`,
 		Now(), ip, ip, appVersion, appVersion, id)
-	return err
-}
-
-// SetDeviceConfig 下发/覆盖终端配置。
-func (s *Store) SetDeviceConfig(ctx context.Context, id int64, cfgJSON string) error {
-	_, _, err := s.SetDeviceConfigVersioned(ctx, id, cfgJSON)
 	return err
 }
 

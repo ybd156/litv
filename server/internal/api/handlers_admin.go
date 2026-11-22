@@ -500,21 +500,19 @@ func (a *API) refreshSource(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) previewSource(w http.ResponseWriter, r *http.Request) {
-	id := pathInt64(r, "id")
-	srcs, err := a.st.ListSources(r.Context())
-	if err != nil {
-		fail(w, http.StatusInternalServerError, 5001, err.Error())
+	id, okID := pathID(r, "id")
+	if !okID {
+		fail(w, http.StatusNotFound, 3001, "源不存在")
 		return
 	}
-	var target *store.Source
-	for i := range srcs {
-		if srcs[i].ID == id {
-			target = &srcs[i]
-			break
+	// 直接按 id 取，不再 ListSources 全表再线性找（那种写法既慢又容易漏判 not found）
+	target, err := a.st.GetSource(r.Context(), id)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			fail(w, http.StatusNotFound, 3001, "源不存在")
+			return
 		}
-	}
-	if target == nil {
-		fail(w, http.StatusNotFound, 3001, "源不存在")
+		fail(w, http.StatusInternalServerError, 5001, err.Error())
 		return
 	}
 	items, err := a.fetchAndParse(r.Context(), *target)
@@ -526,11 +524,14 @@ func (a *API) previewSource(w http.ResponseWriter, r *http.Request) {
 	if limit > 500 {
 		limit = 500
 	}
-	if len(items) > limit {
+	// total 必须是**截断前**的条数：以前先切 items 再算 len(items)，
+	// 于是 total 恒 ≤ limit，前端「共 N 个频道」永远显示不全。
+	total := len(items)
+	if limit > 0 && total > limit {
 		items = items[:limit]
 	}
 	ok(w, map[string]any{
-		"total":  len(items),
+		"total":  total,
 		"groups": parse.Stats(items),
 		"items":  parse.SortByGroup(items),
 	})
@@ -815,7 +816,17 @@ func (a *API) addChannelStream(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) deleteChannelStream(w http.ResponseWriter, r *http.Request) {
-	if err := a.st.DeleteStream(r.Context(), pathInt64(r, "sid")); err != nil {
+	// 路径参数非法 → 404，不要拿 0 去删（见 pathID 注释）
+	sid, okID := pathID(r, "sid")
+	if !okID {
+		fail(w, http.StatusNotFound, 3002, "线路不存在")
+		return
+	}
+	if err := a.st.DeleteStream(r.Context(), sid); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			fail(w, http.StatusNotFound, 3002, "线路不存在")
+			return
+		}
 		fail(w, http.StatusInternalServerError, 5001, err.Error())
 		return
 	}
@@ -1052,7 +1063,16 @@ func (a *API) importEPG(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) deleteEPGSource(w http.ResponseWriter, r *http.Request) {
-	if err := a.st.DeleteEPGSource(r.Context(), pathInt64(r, "id")); err != nil {
+	id, okID := pathID(r, "id")
+	if !okID {
+		fail(w, http.StatusNotFound, 3002, "节目单源不存在")
+		return
+	}
+	if err := a.st.DeleteEPGSource(r.Context(), id); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			fail(w, http.StatusNotFound, 3002, "节目单源不存在")
+			return
+		}
 		fail(w, http.StatusInternalServerError, 5001, err.Error())
 		return
 	}
@@ -1127,8 +1147,16 @@ func (a *API) createBindCode(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) approveDevice(w http.ResponseWriter, r *http.Request) {
-	id := pathInt64(r, "id")
+	id, okID := pathID(r, "id")
+	if !okID {
+		fail(w, http.StatusNotFound, 3001, "设备不存在")
+		return
+	}
 	if err := a.st.ApproveDevice(r.Context(), id); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			fail(w, http.StatusNotFound, 3001, "设备不存在")
+			return
+		}
 		fail(w, http.StatusInternalServerError, 5001, err.Error())
 		return
 	}
@@ -1137,7 +1165,16 @@ func (a *API) approveDevice(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) rejectDevice(w http.ResponseWriter, r *http.Request) {
-	if err := a.st.RevokeDevice(r.Context(), pathInt64(r, "id")); err != nil {
+	id, okID := pathID(r, "id")
+	if !okID {
+		fail(w, http.StatusNotFound, 3001, "设备不存在")
+		return
+	}
+	if err := a.st.RevokeDevice(r.Context(), id); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			fail(w, http.StatusNotFound, 3001, "设备不存在")
+			return
+		}
 		fail(w, http.StatusInternalServerError, 5001, err.Error())
 		return
 	}
@@ -1406,8 +1443,17 @@ func (a *API) recordPathInside(path string) bool {
 
 // recordingFile 把录制文件吐给客户端。
 // 用 http.ServeFile 而不是自己读：它自带 Range 支持，播放器才能拖动进度条。
+//
+// ★ 读侧必须和删侧一样证明「路径属于录制目录」。
+// 以前这里只 os.Stat 一下就直接 ServeFile：只要 DB 里的 rec.Path 被写坏
+// （历史 bug / 导入 / 手工改库），这个接口就成了**任意本地文件下载**。
+// 用 404 而不是 403：不额外泄露「这个路径存不存在」。
 func (a *API) recordingFile(w http.ResponseWriter, r *http.Request) {
-	id := pathInt64(r, "id")
+	id, okID := pathID(r, "id")
+	if !okID {
+		fail(w, http.StatusNotFound, 3001, "录制不存在")
+		return
+	}
 	rec, err := a.st.GetRecording(r.Context(), id)
 	if err != nil {
 		fail(w, http.StatusNotFound, 3001, "录制不存在")
@@ -1415,6 +1461,12 @@ func (a *API) recordingFile(w http.ResponseWriter, r *http.Request) {
 	}
 	if rec.Path == "" {
 		fail(w, http.StatusNotFound, 3001, "录制文件还没生成")
+		return
+	}
+	if !a.recordPathInside(rec.Path) {
+		slog.Warn("录制文件不在录制目录内，拒绝读取",
+			"recording", id, "file", filepath.Base(rec.Path))
+		fail(w, http.StatusNotFound, 3001, "录制文件不存在")
 		return
 	}
 	if _, err := os.Stat(rec.Path); err != nil {

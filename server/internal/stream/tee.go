@@ -64,14 +64,6 @@ func (b *teeBudget) release() {
 	}
 }
 
-// TeeSkipped 返回因为超出全局 tee 上限而被放弃的块数（诊断用）。
-func (h *Hub) TeeSkipped() int64 {
-	if h == nil || h.opts.tee == nil {
-		return 0
-	}
-	return h.opts.tee.skipped.Load()
-}
-
 // teeQueueBlocks 返回每频道时移队列的深度。
 func teeQueueBlocks(opts Options) int {
 	n := opts.TeeQueueBlocks

@@ -109,8 +109,17 @@ func (s *Store) DeleteEPGSource(ctx context.Context, id int64) error {
 	if _, err := tx.ExecContext(ctx, `DELETE FROM epg_channels WHERE source_id=?`, id); err != nil {
 		return err
 	}
-	if _, err := tx.ExecContext(ctx, `DELETE FROM epg_sources WHERE id=?`, id); err != nil {
+	res, err := tx.ExecContext(ctx, `DELETE FROM epg_sources WHERE id=?`, id)
+	if err != nil {
 		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		// 源不存在：整笔回滚，并让上层回 404（不能当成功）
+		return ErrNotFound
 	}
 	return tx.Commit()
 }

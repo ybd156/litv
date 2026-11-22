@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -240,27 +241,5 @@ func (e errString) Error() string { return string(e) }
 // channelDirName 把频道 ID 变成目录名。
 func channelDirName(id int64) string {
 	// 直接用十进制 ID 就够，避免引入哈希依赖
-	return "ch" + itoa(id)
-}
-
-func itoa(v int64) string {
-	if v == 0 {
-		return "0"
-	}
-	neg := v < 0
-	if neg {
-		v = -v
-	}
-	var b [20]byte
-	i := len(b)
-	for v > 0 {
-		i--
-		b[i] = byte('0' + v%10)
-		v /= 10
-	}
-	if neg {
-		i--
-		b[i] = '-'
-	}
-	return string(b[i:])
+	return "ch" + strconv.FormatInt(id, 10)
 }

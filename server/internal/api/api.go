@@ -638,6 +638,20 @@ func pathInt64(r *http.Request, name string) int64 {
 	return n
 }
 
+// pathID 解析路径里的**正整数** ID。
+//
+// 与 pathInt64 的区别：解析失败或 <=0 一律返回 false，调用方必须回 404。
+// 为什么要有它：pathInt64 把 ParseInt 的错误吞掉返 0，
+// 于是 `/channels/1/streams/abc` 会拿着 0 去删，影响 0 行还回 {"deleted":true}。
+// 破坏性接口（删除 / 审批 / 停录）一律用这个。
+func pathID(r *http.Request, name string) (int64, bool) {
+	n, err := strconv.ParseInt(chi.URLParam(r, name), 10, 64)
+	if err != nil || n <= 0 {
+		return 0, false
+	}
+	return n, true
+}
+
 func queryInt(r *http.Request, name string, def int) int {
 	v := r.URL.Query().Get(name)
 	if v == "" {
@@ -696,13 +710,6 @@ func queryBoolDefaultTrue(r *http.Request, name string) bool {
 		return true
 	}
 	return !(strings.EqualFold(v, "false") || v == "0")
-}
-
-func errMsg(err error) string {
-	if err == nil {
-		return ""
-	}
-	return err.Error()
 }
 
 func formatErr(format string, args ...any) string { return fmt.Sprintf(format, args...) }

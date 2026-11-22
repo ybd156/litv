@@ -1037,22 +1037,6 @@ func (a *API) liveTS(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// liveManifest 代理 HLS 清单，并把分片地址改写成我们自己的出口（防上游防盗链、防源泄露）。
-// streamUA 返回这条线路该用的 User-Agent。
-//
-// 顺序：线路自己的（来自源配置）→ 全局配置 → 空（调用方用默认）。
-//
-// 为什么必须按线路取：有的源站强制校验 UA，UA 不对会返回**另一份内容**
-// （比如一段演示视频），而不是报错——用全局 UA 去抓就是"能播但播的不是这个台"。
-func (a *API) streamUA(ctx context.Context, channelID int64) string {
-	if st, err := a.st.BestStream(ctx, channelID); err == nil && st != nil {
-		if ua := st.UserAgent(); ua != "" {
-			return ua
-		}
-	}
-	return a.cfg.Stream.UserAgent
-}
-
 // sanitizedHeaders 把线路配置里的头清洗成可安全外发的形式。
 //
 // 为什么必须清洗：headers_json 来自用户导入的源文件，属于不可信输入。
@@ -1137,16 +1121,7 @@ func findHeaderKey(h map[string]string, want string) (string, bool) {
 	return "", false
 }
 
-// streamFetchOptions 用线路专属的 UA 与全部请求头去抓上游。
-func (a *API) streamFetchOptions(ctx context.Context, channelID int64) fetch.Options {
-	opt := fetch.DefaultOptions()
-	opt.Headers = a.streamHeaders(channelID, nil)
-	if ua := a.streamUA(ctx, channelID); ua != "" {
-		opt.UserAgent = ua
-	}
-	return opt
-}
-
+// liveManifest 代理 HLS 清单，并把分片地址改写成我们自己的出口（防上游防盗链、防源泄露）。
 func (a *API) liveManifest(w http.ResponseWriter, r *http.Request) {
 	id, dk, sid, ok2 := a.verifyStreamFull(r)
 	if !ok2 {

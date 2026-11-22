@@ -169,23 +169,13 @@ func resolveFFmpeg(name string) string {
 	return ""
 }
 
-// Playlist 返回某频道的 m3u8 内容（必要时先拉起 ffmpeg）。
+// PlaylistContext 返回某频道的 m3u8 内容（必要时先拉起 ffmpeg）。
 // segPrefix 用于把切片 URI 改写成我们自己的出口路径。
-func (m *Manager) Playlist(channelID int64, upstream string, segPrefix string) ([]byte, error) {
-	return m.PlaylistWithHeaders(channelID, upstream, segPrefix, nil)
-}
-
-// PlaylistWithHeaders 与 Playlist 相同，但把线路请求头交给 ffmpeg。
 //
 // R09：源站可能要求特定 UA / Referer 才给流。ffmpeg 默认带自己的 UA，
 // 于是裸 TS 源在 NAS 转封装这一步就被 403，用户看到的是
 // "iOS 播不了、但电视能播"——因为电视走的是另一条链路。
 // 这里把与 relay/分片完全相同的一份头喂给 ffmpeg。
-func (m *Manager) PlaylistWithHeaders(channelID int64, upstream string, segPrefix string, headers map[string]string) ([]byte, error) {
-	return m.PlaylistContext(context.Background(), channelID, upstream, segPrefix, headers)
-}
-
-// PlaylistContext 带 ctx 的版本。
 //
 // 为什么要 ctx：等 ffmpeg 出第一个播放列表最多要 10 秒，客户端在这期间
 // 关掉页面/切台时请求就没了，但原来的实现还会把 goroutine 挂满 10 秒。

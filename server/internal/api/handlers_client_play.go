@@ -47,7 +47,7 @@ func (a *API) tvPlay(w http.ResponseWriter, r *http.Request) {
 	}
 
 	kind := "ts"
-	if strings.Contains(strings.ToLower(st.URL), ".m3u8") {
+	if isHLSSource(st.URL) {
 		kind = "hls"
 	}
 	// 客户端可以要求"给我 HLS"（iOS 的 AVPlayer 只认 HLS）。

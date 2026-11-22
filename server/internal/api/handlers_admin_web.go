@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
-	"strings"
 	"time"
 )
 
@@ -32,7 +31,7 @@ func (a *API) webPlay(w http.ResponseWriter, r *http.Request) {
 
 	// 浏览器只能播 HLS：上游是 m3u8 就直接用，是裸 TS 就走转封装
 	kind := "hls"
-	if !strings.Contains(strings.ToLower(st.URL), ".m3u8") {
+	if !isHLSSource(st.URL) {
 		if a.rx == nil || !a.rx.Available() {
 			fail(w, http.StatusServiceUnavailable, 5001,
 				"该频道是裸 TS 源，浏览器播不了。请服务端配置 ffmpeg 开启转封装。")

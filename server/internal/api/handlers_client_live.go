@@ -106,7 +106,7 @@ func (a *API) livePlay(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	target := fmt.Sprintf("%s/live/%d/stream.ts?%s", a.conf().Server.Prefix, id, r.URL.RawQuery)
-	if strings.Contains(strings.ToLower(st.URL), ".m3u8") {
+	if isHLSSource(st.URL) {
 		target = fmt.Sprintf("%s/live/%d/index.m3u8?%s", a.conf().Server.Prefix, id, r.URL.RawQuery)
 	}
 	http.Redirect(w, r, target, http.StatusFound)
@@ -220,7 +220,7 @@ func (a *API) liveManifest(w http.ResponseWriter, r *http.Request) {
 	)
 	for i := range streams {
 		cand := &streams[i]
-		if !strings.Contains(strings.ToLower(cand.URL), ".m3u8") {
+		if !isHLSSource(cand.URL) {
 			lastErr = fmt.Errorf("不是 HLS 线路")
 			continue
 		}

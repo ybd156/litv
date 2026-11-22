@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"net/url"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/litv/litv/server/internal/dlna"
@@ -64,7 +63,7 @@ func (d dlnaSource) StreamURL(ctx context.Context, channelID int64) (string, err
 	}
 	kind := "hls"
 	path := fmt.Sprintf("/live/%d/index.m3u8", channelID)
-	if !strings.Contains(strings.ToLower(st.URL), ".m3u8") {
+	if !isHLSSource(st.URL) {
 		if d.a.rx == nil || !d.a.rx.Available() {
 			// 没有 ffmpeg 就把裸 TS 直接给出去——部分电视/盒子其实能吃 TS
 			path = fmt.Sprintf("/live/%d/stream.ts", channelID)

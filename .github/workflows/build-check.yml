@@ -156,7 +156,7 @@ jobs:
         run: npm run build
 
   android:
-    name: Android（电视版 + 手机版）
+    name: Android（TV + 手机同一包）
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
@@ -178,7 +178,7 @@ jobs:
         with:
           gradle-version: "8.14.6"
 
-      - name: 编译两个 flavor
+      - name: 编译 debug
         # 见 server job 的说明：不让前一步失败短路后面的检查，
         # 一次推送暴露全部问题。
         if: always()
@@ -186,33 +186,50 @@ jobs:
         run: |
           # 用 setup-gradle 装的 gradle 命令。仓库里没有 gradlew wrapper——
           # 编译统一走 CI，不需要本地 wrapper。
+          # 只有一个包（com.litv.tv），不再区分 tv/phone flavor，
+          # 所以任务名不带变体前缀，也不存在 lintDebug 歧义。
           gradle --no-daemon assembleDebug
 
-      - name: 单元测试（tv + phone）
+      - name: 单元测试
         # 见 server job 的说明：不让前一步失败短路后面的检查，
         # 一次推送暴露全部问题。
         if: always()
         working-directory: android
         run: |
           set -euo pipefail
-          # 两个 flavor 共用 app/src/test 源集，但测试任务按 flavor 分开，
-          # 只跑 tv 等于手机版压根没有测试通道。
-          # 注意：splits.abi 打开后测试任务名**不含 ABI**，
           gradle --no-daemon testDebugUnitTest \
             --console=plain 2>&1 | tee /tmp/unit.log
 
           # 「测试是绿的，但根本没测到东西」在本仓发生过两次（AGENTS.md §10）。
           # 没有测试源码时 Gradle 会以 NO-SOURCE 结束并返回 0：
-          # 步骤是绿色的，实际零个断言跑过。这里把那两种形态显式点名。
+          # 步骤是绿色的，实际零个断言跑过。这里把那种形态变成**失败**。
           echo "--- app/src/test 现状 ---"
           if [ -d app/src/test ]; then
             find app/src/test -type f \( -name '*.kt' -o -name '*.java' \) | sort || true
           else
             echo "（android/app/src/test 不存在）"
           fi
-          if grep -qE 'test(Tv|Phone)DebugUnitTest.*NO-SOURCE' /tmp/unit.log; then
-            echo "::warning::单元测试是空跑（NO-SOURCE）：任务执行了但没有测试源码，零断言。这不等于「单元测试通过」。"
+          # 任务名是 testDebugUnitTest（单包，没有 tv/phone 变体）。
+          if grep -qE 'testDebugUnitTest.*NO-SOURCE' /tmp/unit.log; then
+            echo "::error::单元测试是空跑（NO-SOURCE）：任务执行了但没有测试源码，零断言。"
+            exit 1
           fi
+
+          # 判据下沉到产物：tests>0 且 failures/errors 为 0，才算「真的测了」。
+          python3 - <<'PY'
+          import glob, sys, xml.etree.ElementTree as ET
+          tot = fail = err = skip = 0
+          files = glob.glob('app/build/test-results/**/*.xml', recursive=True)
+          for f in files:
+              r = ET.parse(f).getroot()
+              tot += int(r.get('tests', 0)); fail += int(r.get('failures', 0))
+              err += int(r.get('errors', 0)); skip += int(r.get('skipped', 0))
+          print(f'--- test-results: files={len(files)} tests={tot} failures={fail} errors={err} skipped={skip} ---')
+          if tot == 0:
+              sys.exit('没有跑任何断言：test-results 里 tests=0，这一格绿是假的')
+          if fail or err:
+              sys.exit(f'单元测试失败：failures={fail} errors={err}')
+          PY
 
       - name: Lint（**报告模式**，不是门禁）
         # 见 server job 的说明：不让前一步失败短路后面的检查，
@@ -232,10 +249,29 @@ jobs:
           if grep -qE 'abortOnError *= *false' app/build.gradle.kts; then
             echo "::warning::lint 处于报告模式（abortOnError=false）：本步骤恒绿，不代表 lint 干净。lint 门禁**未达成**。"
           fi
-          # 两个 flavor 都要跑：`lintDebug` 是歧义任务名（AGP 会报
-          # 「Task 'lintDebug' is ambiguous」，因为 tv/phone 各有自己的 debug 变体）。
+          # 单包布局下 `lintDebug` 是唯一任务名（不再有 tv/phone 歧义）。
           gradle --no-daemon lintDebug --console=plain
           ls -lh app/build/reports/ 2>/dev/null || true
+
+      - name: 编译 release（R8）
+        # AGENTS §9 明说「只过 debug 不算数」：R8 / JNI / Gson 反射的问题
+        # 只有 release 变体才会暴露。2026-11-23 本地实跑通过（2m4s，三个 ABI
+        # 都出了 APK），所以它可以当门禁；哪天它红了就是真的坏了，
+        # 不要用 retry 或者跳过这一步蒙过去。
+        if: always()
+        working-directory: android
+        run: |
+          gradle --no-daemon assembleRelease --console=plain
+
+      - name: 上传单元测试结果
+        # 判据要能被人复核：只留「步骤是绿的」等于不可审计（AGENTS §10）。
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: unit-test-results
+          path: android/app/build/test-results/**
+          if-no-files-found: warn
+          retention-days: 7
 
       - name: 上传 lint 报告
         if: always()

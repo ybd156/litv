@@ -84,6 +84,16 @@ data class EpgResponse(
     val channel: Channel? = null,
     val programs: List<EpgProgram> = emptyList(),
     val note: String = "",
+    /**
+     * 节目单所属日期，`YYYY-MM-DD`（**服务端时区**）。服务端已按 server.timezone
+     * 算好；客户端不要按设备时区自己推，「今天/明天」会差一天。
+     * "该频道未关联 EPG" 分支不下发这个键，所以必须给默认值。
+     */
+    val date: String = "",
+    /** 当天窗口起点，unix 秒（服务端时区当日 00:00）。缺省 0 = 服务端没给。 */
+    @SerializedName("day_start") val dayStart: Long = 0,
+    /** 当天窗口终点，unix 秒（次日 00:00，左闭右开）。缺省 0 = 服务端没给。 */
+    @SerializedName("day_end") val dayEnd: Long = 0,
 )
 
 data class NowPlaying(

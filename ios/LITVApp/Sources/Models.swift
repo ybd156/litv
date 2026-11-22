@@ -147,9 +147,18 @@ struct EpgResponse: Codable {
     var programs: [EpgProgram] = []
     /// 仅"未关联 EPG"分支才有，用来把"没配 EPG"和"当天没数据"区分开。
     var note: String = ""
+    /// 节目单所属日期，`YYYY-MM-DD`（**服务端时区**，见 tvEPG 的 start.Format）。
+    /// "未关联 EPG"分支与旧服务端都不下发，回落空串。
+    var date: String = ""
+    /// 当天窗口起点，unix 秒（服务端时区当日 00:00）；缺省 0 = 服务端没给。
+    var dayStart: Int64 = 0
+    /// 当天窗口终点，unix 秒（次日 00:00，左闭右开）；缺省 0 = 服务端没给。
+    var dayEnd: Int64 = 0
 
     enum CodingKeys: String, CodingKey {
-        case channel, programs, note
+        case channel, programs, note, date
+        case dayStart = "day_start"
+        case dayEnd = "day_end"
     }
 }
 
@@ -161,6 +170,11 @@ extension EpgResponse {
             channel = try c.decodeIfPresent(Channel.self, forKey: .channel)
             programs = try c.litv(.programs, [EpgProgram]())
             note = try c.litv(.note, "")
+            // 日边界由服务端按 server.timezone 算好（handlers_client_browse.go 的
+            // localDayRange）。缺键不能 throw：未关联 EPG 分支和老服务端都没有这三个键。
+            date = try c.litv(.date, "")
+            dayStart = try c.litv(.dayStart, Int64(0))
+            dayEnd = try c.litv(.dayEnd, Int64(0))
             return
         }
         // 兼容旧形状：docs/design/01-API.md 里还写着 data 是
@@ -170,6 +184,9 @@ extension EpgResponse {
         programs = try one.decode([EpgProgram].self)
         channel = nil
         note = ""
+        date = ""
+        dayStart = 0
+        dayEnd = 0
     }
 }
 

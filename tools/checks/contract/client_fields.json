@@ -71,6 +71,18 @@
         { "name": "health", "requiredIn": ["go", "kotlin", "swift"], "unit": "int: 1|0|-1", "why": "" },
         { "name": "latency_ms", "requiredIn": ["go", "kotlin", "swift"], "unit": "ms", "why": "" }
       ]
+    },
+    {
+      "id": "tvEPG",
+      "goHandler": "server/internal/api/handlers_client_browse.go",
+      "kotlinFile": "android/app/src/main/java/com/litv/tv/data/Models.kt",
+      "swiftFile": "ios/LITVApp/Sources/Models.swift",
+      "note": "GET /api/v1/tv/epg/{id}?day=N 的 data（对象，不是数组）。注意「该频道未关联 EPG」分支只有 channel/programs/note，没有下面三个边界字段——所以客户端必须给默认值，不能强制解。",
+      "fields": [
+        { "name": "date", "requiredIn": ["go", "kotlin", "swift"], "unit": "YYYY-MM-DD（服务端时区）", "why": "日期标签的唯一权威来源；客户端自己按设备时区算会在跨时区时差一天" },
+        { "name": "day_start", "requiredIn": ["go", "kotlin", "swift"], "unit": "unix-seconds（服务端时区当日 00:00）", "why": "当天窗口的起点；服务端已按 server.timezone 算好，别再让客户端自己 startOfDay" },
+        { "name": "day_end", "requiredIn": ["go", "kotlin", "swift"], "unit": "unix-seconds（次日 00:00，左闭右开）", "why": "当天窗口的终点；与 day_start 配对使用，缺一个就会按设备时区猜" }
+      ]
     }
   ]
 }

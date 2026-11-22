@@ -184,3 +184,25 @@ func itoa(n int) string {
 	}
 	return string(b)
 }
+
+// TestDefaultRemuxWindowCoversClientBuffer 守住「出厂默认配置」这条跨端不变量。
+//
+// 为什么在 config 里也测一遍（remux 包另有一条）：生产走的是 `Default()` 的
+// 值，而 `remux.NewManager` 的默认只在 Options 全零时才生效。两处都能把窗口
+// 调回 12 秒，而且改完都"能编译能跑"——只有这条断言会拦住。
+//
+// 具体数值：客户端（Android/ExoPlayer）对「自建源」的 maxBuffer 上限是 40 秒，
+// 窗口必须明显大于它，否则播放位置贴着窗口边缘 → 周期性
+// ERROR_CODE_BEHIND_LIVE_WINDOW → 重缓冲。
+func TestDefaultRemuxWindowCoversClientBuffer(t *testing.T) {
+	const clientMaxBufferSeconds = 40
+	const wantMarginSeconds = 15
+
+	c := Default()
+	window := c.Remux.SegmentSeconds * c.Remux.PlaylistSize
+	if want := clientMaxBufferSeconds + wantMarginSeconds; window < want {
+		t.Fatalf("出厂默认 remux 窗口只有 %d 秒（segment_seconds=%d × playlist_size=%d），"+
+			"客户端 maxBuffer 上限 %d 秒，至少要 %d 秒",
+			window, c.Remux.SegmentSeconds, c.Remux.PlaylistSize, clientMaxBufferSeconds, want)
+	}
+}

@@ -49,7 +49,17 @@ type Options struct {
 	Dir string
 	// SegmentSeconds 单个切片时长，默认 2 秒（直播要短，换台才快）。
 	SegmentSeconds int
-	// PlaylistSize 播放列表里保留几个切片，默认 6。
+	// PlaylistSize 播放列表里保留几个切片，默认 **30**（= 约 60 秒窗口）。
+	//
+	// 为什么必须是 30 而不是当初的 6：客户端（Android/ExoPlayer）对「自建源」
+	// 的 maxBuffer 上限是 40 秒，而窗口 = SegmentSeconds × PlaylistSize。
+	// 原来是 2×6 = **12 秒**，比客户端允许囤的还小一半——播放位置必然贴到
+	// 窗口左边缘，于是周期性 ERROR_CODE_BEHIND_LIVE_WINDOW → seek 回边缘 →
+	// 重缓冲。这个坑客户端注释里记过一次（它当时调小 minBuffer 才躲过去），
+	// 根因其实在这里。
+	//
+	// 60 秒窗口 vs 40 秒上限，留了 20 秒余量；`delete_segments` 已开着，
+	// 老切片会即时删除，所以磁盘只多留 ~30 个切片（4Mbps 源约 15MB/频道）。
 	PlaylistSize int
 	// IdleTimeout 无请求多久后杀掉 ffmpeg，默认 60 秒。
 	IdleTimeout time.Duration
@@ -76,6 +86,16 @@ type Job struct {
 	started time.Time
 }
 
+// WindowSeconds 返回播放列表覆盖的时间窗口（秒）= SegmentSeconds × PlaylistSize。
+//
+// 这是一个**跨端契约数字**，不是纯实现细节：客户端会囤缓冲，窗口必须明显
+// 大于客户端可能囤的量（Android 侧「自建源」maxBuffer 上限 40 秒），否则
+// 播放位置贴着窗口边缘，必然周期性掉出直播窗口。启动时把它打进日志，
+// 运维一眼就能看出配得够不够。
+func (m *Manager) WindowSeconds() int {
+	return m.opt.SegmentSeconds * m.opt.PlaylistSize
+}
+
 // Manager 管理所有转封装任务。
 type Manager struct {
 	opt Options
@@ -90,7 +110,7 @@ func NewManager(opt Options) *Manager {
 		opt.SegmentSeconds = 2
 	}
 	if opt.PlaylistSize <= 0 {
-		opt.PlaylistSize = 6
+		opt.PlaylistSize = 30
 	}
 	if opt.IdleTimeout <= 0 {
 		opt.IdleTimeout = 60 * time.Second

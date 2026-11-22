@@ -146,7 +146,10 @@ func main() {
 		defer rxMgr.Close()
 		a.SetRemux(rxMgr)
 		if rxMgr.Available() {
-			slog.Info("转封装已启用", "ffmpeg", rxMgr.FFmpegPath(), "dir", rxDir)
+			// window_s 是跨端契约数字：客户端会囤缓冲，窗口必须明显大于它。
+			// 打进日志，配小了（比如有人把 playlist_size 调回 6）一眼就能看出来。
+			slog.Info("转封装已启用", "ffmpeg", rxMgr.FFmpegPath(), "dir", rxDir,
+				"window_s", rxMgr.WindowSeconds())
 		} else {
 			// 注意：这个警告不影响 TV/手机 App——它们直接吃裸 TS。
 			// 只有 iOS 和网页（只认 HLS）需要服务端转封装。

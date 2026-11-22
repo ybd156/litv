@@ -287,7 +287,10 @@ func Default() *Config {
 		Remux: Remux{
 			Enabled:        true,
 			SegmentSeconds: 2,
-			PlaylistSize:   6,
+			// 30 × 2s = 60 秒窗口。客户端对「自建源」的 maxBuffer 上限是 40 秒，
+			// 窗口必须明显大于它，否则播放位置贴窗口边缘 → 周期性掉出直播窗口。
+			// 改成 6（=12 秒）就会稳定触发 BEHIND_LIVE_WINDOW，别再调回去。
+			PlaylistSize:   30,
 			IdleTimeoutSec: 60,
 		},
 		Record: Record{Enabled: true},

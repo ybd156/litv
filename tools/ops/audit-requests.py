@@ -29,8 +29,8 @@ CHECKS = [
      ".github/workflows/release.yml", "gh release create"),
     ("端口被占用自动顺延",
      "server/cmd/litvd/main.go", "listenWithFallback"),
-    ("手机竖屏布局（layout-port）",
-     "android/app/src/main/res/layout-port/activity_phone_home.xml", "<"),
+    ("手机竖屏布局（layout）",
+     "android/app/src/main/res/layout/activity_phone_home.xml", "<"),
     ("CHANGELOG",
      "CHANGELOG.md", "## [0.0.5]"),
     ("设备页 pending 404 修复",
@@ -69,20 +69,22 @@ CHECKS = [
      "admin/src/views/LoginView.vue", "使用 NAS 登录"),
     ("删除 APK 逆向报告",
      "docs/research/03-apk-re.md", ""),
-    ("三列联动首页",
-     "android/app/src/main/res/layout/activity_home.xml", "groupList"),
+    ("三列联动首页（该布局已撤，改为直接进播放页）",
+     "android/app/src/main/res/layout/activity_home.xml", ""),
     ("节目单：回看角标 + 简介走马灯",
-     "android/app/src/main/res/layout/item_epg.xml", "replayBadge"),
-    ("设置分主题弹层",
-     "android/app/src/main/java/com/litv/tv/ui/SettingsDialog.kt", "switchTheme"),
+     "android/app/src/main/res/layout/item_epg.xml", "@+id/action"),
+    ("设置分主题弹层（弹层已删）",
+     "android/app/src/main/java/com/litv/tv/ui/SettingsDialog.kt", ""),
     ("按 MENU 打开设置",
-     "android/app/src/main/java/com/litv/tv/ui/PlayerActivity.kt", "SettingsDialog(this).show()"),
-    ("开机直进播放页",
-     "android/app/src/main/java/com/litv/tv/ui/HomeActivity.kt", "autoPlayLast"),
+     "android/app/src/main/java/com/litv/tv/ui/PlayerActivity.kt", "KeyEvent.KEYCODE_MENU"),
+    ("开机自动播放上次频道（偏好项）",
+     "android/app/src/main/java/com/litv/tv/data/Prefs.kt", "autoPlayLast"),
+    ("开机自动播放上次频道（启动器读取点）",
+     "android/app/src/main/java/com/litv/tv/ui/LauncherActivity.kt", "autoPlayLast"),
+    ("换台加速：3s 超时选项（默认已改为 15s）",
+     "android/app/src/main/java/com/litv/tv/data/PlaybackDefaults.kt", "START_TIMEOUT_OPTIONS_MS"),
     ("换台加速：聚焦预取",
      "android/app/src/main/java/com/litv/tv/data/Api.kt", "prefetchPlay"),
-    ("换台加速：回退超时 3s",
-     "android/app/src/main/java/com/litv/tv/player/PlayerManager.kt", "START_TIMEOUT_MS = 3000L"),
     ("硬解 UA 修复（Exo）",
      "android/app/src/main/java/com/litv/tv/player/ExoEngine.kt", 'headers["User-Agent"]?.takeIf'),
     ("iOS 绑定页地址分框",
@@ -96,10 +98,13 @@ CHECKS = [
 print("=" * 72)
 for name, path, needle in CHECKS:
     r = has(path, needle)
-    if r is None:
+    if needle == "":
+        # 反向检查：这条是「文件/布局应当已经不存在」（删掉的死码、撤下的方案）。
+        # 注意必须先判 needle，再判 r is None——否则"已删除"会被报成"文件不存在"，
+        # 把一个正确的删除显示成异常（这个顺序 bug 存在了很久）。
+        status = "已删除（符合预期）" if r is None else "文件还在（未删除）"
+    elif r is None:
         status = "文件不存在"
-    elif needle == "":  # 反向检查：文件应该不存在
-        status = "文件还在（未删除）"
     elif r:
         status = "有"
     else:
@@ -108,8 +113,15 @@ for name, path, needle in CHECKS:
 
 print("=" * 72)
 print("\n=== git 状态 ===")
-out = subprocess.run(["git", "status", "--porcelain"], capture_output=True, text=True).stdout
-print("未提交文件数:", len([l for l in out.split("\n") if l.strip()]))
-for l in out.split("\n")[:12]:
-    if l.strip():
-        print("  ", l)
+try:
+    out = subprocess.run(["git", "status", "--porcelain"], capture_output=True, text=True).stdout
+except (FileNotFoundError, OSError):
+    # 本机 git 可能不在 PATH（例如 Windows 上装在独立目录）。这里只影响末尾那段
+    # 附带信息，不该让整个走查脚本以 traceback 结束。
+    out = None
+    print("（本机找不到 git，跳过工作树状态）")
+if out is not None:
+    print("未提交文件数:", len([l for l in out.split("\n") if l.strip()]))
+    for l in out.split("\n")[:12]:
+        if l.strip():
+            print("  ", l)

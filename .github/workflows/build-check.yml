@@ -104,6 +104,15 @@ jobs:
         # 删掉一条赋值必红、只改计算属性体不红。当前代码 exit 0。
         run: python3 tools/checks/check-swift-init-coverage.py
 
+      - name: Swift 花括号/圆括号/方括号配平
+        # 这个脚本早就写好、也写得很认真（自带「零个文件 = 零个结论」的告诫），
+        # 但**从来没接进 CI**——一条永远不跑的门禁等于不存在。这个仓库被同类问题
+        # 坑过一次：check-api-contract.py 长期没人跑，坏了也没人知道。
+        # 它抓的是"编辑时少一个 }"这类编译前就能救回来的错，比等 xcodebuild 快。
+        # 接线前自证会红：临时塞一个缺 } 的 .swift 文件 → exit 1 且点名该文件；
+        # 删掉探针后 → exit 0。当前代码 exit 0。
+        run: python3 tools/checks/check-swift-balance.py
+
   server:
     name: Go 服务端
     runs-on: ubuntu-24.04

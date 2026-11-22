@@ -93,6 +93,12 @@ __pycache__/
 *.pyc
 
 # 本机诊断/构建临时产物（不要进仓库：体积大，且含本机路径）
+# 真机走查脚本（tools/ops/watch-tv-play.ps1）每次跑都会输出一份报告：
+# 带 ANSI 控制字符与时间戳，属于运行产物，不是源码。
+tools/ops/watch-report.txt
+# 第三方协议的逆向分析记录：只在本地保留，**不入库**（不随仓库分发）。
+# 需要的实现说明见 docs/ysp-内置源实现.md。
+docs/*协议逆向*
 .apk.zip
 .apkout/
 .getapk.sh

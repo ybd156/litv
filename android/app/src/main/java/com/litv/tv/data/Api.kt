@@ -482,7 +482,7 @@ class Api(private val prefs: Prefs) {
      *
      * @param stallMs 本次卡死的持续时长（毫秒）
      * @param watchMs 本台累计观看时长，**单位毫秒**（`rebuffer_ratio = Σstall_ms / Σwatch_ms`
-     *                的分母；服务端 `handlers_client.go` 按毫秒夹取到 `maxDurationMs`）。
+     *                的分母；服务端 `handlers_client_stats.go` 按毫秒夹取到 `maxDurationMs`）。
      *                唯一计算处：`com.litv.tv.player.WatchClock.watchedMs()`。
      *                曾经这里误传秒 → 指标放大 1000 倍且完全静默，见 WatchClockTest。
      * @param path    播放链路：ts | hls | remux（取 PlayInfo.kind，**不是** direct/relay）

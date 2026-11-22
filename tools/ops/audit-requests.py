@@ -56,7 +56,7 @@ CHECKS = [
     ("源级 UA（管理台表单）",
      "admin/src/components/SourceFormModal.vue", "user_agent"),
     ("直连播放（服务端）",
-     "server/internal/api/handlers_client.go", '"mode":    "direct"'),
+     "server/internal/api/handlers_client_play.go", '"mode":      "direct"'),
     ("直连播放（客户端开关）",
      "android/app/src/main/java/com/litv/tv/data/Prefs.kt", "directMode"),
     ("台标管理（服务端）",

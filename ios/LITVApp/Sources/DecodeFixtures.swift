@@ -3,7 +3,7 @@ import Foundation
 // R07 回归 fixture。
 //
 // 这里的 JSON 全部照抄真实 handler 的输出形状（字段名逐个对照 Go 侧
-// store 模型的 json tag 和 handlers_client.go 里 map[string]any 的键），
+// store 模型的 json tag 和 handlers_client_*.go 里 map[string]any 的键），
 // 不是手写的"理想响应"。用途是把"缺键即 throw"这个老毛病钉住：
 // 每条 fixture 都跑一次 JSONDecoder，任何一条解不开就把它收集成失败项。
 //
@@ -16,7 +16,7 @@ import Foundation
 /// 服务端响应 fixture 集合。
 enum DecodeFixtures {
 
-    // MARK: - 来源：handlers_client.go tvBootstrap
+    // MARK: - 来源：handlers_client_browse.go tvBootstrap
 
     /// 新设备、设备配置还没下发（devices.config_json 默认 `'{}'` → devCfg 是空 map）。
     /// 服务端还会给 `sources`，iOS 用不到，顺便验证多余键被忽略而不是报错。
@@ -45,7 +45,7 @@ enum DecodeFixtures {
     }}
     """#
 
-    // MARK: - 来源：handlers_client.go tvPlay
+    // MARK: - 来源：handlers_client_play.go tvPlay
 
     /// direct 分支：url 是上游原始地址，多带 headers，这里故意是裸 TS。
     static let playDirectTs = #"""
@@ -75,7 +75,7 @@ enum DecodeFixtures {
     {"code":0,"msg":"ok","data":{"kind":"ts","url":"http://upstream.example/live/1.ts"}}
     """#
 
-    // MARK: - 来源：handlers_client.go tvEPG
+    // MARK: - 来源：handlers_client_browse.go tvEPG
 
     /// 正常分支：`ok(w, map[string]any{"channel": ch, "programs": progs})`。
     static let epgNormal = #"""
@@ -109,7 +109,7 @@ enum DecodeFixtures {
     ]}
     """#
 
-    // MARK: - 来源：handlers_client.go tvTimeshift / tvStreams
+    // MARK: - 来源：tvTimeshift → handlers_client_play.go；tvStreams → handlers_client_browse.go
 
     /// 时移未开启：只有 enabled=false 和 available_seconds=0，**没有 url 键**。
     static let timeshiftDisabled = #"""

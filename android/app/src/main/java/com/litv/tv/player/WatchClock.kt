@@ -4,7 +4,7 @@ package com.litv.tv.player
  * 「本台累计观看时长」的唯一计算处。
  *
  * 为什么要抽成纯函数：这个值直接进 `/api/v1/tv/stats` 的 `watch_ms`，
- * 而服务端 `handlers_client.go` 按**毫秒**夹取（`maxDurationMs = 86_400_000`），
+ * 而服务端 `handlers_client_stats.go` 按**毫秒**夹取（`maxDurationMs = 86_400_000`），
  * 并用它当 `rebuffer_ratio = Σstall_ms / Σwatch_ms` 的**分母**。
  *
  * 真机事故：这里曾经返回**秒**（`(now - start) / 1000`），而字段名是 `watch_ms`。

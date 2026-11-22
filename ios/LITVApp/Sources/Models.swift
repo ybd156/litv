@@ -30,7 +30,7 @@ private extension KeyedDecodingContainerProtocol {
 // MARK: - 频道
 
 /// 服务端来源：server/internal/store/models.go 的 Channel（json tag 与下面一致），
-/// 由 handlers_client.go 的 tvBootstrap / tvEPG / tvChannels 下发。
+/// 由 handlers_client_browse.go 的 tvBootstrap / tvEPG / tvChannels 下发。
 struct Channel: Codable, Identifiable, Hashable {
     /// 主键。服务端一定会带，缺了就退化成 0
     ///（宁可列表里 id 重复，也不要整页解析失败导致进不去首页）。
@@ -91,7 +91,7 @@ extension ChannelGroup {
 // MARK: - 节目单
 
 /// 服务端来源：server/internal/store/models.go 的 EPGProgram，
-/// 由 handlers_client.go 的 tvEPG 放进 {"channel":…,"programs":[…]} 的 programs 里。
+/// 由 handlers_client_browse.go 的 tvEPG 放进 {"channel":…,"programs":[…]} 的 programs 里。
 struct EpgProgram: Codable, Identifiable, Hashable {
     let id: Int64
     var epgChannelId: Int64 = 0
@@ -136,7 +136,7 @@ extension EpgProgram {
 
 /// `/api/v1/tv/epg/{id}` 的真实外壳。
 ///
-/// 服务端 handlers_client.go 的 tvEPG 有两个分支，data 都是**对象**而不是数组：
+/// 服务端 handlers_client_browse.go 的 tvEPG 有两个分支，data 都是**对象**而不是数组：
 ///   频道未关联 EPG：{"channel":{…},"programs":[],"note":"该频道未关联 EPG"}
 ///   正常：         {"channel":{…},"programs":[{…}]}
 /// 历史上 iOS 按 `[EpgProgram]` 解数组，形状对不上，节目单永远是空。
@@ -200,7 +200,7 @@ extension NowPlaying {
 
 /// 设备配置。服务端来源：devices.config_json 反序列化后的 map。
 ///
-/// 关键：它是**原样透传的 map**（handlers_client.go tvBootstrap 里 `var devCfg map[string]any`）。
+/// 关键：它是**原样透传的 map**（handlers_client_browse.go tvBootstrap 里 `var devCfg map[string]any`）。
 /// 设备还没下发配置时 map 是 nil→JSON `null`，配置存在但没填字段时是 `{}`。
 /// 两种情况下每个键都可能缺，所以必须逐字段给默认值。
 struct DeviceConfig: Codable {
@@ -265,7 +265,7 @@ extension ServerInfo {
     }
 }
 
-/// 服务端来源：handlers_client.go 的 tvBootstrap。
+/// 服务端来源：handlers_client_browse.go 的 tvBootstrap。
 /// 服务端还多给一个 sources（源列表，只有 id/name），iOS 用不到，
 /// 按未知键忽略即可（解码不会因为多键报错）。
 struct Bootstrap: Codable {
@@ -311,7 +311,7 @@ extension Bootstrap {
 
 // MARK: - 播放地址
 
-/// 服务端来源：handlers_client.go 的 tvPlay。
+/// 服务端来源：handlers_client_play.go 的 tvPlay。
 ///
 /// relay 分支：{"channel":…,"kind":…,"mode":"relay","url":…,"expires":…,"stream_id":…,"ua":…}
 /// direct 分支：同上，另外多一个 headers（源站请求头）和 stream_id。
@@ -398,7 +398,7 @@ extension PlayInfo.PlayChannel {
     }
 }
 
-/// 服务端来源：handlers_client.go 的 tvStreams（map，字段名与下面一致）。
+/// 服务端来源：handlers_client_browse.go 的 tvStreams（map，字段名与下面一致）。
 struct TvStream: Codable, Identifiable {
     let id: Int64
     var label: String = ""
@@ -436,7 +436,7 @@ extension TvStream {
 
 // MARK: - 绑定 / 心跳 / 时移
 
-/// 服务端来源：handlers_client.go 的 deviceRegister。
+/// 服务端来源：handlers_client_device.go 的 deviceRegister。
 struct RegisterResult: Codable {
     var deviceId: Int64 = 0
     var token: String = ""
@@ -461,7 +461,7 @@ extension RegisterResult {
     }
 }
 
-/// 服务端来源：handlers_client.go 的 tvTimeshift。
+/// 服务端来源：handlers_client_play.go 的 tvTimeshift。
 /// 时移未开启时只回 {"available_seconds":0,"enabled":false} —— **没有 url 键**。
 /// 局域网里一个可投屏的 DLNA 设备（GET /tv/dlna/renderers）。
 ///

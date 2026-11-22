@@ -290,7 +290,7 @@ def check_unit_comments() -> None:
                 warn(
                     "R4",
                     f"{rel(p)}:{line_of(text, m.start())}",
-                    "watchMs 注释写「秒」，而服务端 handlers_client.go 按毫秒夹取"
+                    "watchMs 注释写「秒」，而服务端 handlers_client_stats.go 按毫秒夹取"
                     "（maxDurationMs = 86_400_000）——注释与契约不一致",
                 )
 

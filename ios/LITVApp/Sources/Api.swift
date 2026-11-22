@@ -157,7 +157,7 @@ struct ApiClient {
     /// 直接喂给 AVPlayer 只会黑屏，而且我们已经绕过了服务端的转封装。
     /// 这里 `direct: false` 会稳定地带 `fmt=hls`，服务端据此转封装。
     ///
-    /// 注意：服务端没配 ffmpeg 时 `kind` 仍然是 "ts"（见 handlers_client.go 的 tvPlay），
+    /// 注意：服务端没配 ffmpeg 时 `kind` 仍然是 "ts"（见 handlers_client_play.go 的 tvPlay），
     /// 调用方必须自己检查 `kind`，不能假定这里一定拿到 HLS。
     func playForAVPlayer(channelId: Int64, streamId: Int64 = 0) async throws -> PlayInfo {
         try await play(channelId: channelId, streamId: streamId, direct: false)
@@ -172,7 +172,7 @@ struct ApiClient {
 
     /// 取当天节目单。
     ///
-    /// 服务端 data 是对象不是数组（handlers_client.go 的 tvEPG）：
+    /// 服务端 data 是对象不是数组（handlers_client_browse.go 的 tvEPG）：
     ///   {"channel":{…},"programs":[{…}]}                       正常
     ///   {"channel":{…},"programs":[],"note":"该频道未关联 EPG"}  未关联 EPG
     /// 所以按 EpgResponse 解外壳，再把 programs 摊平成数组给界面用。
@@ -203,7 +203,7 @@ struct ApiClient {
     /// QoE 上报（与 Android 端 StatsPayload 同一份契约）。
     ///
     /// event: start | stall | stop | error
-    /// 字段名必须和服务端 handlers_client.go 的 tvReportStats 对齐：
+    /// 字段名必须和服务端 handlers_client_stats.go 的 tvReportStats 对齐：
     /// channel_id / event / startup_ms / detail / stall_ms / watch_ms / path / engine
     ///
     /// 失败静默：统计不能影响播放。
@@ -335,7 +335,7 @@ struct EmptyResponse: Codable {}
 struct HeartbeatResult: Codable {
     var configVersion: Int64 = 0
     var serverTime: Int64 = 0
-    /// 频道表指纹（服务端 handlers_client.go 的 `channels_version`）。
+    /// 频道表指纹（服务端 handlers_client_device.go 的 tvHeartbeat）。
     ///
     /// 为什么必须解出来：Android 有、iOS 一直缺 —— 于是服务端加台/停台/改分组
     /// 之后，iOS 端**永远发现不了**，用户只能杀掉 App 重进才看到新频道。

@@ -57,7 +57,7 @@ data class EpgProgram(
 /**
  * /tv/epg/{id} 的返回外壳。
  *
- * 服务端 data 是**对象**不是数组（见 handlers_client.go 的 tvEPG）：
+ * 服务端 data 是**对象**不是数组（见 handlers_client_browse.go 的 tvEPG）：
  *   {"channel":{…},"programs":[…]}                          正常
  *   {"channel":{…},"programs":[],"note":"该频道未关联 EPG"}  未关联
  *

@@ -16,7 +16,7 @@
   "endpoints": [
     {
       "id": "tvPlay",
-      "goHandler": "server/internal/api/handlers_client.go",
+      "goHandler": "server/internal/api/handlers_client_play.go",
       "kotlinFile": "android/app/src/main/java/com/litv/tv/data/Models.kt",
       "swiftFile": "ios/LITVApp/Sources/Models.swift",
       "note": "GET /api/v1/tv/play/{id} 的 data；direct 与 relay 两个分支的并集",
@@ -32,7 +32,7 @@
     },
     {
       "id": "tvHeartbeat",
-      "goHandler": "server/internal/api/handlers_client.go",
+      "goHandler": "server/internal/api/handlers_client_device.go",
       "kotlinFile": "android/app/src/main/java/com/litv/tv/data/Models.kt",
       "swiftFile": "ios/LITVApp/Sources/Api.swift",
       "note": "POST /api/v1/tv/heartbeat 的 data（iOS 的 HeartbeatResult 定义在 Api.swift 尾部）",
@@ -44,7 +44,7 @@
     },
     {
       "id": "tvReportStats",
-      "goHandler": "server/internal/api/handlers_client.go",
+      "goHandler": "server/internal/api/handlers_client_stats.go",
       "kotlinFile": "android/app/src/main/java/com/litv/tv/data/StatsPayload.kt",
       "swiftFile": "ios/LITVApp/Sources/Api.swift",
       "note": "POST /api/v1/tv/stats 的请求体（唯一用 decodeLenient 的端点）",
@@ -61,7 +61,7 @@
     },
     {
       "id": "tvStreams",
-      "goHandler": "server/internal/api/handlers_client.go",
+      "goHandler": "server/internal/api/handlers_client_browse.go",
       "kotlinFile": "android/app/src/main/java/com/litv/tv/data/Models.kt",
       "swiftFile": "ios/LITVApp/Sources/Models.swift",
       "note": "GET /api/v1/tv/streams/{id} 的 data（数组，不能是 null）",

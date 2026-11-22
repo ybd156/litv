@@ -255,12 +255,20 @@ struct VLCPlayerView: UIViewRepresentable {
 struct VLCPlayerView: View {
     let url: URL
     var autoplay: Bool = true
+    /// 解码方式：占位实现不使用，仅为与 VLCKit 版的签名保持一致。
+    var decodeMode: String = "auto"
+    /// 网络缓冲（毫秒）：占位实现不使用，仅为签名一致。
+    var bufferMs: Int = 1500
+    /// 直播主动延迟（毫秒）：占位实现不使用，仅为签名一致。
+    var liveDelayMs: Int = 0
     /// 源配置里指定的 User-Agent（空 = 用 VLC 默认）
     var userAgent: String = ""
     /// 这条线路的完整请求头（R09），占位实现不使用，仅为保持签名一致。
     var headers: [String: String] = [:]
     /// 控制条通过它拿到底层播放器
     var control: VLCControl? = nil
+    /// 画面比例：占位实现不使用，仅为签名一致。
+    var aspect: String = "auto"
     var onState: ((VLCPlaybackState) -> Void)?
 
     var body: some View {

@@ -9,7 +9,7 @@ import okhttp3.Dns
 /**
  * 按设置里的「IP 协议偏好」过滤/排序 DNS 结果。
  *
- * 为什么需要它：国内不少电视盒子的 IPv6 是「半通」的——实测 MiTV-ASTP0（Android 9 /
+ * 为什么需要它：国内不少电视盒子的 IPv6 是「半通」的——实测某 Android 9 电视盒子
  * 移动宽带）：走 IPv6 连 Cloudflare，TCP 建连卡在 SYN_SENT，IPv4 那条是 ESTABLISHED。
  * 系统 DNS 会同时返回 A 和 AAAA，OkHttp 不保证先试哪个，于是一个个请求卡满超时。
  *

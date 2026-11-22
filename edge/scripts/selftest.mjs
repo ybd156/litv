@@ -395,10 +395,29 @@ check(
 );
 check("groups 计数正确", !!data && JSON.stringify(asArr(data?.groups).map((g) => g.name).sort()) ===
   JSON.stringify(["手工", "卫视", "央视", "新闻,财经"].sort()));
-check("sources 是数组且只有 id/name", !!data && Array.isArray(data.sources) &&
-  data.sources.every((s) => typeof s.id === "number" && typeof s.name === "string" && !("url" in s)),
-  // 失败时把实际值打出来：这条在 CI 上红、本地绿过，靠猜定位不了。
-  JSON.stringify(data?.sources));
+// sources 与 channels 同理：Node 24.22 的 node:sqlite 会把子查询里的
+// json_group_array 当 TEXT 返回（得到 "[]"），而 D1 返回真数组。
+// 早先 channels 归一了、sources 漏了，于是 CI（24.x 较新）红、本地（24.21）绿。
+//
+// 归一后仍要求"能解析成数组"：真退化成非 JSON 字符串时必须红，那才是契约问题。
+const bSources = Array.isArray(data?.sources)
+  ? data.sources
+  : typeof data?.sources === "string"
+    ? (() => {
+        try {
+          const p = JSON.parse(data.sources);
+          return Array.isArray(p) ? p : null;
+        } catch {
+          return null;
+        }
+      })()
+    : null;
+check(
+  "sources 是数组且只有 id/name",
+  Array.isArray(bSources) &&
+    bSources.every((s) => typeof s.id === "number" && typeof s.name === "string" && !("url" in s)),
+  typeof data?.sources === "string" ? `TEXT(${data.sources.slice(0, 80)})` : JSON.stringify(data?.sources),
+);
 
 // ---------------------------------------------------------------- C. 源清单 / TXT / HTML
 

@@ -232,7 +232,11 @@ final class SessionFixture {
     static let c = "https://server-c.invalid"
     static let tokenA = "fixture-token-a"
     static let tokenB = "fixture-token-b"
-    static let bootstrap = #"{"code":0,"msg":"ok","data":{"channels":[{"id":7,"name":"fixture channel"}],"groups":[{"name":"fixture group","count":1}],"favorites":[7],"now":[{"channel_id":7,"title":"fixture title"}]}}"#
+    // 注意 groups 的来源：Session 只用**频道自己**的 group 算分组
+    // （client 模式下 D1 里的 groups 是过期数据，Android 也这么算）。
+    // 所以这里故意让 data.groups 与频道的 group 不同名——
+    // 断言拿到 "fixture group" 才能同时证明"用了频道的"和"没用服务端的"。
+    static let bootstrap = #"{"code":0,"msg":"ok","data":{"channels":[{"id":7,"name":"fixture channel","group":"fixture group"}],"groups":[{"name":"服务端旧分组","count":99}],"favorites":[7],"now":[{"channel_id":7,"title":"fixture title"}]}}"#
     static let pendingB = #"{"code":0,"msg":"ok","data":{"token":"fixture-token-b","status":"pending","hint":"pending fixture"}}"#
     static let boundA = #"{"code":0,"msg":"ok","data":{"token":"fixture-token-a","status":"bound","hint":"bound fixture"}}"#
     static let boundB = #"{"code":0,"msg":"ok","data":{"token":"fixture-token-b","status":"bound","hint":"bound fixture"}}"#

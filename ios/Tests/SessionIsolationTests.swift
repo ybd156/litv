@@ -291,6 +291,8 @@ final class SessionIsolationTests: XCTestCase {
         if let extra = f.session.bootstrapTask { await extra.value }
         XCTAssertTrue(f.session.isBound)
         XCTAssertEqual(f.session.channels.map(\.id), [7])
+        // 分组由 Session.rebuildGroups 从频道算（不用 data.groups）：
+        // fixture 里频道的 group 是 "fixture group"，而 data.groups 给的是"服务端旧分组"。
         XCTAssertEqual(f.session.groups.map(\.name), ["fixture group"])
         XCTAssertEqual(f.session.favorites, [7])
         XCTAssertEqual(f.session.nowTitles[7], "fixture title")

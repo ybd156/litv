@@ -84,9 +84,7 @@ func TestCountExcludesClosedUpstreams(t *testing.T) {
 	made := make([]*Upstream, 0, 5)
 	for i := 0; i < 5; i++ {
 		up := makeTestUpstream(opts, int64(i+1), fmt.Sprintf("http://x/%d.ts", i))
-		h.mu.Lock()
-		h.ups[int64(i+1)] = up
-		h.mu.Unlock()
+		upsPutLocked(h, up)
 		made = append(made, up)
 	}
 	if got := h.Count(); got != 5 {
@@ -168,9 +166,7 @@ func TestReleasedSlotCanBeReused(t *testing.T) {
 	defer h.Close()
 
 	up := makeTestUpstream(opts, 1, "http://x/1.ts")
-	h.mu.Lock()
-	h.ups[1] = up
-	h.mu.Unlock()
+	upsPutLocked(h, up)
 
 	up.close()
 	if got := h.Count(); got != 0 {
@@ -198,9 +194,7 @@ func TestIdleUpstreamEvictedInsteadOfRejecting(t *testing.T) {
 	for i := 0; i < 2; i++ {
 		u := makeTestUpstream(opts, int64(i+1), fmt.Sprintf("http://x/%d.ts", i))
 		u.started = time.Now().Add(-time.Minute)
-		h.mu.Lock()
-		h.ups[int64(i+1)] = u
-		h.mu.Unlock()
+		upsPutLocked(h, u)
 	}
 	if got := h.Count(); got != 2 {
 		t.Fatalf("初始应有 2 个上游，实际 %d", got)

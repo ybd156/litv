@@ -180,9 +180,7 @@ func TestStatsKeepsStableKeys(t *testing.T) {
 	u := makeTestUpstream(h.opts, 7, "http://127.0.0.1:1/")
 	u.tee = make(chan []byte, 4)
 	u.teeDone = make(chan struct{})
-	h.mu.Lock()
-	h.ups[7] = u
-	h.mu.Unlock()
+	upsPutLocked(h, u)
 
 	stats := h.Stats()
 	if len(stats) != 1 {

@@ -44,6 +44,16 @@ func makeTestUpstream(opts Options, channelID int64, url string) *Upstream {
 	}
 }
 
+// upsPutLocked 按上游自身的 (ChannelID, URL) 登记到 hub 的表中。
+//
+// 拆键之后表是 map[upKey]*Upstream，测试里再手写 int64 键就编不过。
+// 用上游自己的字段拼键，既少写一个常量，也不会出现"键与上游字段对不上"。
+func upsPutLocked(h *Hub, u *Upstream) {
+	h.mu.Lock()
+	h.ups[upKey{channel: u.ChannelID, url: u.URL}] = u
+	h.mu.Unlock()
+}
+
 // makeSubscribers 造 n 个订阅者并登记到 u.subs。
 // fill=true 时把每个通道塞满，模拟永远不读的慢客户端。
 func makeSubscribers(u *Upstream, n, size int, fill bool) []*Subscriber {
@@ -164,9 +174,7 @@ func TestSubscribeClosedFlagReadRace(t *testing.T) {
 		up := makeTestUpstream(hub.opts, id, deadURL)
 
 		// 直接把上游塞进 hub，模拟「该频道已有活跃上游」
-		hub.mu.Lock()
-		hub.ups[id] = up
-		hub.mu.Unlock()
+		upsPutLocked(hub, up)
 
 		ctx, cancel := context.WithCancel(context.Background())
 		start := make(chan struct{})

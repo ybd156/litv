@@ -77,7 +77,7 @@ func TestTimeshiftTeeSkippedWhenNoSubscribers(t *testing.T) {
 	deadline = time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
 		h.mu.Lock()
-		up := h.ups[1]
+		up := h.ups[upKey{channel: 1, url: srv.URL}]
 		h.mu.Unlock()
 		if up == nil || up.subscriberCount() == 0 {
 			break

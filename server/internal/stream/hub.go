@@ -65,7 +65,21 @@ type Options struct {
 type Hub struct {
 	opts Options
 	mu   sync.Mutex
-	ups  map[int64]*Upstream // key = channelID
+	ups  map[upKey]*Upstream
+}
+
+// upKey 是上游的键：**频道 + 线路地址**。
+//
+// 以前只用 channelID 做键，于是"同一个台、两台设备选了不同线路"会互相踢：
+// 后到的订阅者发现 `up.URL` 与自己的 url 不同，就把整条上游 close 掉重建，
+// 先到的那台被挂在已关闭的上游上，表现是"我看得好好的突然断了/一直重连"。
+//
+// 把 URL 加进键之后：不同线路各有一条上游，互不影响；**同一条线路仍然共用
+// 一条上游**——所以「3 台设备同台只占 1 份上行」在默认情形（大家都用首选线路）
+// 下依然成立，只有"用户显式选了不同线路"时才会各占一份，这是正确的代价。
+type upKey struct {
+	channel int64
+	url     string
 }
 
 // NewHub 创建 Hub。
@@ -96,7 +110,7 @@ func NewHub(opts Options) *Hub {
 		opts.MaxTeeStreams = 64
 	}
 	opts.tee = newTeeBudget(opts.MaxTeeStreams)
-	return &Hub{opts: opts, ups: make(map[int64]*Upstream)}
+	return &Hub{opts: opts, ups: make(map[upKey]*Upstream)}
 }
 
 // smallRingWarned 保证「缓冲偏小」只提醒一次，不刷屏。
@@ -216,10 +230,11 @@ type Upstream struct {
 	teeSkipped atomic.Int64
 }
 
-// Subscribe 订阅一个频道。若该频道已有上游则直接复用。
+// Subscribe 订阅一个频道的一条线路。若该（频道,线路）已有上游则直接复用。
 func (h *Hub) Subscribe(ctx context.Context, channelID int64, url string, headers map[string]string) (*Subscriber, error) {
 	h.mu.Lock()
-	up, ok := h.ups[channelID]
+	key := upKey{channel: channelID, url: url}
+	up, ok := h.ups[key]
 
 	// 上游卡死判定：连接还开着，但已经不推数据了。
 	// 不重建的话，新订阅者会挂在这个死连接上一直转圈。
@@ -234,8 +249,11 @@ func (h *Hub) Subscribe(ctx context.Context, channelID int64, url string, header
 		}
 	}
 
-	if !ok || up.isClosed() || up.URL != url || stale {
-		// 新建（或替换：源换了地址）
+	if !ok || up.isClosed() || stale {
+		// 新建（或替换：同一条线路的上游已关闭/卡死）
+		//
+		// 注意：这里**不再**比较 `up.URL != url`——URL 已经进了键，
+		// 键相同就必然同址。这正是修掉"两台设备选不同线路互相掐断"的地方。
 		//
 		// B02：在真正创建之前原子地检查全局上限。
 		// 检查与插入都在 h.mu 内完成，所以并发请求不会同时越过限制。
@@ -278,7 +296,7 @@ func (h *Hub) Subscribe(ctx context.Context, channelID int64, url string, header
 			Timeout:   0,
 			Transport: up.transport,
 		}
-		h.ups[channelID] = up
+		h.ups[key] = up
 		go up.run(ctx2)
 	}
 	h.mu.Unlock()
@@ -344,10 +362,10 @@ func (h *Hub) Close() {
 	for _, up := range h.ups {
 		up.close()
 	}
-	h.ups = map[int64]*Upstream{}
+	h.ups = map[upKey]*Upstream{}
 }
 
-// Count 返回活跃频道数。
+// Count 返回活跃**上游连接**数（不等于频道数：一个台可能有多条线路在上游）。
 //
 // B02：以前直接 return len(h.ups)，但 map 里会残留已经 close 却尚未
 // 从表中删除的条目（close 在上游 goroutine 里异步收尾），
@@ -357,6 +375,24 @@ func (h *Hub) Count() int {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	return h.liveCountLocked()
+}
+
+// ChannelCount 返回有活跃上游的**频道**数。
+//
+// 拆键之后 Count() 与频道数不再相等（一个台可有 2 条线路各占一条上游），
+// 管理台的 active_channels 与 active_streams 是两个指标，必须分开取：
+// 前者按台去重，后者按上游连接算。以前两者都写 a.hub.Count()，
+// 那时它们碰巧相等；现在不能再用同一个数。
+func (h *Hub) ChannelCount() int {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	seen := make(map[int64]struct{}, len(h.ups))
+	for k, u := range h.ups {
+		if u != nil && !u.isClosed() {
+			seen[k.channel] = struct{}{}
+		}
+	}
+	return len(seen)
 }
 
 // liveCountLocked 统计未关闭的上游。调用方必须已持有 h.mu。

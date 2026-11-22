@@ -41,7 +41,7 @@ func (a *API) systemInfo(w http.ResponseWriter, r *http.Request) {
 		"uptime_s": int(time.Since(a.startAt).Seconds()),
 		// 管理台读的是 uptime_seconds，这里同时给两个名字，省得再对一次契约
 		"uptime_seconds":  int(time.Since(a.startAt).Seconds()),
-		"active_channels": a.hub.Count(),
+		"active_channels": a.hub.ChannelCount(),
 		"active_streams":  a.hub.Count(),
 		"max_concurrent":  a.conf().Stream.MaxConcurrent,
 		"arch":            runtime.GOARCH,

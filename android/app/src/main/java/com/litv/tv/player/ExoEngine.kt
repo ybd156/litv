@@ -310,7 +310,17 @@ class ExoEngine : PlayerEngine {
         //   Release 旧实例 + Init 新实例   约 0.72s   ← 纯浪费
         //   拉 m3u8 + 分片 + 解码           约 1.7s
         // 只要解码方式 / 缓冲 / 隧道模式没变，就没有理由重建播放器。
-        val cfg = "$decode|$bufferMs|$exoEnableTunneling|${Av3aLoader.available(ctx)}"
+        // ★ 2026-11-22：内置源和自建源要用不同的缓冲档位。
+        //
+        //   内置源（央视频，走本机代理 127.0.0.1）：HLS 窗口只有 6 片 × 约 6 秒 ≈ 36 秒，
+        //     缓冲必须压在窗口以内，否则播放位置掉出去 → BEHIND_LIVE_WINDOW → 重缓冲。
+        //   自建源（直连）：分片间隔通常约 10 秒，14 秒只够 1.4 个分片，一抖就欠载。
+        //     电视 13 小时日志里 129 次重缓冲（每 87 秒一次）就是这么来的。
+        //
+        //   源类型必须并进 cfg：两种档位的 bufferMs 不同，播放器要按新参数重建。
+        val isLocalProxy = url.contains("127.0.0.1")
+        val effBufferMs = if (isLocalProxy) bufferMs else maxOf(bufferMs, 22_000)
+        val cfg = "$decode|$effBufferMs|$exoEnableTunneling|${Av3aLoader.available(ctx)}|local=$isLocalProxy"
         val existing = player
         val p: ExoPlayer
         if (existing != null && builtConfig == cfg) {
@@ -327,7 +337,7 @@ class ExoEngine : PlayerEngine {
             p = existing
         } else {
             releaseInternal()
-            p = buildPlayer(ctx, decode, bufferMs)
+            p = buildPlayer(ctx, decode, effBufferMs, isLocalProxy)
             player = p
             builtConfig = cfg
         }
@@ -392,6 +402,7 @@ class ExoEngine : PlayerEngine {
         ctx: android.content.Context,
         decode: String,
         bufferMs: Int,
+        isLocalProxy: Boolean,
     ): ExoPlayer {
         // 直播缓冲。
         //
@@ -434,7 +445,12 @@ class ExoEngine : PlayerEngine {
         // 下限 14 秒：实测央视频分片约 6 秒，14 秒 = 2.3 个分片，才抗得住一次抖动；
         // 同时必须 < 直播窗口的一半（窗口 6 片 ≈ 36 秒，一半是 18 秒），
         // 否则播放位置贴边 → BEHIND_LIVE_WINDOW（这个坑上面刚踩过）。
-        val minBufferMs = bufferMs.coerceIn(14_000, 16_000)
+        // 分档：内置源必须贴着窗口以内；自建源窗口通常 60~100 秒，可以囤得更深。
+        val minBufferMs = if (isLocalProxy) {
+            bufferMs.coerceIn(14_000, 16_000)
+        } else {
+            bufferMs.coerceIn(20_000, 30_000)
+        }
         // 上限原来只有 max(缓冲设置, 12s)。实测 cctv17 这类源：
         // 播放列表（1KB）每次要 880~1450ms、分片（2~3MB）要 870~1213ms，
         // 两分钟里"加载慢"出现 29 次、重缓冲 2 次 —— 12 秒的池子太薄，
@@ -448,7 +464,11 @@ class ExoEngine : PlayerEngine {
         // ★ 上限必须**明显小于**直播窗口（这里窗口约 36 秒）。
         //   原来 max = min*4 夹到 40 秒，比窗口还大，必然掉出直播窗口。
         //   改成 min + 8 秒（10~16 秒的 min 对应 18~24 秒上限），留足余量。
-        val maxBufferMs = (minBufferMs + 4_000).coerceIn(minBufferMs + 2_000, 20_000)
+        val maxBufferMs = if (isLocalProxy) {
+            (minBufferMs + 4_000).coerceIn(minBufferMs + 2_000, 20_000)
+        } else {
+            (minBufferMs + 10_000).coerceIn(minBufferMs + 2_000, 40_000)
+        }
         // bufferForPlayback 从 300 提到 800：
         // 实测音频 HAL 的欠载告警全部集中在起播那 4 秒（19 条在 20:42:49~53，
         // 之后 55 秒安静）。300ms 就开播时管线还没填满，第一秒最容易破音。
@@ -466,7 +486,8 @@ class ExoEngine : PlayerEngine {
         // 不用再靠猜（之前排查卡顿时最缺的就是这个数）。
         com.litv.tv.data.PlayLog.w(
             TAG,
-            "缓冲参数 min=${minBufferMs}ms max=${maxBufferMs}ms 起播=800ms 恢复=1000ms",
+            "缓冲参数 min=${minBufferMs}ms max=${maxBufferMs}ms 起播=800ms 恢复=1000ms 档位=" +
+                (if (isLocalProxy) "内置源" else "自建源"),
         )
 
         // ★ 源配置里的 UA 必须走 setUserAgent，不能只塞进请求头。

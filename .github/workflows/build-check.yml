@@ -80,6 +80,13 @@ jobs:
         # 所以这个脚本在接入前已确认在当前代码上 exit 0。
         run: python3 tools/checks/check-field-contract.py
 
+      - name: 错误码 ↔ 管理台文案对账
+        # 服务端新增一个码而 errors.ts 没跟，用户看到的是「请求失败（错误码 3003）」，
+        # 信息量为零，而且只有真撞上才会发现。这里把「服务端出现的码 ⊆ 前端文案表」
+        # 变成机械约束：边缘部署专用码（如 2006）只提示、不算失败。
+        # 接线前已确认在当前代码上 exit 0；并做过反证（加一个未登记的码会红）。
+        run: python3 tools/checks/check-error-codes.py
+
       - name: 播放层安全不变量（日志脱敏 / TLS / 原生 header）
         # 三类问题单测抓不到，因为不是"算错了"而是"某一行写法"：
         #   ① 签名 URL 进 logcat（出过两次：url.take(60)、libVLC -vvv）

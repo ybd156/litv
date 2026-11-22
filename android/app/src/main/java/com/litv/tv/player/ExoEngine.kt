@@ -845,6 +845,10 @@ class ExoEngine : PlayerEngine {
             height = videoH,
             fps = vf?.frameRate ?: 0f,
             bitrateKbps = ((vf?.bitrate ?: 0) / 1000),
+            // 缓冲中 ≠ 卡死。看门狗用它区分「正常重缓冲」和「真的冻住了」。
+            isBuffering = runCatching {
+                p.playbackState == androidx.media3.common.Player.STATE_BUFFERING
+            }.getOrDefault(false),
         )
     }
 

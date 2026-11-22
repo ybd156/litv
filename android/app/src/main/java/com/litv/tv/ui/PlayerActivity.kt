@@ -1266,6 +1266,13 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         slideDir = pendingSlideDir
         pendingSlideDir = 0f
         Log.i(TAG, "playChannel: ${ch.name} streamId=$streamId rebuild=$forceRebuild slide=$slideDir direct=${app.prefs.directMode}")
+        // ★ 2026-11-22：落盘"这次播的是哪个台、哪个源"。
+        //   没有这一条，事后看 play.log 根本分不清测的是内置源还是自建源 ——
+        //   昨天就是靠数 HlsProxy 行数才看出来，差点又拿自建源的数据当内置源的结论。
+        run {
+            val srcKind = if (com.litv.tv.data.YspClient.isYspChannel(ch.id)) "内置" else "自建"
+            com.litv.tv.data.PlayLog.w(TAG, "起播「${ch.name}」id=${ch.id} 源=$srcKind")
+        }
         setSplashStage("正在起播…")
         // 立刻停掉上一次的起播计时器：下面要等签名地址（0.8~1.4 秒），
         // 这段时间上一次的"4 秒无数据"看门狗会把还没开始的新台判死。

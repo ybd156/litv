@@ -232,6 +232,23 @@ class PlayerManager(
         }
         val frozenMs = android.os.SystemClock.elapsedRealtime() - lastPosChangeAt
 
+        // ★ 2026-11-22：缓冲中不算卡死。
+        //
+        // 真机日志（电视 13 小时）暴露的误判：
+        //   「加载慢 990ms」→ 1 分 22 秒后 →「判定卡死，第 1 次自动恢复」
+        // 那些时候网络是好的（加载都在 1 秒内），只是播放器正在 BUFFERING、
+        // 位置暂时不动。16 秒的阈值对"正常重缓冲"太短，于是：
+        //   重缓冲 → 被判卡死 → startCurrent() 重建播放器 → 更久才出画面 → 更卡。
+        // 也就是说，这个看门狗自己把「小卡顿」放大成了「大卡顿」。
+        //
+        // 真正的卡死定义应该是：**既没有在缓冲，位置又不动**。
+        if (eng.stats().isBuffering) {
+            // 还在缓冲：把基准时间往前挪，让它重新计 16 秒
+            lastPosChangeAt = android.os.SystemClock.elapsedRealtime()
+            main.postDelayed(stallWatchdog, STALL_CHECK_MS)
+            return@Runnable
+        }
+
         // 稳定播放满 5 分钟就把"已自动恢复次数"归零。
         //
         // 为什么必须有：stallRecovered 以前只在 play() 复位，长看同一个台时

@@ -975,6 +975,9 @@ class VlcEngine : PlayerEngine {
             height = videoH,
             videoCodec = vCodec,
             audioCodec = aCodec,
+            // VLC 没有可靠的 buffering 状态可读（isPlaying 在卡死时也是 false，
+            // 用了会把真卡死也豁免掉）。这里保守填 false：VLC 上的卡死判定维持原样。
+            isBuffering = false,
         )
     }
 

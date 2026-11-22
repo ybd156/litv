@@ -144,6 +144,15 @@ data class EngineStats(
     val fps: Float = 0f,
     val droppedFrames: Int = 0,
     val bitrateKbps: Int = 0,
+    /**
+     * 是否处于「缓冲中」（不是真卡死）。
+     *
+     * 用途：[PlayerManager] 的卡顿看门狗。
+     * 真机日志里「加载慢 990ms」之后 82 秒被判定卡死 —— 那时候网络是好的，
+     * 只是播放器在 BUFFERING、位置暂时不动。把缓冲也当成卡死会导致
+     * 「重缓冲 → 判死 → 重建播放器 → 更久才出画」的放大循环。
+     */
+    val isBuffering: Boolean = false,
 )
 
 /** 内核类型。 */

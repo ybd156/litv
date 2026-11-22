@@ -25,7 +25,7 @@ import { DatabaseSync } from "node:sqlite";
 import { BOOTSTRAP_SQL } from "../src/bootstrap.sql.js";
 
 const checks = [];
-const check = (name, ok) => checks.push([name, !!ok]);
+const check = (name, ok, detail) => checks.push([name, !!ok, detail]);
 
 // ---------------------------------------------------------------- 素材
 
@@ -616,8 +616,11 @@ server.close();
 // ---------------------------------------------------------------- 汇总
 
 let bad = 0;
-for (const [name, pass] of checks) {
-  console.log(`${pass ? "✅" : "❌"} ${name}`);
+for (const [name, pass, detail] of checks) {
+  // 失败时把 detail 一并打出来：此前 check() 不接收第三个参数，
+  // 文件里几十处 check(..., 实际值) 全是死参数，红了只能靠猜。
+  const tail = !pass && detail !== undefined ? `  ← 实际: ${String(detail).slice(0, 300)}` : "";
+  console.log(`${pass ? "✅" : "❌"} ${name}${tail}`);
   if (!pass) bad++;
 }
 console.log(`\n${checks.length - bad}/${checks.length} 通过`);

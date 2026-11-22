@@ -184,6 +184,84 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
     private lateinit var epgAdapter: EpgAdapter
 
     private var channels: List<Channel> = emptyList()
+
+    // ---------------------------------------------------------------- 内置源自动降级
+    //
+    // 用户诉求（2026-11-22）：「我要的是能持续保持播放，而不是让我自己实时看有没有问题去换」。
+    //
+    // 已查明的硬限制：央视频分片 CDN 会成片拒绝某些出口 IP。实测同一套代码
+    //   · PC（电信）→ 两条线路的分片都 200 / 1.84MB / 94ms
+    //   · 电视（广东移动 120.231.171.23）→ 100% 403，换线路/换 TLS 栈/钉 DNS 全无效
+    // 客户端改不了这个，但**画面不能断**：内置源不可用时自动切到自建源的同频道
+    // （CCTV-1 综合 ↔ cctv1-MCP 是同一个台）。
+    //
+    // 匹配优先用 epgId（两边都会归一化到 `CCTV1`），退化为频道名归一化。
+
+    /** 已经为哪个内置源频道降级过（一次会话只降一次，避免两个源来回跳）。 */
+    private var fallbackDoneFor = 0L
+
+    init {
+        com.litv.tv.data.LocalHlsProxy.onTooMany403 = { id ->
+            android.os.Handler(android.os.Looper.getMainLooper()).post { fallbackFromBuiltin(id) }
+        }
+    }
+
+    /** 频道名归一化：去空格/连字符/下划线，去掉 `-MCP` 后缀和「综合」这类修饰。 */
+    private fun normName(s: String): String =
+        s.lowercase()
+            .replace("-", "").replace(" ", "").replace("_", "")
+            .removeSuffix("mcp").removeSuffix("综合")
+
+    /**
+     * 内置源连续 403 时，静默切到自建源的同频道。
+     *
+     * 不弹「请换台」——用户点的是哪个台，就应该看到哪个台。
+     */
+    private fun fallbackFromBuiltin(yspId: Long) {
+        // 诊断：把每个提前 return 的分支都落盘，避免"回调没生效"这种哑失败。
+        com.litv.tv.data.PlayLog.w(
+            TAG,
+            "降级请求 yspId=$yspId cur=${current?.id}/${current?.name} 已降级=${fallbackDoneFor}",
+        )
+        val cur = current ?: run {
+            com.litv.tv.data.PlayLog.w(TAG, "降级中止：current 为空")
+            return
+        }
+        if (cur.id != yspId) {
+            com.litv.tv.data.PlayLog.w(TAG, "降级中止：已换台（cur=${cur.id} 请求=$yspId）")
+            return
+        }
+        if (!com.litv.tv.data.YspClient.isYspChannel(cur.id)) {
+            com.litv.tv.data.PlayLog.w(TAG, "降级中止：当前不是内置源")
+            return
+        }
+        if (fallbackDoneFor == yspId) {
+            com.litv.tv.data.PlayLog.w(TAG, "降级中止：这个台已经降过一次")
+            return
+        }
+
+        val wantEpg = epgIdOf(cur)
+        val wantName = normName(cur.name)
+        com.litv.tv.data.PlayLog.w(TAG, "降级匹配：epg=$wantEpg 名=$wantName 候选=${channels.count { it.sourceId >= 0 }}")
+        val alt = channels.firstOrNull { c ->
+            c.id != cur.id && c.sourceId >= 0 && (
+                (wantEpg.isNotBlank() && epgIdOf(c) == wantEpg) ||
+                    normName(c.name) == wantName ||
+                    (wantName.length >= 4 && normName(c.name).startsWith(wantName.take(4)))
+                )
+        }
+        if (alt == null) {
+            Log.w(TAG, "内置源连续 403，但没有同频道替代源（${cur.name}）")
+            com.litv.tv.data.PlayLog.w(TAG, "降级失败：无替代源（${cur.name}）")
+            toastTip("央视频暂不可用，也没有同频道替代源")
+            return
+        }
+        fallbackDoneFor = yspId
+        Log.w(TAG, "内置源连续 403 → 自动降级 ${cur.name} → ${alt.name}")
+        com.litv.tv.data.PlayLog.w(TAG, "自动降级：${cur.name} → ${alt.name}")
+        toastTip("央视频暂不可用，已切到同频道「${alt.name}」")
+        playChannel(alt, isFallback = true)
+    }
     private var allChannels: List<Channel> = emptyList()
     private val favoriteIds = mutableSetOf<Long>()
 
@@ -1260,7 +1338,15 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         com.litv.tv.data.NetState.addListener(listener)
     }
 
-    private fun playChannel(ch: Channel, streamId: Long = 0, forceRebuild: Boolean = false) {
+    private fun playChannel(
+        ch: Channel,
+        streamId: Long = 0,
+        forceRebuild: Boolean = false,
+        isFallback: Boolean = false,
+    ) {
+        // 用户主动换台（含切回同一个内置源）就清掉「已降级」记录，
+        // 否则切回内置源再卡住时不会重新降级。
+        if (!isFallback) fallbackDoneFor = 0L
         // 取走本次的转场方向并立刻清零：只有 switchBy 会写它，
         // 其余入口（点列表/数字键/恢复/重试）拿到的都是 0 = 只淡出。
         slideDir = pendingSlideDir

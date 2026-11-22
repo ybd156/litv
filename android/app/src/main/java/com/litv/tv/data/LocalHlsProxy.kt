@@ -157,6 +157,24 @@ object LocalHlsProxy {
      */
     @Volatile private var needRotateLine = false
 
+    /**
+     * 连续 403 达到阈值时的回调（参数：频道 id）。
+     *
+     * 用途：央视频分片 CDN 会成片拒绝某些出口 IP（实测电视走广东移动时 100% 403，
+     * 而同一套代码在电信线路上分片 200/1.8MB）。客户端改不了这个限制，
+     * 但可以**自动降级到自建源的同频道**——用户点的是「CCTV-1」，
+     * 走哪条链路是他的事，画面不能断。
+     *
+     * 在 UI 层注册；没注册时行为与之前一致。
+     */
+    @Volatile var onTooMany403: ((Long) -> Unit)? = null
+
+    /** 当前正在服务的频道 id（分片 URL 里没有频道号，只能按「最近取过清单的那个台」算）。 */
+    @Volatile private var curChannelId: Long = 0L
+
+    /** 连续 403 计数，成功拉到一个分片就清零。 */
+    private val fail403 = java.util.concurrent.atomic.AtomicInteger(0)
+
     /** 当前用第几条线路（0 起）。 */
     @Volatile private var lineIndex = 0
 
@@ -295,6 +313,10 @@ object LocalHlsProxy {
             writeStatus(out, 404, "unknown channel")
             return
         }
+
+        // 记录当前正在直播的频道：分片 URL 里没有频道号，403 降级只能按这个算。
+        // ★ 必须放在缓存检查**之前** —— 缓存命中分支会直接 return，放在后面就永远设不上。
+        curChannelId = id
 
         val cached = cache[id]
         if (cached != null && System.currentTimeMillis() - cached.at < M3U8_TTL_MS) {
@@ -451,8 +473,20 @@ object LocalHlsProxy {
                 //   只清缓存不换线的话，重新取流拿回来还是同一条线，
                 //   分片地址照样 403 → 播放器重试 5 次 → 黑屏（真机 112 次）。
                 needRotateLine = true
-                Log.i(TAG, "分片 403（清 playlist=$n、线路；下次换线路）")
-                PlayLog.w(TAG, "分片 403，下次换线路")
+                val cnt = fail403.incrementAndGet()
+                Log.i(TAG, "分片 403（清 playlist=$n、线路；下次换线路）连续第 $cnt 次")
+                PlayLog.w(TAG, "分片 403，连续第 $cnt 次")
+                // 连续 3 次 403 就降级。
+                //
+                // 为什么是 3：真机日志显示 ExoPlayer 一轮重试最多产生 **4 次**分片 403，
+                // 第 5 次是整体失败、随后 PlayerManager 重建播放器又能拉到分片，
+                // 计数器就被清零了 —— 阈值设 6 永远够不到（实测卡在 4）。
+                if (cnt == 3) {
+                    val target = curChannelId
+                    Log.w(TAG, "连续 3 次分片 403，通知上层降级（ch=$target）")
+                    PlayLog.w(TAG, "连续 3 次 403 → 请求降级到其他源")
+                    onTooMany403?.invoke(target)
+                }
             }
             writeStatus(out, 502, "segment failed: " + (msg.ifBlank { e.javaClass.simpleName }))
             return
@@ -462,6 +496,7 @@ object LocalHlsProxy {
         // 只在慢的时候落盘：正常分片 1~2 秒，超过 3 秒就是 CDN 抖动，正是要抓的东西
         if (cost > 3000) PlayLog.w(TAG, "分片慢 ${cost}ms / ${bytes.size / 1024}KB")
         synchronized(segCache) { segCache[real] = bytes }
+        if (fail403.get() != 0) fail403.set(0)   // 能拉到分片说明链路恢复，计数归零
         writeBody(out, bytes, "video/mp2t")
     }
 

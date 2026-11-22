@@ -19,6 +19,24 @@ const schema = await readFile(new URL("../schema.sql", import.meta.url), "utf8")
 const db = new DatabaseSync(":memory:");
 db.exec(schema);
 
+/**
+ * 兼容 node:sqlite 与 D1 的差异：Node 24.22 的子查询里 json_group_array 会当
+ * TEXT 返回（"[]"），而 D1 返回真数组。从这里取数组，别直接 .some/.map/.includes——
+ * 否则本地（24.21）绿、CI 红，且报错是 "is not a function" 这种没头绪的形状。
+ */
+const asArr = (v) => {
+  if (Array.isArray(v)) return v;
+  if (typeof v === "string") {
+    try {
+      const parsed = JSON.parse(v);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  }
+  return [];
+};
+
 /** 最小 D1 兼容层：只实现 Worker 用到的 prepare/bind/first/run/all。 */
 class Statement {
   constructor(sql) {
@@ -653,13 +671,13 @@ const beforeCount = beforeBlk.body?.data?.total ?? 0;
 check("屏蔽前列表里有购物台", beforeCount >= 3, String(beforeCount));
 
 const blkAdd = await call("POST", "/api/v1/admin/blocked", { kind: "group", value: "购物" }, "203.0.113.70", admB);
-check("屏蔽分组成功", blkAdd.body?.code === 0 && blkAdd.body.data.groups.includes("购物"), JSON.stringify(blkAdd.body));
+check("屏蔽分组成功", blkAdd.body?.code === 0 && asArr(blkAdd.body.data.groups).includes("购物"), JSON.stringify(blkAdd.body));
 
 const afterBlk = await call("GET", "/api/v1/channels?size=200", undefined, "203.0.113.70", admB);
 check(
   "整类频道从管理台列表里消失",
-  !(afterBlk.body?.data?.items ?? []).some((c) => c.group === "购物"),
-  JSON.stringify((afterBlk.body?.data?.items ?? []).map((c) => c.group)),
+  !asArr(afterBlk.body?.data?.items).some((c) => c.group === "购物"),
+  JSON.stringify(asArr(afterBlk.body?.data?.items).map((c) => c.group)),
 );
 check(
   "total 也跟着减少（不是只过滤了当前页）",
@@ -672,11 +690,11 @@ const devB = await reg("123456", "dev-blk", "androidtv", "203.0.113.71");
 const bootBlk = await call("GET", "/api/v1/tv/bootstrap", undefined, "203.0.113.71", devB.body.data.token);
 check(
   "被屏蔽的分组不出现在 bootstrap",
-  !(bootBlk.body?.data?.channels ?? []).some((c) => c.group === "购物"),
+  !asArr(bootBlk.body?.data?.channels).some((c) => c.group === "购物"),
 );
 check(
   "被屏蔽的分组也不出现在 groups 统计里",
-  !(bootBlk.body?.data?.groups ?? []).some((g) => g.name === "购物"),
+  !asArr(bootBlk.body?.data?.groups).some((g) => g.name === "购物"),
 );
 
 // 单个频道
@@ -684,8 +702,8 @@ await call("POST", "/api/v1/admin/blocked", { kind: "channel", value: "某测试
 const afterCh = await call("GET", "/api/v1/channels?size=200", undefined, "203.0.113.70", admB);
 check(
   "屏蔽单个频道只挡它自己",
-  !(afterCh.body?.data?.items ?? []).some((c) => c.name === "某测试台"),
-  JSON.stringify((afterCh.body?.data?.items ?? []).map((c) => c.name)),
+  !asArr(afterCh.body?.data?.items).some((c) => c.name === "某测试台"),
+  JSON.stringify(asArr(afterCh.body?.data?.items).map((c) => c.name)),
 );
 
 // 解除
@@ -696,7 +714,7 @@ const blkDel = await call(
   "203.0.113.70",
   admB,
 );
-check("解除屏蔽成功", blkDel.body?.code === 0 && !blkDel.body.data.groups.includes("购物"));
+check("解除屏蔽成功", blkDel.body?.code === 0 && !asArr(blkDel.body.data.groups).includes("购物"));
 const restored = await call("GET", "/api/v1/channels?size=200", undefined, "203.0.113.70", admB);
 check("解除后频道回来了", (restored.body?.data?.total ?? 0) === beforeCount - 1, String(restored.body?.data?.total));
 
@@ -714,7 +732,7 @@ check("屏蔽参数错回 1001", (await call("POST", "/api/v1/admin/blocked", { 
 // （前面的用例已经把清单清空了，这里重新屏蔽一个来验证标记）
 await call("POST", "/api/v1/admin/blocked", { kind: "group", value: "购物" }, "203.0.113.70", admB);
 const info = await call("GET", "/api/v1/admin/blocked", undefined, "203.0.113.70", admB);
-const cand = info.body?.data?.candidates ?? [];
+const cand = asArr(info.body?.data?.candidates);
 check(
   "屏蔽页能列出源里的分类（带频道数）",
   cand.some((c) => c.name === "购物" && c.count >= 2) && cand.some((c) => c.name === "成人"),
@@ -738,7 +756,7 @@ await call("POST", "/api/v1/admin/blocked", { kind: "group", value: "已下架�
 const info2 = await call("GET", "/api/v1/admin/blocked", undefined, "203.0.113.70", admB);
 check(
   "源里消失的分类仍能从屏蔽清单里看到",
-  (info2.body?.data?.candidates ?? []).some((c) => c.name === "已下架分类"),
+  asArr(info2.body?.data?.candidates).some((c) => c.name === "已下架分类"),
   JSON.stringify(info2.body?.data?.candidates),
 );
 await call("DELETE", `/api/v1/admin/blocked?kind=group&value=${encodeURIComponent("已下架分类")}`, undefined, "203.0.113.70", admB);
@@ -748,14 +766,14 @@ await call("DELETE", `/api/v1/admin/blocked?kind=group&value=${encodeURIComponen
 const compatList = await call("GET", "/api/v1/blocked", undefined, "203.0.113.70", admB);
 check("兼容层 /api/v1/blocked 可读", compatList.body?.code === 0 && Array.isArray(compatList.body.data.candidates));
 const compatAdd = await call("POST", "/api/v1/blocked", { kind: "group", value: "测试" }, "203.0.113.70", admB);
-check("兼容层可以加屏蔽", compatAdd.body?.code === 0 && compatAdd.body.data.groups.includes("测试"));
+check("兼容层可以加屏蔽", compatAdd.body?.code === 0 && asArr(compatAdd.body.data.groups).includes("测试"));
 const bothPaths = await call("GET", "/api/v1/admin/blocked", undefined, "203.0.113.70", admB);
 check(
   "两个路径读到的是同一份清单",
   JSON.stringify(bothPaths.body?.data?.groups?.sort()) === JSON.stringify(compatAdd.body?.data?.groups?.sort()),
 );
 const compatDel = await call("DELETE", "/api/v1/blocked?kind=group&value=%E6%B5%8B%E8%AF%95", undefined, "203.0.113.70", admB);
-check("兼容层可以解除屏蔽", compatDel.body?.code === 0 && !compatDel.body.data.groups.includes("测试"));
+check("兼容层可以解除屏蔽", compatDel.body?.code === 0 && !asArr(compatDel.body.data.groups).includes("测试"));
 
 // ---------------------------------------------------------------- 立即重建的自检
 const rebuildInfo = await call("GET", "/api/v1/admin/build", undefined, "203.0.113.70", admB);

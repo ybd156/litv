@@ -65,11 +65,15 @@ var allowLoopback atomic.Bool
 // SetAllowLoopback 打开/关闭对回环地址的访问。只应在测试初始化时调用。
 func SetAllowLoopback(v bool) { allowLoopback.Store(v) }
 
-// checkIP 拒绝「本机 / 链路本地 / 未指定 / 组播」地址。
+// checkIP 拒绝「本机 / 链路本地 / 未指定 / 组播 / 保留段」地址。
 //
 // 私网（RFC1918、ULA）默认放行：很多用户的自建源就在局域网里，
 // 一刀切会让「源在 NAS 同网段」这种最常见的部署直接不可用。
-// 这里挡住的是 SSRF 最危险的那一档——本机服务与云元数据地址。
+//
+// ★ 段判定只留一份：safedial.Blocked。
+// 以前这里自己又写了一遍（loopback / 链路本地 / 组播），漏了 CGNAT、
+// 192.0.0.0/24、198.18/15、240/4、NAT64 —— 而 safedial 里都有。
+// 两套判定并存的结果是"一个入口拦、另一个不拦"，这种分叉无法靠 review 防住。
 func checkIP(ip net.IP) error {
 	if ip == nil {
 		return fmt.Errorf("地址不合法")
@@ -77,14 +81,17 @@ func checkIP(ip net.IP) error {
 	if allowLoopback.Load() {
 		return nil
 	}
-	if ip.IsLoopback() || ip.IsUnspecified() || ip.IsMulticast() ||
-		ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() {
-		return fmt.Errorf("禁止访问本机或链路本地地址")
+	addr, ok := netip.AddrFromSlice(ip)
+	if !ok {
+		return fmt.Errorf("地址不合法")
+	}
+	if safedial.Blocked(addr) {
+		return fmt.Errorf("禁止访问本机、链路本地或保留地址")
 	}
 	// 本机网卡地址（比如 NAS 自己的 192.168.x.x）同样要拒。
 	// 只拒回环挡不住「远端内容指向本机 LAN 地址」这条路径——
 	// 对服务端来说那是自己的 HTTP 管理面，不是外部站点。
-	if addr, ok := netip.AddrFromSlice(ip); ok && safedial.IsLocalAddr(addr) {
+	if safedial.IsLocalAddr(addr) {
 		return fmt.Errorf("禁止访问本机地址")
 	}
 	return nil
@@ -150,7 +157,14 @@ func safeDialer(d *net.Dialer) func(ctx context.Context, network, addr string) (
 
 func newTransport() *http.Transport {
 	return &http.Transport{
-		Proxy: http.ProxyFromEnvironment,
+		// ★ 刻意不设 Proxy（也绝不设 http.ProxyFromEnvironment）。
+		//
+		// 策略判在 net.Dialer.Control 上，判的是"真正要连的地址"。
+		// 一旦走代理，connect 的目标变成代理地址，Control 校验的就成了代理，
+		// 代理再去解析真实目标 —— 整套 SSRF 防线被整体绕过；
+		// 而 HTTP_PROXY/HTTPS_PROXY 在容器和用户 shell 里很常见，
+		// 属于"环境一改就静默失效"的那类问题。
+		// 需要代理的部署应在配置里显式声明，而不是靠环境变量悄悄改出站路径。
 		DialContext: safeDialer(&net.Dialer{
 			Timeout:   8 * time.Second,
 			KeepAlive: 30 * time.Second,

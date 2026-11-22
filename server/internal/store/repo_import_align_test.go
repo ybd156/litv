@@ -403,12 +403,13 @@ func TestImportPreservesUserFields(t *testing.T) {
 //     这一点正是「分块写入」与「单个大事务」的分水岭：
 //     单个大事务时 writer 在整段导入里一次都挤不进去。
 //  2. **有界等待**：单次写的最长耗时不超过一个分块的持锁时长（这里取 500ms）。
-//  3. **零超时**：全程没有 SQLITE_BUSY。
+//  3. **导入第一次就成功**：并发写不能让刷新失败——2026-11-23 修的正是这一条，
+//     根因是分块事务先 SELECT 再 INSERT（deferred 事务升级写锁时 SQLITE_BUSY
+//     不等待），不是"偶发调度噪声"。
 //
-// busy_timeout 与生产默认对齐（8s）。为什么不在测试里压到 2s：CI 上导入
-// 3000 条要 ~3.8s，压到 2s 会让 writer 因为「整段导入期间都在等」而超时——
-// 那测出来的是导入耗时，不是锁粒度。真正的判据是下面三条：
-// 有穿插、单次等待有界、零 SQLITE_BUSY。
+// busy_timeout 与生产默认对齐（8s）。注意并发写撞上 BUSY 只记录不判失败：
+// 那个协程是 5ms 死磕写锁，本来就是测试自己制造的竞争；用户真正会感知到的
+// 是"刷新失败没有"，对应第 3 条。
 func TestImportDoesNotBlockConcurrentWrites(t *testing.T) {
 	st, err := openWithBusyTimeout(filepath.Join(t.TempDir(), "conc.db"), 8000)
 	if err != nil {
@@ -485,25 +486,20 @@ func TestImportDoesNotBlockConcurrentWrites(t *testing.T) {
 	}()
 
 	startWall := time.Now()
-	// 允许重试：这里有一个 5ms 节奏的写入协程在抢写锁，SQLite 单写者模型下
-	// 导入的分块事务偶尔会撞上 SQLITE_BUSY。真实环境里 busy_timeout(8s)
-	// 会替我们等，但这项测试**不能用"零 BUSY"当判据**——
-	// CI 上已经因为它偶发变红两次（同一次提交的两次运行，一次绿一次红）。
-	// 本测试要守的不是调度结果，而是用户真正的诉求：**刷新不会卡死**。
-	var ierr error
-	for attempt := 0; attempt < 3; attempt++ {
-		if _, ierr = st.ImportChannels(ctx, srcID, items, ImportOptions{Align: true, ChunkSize: chunk}); ierr == nil {
-			break
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
+	// **只允许一次**：这里守的就是「刷新不会因为并发上报而失败」。
+	//
+	// 早期版本允许重试 3 次，本意是躲开"调度噪声"，实际藏住的是一个真缺陷：
+	// 分块事务是 deferred 的，里面先 SELECT 再 INSERT，WAL 下这种升级写锁
+	// 冲突会立即返回 SQLITE_BUSY 且不理会 busy_timeout——所以重试多少次都
+	// 打在同一个瞬间上，三次全红。现在事务的第一条语句就是写，第一次就必须成功。
+	_, ierr := st.ImportChannels(ctx, srcID, items, ImportOptions{Align: true, ChunkSize: chunk})
 	endWall := time.Now()
 
 	close(stop)
 	<-done
 
 	if ierr != nil {
-		t.Fatalf("导入在 3 次尝试后仍失败（这才是真的卡死）: %v", ierr)
+		t.Fatalf("导入失败（并发上报期间刷新不应失败）: %v", ierr)
 	}
 	if dur := endWall.Sub(startWall); dur > 10*time.Second {
 		t.Fatalf("导入耗时 %v，超过 10s——刷新会把写锁占太久", dur)

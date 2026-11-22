@@ -1075,23 +1075,33 @@ func (s *Store) loadImportSnapshot(ctx context.Context, sourceID int64) (*import
 
 // applyImportChunk 在一个写事务里处理一批 item。
 //
-// 它只读 snap（内存），**不查库**——每个 item 零查询。
+// 它只读 snap（内存），**每个 item 零查询**；事务之外只取一次源 UA。
+// 事务的**第一条语句必须是写**（见函数体内的注释），否则会踩到
+// WAL 下「deferred 事务升级写锁不发等待」的坑。
 func (s *Store) applyImportChunk(ctx context.Context, sourceID int64, items []Channel, snap *importSnapshot, stats *ImportStats) error {
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-
 	// 这个源专属的 UA，导入时写进每条线路的 headers_json。
+	//
+	// **必须在事务外读**：本事务是 deferred（`BEGIN`，不是 `BEGIN IMMEDIATE`），
+	// 一旦先 SELECT 再 INSERT，事务就从"读"升级成"写"；而 SQLite 在 WAL 下
+	// 对这种升级冲突是**立即**返回 SQLITE_BUSY、并且**不调用** busy handler
+	// 的（避免死锁），busy_timeout(8s) 等于没设。后果就是：刷新正好撞上 TV
+	// 上报 play_events 的那一刻，分块事务瞬间失败——`TestImportDoesNotBlock
+	// ConcurrentWrites` 在 CI 上因此红过两次，重试 3 次也全是同一个瞬间。
+	// 把读挪到事务之外，事务的第一条语句就是写，抢不到写锁时会正常等待。
 	var srcUA string
-	_ = tx.QueryRowContext(ctx, `SELECT COALESCE(user_agent,'') FROM sources WHERE id=?`, sourceID).Scan(&srcUA)
+	_ = s.db.QueryRowContext(ctx, `SELECT COALESCE(user_agent,'') FROM sources WHERE id=?`, sourceID).Scan(&srcUA)
 	headersJSON := "{}"
 	if ua := strings.TrimSpace(srcUA); ua != "" {
 		if b, jerr := json.Marshal(map[string]string{"User-Agent": ua}); jerr == nil {
 			headersJSON = string(b)
 		}
 	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
 
 	for _, c := range items {
 		nu := c.firstURL()

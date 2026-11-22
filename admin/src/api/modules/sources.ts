@@ -20,7 +20,7 @@ export async function listSources(): Promise<Source[]> {
 /**
  * 新建源。
  *
- * ★ 服务端只回 `{id}`（`handlers_admin.go` 的 createSource → `ok(w, {"id": id})`），
+ * ★ 服务端只回 `{id}`（`handlers_admin_source.go` 的 createSource → `ok(w, {"id": id})`），
  * 不是整个 Source。之前这里标成 `Promise<Source>` 是类型在说谎——调用方一旦
  * 去读 `.channel_count` 就会拿到 undefined。
  */

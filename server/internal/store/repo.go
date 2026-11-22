@@ -1786,30 +1786,6 @@ var (
 	ErrBindCodeMismatch = errors.New("绑定码不属于这台设备")
 )
 
-// BindCodeDeviceID 读出绑定码应绑定的设备 ID（0 表示通用邀请码）。
-//
-// 只读校验，不消费。注册流程先用它判断"这个码是不是给我的"，
-// 确认后再走事务消费——不能像以前那样先标 used 再比对。
-func (s *Store) BindCodeDeviceID(ctx context.Context, code string) (int64, error) {
-	var deviceID, exp int64
-	var used int
-	err := s.db.QueryRowContext(ctx, `SELECT device_id,expires_at,used FROM bind_codes WHERE code=?`, code).
-		Scan(&deviceID, &exp, &used)
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return 0, ErrBindCodeNotFound
-		}
-		return 0, err
-	}
-	if used != 0 {
-		return 0, ErrBindCodeUsed
-	}
-	if exp < Now() {
-		return 0, ErrBindCodeExpired
-	}
-	return deviceID, nil
-}
-
 // RegisterWithBindCode 在一个事务里完成「建建设备 → 消费码 → 批准」。
 //
 // 这是绑定链路的唯一正确入口，解决三个原有缺陷：

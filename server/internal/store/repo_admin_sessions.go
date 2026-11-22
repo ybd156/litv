@@ -132,8 +132,15 @@ func (s *Store) RevokeAllAdminSessions(ctx context.Context) (int64, error) {
 	return n, tx.Commit()
 }
 
-// CleanupAdminSessions is used at startup and each login. The active table is
-// always bounded by the configured cap; expiry requires no background worker.
+// CleanupAdminSessions 清理过期/超额的会话行。
+//
+// ⚠️ 现状（2026-11-23 核实）：**它没有任何调用点**。注释以前写的是
+// "used at startup and each login"，那是**不成立的**——启动与登录路径都没调它。
+// 结果是过期会话只会在表内累积（表有上限，不会无限涨，但过期的不会主动消失）。
+//
+// 之所以留着不删：删掉等于把"没人清理"这个缺口合法化（同 docs/refactor §B 的
+// 处理原则）。接法很简单——在 `cmd/litvd` 启动处与登录成功后各调一次即可；
+// 这属于行为变更（会真的删行），本次未做，留给产品决定。
 func (s *Store) CleanupAdminSessions(ctx context.Context, now int64) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {

@@ -124,12 +124,6 @@ func (s *Store) DeleteEPGSource(ctx context.Context, id int64) error {
 	return tx.Commit()
 }
 
-// MarkEPGSynced 记录同步结果（保留旧名字，转调 MarkEPGAttempt）。
-func (s *Store) MarkEPGSynced(ctx context.Context, id int64, errMsg string) error {
-	_, err := s.MarkEPGAttempt(ctx, id, errMsg)
-	return err
-}
-
 // MarkEPGAttempt 记录一次同步尝试。
 //
 // 成败必须分开记：
@@ -381,6 +375,3 @@ func (s *Store) SetChannelEpgID(ctx context.Context, channelID int64, epgID stri
 
 // ErrNoRows 暴露给上层判断。
 var ErrNoRows = sql.ErrNoRows
-
-// IsNotFound 便捷判断。
-func IsNotFound(err error) bool { return errors.Is(err, sql.ErrNoRows) || errors.Is(err, ErrNotFound) }

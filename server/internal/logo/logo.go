@@ -74,9 +74,6 @@ func (s *Store) Path(channelID int64) string {
 	return matches[0]
 }
 
-// Exists 报告是否已有本地台标。
-func (s *Store) Exists(channelID int64) bool { return s.Path(channelID) != "" }
-
 // SaveBytes 保存上传的图片字节，返回站内访问路径。
 func (s *Store) SaveBytes(channelID int64, data []byte, contentType string) (string, error) {
 	ext, ok := allowedTypes[strings.ToLower(strings.TrimSpace(strings.Split(contentType, ";")[0]))]

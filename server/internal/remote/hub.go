@@ -107,17 +107,6 @@ func (h *Hub) Send(deviceID int64, cmd Command) bool {
 	}
 }
 
-// Online 返回在线设备 ID 列表。
-func (h *Hub) Online() []int64 {
-	h.mu.RLock()
-	defer h.mu.RUnlock()
-	out := make([]int64, 0, len(h.conns))
-	for id := range h.conns {
-		out = append(out, id)
-	}
-	return out
-}
-
 // IsOnline 判断某设备是否在线。
 func (h *Hub) IsOnline(deviceID int64) bool {
 	h.mu.RLock()

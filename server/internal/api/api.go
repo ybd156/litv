@@ -301,11 +301,6 @@ func deviceFrom(ctx context.Context) (*store.Device, bool) {
 	return v, ok
 }
 
-func viaGatewayFrom(ctx context.Context) bool {
-	v, _ := ctx.Value(ctxViaGateway).(bool)
-	return v
-}
-
 // Handler 构造完整路由。viaGateway 决定是否信任网关头。
 func (a *API) Handler(viaGateway bool) http.Handler {
 	r := chi.NewRouter()

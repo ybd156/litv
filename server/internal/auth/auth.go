@@ -17,7 +17,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
-	"strconv"
 	"strings"
 	"time"
 )
@@ -182,19 +181,6 @@ func (s *Signer) Verify(channelID int64, exp int64, deviceKey, sig string) error
 		return fmt.Errorf("播放地址签名无效")
 	}
 	return nil
-}
-
-// BuildSignedURL 拼出带签名的播放地址。
-//
-// dk 用派生值：device_key 等价于设备凭据，不能出现在地址里。目前没有
-// 调用方（各 handler 自己拼 URL），保留这个 helper 是为了不让将来的人
-// 又写一条「明文 dk」的路径。
-func BuildSignedURL(basePath string, channelID int64, deviceKey string, s *Signer, ttl time.Duration) string {
-	exp := time.Now().Add(ttl).Unix()
-	dk := s.DeriveDeviceKey(deviceKey)
-	sig := s.Sign(channelID, exp, dk)
-	return fmt.Sprintf("%s?sig=%s&exp=%s&dk=%s",
-		basePath, sig, strconv.FormatInt(exp, 10), dk)
 }
 
 // ---------- 分片代理签名 ----------

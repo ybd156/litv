@@ -10,7 +10,6 @@ import (
 	"encoding/xml"
 	"fmt"
 	"io"
-	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -236,18 +235,4 @@ func digits(s string) string {
 		}
 	}
 	return b.String()
-}
-
-// FormatTime 把 Unix 秒格式化成 HH:MM，给节目单展示用。
-func FormatTime(ts int64) string {
-	return time.Unix(ts, 0).Format("15:04")
-}
-
-// ParseDurationSeconds 解析 "3600" 这类字符串。
-func ParseDurationSeconds(s string) int64 {
-	n, err := strconv.ParseInt(strings.TrimSpace(s), 10, 64)
-	if err != nil {
-		return 0
-	}
-	return n
 }

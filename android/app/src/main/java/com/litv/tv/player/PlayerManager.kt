@@ -777,9 +777,29 @@ class PlayerManager(
                 "$url${sep}_t=${System.currentTimeMillis()}"
             }
         }
+        // ★ 2026-11-22：自建源也走本地代理。
+        //
+        // 实测（PC 并发测 65 个源）：mursor 源站拉一个 1~2KB 的 m3u8 中位要 **3.1 秒**，
+        // 最慢 10 秒；电视上更差（同一个台 PC 1.36s、电视起播 15 秒）。上游改不了，
+        // 客户端唯一能做的是「提前拉、少往返」——
+        //   · 代理拿到 m3u8 后**立刻后台预取前 2 个分片**，播放器来要时直接命中
+        //   · 分片留一份缓存，重缓冲时不必再打源站
+        //   · 所有请求共用 OkHttp 连接池
+        // 代理不可用时回退原地址，不影响可用性。
+        val proxiedUrl = runCatching {
+            if (bustedUrl.contains(".m3u8", ignoreCase = true) &&
+                !bustedUrl.contains("127.0.0.1")
+            ) {
+                com.litv.tv.data.LocalHlsProxy.rawUrlFor(bustedUrl)
+            } else null
+        }.getOrNull()
+        if (proxiedUrl != null) {
+            com.litv.tv.data.PlayLog.w(TAG, "自建源走本地代理（可预取分片）")
+        }
+
         failLog.clear()
         pendingChannelId = channelId
-        pendingUrl = bustedUrl
+        pendingUrl = proxiedUrl ?: bustedUrl
         pendingHeaders = headers
 
         val remembered = prefs.engineFor(channelId).ifBlank { null }

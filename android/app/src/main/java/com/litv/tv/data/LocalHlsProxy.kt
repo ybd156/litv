@@ -283,10 +283,18 @@ object LocalHlsProxy {
                 c.soTimeout = 20000
                 val input = c.getInputStream().bufferedReader()
                 val requestLine = input.readLine() ?: return@use
-                // 吃掉剩余的请求头
+                // 读请求头并记下 UA/Referer —— 通用代理（自建源）要原样带给源站，
+                // 很多源站按 UA 返回不同清单甚至 403。
                 while (true) {
                     val line = input.readLine() ?: break
                     if (line.isEmpty()) break
+                    val lower = line.lowercase()
+                    when {
+                        lower.startsWith("user-agent:") ->
+                            reqUa = line.substringAfter(':').trim().ifBlank { "qqlive" }
+                        lower.startsWith("referer:") ->
+                            reqReferer = line.substringAfter(':').trim()
+                    }
                 }
                 val path = requestLine.split(' ').getOrNull(1) ?: return@use
                 Log.i(TAG, "REQ " + requestLine.take(80))
@@ -295,11 +303,134 @@ object LocalHlsProxy {
                     path.startsWith("/ch/") -> servePlaylist(path, out)
                     path.startsWith("/rp/") -> serveReplay(path, out)
                     path.startsWith("/seg/") -> serveSegment(path, out)
+                    // 通用 HLS 代理：自建源也走本地，才能预取分片 + 缓存 + 复用连接。
+                    path.startsWith("/raw/") -> serveRaw(path, out)
+                    path.startsWith("/rawseg/") -> serveRawSeg(path, out)
                     else -> writeStatus(out, 404, "not found")
                 }
                 runCatching { out.flush() }
             }
         }.onFailure { e -> Log.w(TAG, "请求处理失败: ${e.message}") }
+    }
+
+    // ---------------------------------------------------------------- 通用 HLS 代理（自建源）
+
+    /**
+     * 为什么自建源也要走代理：
+     *
+     * 实测（2026-11-22，PC 并发测 65 个源）：mursor 源站拉一个 1~2KB 的 m3u8
+     * **中位要 3.1 秒**，最慢 10 秒。电视上更差（同一个 cctv1-MCP 在 PC 1.36 秒、
+     * 电视起播 15 秒）。上游改不了，客户端唯一能做的就是：
+     *   · 拿到 m3u8 后**立刻后台预取前几个分片**，播放器来要时直接命中
+     *   · 分片留一份缓存，重连/重缓冲时不必再打源站
+     *   · 所有请求共用 OkHttp 连接池（少一次 TLS 握手）
+     *
+     * 只处理 HLS（m3u8）；其它格式调用方回退直连。
+     */
+    @Volatile private var reqUa: String = "qqlive"
+    @Volatile private var reqReferer: String? = null
+
+    private val rawCache = ConcurrentHashMap<String, CachedM3u8>()
+    private val rawSegCache = object : LinkedHashMap<String, ByteArray>(8, 0.75f, true) {
+        override fun removeEldestEntry(e: MutableMap.MutableEntry<String, ByteArray>) = size > 12
+    }
+
+    private fun b64enc(s: String): String =
+        Base64.encodeToString(s.toByteArray(Charsets.UTF_8), Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING)
+
+    private fun b64dec(s: String): String? = runCatching {
+        String(Base64.decode(s, Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING), Charsets.UTF_8)
+    }.getOrNull()
+
+    /** 对外暴露：把任意 m3u8 地址包装成本地代理地址。 */
+    fun rawUrlFor(m3u8Url: String): String? {
+        val port = ensureStarted()
+        if (port <= 0) return null
+        return "http://127.0.0.1:$port/raw/" + b64enc(m3u8Url) + ".m3u8"
+    }
+
+    private fun serveRaw(path: String, out: OutputStream) {
+        val enc = path.removePrefix("/raw/").substringBefore('?').substringBeforeLast('.')
+        val realUrl = b64dec(enc)
+        if (realUrl.isNullOrBlank()) {
+            writeStatus(out, 400, "bad raw url")
+            return
+        }
+        // 清单缓存 5 秒：源站慢的时候，播放器 2~4 秒一次的刷新不该每次都打源站。
+        val cached = rawCache[realUrl]
+        if (cached != null && System.currentTimeMillis() - cached.at < 5_000L) {
+            writeBody(out, cached.text.toByteArray(Charsets.UTF_8), "application/vnd.apple.mpegurl")
+            return
+        }
+        val text = runCatching { fetchTextSmart(realUrl) }.getOrNull()
+        if (text.isNullOrBlank()) {
+            // 源站这一次没给：有旧清单就先用旧的顶着，播放器不至于立刻断
+            if (cached != null) {
+                writeBody(out, cached.text.toByteArray(Charsets.UTF_8), "application/vnd.apple.mpegurl")
+            } else {
+                writeStatus(out, 502, "raw playlist failed")
+            }
+            return
+        }
+        // 改写分片地址 → /rawseg/{b64}
+        val base = realUrl.substringBeforeLast('/') + "/"
+        val sb = StringBuilder()
+        val segs = ArrayList<String>(8)
+        for (line in text.lineSequence()) {
+            val s = line.trim()
+            if (s.isEmpty()) continue
+            if (s.startsWith("#")) {
+                sb.append(s).append('\n')
+            } else {
+                val abs = if (s.startsWith("http")) s else base + s.removePrefix("./")
+                segs.add(abs)
+                sb.append("/rawseg/").append(b64enc(abs)).append('\n')
+            }
+        }
+        val rewritten = sb.toString()
+        rawCache[realUrl] = CachedM3u8(rewritten, System.currentTimeMillis(), realUrl)
+        writeBody(out, rewritten.toByteArray(Charsets.UTF_8), "application/vnd.apple.mpegurl")
+        // ★ 预取前 2 个分片：源站慢，等播放器来要就晚了。
+        //   拿到清单时立刻并行拉，播放器请求时多半已经命中缓存。
+        prefetchRawSegments(segs.take(2))
+    }
+
+    private val prefetchPool = Executors.newFixedThreadPool(2)
+
+    private fun prefetchRawSegments(segs: List<String>) {
+        val todo = segs.filter { s -> synchronized(rawSegCache) { rawSegCache[s] } == null }
+        if (todo.isEmpty()) return
+        runCatching {
+            prefetchPool.execute {
+                todo.forEach { url ->
+                    runCatching {
+                        val bytes = fetchBytesSmart(url)
+                        synchronized(rawSegCache) { rawSegCache[url] = bytes }
+                        Log.i(TAG, "预取分片 " + bytes.size / 1024 + "KB")
+                    }
+                }
+            }
+        }
+    }
+
+    private fun serveRawSeg(path: String, out: OutputStream) {
+        val enc = path.removePrefix("/rawseg/").substringBefore('?')
+        val real = b64dec(enc)
+        if (real.isNullOrBlank()) {
+            writeStatus(out, 400, "bad raw seg")
+            return
+        }
+        synchronized(rawSegCache) { rawSegCache[real] }?.let { hit ->
+            writeBody(out, hit, "video/mp2t")
+            return
+        }
+        val bytes = runCatching { fetchBytesSmart(real) }.getOrNull()
+        if (bytes == null) {
+            writeStatus(out, 502, "raw segment failed")
+            return
+        }
+        synchronized(rawSegCache) { rawSegCache[real] = bytes }
+        writeBody(out, bytes, "video/mp2t")
     }
 
     private fun servePlaylist(path: String, out: OutputStream) {

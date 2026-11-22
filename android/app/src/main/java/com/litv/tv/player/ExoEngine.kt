@@ -318,7 +318,11 @@ class ExoEngine : PlayerEngine {
         //     电视 13 小时日志里 129 次重缓冲（每 87 秒一次）就是这么来的。
         //
         //   源类型必须并进 cfg：两种档位的 bufferMs 不同，播放器要按新参数重建。
-        val isLocalProxy = url.contains("127.0.0.1")
+        // 走本地代理的两种源要区分开：
+        //   /ch/  前面的内置源（央视频，窗口 36 秒，缓冲必须压在窗口内）
+        //   /raw/ 前面的自建源（窗口通常 60~100 秒，可以囤更深）
+        // 只看 127.0.0.1 会把自建源误判成内置源，用小缓冲去跑慢源 —— 反而更容易卡。
+        val isLocalProxy = url.contains("127.0.0.1") && !url.contains("/raw/")
         val effBufferMs = if (isLocalProxy) bufferMs else maxOf(bufferMs, 22_000)
         val cfg = "$decode|$effBufferMs|$exoEnableTunneling|${Av3aLoader.available(ctx)}|local=$isLocalProxy"
         val existing = player

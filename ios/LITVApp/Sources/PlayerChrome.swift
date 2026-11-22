@@ -48,17 +48,4 @@ extension PlayerView {
         }
         .buttonStyle(.plain)
     }
-
-    func chip(_ title: String, on: Bool, tap: @escaping () -> Void) -> some View {
-        Button(action: tap) {
-            Text(title)
-                .font(.caption)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 6)
-                .background(on ? Color.accentColor.opacity(0.25) : Color.white.opacity(0.08))
-                .foregroundColor(on ? .accentColor : .gray)
-                .clipShape(Capsule())
-        }
-        .buttonStyle(.plain)
-    }
 }

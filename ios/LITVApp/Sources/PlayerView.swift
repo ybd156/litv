@@ -48,7 +48,6 @@ struct PlayerView: View {
     @State private var dragStartBrightness: CGFloat?
     @State private var dragStartVolume: Float?
     @State private var streamId: Int64 = 0
-    @State private var streams: [TvStream] = []
     /// VLC 失败降级正在进行。VLCKit 一次失败可能连发两个状态回调
     /// （error + ended），不加锁会并发起两次降级请求、开两个 AVPlayer。
     @State private var fallbackInFlight = false
@@ -88,16 +87,12 @@ struct PlayerView: View {
     /// 是不是因为退到后台才暂停的（回来要接着播）。
     @State private var pausedByBackground = false
 
-    /// QoE：本次起播的起点 / 已经上报过 start 没有。
     @AppStorage("litv.aspect") private var aspectMode = "auto"
-
-    /// 播放页当前分组（nil = 全部）。与 Android 手机端的 chip 一致：
-    /// 切台时只在这个分组的频道里循环。
-    @State private var playGroup: String? = nil
 
     /// 时移（回看）地址。非空时 start() 直接播它，不再请求 /tv/play。
     @State private var timeshiftURL: URL?
 
+    /// QoE：本次起播的起点 / 已经上报过 start 没有。
     @State private var playStartedAt: Date?
     @State private var startReported = false
     @State private var forceFullscreen = false
@@ -475,21 +470,6 @@ struct PlayerView: View {
         return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }
 
-    /// 浮层里用的完整信息卡（横屏时用；竖屏已拆到画面上/下）。
-    private var osd: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            PlayerOSDHeader(active: active, timeshiftURL: timeshiftURL, techText: techText)
-            PlayerOSDDetails(timeshiftURL: timeshiftURL, programs: programs, routeText: routeText)
-        }
-        .padding(12)
-        // 与 Android 一致：**纯文字浮在画面上**，不加半透明卡片底和圆角。
-        // 之前这里是 .ultraThinMaterial + cornerRadius(10)，用户要求去掉。
-        // 顶部额外留 40pt：全屏时这个浮层紧贴屏幕顶端，会被 iPhone 的灵动岛/
-        // 圆角遮住（用户实测「没适配全面屏」就是指这个）。
-        .padding(.top, 40)
-        .padding(12)
-    }
-
     /// 播放控制条：上一台 / 播放暂停 / 下一台 / 静音。
     ///
     /// 之前只有 OSD 显示信息，没有任何操作控件——用户只能靠手势，
@@ -675,21 +655,6 @@ struct PlayerView: View {
         }
     }
 
-    /// 播放页分组 chip（与 Android 手机端一致）。
-    private var groupChips: some View {
-        let groups = Array(Set(session.channels.map { $0.group }.filter { !$0.isEmpty })).sorted()
-        return ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 8) {
-                chip("全部", on: playGroup == nil) { playGroup = nil }
-                ForEach(groups, id: \.self) { g in
-                    chip(g, on: playGroup == g) { playGroup = g }
-                }
-            }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 6)
-        }
-    }
-
     /// 从节目单某一档发起回看。
     ///
     /// 与 Android 的 `EpgActions.replay` 一致：服务端的时移接口是**按整台**给地址
@@ -716,12 +681,10 @@ struct PlayerView: View {
     }
 
     private func switchBy(_ delta: Int) {
-        // 只在当前分组内循环（未选分组 = 全部），与 Android 手机端一致
-        var list = session.channels
-        if let g = playGroup {
-            let inGroup = list.filter { $0.group == g }
-            if !inGroup.isEmpty { list = inGroup }
-        }
+        // 逐台切换：在当前全部频道里前后移动（与 Android 手机端一致）。
+        // 曾经有过「只在当前分组内循环」的分支，但播放页的分组选择器早已不可达、
+        // 那个分组状态从不被赋值，过滤从未生效，故连同该状态一并删除（见 git 历史）。
+        let list = session.channels
         guard !list.isEmpty else { return }
         let i = list.firstIndex(where: { $0.id == active.id }) ?? 0
         let n = ((i + delta) % list.count + list.count) % list.count
@@ -1053,15 +1016,5 @@ struct PlayerView: View {
         p.play()
         player = p
         loading = false
-    }
-
-    private func loadStreams() async {
-        streams = (try? await session.api.streams(channelId: active.id)) ?? []
-        // 简单轮换：每次点刷新切到下一条线路
-        if streams.count > 1 {
-            let idx = streams.firstIndex(where: { $0.id == streamId }) ?? 0
-            streamId = streams[(idx + 1) % streams.count].id
-        }
-        await start()
     }
 }

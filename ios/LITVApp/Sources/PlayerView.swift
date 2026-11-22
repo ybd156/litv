@@ -147,7 +147,7 @@ struct PlayerView: View {
         VStack(spacing: 0) {
             // 竖屏布局：频道名在上，16:9 画面在中间，节目信息在下。
             if !isFullscreen {
-                osdHeader
+                PlayerOSDHeader(active: active, timeshiftURL: timeshiftURL, techText: techText)
                     .padding(.horizontal, 16)
                     .padding(.top, 8)
                     .padding(.bottom, 10)
@@ -157,11 +157,13 @@ struct PlayerView: View {
             videoArea
 
             if !isFullscreen {
-                osdDetails
+                PlayerOSDDetails(timeshiftURL: timeshiftURL, programs: programs, routeText: routeText)
                     .padding(.horizontal, 16)
                     .padding(.top, 10)
                 // 节目单常驻在视频下方（与 Android 手机端一致：不再是弹层）
-                liveEpgPanel
+                PlayerLiveEpgPanel(epgDay: epgDay, epgTip: epgTip, programs: programs,
+                                   onLoadEpg: { await loadEpg(day: $0) },
+                                   onReplay: { await replayProgram($0) })
             }
         }
         .background(Color.black.ignoresSafeArea())
@@ -201,8 +203,19 @@ struct PlayerView: View {
         //   现在改为放进控制条的「更多」菜单（见 controls），不依赖导航容器，
         //   竖屏与全屏都能点到；`.navigationTitle` 留着——将来若给 PlayTab 包上
         //   NavigationView，它会自然生效，不冲突。
-        .sheet(isPresented: $showEpg) { epgSheet }
-        .sheet(isPresented: $showCast) { castSheet }
+        .sheet(isPresented: $showEpg) {
+            PlayerEpgSheet(active: active, epgDay: epgDay, epgTip: epgTip,
+                           programs: programs, showEpg: $showEpg,
+                           onLoadEpg: { await loadEpg(day: $0) },
+                           onAddReminder: { await addReminder($0) },
+                           onAddRecording: { await addRecording($0) })
+        }
+        .sheet(isPresented: $showCast) {
+            PlayerCastSheet(castLoading: castLoading, renderers: renderers,
+                            castTip: castTip, showCast: $showCast,
+                            onReload: { await loadRenderers() },
+                            onCast: { await doCast($0) })
+        }
         .onAppear {
             // 播放中屏幕常亮：不设的话看直播十几秒就黑屏，用户要不停点屏幕。
             UIApplication.shared.isIdleTimerDisabled = true
@@ -462,72 +475,11 @@ struct PlayerView: View {
         return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }
 
-    private var osdHeader: some View {
-        HStack(spacing: 8) {
-            Text(active.name).font(.headline).foregroundColor(.white)
-            // 与 Android 一致：频道名后面跟「● 直播」角标
-            Text(timeshiftURL == nil ? "● 直播" : "◀ 回放")
-                .font(.system(size: 10, weight: .semibold))
-                .foregroundColor(timeshiftURL == nil ? .red : .orange)
-                .padding(.horizontal, 6)
-                .padding(.vertical, 2)
-                .background(Capsule().fill(Color.black.opacity(0.45)))
-            Spacer()
-            // 与 Android 一致：右上角显示**引擎/解码**（Android 是「系统硬解 (Media3)」），
-            // 不再是分组名 —— 分组名在频道页已经有了，播放时更想知道走的哪条链路。
-            Text(techText ?? active.group)
-                .font(.caption)
-                .foregroundColor(.gray)
-        }
-    }
-
-    /// 节目信息：当前节目 + 进度 + 下一档 + 播放链路。竖屏时放在画面**下方**。
-    private var osdDetails: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            // 直播 / 回放角标 + 技术信息（分辨率 · 引擎）。
-            // 安卓手机端有「● 直播 / ◀ 回放」角标，iOS 之前完全没有——
-            // 用户点了回看之后看不出自己在看回放还是直播。
-            HStack(spacing: 8) {
-                Text(timeshiftURL == nil ? "● 直播" : "◀ 回放")
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundColor(timeshiftURL == nil ? .red : .orange)
-                // techText（分辨率/引擎）已在顶部 osdHeader 显示，这里不重复
-                Spacer(minLength: 0)
-            }
-            if let now = programs.first(where: { $0.isNow }) {
-                Text("\(now.timeText) \(now.title)")
-                    .font(.caption).foregroundColor(.gray).lineLimit(1)
-                // 当前节目进度：和 Android 端一致，一眼看出还剩多久
-                if now.endAt > now.startAt {
-                    let nowTS = Int64(Date().timeIntervalSince1970)
-                    let total = Double(now.endAt - now.startAt)
-                    let done = Double(max(0, min(now.endAt - now.startAt, nowTS - now.startAt)))
-                    ProgressView(value: done, total: total)
-                        .tint(Color(red: 0.176, green: 0.831, blue: 0.749))
-                }
-            }
-            if programs.isEmpty {
-                // 空着什么都不显示，用户会以为"坏了"。
-                // 明确告诉他大概率是没关联 EPG，好去管理台处理。
-                Text("没有节目单（该频道可能未关联 EPG）")
-                    .font(.caption2).foregroundColor(.gray.opacity(0.8))
-            }
-            // 下一档节目：Android 的 OSD 有这一行
-            if let next = programs.first(where: { $0.startAt > Int64(Date().timeIntervalSince1970) }) {
-                Text("下一档 \(next.timeText) \(next.title)")
-                    .font(.caption2).foregroundColor(.gray.opacity(0.85)).lineLimit(1)
-            }
-            // 播放链路 + 实际用的 UA：排查源站校验时一眼能看到
-            Text(routeText)
-                .font(.system(size: 10)).foregroundColor(.gray.opacity(0.8)).lineLimit(1)
-        }
-    }
-
     /// 浮层里用的完整信息卡（横屏时用；竖屏已拆到画面上/下）。
     private var osd: some View {
         VStack(alignment: .leading, spacing: 6) {
-            osdHeader
-            osdDetails
+            PlayerOSDHeader(active: active, timeshiftURL: timeshiftURL, techText: techText)
+            PlayerOSDDetails(timeshiftURL: timeshiftURL, programs: programs, routeText: routeText)
         }
         .padding(12)
         // 与 Android 一致：**纯文字浮在画面上**，不加半透明卡片底和圆角。
@@ -609,21 +561,6 @@ struct PlayerView: View {
         }
     }
 
-    /// 底部小胶囊（比例 / 内核 / 解码），与 Android 的 `PhoneCtlPill` 同款。
-    private func pillButton(_ label: String, _ action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Text(label)
-                .font(.system(size: 11))
-                .foregroundColor(.white)
-                .lineLimit(1)
-                .fixedSize(horizontal: true, vertical: false)  // 竖屏窄，不能让「比例 自动」换行
-                .padding(.horizontal, 9)
-                .frame(height: 30)
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-    }
-
     /// 画面比例的中文标签（与 Android 的 `比例 自动` 一致）
     private var aspectLabel: String {
         switch aspectMode {
@@ -642,48 +579,6 @@ struct PlayerView: View {
     }
 
     // ---------------------------------------------------------------- 投屏
-
-    private var castSheet: some View {
-        NavigationView {
-            List {
-                if castLoading {
-                    Text("正在搜索可投屏设备…").foregroundColor(.gray)
-                } else if renderers.isEmpty {
-                    Text("没找到可投屏的设备\n确认电视/盒子已开机，且和 NAS 在同一个局域网")
-                        .foregroundColor(.gray)
-                        .font(.system(size: 13))
-                }
-                ForEach(renderers) { r in
-                    Button {
-                        Task { await doCast(r) }
-                    } label: {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(r.name).foregroundColor(.primary)
-                            if !r.model.isEmpty {
-                                Text(r.model).font(.caption).foregroundColor(.gray)
-                            }
-                        }
-                    }
-                }
-                if let tip = castTip {
-                    Text(tip).font(.caption).foregroundColor(.orange)
-                }
-            }
-            .navigationTitle("投屏到")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
-                    Button {
-                        Task { await loadRenderers() }
-                    } label: { Image(systemName: "arrow.clockwise") }
-                }
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("关闭") { showCast = false }
-                }
-            }
-        }
-        .navigationViewStyle(.stack)
-    }
 
     private func loadRenderers() async {
         castLoading = true
@@ -708,31 +603,6 @@ struct PlayerView: View {
         } catch {
             castTip = "投屏失败：\(error.localizedDescription)"
         }
-    }
-
-    /// 图标 + 文字两行。
-    ///
-    /// 2026-11-19：**用 SF Symbols，不用 Unicode 符号**。
-    /// `⏮ ⏸ ⏭ ⇪` 这些在 iOS 上会被渲染成 **emoji**（自带蓝色方块底），
-    /// 看起来就像给按钮加了圆底——这正是用户圈出来的「有颜色」。
-    /// SF Symbols 是单色矢量，`.foregroundColor(.white)` 后就是纯白。
-    private func ctlButton(_ symbol: String, _ label: String, size: CGFloat,
-                           _ action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            VStack(spacing: 2) {
-                // 必须显式给白色：Image 不给颜色会继承 App 的 accentColor（这里是绿色），
-                // 用户实测指出「图标怎么是绿的」。
-                Image(systemName: symbol)
-                    .font(.system(size: size))
-                    .foregroundColor(.white)
-                Text(label).font(.system(size: 10)).foregroundColor(.white)
-            }
-            .frame(minWidth: 46, minHeight: 44)
-            // 命中区域必须铺满整块：否则点按钮边缘会穿透到底层「点画面 → 隐藏控件」，
-            // 表现就是「点那些按钮还点不了，一点就隐藏了」（用户实测）。
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
     }
 
     // ---------------------------------------------------------------- 内核 / 解码
@@ -820,19 +690,6 @@ struct PlayerView: View {
         }
     }
 
-    private func chip(_ title: String, on: Bool, tap: @escaping () -> Void) -> some View {
-        Button(action: tap) {
-            Text(title)
-                .font(.caption)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 6)
-                .background(on ? Color.accentColor.opacity(0.25) : Color.white.opacity(0.08))
-                .foregroundColor(on ? .accentColor : .gray)
-                .clipShape(Capsule())
-        }
-        .buttonStyle(.plain)
-    }
-
     /// 从节目单某一档发起回看。
     ///
     /// 与 Android 的 `EpgActions.replay` 一致：服务端的时移接口是**按整台**给地址
@@ -878,148 +735,6 @@ struct PlayerView: View {
         switched = list[n]
     }
 
-    /// 常驻节目单：视频下方直接铺开，按天切换。
-    ///
-    /// 与 Android 手机端对齐——那边节目单是常驻面板，不是按钮弹出来的。
-    /// 全屏时仍然用 sheet（画面优先）。
-    private var liveEpgPanel: some View {
-        VStack(spacing: 0) {
-            // 与 Android 一致：**6 天日期行**（今天 ±3），点哪个看哪天。
-            // 之前只有「< 今天 >」左右箭头，看不到有哪些日期可选。
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 18) {
-                    ForEach([-3, -2, -1, 0, 1, 2], id: \.self) { d in
-                        Button { Task { await loadEpg(day: d) } } label: {
-                            Text(dayLabel(d))
-                                .font(.system(size: 14, weight: epgDay == d ? .semibold : .regular))
-                                .foregroundColor(epgDay == d
-                                                 ? Color(red: 0.176, green: 0.831, blue: 0.749)
-                                                 : .gray)
-                        }
-                    }
-                }
-                .padding(.horizontal, 20)
-            }
-            .padding(.vertical, 8)
-
-            if let tip = epgTip {
-                Text(tip)
-                    .font(.caption)
-                    .foregroundColor(.orange)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 16)
-                    .padding(.bottom, 4)
-            }
-
-            if programs.isEmpty {
-                Text("暂无节目单")
-                    .font(.caption)
-                    .foregroundColor(.gray)
-                    .frame(maxWidth: .infinity, alignment: .center)
-                    .padding(.vertical, 24)
-            } else {
-                ScrollView {
-                    LazyVStack(spacing: 0) {
-                        ForEach(programs) { p in
-                            HStack {
-                                Text(p.timeText)
-                                    .foregroundColor(.gray)
-                                    .font(.caption)
-                                    .frame(width: 44, alignment: .leading)
-                                Text(p.title)
-                                    .foregroundColor(p.isNow ? .green : .primary)
-                                Spacer()
-                                // 已经播完的节目给一个「回看」入口。
-                                // 安卓从节目单行就能直接回看，iOS 之前只能点顶栏整台时移。
-                                if p.endAt <= Int64(Date().timeIntervalSince1970) {
-                                    Button {
-                                        Task { await replayProgram(p) }
-                                    } label: {
-                                        Text("回看")
-                                            .font(.caption2)
-                                            .foregroundColor(Color(red: 0.176, green: 0.831, blue: 0.749))
-                                    }
-                                    .buttonStyle(.plain)
-                                }
-                            }
-                            .padding(.horizontal, 16)
-                            .padding(.vertical, 8)
-                        }
-                    }
-                }
-            }
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-    }
-
-    /// 节目单弹层：支持按天切换，长按节目可以设开播提醒 / 预约录制。
-    private var epgSheet: some View {
-        NavigationView {
-            VStack(spacing: 0) {
-                // 按天切换。IPTV 的节目单一般只给前后几天，
-                // 所以这里不限范围，拉不到就是空列表。
-                // 与 Android 一致：6 天日期行
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 18) {
-                        ForEach([-3, -2, -1, 0, 1, 2], id: \.self) { d in
-                            Button { Task { await loadEpg(day: d) } } label: {
-                                Text(dayLabel(d))
-                                    .font(.system(size: 14, weight: epgDay == d ? .semibold : .regular))
-                                    .foregroundColor(epgDay == d
-                                                     ? Color(red: 0.176, green: 0.831, blue: 0.749)
-                                                     : .gray)
-                            }
-                        }
-                    }
-                    .padding(.horizontal, 20)
-                }
-                .padding(.vertical, 10)
-
-                if let tip = epgTip {
-                    Text(tip)
-                        .font(.caption)
-                        .foregroundColor(.orange)
-                        .padding(.horizontal, 20)
-                        .padding(.bottom, 6)
-                }
-
-                List(programs) { p in
-                    HStack {
-                        Text(p.timeText)
-                            .foregroundColor(.gray)
-                            .font(.caption)
-                            .frame(width: 44, alignment: .leading)
-                        Text(p.title)
-                            .foregroundColor(p.isNow ? .green : .primary)
-                        Spacer()
-                    }
-                    .contentShape(Rectangle())
-                    // 长按出菜单：只有还没播完的节目才给提醒/录制
-                    .contextMenu {
-                        if p.endAt > Int64(Date().timeIntervalSince1970) {
-                            Button {
-                                Task { await addReminder(p) }
-                            } label: { Label("提醒我", systemImage: "bell") }
-
-                            Button {
-                                Task { await addRecording(p) }
-                            } label: { Label("预约录制", systemImage: "record.circle") }
-                        }
-                    }
-                }
-                .listStyle(.plain)
-            }
-            .navigationTitle(active.name)
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("关闭") { showEpg = false }
-                }
-            }
-        }
-        .navigationViewStyle(.stack)
-    }
-
     /// 上下滑动：左半边调屏幕亮度，右半边调播放器音量。
     ///
     /// 为什么用 VLC 的音量而不是系统音量：系统音量要 MPVolumeView 那套私有手法，
@@ -1041,15 +756,6 @@ struct PlayerView: View {
             let vol = min(200, max(0, (dragStartVolume ?? 100) + Float(delta) * 200))
             vlc.setVolume(vol)
             gestureTip = "音量 \(Int(vol))%"
-        }
-    }
-
-    private func dayLabel(_ d: Int) -> String {
-        switch d {
-        case 0: return "今天"
-        case -1: return "昨天"
-        case 1: return "明天"
-        default: return d > 0 ? "\(d) 天后" : "\(-d) 天前"
         }
     }
 
@@ -1358,52 +1064,4 @@ struct PlayerView: View {
         }
         await start()
     }
-}
-
-/// AVPlayer 的失败观察器。
-///
-/// 为什么要单独一个引用类型：SwiftUI 的 View 是 struct，KVO token 与
-/// NotificationCenter 的观察必须**成对**摘掉，放在 @State 里的临时值很容易漏。
-/// 这里由引用对象持有，stop() 与 deinit 都会摘干净（重复调用是安全的）。
-///
-/// 覆盖两种真实故障：
-///   1. item.status == .failed —— 源站 403/404、HLS 播放列表解析失败；
-///   2. AVPlayerItemFailedToPlayToEndTime —— 直播中途连接断开。
-final class AVPlayerWatcher {
-
-    private var statusObs: NSKeyValueObservation?
-    private var endObs: NSObjectProtocol?
-
-    /// 开始观察。onFail 一律在主队列回调。
-    func watch(_ player: AVPlayer, onFail: @escaping (String) -> Void) {
-        stop()
-        guard let item = player.currentItem else { return }
-
-        statusObs = item.observe(\.status, options: [.new, .initial]) { observed, _ in
-            guard observed.status == .failed else { return }
-            let why = observed.error?.localizedDescription ?? "未知错误"
-            DispatchQueue.main.async { onFail("播放失败：\(why)") }
-        }
-
-        endObs = NotificationCenter.default.addObserver(
-            forName: .AVPlayerItemFailedToPlayToEndTime,
-            object: item,
-            queue: .main
-        ) { note in
-            let err = note.userInfo?[AVPlayerItemFailedToPlayToEndTimeErrorKey] as? Error
-            onFail("播放中断：\(err?.localizedDescription ?? "连接已断开")")
-        }
-    }
-
-    /// 摘掉所有观察（幂等）。必须成对调用，否则 item 释放后再回调会崩。
-    func stop() {
-        statusObs?.invalidate()
-        statusObs = nil
-        if let obs = endObs {
-            NotificationCenter.default.removeObserver(obs)
-            endObs = nil
-        }
-    }
-
-    deinit { stop() }
 }

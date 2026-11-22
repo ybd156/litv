@@ -32,6 +32,9 @@ import java.util.concurrent.Executors
 object LocalHlsProxy {
 
     private const val TAG = "HlsProxy"
+
+    /** 央视 CDN 认这个 UA（和直播接口一致）。 */
+    private const val UA_PROXY = "qqlive"
     /**
      * playlist 缓存时长。
      *
@@ -57,6 +60,27 @@ object LocalHlsProxy {
     private val cache = ConcurrentHashMap<Long, CachedM3u8>()
     private val lineCache = ConcurrentHashMap<Long, CachedLine>()
     private val pool = Executors.newFixedThreadPool(6)
+
+    /**
+     * 全代理共用**一个** OkHttpClient —— 这是分片流畅的前提。
+     *
+     * 原来每个请求都 `URL(url).openConnection()` 新建 HttpURLConnection，
+     * 等于每个 2~3MB 的分片都要重做一次 TCP + TLS 握手。手机 CPU 快看不出来，
+     * 电视（Amlogi 盒子 + 移动宽带）上光握手就吃掉大半时间，缓冲一欠就重缓冲。
+     *
+     * 依据：ysp-live 的文档把「连接复用」写成了分片流畅的前提（YSP_KEEPALIVE）。
+     * OkHttp 自带连接池 + keep-alive，复用同一个 client 就能做到。
+     */
+    private val httpClient: okhttp3.OkHttpClient by lazy {
+        okhttp3.OkHttpClient.Builder()
+            .protocols(listOf(okhttp3.Protocol.HTTP_1_1))
+            .connectTimeout(6, java.util.concurrent.TimeUnit.SECONDS)
+            .readTimeout(20, java.util.concurrent.TimeUnit.SECONDS)
+            .retryOnConnectionFailure(true)
+            // 连接池：默认 5 个空闲连接 / 5 分钟，这里放宽一点，够 27 个台 + 主备线路
+            .connectionPool(okhttp3.ConnectionPool(8, 5, java.util.concurrent.TimeUnit.MINUTES))
+            .build()
+    }
 
     /** Application context：Cronet 建 Engine 需要。 */
     @Volatile private var appCtx: android.content.Context? = null
@@ -121,6 +145,22 @@ object LocalHlsProxy {
     private val replayCursors = ConcurrentHashMap<String, ReplayCursor>()
 
     /**
+     * 该换线路了吗。
+     *
+     * 央视频一次返回两条线路（`playurl` + `backurl_list[0]`）。之前永远只用第一条，
+     * 一旦这条线在某个出口 IP 上被 CDN 拒（分片 403），重新取流拿回来的还是同一条线
+     * 的分片地址，于是 403 → 502 → 播放器重试 5 次 → **黑屏**。
+     * 真机日志里这种「IO_BAD_HTTP 502」出现了 112 次，全部集中在播内置源的时段。
+     *
+     * 这里在分片 403 时置位，下次取流就换下一条线路试。
+     * 同一时刻只播一个台，所以一个全局标记够用。
+     */
+    @Volatile private var needRotateLine = false
+
+    /** 当前用第几条线路（0 起）。 */
+    @Volatile private var lineIndex = 0
+
+    /**
      * 最近几个分片的字节缓存（LRU）。
      *
      * 为什么需要：分片 URL 带 `svrtime` 签名、时效很短。而 playurl 每 15 秒换一次，
@@ -132,7 +172,7 @@ object LocalHlsProxy {
      */
     private val segCache = object : LinkedHashMap<String, ByteArray>(4, 0.75f, true) {
         override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, ByteArray>): Boolean =
-            size > 6
+            size > 8
     }
 
     /** /rp/{id}/{start}/{end}.m3u8 —— 代取回看 playlist 并改写分片地址。 */
@@ -273,7 +313,23 @@ object LocalHlsProxy {
         if (realUrl.isNullOrBlank()) {
             for ((i, wait) in longArrayOf(0L, 300L, 700L, 1500L).withIndex()) {
                 if (wait > 0) Thread.sleep(wait)
-                realUrl = runCatching { YspClient.firstLine(ch) }.getOrNull()
+                realUrl = runCatching {
+                    val list = YspClient.lines(ch)
+                    if (list.isEmpty()) {
+                        null
+                    } else {
+                        // 上一条线路刚 403 过就换下一条；否则用当前这条
+                        if (needRotateLine) {
+                            lineIndex = (lineIndex + 1) % list.size
+                            needRotateLine = false
+                            if (list.size > 1) {
+                                Log.i(TAG, "分片 403 后切线路 → 第 ${lineIndex + 1}/${list.size} 条")
+                                PlayLog.w(TAG, "切线路 → 第 ${lineIndex + 1}/${list.size} 条")
+                            }
+                        }
+                        list[lineIndex.coerceIn(0, list.size - 1)].url
+                    }
+                }.getOrNull()
                 if (!realUrl.isNullOrBlank()) break
                 Log.w(TAG, "取流第 ${i + 1} 次失败，继续重试")
             }
@@ -380,20 +436,23 @@ object LocalHlsProxy {
             //   （缓存很小，清全部的代价远低于精确追踪「这个分片属于哪个频道」）
             val msg = e.message ?: ""
             if (msg.contains("403")) {
-                // ★ 关键：过期的是**线路（playurl）**，不是 playlist。
-                //   playlist 的 TTL 只有 4 秒，通常早就空了 —— 真机上日志是
-                //   「已清 0 个 playlist 缓存」然后继续 403，因为下次仍然拿
-                //   同一个旧 playurl 去取流，取回来的还是同一批过期分片地址。
-                //   所以这里必须把 lineCache 一起清掉，强制重新 ticket+取流。
+                // 403 时清 playlist + 线路，强制重新 ticket + 取流。
+                //
+                // 曾经试过「什么都不清，等 playlist 自然轮换」——电视上更糟：
+                // 90 秒内 502 报 76 次、403 报 54 次，连 VLC 都判「直播流结束」。
+                // 说明这个 CDN 在电视那条链路上，旧 playurl 取回来的分片地址
+                // 基本全是打不开的，必须换线路才行。
+                //
+                // segCache 仍然保留：它兜的是「同一个分片之前拉成功过」的情况。
                 val n = cache.size
                 cache.clear()
-                val m = lineCache.size
                 lineCache.clear()
-                // ★ 千万别清 segCache：403 说明「这个地址现在打不开了」，
-                //   但之前已经拉到的字节仍在缓存里，播放器重试时正好能从这里拿到。
-                //   第一版把缓存一起清了，等于把唯一的救命稻草扔掉 —— 403 之后还是 403。
-                Log.i(TAG, "分片 403（地址已过期），清 playlist=$n、线路=$m，分片缓存保留")
-                PlayLog.w(TAG, "分片 403，清 playlist=$n 条")
+                // ★ 关键：置位，下次取流换另一条线路。
+                //   只清缓存不换线的话，重新取流拿回来还是同一条线，
+                //   分片地址照样 403 → 播放器重试 5 次 → 黑屏（真机 112 次）。
+                needRotateLine = true
+                Log.i(TAG, "分片 403（清 playlist=$n、线路；下次换线路）")
+                PlayLog.w(TAG, "分片 403，下次换线路")
             }
             writeStatus(out, 502, "segment failed: " + (msg.ifBlank { e.javaClass.simpleName }))
             return
@@ -452,17 +511,9 @@ object LocalHlsProxy {
 
     /** 用 OkHttp 取字节。强制 HTTP/1.1（回看 CDN 在 h2 上会 RST）。 */
     private fun okHttpFetch(url: String): ByteArray {
-        val client = okhttp3.OkHttpClient.Builder()
-            .protocols(listOf(okhttp3.Protocol.HTTP_1_1))
-            .connectTimeout(15, java.util.concurrent.TimeUnit.SECONDS)
-            .readTimeout(60, java.util.concurrent.TimeUnit.SECONDS)
-            .retryOnConnectionFailure(true)
-            .build()
-        val req = okhttp3.Request.Builder()
-            .url(url)
-            .header("User-Agent", "qqlive")
-            .build()
-        client.newCall(req).execute().use { resp ->
+        // 同样走共享 client（回看 CDN 对 TLS 栈敏感，必须 OkHttp）
+        val req = okhttp3.Request.Builder().url(url).header("User-Agent", UA_PROXY).build()
+        httpClient.newCall(req).execute().use { resp ->
             if (!resp.isSuccessful) throw java.io.IOException("OkHttp HTTP " + resp.code)
             return resp.body?.bytes() ?: throw java.io.IOException("OkHttp 空响应")
         }
@@ -473,6 +524,16 @@ object LocalHlsProxy {
     }
 
     private fun fetchBytes(url: String): ByteArray {
+        // 走共享 OkHttpClient，复用 TCP/TLS 连接
+        val req = okhttp3.Request.Builder().url(url).header("User-Agent", UA_PROXY).build()
+        httpClient.newCall(req).execute().use { resp ->
+            if (!resp.isSuccessful) throw java.io.IOException("HTTP " + resp.code)
+            return resp.body?.bytes() ?: throw java.io.IOException("空响应")
+        }
+    }
+
+    @Suppress("unused")
+    private fun fetchBytesLegacy(url: String): ByteArray {
         val c = open(url, 12000)
         return try {
             if (c.responseCode !in 200..299) throw java.io.IOException("HTTP ${c.responseCode}")

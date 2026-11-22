@@ -75,9 +75,12 @@ object LocalHlsProxy {
         okhttp3.OkHttpClient.Builder()
             .protocols(listOf(okhttp3.Protocol.HTTP_1_1))
             .connectTimeout(6, java.util.concurrent.TimeUnit.SECONDS)
-            // 源站实测 m3u8 中位 3.1 秒、最慢 10 秒；分片更大。
-            // 20 秒会在慢源上误判超时（线上 ERROR_CODE_IO_UNSPECIFIED 的来源之一）。
-            .readTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
+            // ★ 2026-11-22 回退：30 秒是错的。
+            //   起播总预算只有 36 秒（PlayerManager 的 START_BUDGET_MS），
+            //   一次请求占掉 30 秒，就等于只给了一次机会、而且必然超预算 ——
+            //   真机实测「起播总预算 36000ms 用尽，放弃」连出两次，完全起不来。
+            //   宁可 20 秒超时让播放器早点重试，也不要一次耗死整个预算。
+            .readTimeout(20, java.util.concurrent.TimeUnit.SECONDS)
             .retryOnConnectionFailure(true)
             // 连接池：默认 5 个空闲连接 / 5 分钟，这里放宽一点，够 27 个台 + 主备线路
             .connectionPool(okhttp3.ConnectionPool(8, 5, java.util.concurrent.TimeUnit.MINUTES))
@@ -364,7 +367,10 @@ object LocalHlsProxy {
             writeBody(out, cached.text.toByteArray(Charsets.UTF_8), "application/vnd.apple.mpegurl")
             return
         }
-        val text = runCatching { fetchTextSmart(realUrl) }.getOrNull()
+        // ★ 超时必须给足：实测源站拉一个 1~2KB 的 m3u8 **中位 3.1 秒、p90 4.5 秒、最慢 10 秒**，
+        //   而 open() 的默认超时是 3 秒（那是为内置源的 2KB 清单定的）。
+        //   用默认值的结果就是真机日志里成片的「加载失败 502，第 1/5…第 5/5 次重试」。
+        val text = runCatching { fetchText(realUrl, reqUa, timeoutMs = 10_000) }.getOrNull()
         if (text.isNullOrBlank()) {
             // 源站这一次没给：有旧清单就先用旧的顶着，播放器不至于立刻断
             if (cached != null) {
@@ -428,9 +434,9 @@ object LocalHlsProxy {
         }
         val t0 = System.currentTimeMillis()
         val bytes = try {
-            fetchBytesSmart(real)
+            fetchBytes(real, reqUa)
         } catch (e: Throwable) {
-            // ★ 之前这里静默返回 502，线上出现 ERROR_CODE_IO_UNSPECIFIED 时完全查不到原因
+            // ★ 之前这里静默返回 502，线上出现 ERROR_CODE_IO_UNEXPECified 时完全查不到原因
             //   （不是 403，所以旧日志一个字都没有）。把异常类别和耗时落盘。
             val cost = System.currentTimeMillis() - t0
             Log.w(TAG, "自建源分片失败（${cost}ms）：${e.javaClass.simpleName}: ${e.message}")
@@ -642,12 +648,12 @@ object LocalHlsProxy {
 
     // ---------------------------------------------------------------- HTTP
 
-    private fun open(url: String, timeoutMs: Int = 3000): HttpURLConnection {
+    private fun open(url: String, timeoutMs: Int = 3000, ua: String = UA_PROXY): HttpURLConnection {
         val c = URL(url).openConnection() as HttpURLConnection
         c.connectTimeout = timeoutMs
         c.readTimeout = timeoutMs
         c.instanceFollowRedirects = true
-        c.setRequestProperty("User-Agent", "qqlive")
+        c.setRequestProperty("User-Agent", ua)
         // 回看的 CDN（tlivecloud-playback-cdn）会主动 `Connection reset`，
         // 加上这两条让它走最朴素的一问一答：不复用连接、不要压缩。
         c.setRequestProperty("Connection", "close")
@@ -655,8 +661,8 @@ object LocalHlsProxy {
         return c
     }
 
-    private fun fetchText(url: String): String {
-        val c = open(url)
+    private fun fetchText(url: String, ua: String = UA_PROXY, timeoutMs: Int = 3000): String {
+        val c = open(url, timeoutMs, ua)
         return try {
             if (c.responseCode !in 200..299) throw java.io.IOException("HTTP ${c.responseCode}")
             c.inputStream.readBytes().toString(Charsets.UTF_8)
@@ -698,13 +704,15 @@ object LocalHlsProxy {
         return fetchBytesSmart(url).toString(Charsets.UTF_8)
     }
 
-    private fun fetchBytes(url: String): ByteArray {
+    private fun fetchBytes(url: String, ua: String = UA_PROXY): ByteArray {
         // 走共享 OkHttpClient，复用 TCP/TLS 连接。
-        // UA 用播放器透传过来的（自建源常按 UA 区分），没有则回退 qqlive。
+        //
+        // ★ ua 必须**按调用方传入**，不能读全局 reqUa：
+        //   全局字段是 /raw/ 请求时写的，会污染内置源和回看 —— 上一版就是这么回归的
+        //   （自建源的 UA 被带到央视频请求上，两个源都起不来）。
         val req = okhttp3.Request.Builder()
             .url(url)
-            .header("User-Agent", reqUa.ifBlank { UA_PROXY })
-            .apply { reqReferer?.let { header("Referer", it) } }
+            .header("User-Agent", ua.ifBlank { UA_PROXY })
             .build()
         httpClient.newCall(req).execute().use { resp ->
             if (!resp.isSuccessful) throw java.io.IOException("HTTP " + resp.code)

@@ -81,6 +81,7 @@ class VlcEngine : PlayerEngine {
             val idle = if (lastTimeEventAt > 0) now - lastTimeEventAt else 0
             if (lastTimeEventAt > 0 && idle > 12_000) {
                 Log.w(TAG, "VLC 12 秒没送帧（idle=${idle}ms），轻推一次")
+                com.litv.tv.data.PlayLog.w(TAG, "VLC 12 秒没送帧，轻推 pause/play（idle=${idle}ms）")
                 // 必须走 VlcOps：看门狗跑在主线程，直接 pause/play 会和 release 抢 libvlc 的锁
                 VlcOps.exec.execute { runCatching { p.pause(); p.play() } }
                 if (nudgedOnce) {
@@ -970,7 +971,18 @@ class VlcEngine : PlayerEngine {
             )
         }
         return EngineStats(
-            positionMs = runCatching { player?.time ?: -1L }.getOrDefault(-1L),
+            // ★ 2026-11-22：故意返回 -1（= 本内核拿不到可靠播放位置）。
+            //
+            // 真机证据：VLC 连播 104 分钟，**`VLC 停止送帧` 一次都没出现**
+            //（说明画面从未停），却被 PlayerManager 的位置看门狗判了 2 次卡死并重启。
+            // 原因：libVLC 播 HLS 直播时 `player.time` 经常不前进/返回 0，
+            // 而看门狗判据是「位置 16 秒不动」——画面在动、位置不动，必然误判。
+            //
+            // VLC 自己有一套更可靠的检测：lastTimeEventAt 来自真实的 TimeChanged 事件，
+            // 12 秒收不到就轻推 pause/play，推过还不行就 PlayLog「VLC 停止送帧」+ 上报错误。
+            // 返回 -1 会让 PlayerManager 跳过位置判定（见其 `pos < 0 && lastPosMs < 0` 分支），
+            // 各用各自可靠的指标，不再互相干扰。
+            positionMs = -1L,
             width = videoW,
             height = videoH,
             videoCodec = vCodec,

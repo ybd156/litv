@@ -116,9 +116,9 @@ func (a *API) passwordLogin(w http.ResponseWriter, r *http.Request) {
 		fail(w, http.StatusBadRequest, 1001, "参数错误：password 最多 256 bytes")
 		return
 	}
-	if !auth.PasswordMatches(password, a.cfg.Auth.AdminPassword) {
+	if !auth.PasswordMatches(password, a.conf().Auth.AdminPassword) {
 		reason := store.AuditCredentials
-		if a.cfg.Auth.AdminPassword == "" {
+		if a.conf().Auth.AdminPassword == "" {
 			reason = store.AuditDisabled
 		}
 		a.auditAuth(r.Context(), store.AuthLoginFailure, reason, 0)
@@ -132,7 +132,7 @@ func (a *API) passwordLogin(w http.ResponseWriter, r *http.Request) {
 		fail(w, http.StatusInternalServerError, 5001, "管理员登录暂不可用")
 		return
 	}
-	hours, cap := a.cfg.Auth.AdminTokenHours, a.cfg.Auth.AdminMaxSessions
+	hours, cap := a.conf().Auth.AdminTokenHours, a.conf().Auth.AdminMaxSessions
 	// Default also protects embedders that construct Config without Load.
 	// Explicit out-of-range values fail closed in Store, never create long TTLs.
 	if hours == 0 {

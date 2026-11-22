@@ -75,7 +75,7 @@ func (a *API) refreshOneEPGSource(ctx context.Context, src store.EPGSource) EPGR
 		return res
 	}
 
-	parsed, perr := epg.Parse(strings.NewReader(string(parse.ToUTF8(body))), a.cfg.EPG.MaxProgrammes)
+	parsed, perr := epg.Parse(strings.NewReader(string(parse.ToUTF8(body))), a.conf().EPG.MaxProgrammes)
 	if perr != nil && (parsed == nil || len(parsed.Programmes) == 0) {
 		res.Error = perr.Error()
 		res.ElapsedMs = time.Since(start).Milliseconds()
@@ -134,8 +134,8 @@ func (a *API) fetchEPGBody(ctx context.Context, src store.EPGSource) ([]byte, er
 		if err != nil {
 			return nil, fmt.Errorf("读取本地 XMLTV 失败: %w", err)
 		}
-		if max := a.cfg.EPG.MaxBytes(); max > 0 && int64(len(b)) > max {
-			return nil, fmt.Errorf("文件超过上限 %d MB", a.cfg.EPG.MaxBytesMB)
+		if max := a.conf().EPG.MaxBytes(); max > 0 && int64(len(b)) > max {
+			return nil, fmt.Errorf("文件超过上限 %d MB", a.conf().EPG.MaxBytesMB)
 		}
 		return b, nil
 	}
@@ -150,7 +150,7 @@ func (a *API) fetchEPGBody(ctx context.Context, src store.EPGSource) ([]byte, er
 		}
 		opt.Headers["Referer"] = src.Referer
 	}
-	if max := a.cfg.EPG.MaxBytes(); max > 0 {
+	if max := a.conf().EPG.MaxBytes(); max > 0 {
 		opt.MaxBytes = max
 	}
 

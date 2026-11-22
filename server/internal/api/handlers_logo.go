@@ -108,7 +108,7 @@ func (a *API) uploadLogo(w http.ResponseWriter, r *http.Request) {
 			fail(w, http.StatusBadRequest, 1001, "这已经是本地台标了")
 			return
 		}
-		local, err = a.logos.SaveFromURL(r.Context(), id, target, a.cfg.Stream.UserAgent)
+		local, err = a.logos.SaveFromURL(r.Context(), id, target, a.conf().Stream.UserAgent)
 		if err != nil {
 			fail(w, http.StatusBadGateway, 4001, "抓取台标失败: "+err.Error())
 			return

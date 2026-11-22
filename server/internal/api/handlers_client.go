@@ -119,7 +119,7 @@ func (a *API) deviceRegister(w http.ResponseWriter, r *http.Request) {
 	// 否则过期设备重注册拿到的凭据会被 GetDeviceByToken 立刻判成已过期。
 	id, status, err := a.st.RegisterWithBindCode(
 		r.Context(), body.DeviceKey, hash, body.Name, body.Platform, body.Model, body.Code,
-		a.cfg.Auth.TokenHours)
+		a.conf().Auth.TokenHours)
 	if err != nil {
 		switch {
 		case errors.Is(err, store.ErrReservedDevicePlatform):
@@ -159,7 +159,7 @@ func (a *API) deviceRegister(w http.ResponseWriter, r *http.Request) {
 	audit("device.register.ok", "status="+status)
 
 	// 记录来源 IP 与版本号（只用于展示，不参与鉴权）。
-	_ = a.st.UpdateDeviceClientInfo(r.Context(), id, clientIP(r, a.cfg), body.AppVersion)
+	_ = a.st.UpdateDeviceClientInfo(r.Context(), id, clientIP(r, a.conf()), body.AppVersion)
 
 	ok(w, map[string]any{
 		"device_id": id,
@@ -247,7 +247,7 @@ func (a *API) tvBootstrap(w http.ResponseWriter, r *http.Request) {
 	// 节目单页、录制按节目名、回看这些功能都读本地库里那份。客户端优先用
 	// 自己解析的结果，拿不到时才回落到 /api/v1/tv/epg/{id}。
 	epgURL := ""
-	for _, u := range a.cfg.EPG.DefaultURLs {
+	for _, u := range a.conf().EPG.DefaultURLs {
 		if u != "" {
 			epgURL = u
 			break
@@ -308,7 +308,7 @@ func (a *API) tvEPG(w http.ResponseWriter, r *http.Request) {
 	// 等价于 UTC 零点。东八区用户看到的是"节目单错位 8 小时"：
 	// 早上 8 点前查当天，拿到的其实是本地前一天的节目。
 	// 用 time.Date 在指定时区里构造当地午夜，跨日、跨月、跨年才正确。
-	start, end := localDayRange(a.now(), a.cfg.Server.Timezone, day)
+	start, end := localDayRange(a.now(), a.conf().Server.Timezone, day)
 	progs, err := a.st.ProgramsByXmltvID(r.Context(), ch.EpgID, start.Unix(), end.Unix())
 	if err != nil {
 		fail(w, http.StatusInternalServerError, 5001, err.Error())
@@ -324,7 +324,7 @@ func (a *API) tvEPG(w http.ResponseWriter, r *http.Request) {
 		"programs":    progs,
 		"day":         day,
 		"date":        start.Format("2006-01-02"),
-		"timezone":    a.cfg.Server.Timezone,
+		"timezone":    a.conf().Server.Timezone,
 		"server_time": a.now().Unix(),
 		"day_start":   start.Unix(),
 		"day_end":     end.Unix(),
@@ -378,7 +378,7 @@ func (a *API) tvHeartbeat(w http.ResponseWriter, r *http.Request) {
 		AppVersion string `json:"app_version"`
 	}
 	_ = decode(r, &body)
-	_ = a.st.TouchDeviceWithInfo(r.Context(), dev.ID, clientIP(r, a.cfg), body.AppVersion)
+	_ = a.st.TouchDeviceWithInfo(r.Context(), dev.ID, clientIP(r, a.conf()), body.AppVersion)
 	// 频道列表指纹：客户端据此判断"要不要重新拉一次列表"。
 	// 没有它，管理员在服务端启用/新增频道后，电视端永远看不到变化
 	// （客户端只在打开播放页时 bootstrap 一次）。
@@ -472,12 +472,12 @@ func (a *API) tvPlay(w http.ResponseWriter, r *http.Request) {
 	// dk 用派生值：device_key 等价于设备凭据，不能出现在地址里。
 	dk := a.signer.DeriveDeviceKey(dev.DeviceKey)
 	sig := a.signer.SignStream(id, st.ID, exp, dk)
-	path := fmt.Sprintf("%s/live/%d/stream.ts", a.cfg.Server.Prefix, id)
+	path := fmt.Sprintf("%s/live/%d/stream.ts", a.conf().Server.Prefix, id)
 	switch kind {
 	case "hls":
-		path = fmt.Sprintf("%s/live/%d/index.m3u8", a.cfg.Server.Prefix, id)
+		path = fmt.Sprintf("%s/live/%d/index.m3u8", a.conf().Server.Prefix, id)
 	case "remux":
-		path = fmt.Sprintf("%s/live/%d/remux.m3u8", a.cfg.Server.Prefix, id)
+		path = fmt.Sprintf("%s/live/%d/remux.m3u8", a.conf().Server.Prefix, id)
 	}
 	q := url.Values{}
 	q.Set("sig", sig)
@@ -492,7 +492,7 @@ func (a *API) tvPlay(w http.ResponseWriter, r *http.Request) {
 	// 且 UA/Referer 校验得客户端自己带（所以这里把头一起给出去）。
 	// 只在客户端明确要（direct=1）且服务端允许时才走这条路。
 	wantDirect := strings.EqualFold(r.URL.Query().Get("direct"), "1")
-	if wantDirect && a.cfg.Stream.DirectEnabled && kind != "remux" {
+	if wantDirect && a.conf().Stream.DirectEnabled && kind != "remux" {
 		ok(w, map[string]any{
 			"channel":   map[string]any{"id": ch.ID, "name": ch.Name, "logo": ch.Logo},
 			"kind":      kind,
@@ -624,7 +624,7 @@ func (a *API) tvTimeshift(w http.ResponseWriter, r *http.Request) {
 		"enabled":           true,
 		"available_seconds": span,
 		"url": fmt.Sprintf("%s/live/%d/timeshift.ts?%s",
-			a.cfg.Server.Prefix, id, q.Encode()),
+			a.conf().Server.Prefix, id, q.Encode()),
 	})
 }
 
@@ -700,7 +700,7 @@ func (a *API) liveRemuxPlaylist(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 切片 URI 会被改写为 /live/{id}/remux/{seg}，签名通过查询串补到每个 URI 上
-	segPrefix := fmt.Sprintf("%s/live/%d/remux/", a.cfg.Server.Prefix, id)
+	segPrefix := fmt.Sprintf("%s/live/%d/remux/", a.conf().Server.Prefix, id)
 
 	// R09：转封装也必须用同一份线路头。源站校验覆盖整条链路，
 	// ffmpeg 用自己的默认 UA 会被 403，表现为"iOS 播不了但电视能播"。
@@ -972,9 +972,9 @@ func (a *API) livePlay(w http.ResponseWriter, r *http.Request) {
 		fail(w, http.StatusNotFound, 3002, "该频道没有可用线路")
 		return
 	}
-	target := fmt.Sprintf("%s/live/%d/stream.ts?%s", a.cfg.Server.Prefix, id, r.URL.RawQuery)
+	target := fmt.Sprintf("%s/live/%d/stream.ts?%s", a.conf().Server.Prefix, id, r.URL.RawQuery)
 	if strings.Contains(strings.ToLower(st.URL), ".m3u8") {
-		target = fmt.Sprintf("%s/live/%d/index.m3u8?%s", a.cfg.Server.Prefix, id, r.URL.RawQuery)
+		target = fmt.Sprintf("%s/live/%d/index.m3u8?%s", a.conf().Server.Prefix, id, r.URL.RawQuery)
 	}
 	http.Redirect(w, r, target, http.StatusFound)
 }
@@ -1101,7 +1101,7 @@ func (a *API) streamHeaders(channelID int64, st *store.Stream) map[string]string
 		h = map[string]string{}
 	}
 	if _, okUA := findHeaderKey(h, "user-agent"); !okUA {
-		if ua := a.cfg.Stream.UserAgent; ua != "" {
+		if ua := a.conf().Stream.UserAgent; ua != "" {
 			h["User-Agent"] = ua
 		}
 	}
@@ -1184,8 +1184,8 @@ func (a *API) liveManifest(w http.ResponseWriter, r *http.Request) {
 		opt.Headers = a.streamHeaders(id, cand)
 		if ua := cand.UserAgent(); ua != "" {
 			opt.UserAgent = ua
-		} else if a.cfg.Stream.UserAgent != "" {
-			opt.UserAgent = a.cfg.Stream.UserAgent
+		} else if a.conf().Stream.UserAgent != "" {
+			opt.UserAgent = a.conf().Stream.UserAgent
 		}
 		got, ferr := fetch.Get(cctx, cand.URL, opt)
 		cancel()
@@ -1462,7 +1462,7 @@ func (a *API) segmentURLDepth(abs string, channelID int64, dk string, depth, max
 		// 把深度带进代理地址，下次请求从这儿继续往上数。
 		q.Set("depth", strconv.Itoa(depth))
 	}
-	return fmt.Sprintf("%s/live/%d/seg?%s", a.cfg.Server.Prefix, channelID, q.Encode())
+	return fmt.Sprintf("%s/live/%d/seg?%s", a.conf().Server.Prefix, channelID, q.Encode())
 }
 
 // rewriteURIAttr 处理 `#EXT-X-KEY:METHOD=AES-128,URI="xxx"` 这类带 URI 属性的标签。

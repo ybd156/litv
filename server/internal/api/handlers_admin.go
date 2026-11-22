@@ -54,18 +54,18 @@ func (a *API) systemInfo(w http.ResponseWriter, r *http.Request) {
 		"uptime_seconds":  int(time.Since(a.startAt).Seconds()),
 		"active_channels": a.hub.Count(),
 		"active_streams":  a.hub.Count(),
-		"max_concurrent":  a.cfg.Stream.MaxConcurrent,
+		"max_concurrent":  a.conf().Stream.MaxConcurrent,
 		"arch":            runtime.GOARCH,
-		"port":            a.cfg.Server.Port,
-		"gateway_socket":  a.cfg.Server.GatewaySocket,
-		"prefix":          a.cfg.Server.Prefix,
-		"transcode":       a.cfg.Transcode.Enabled,
-		"db_path":         a.cfg.Database.Path,
+		"port":            a.conf().Server.Port,
+		"gateway_socket":  a.conf().Server.GatewaySocket,
+		"prefix":          a.conf().Server.Prefix,
+		"transcode":       a.conf().Transcode.Enabled,
+		"db_path":         a.conf().Database.Path,
 	}
 	// 实际端口可能和配置不同（被占用时自动顺延），TV 要填的是这个
 	if a.actualPort > 0 {
 		data["actual_port"] = a.actualPort
-		data["port_changed"] = a.actualPort != a.cfg.Server.Port
+		data["port_changed"] = a.actualPort != a.conf().Server.Port
 	}
 	// ffmpeg 的真实解析结果（配置里可能只写了个名字）
 	data["ffmpeg"] = a.ffmpegPath
@@ -95,18 +95,18 @@ func (a *API) systemLogs(w http.ResponseWriter, r *http.Request) {
 func (a *API) getConfig(w http.ResponseWriter, r *http.Request) {
 	// 只暴露可安全展示的字段，绝不返回 secret / 密码
 	ok(w, map[string]any{
-		"port":              a.cfg.Server.Port,
-		"prefix":            a.cfg.Server.Prefix,
-		"max_concurrent":    a.cfg.Stream.MaxConcurrent,
-		"ring_size":         a.cfg.Stream.RingSize,
-		"transcode":         a.cfg.Transcode.Enabled,
-		"transcode_enabled": a.cfg.Transcode.Enabled, // 前端字段名，与 transcode 同义
-		"hwaccel":           a.cfg.Transcode.HWAccel,
-		"epg_enabled":       a.cfg.EPG.Enabled,
-		"epg_refresh_hour":  epgRefreshHour(a.cfg.EPG.RefreshCron),
-		"token_hours":       a.cfg.Auth.TokenHours,
-		"log_level":         a.cfg.Log.Level,
-		"allow_lan":         a.cfg.Server.Host == "0.0.0.0",
+		"port":              a.conf().Server.Port,
+		"prefix":            a.conf().Server.Prefix,
+		"max_concurrent":    a.conf().Stream.MaxConcurrent,
+		"ring_size":         a.conf().Stream.RingSize,
+		"transcode":         a.conf().Transcode.Enabled,
+		"transcode_enabled": a.conf().Transcode.Enabled, // 前端字段名，与 transcode 同义
+		"hwaccel":           a.conf().Transcode.HWAccel,
+		"epg_enabled":       a.conf().EPG.Enabled,
+		"epg_refresh_hour":  epgRefreshHour(a.conf().EPG.RefreshCron),
+		"token_hours":       a.conf().Auth.TokenHours,
+		"log_level":         a.conf().Log.Level,
+		"allow_lan":         a.conf().Server.Host == "0.0.0.0",
 	})
 }
 
@@ -157,21 +157,26 @@ func (a *API) putConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 记录改前的值，用于判断哪些需要重启才生效。
-	oldPort := a.cfg.Server.Port
-	oldHost := a.cfg.Server.Host
-	oldEPGCron := a.cfg.EPG.RefreshCron
-
 	// 串行化读改写：两个并发 PUT 交错会互相覆盖。
 	a.cfgMu.Lock()
 	defer a.cfgMu.Unlock()
+
+	// 一次 Load 出快照，后面所有"改前值"判断与 Clone 都用它。
+	// 分成多次 conf() 会读到两次发布之间的值，导致「哪些字段需要重启」判断错位
+	// （old 来自旧配置、next 克隆自新配置）。
+	cur := a.conf()
+
+	// 记录改前的值，用于判断哪些需要重启才生效。
+	oldPort := cur.Server.Port
+	oldHost := cur.Server.Host
+	oldEPGCron := cur.EPG.RefreshCron
 
 	// ★ 在**副本**上改。
 	//
 	// 以前直接改 a.cfg（live 对象）再 Save：落盘失败时内存里已经是新值、
 	// 日志级别也已经生效，而磁盘还是旧的——重启后出现「设置看起来成功、
 	// 实际回滚」的诡异状态，GET 和实际行为还对不上。
-	next := a.cfg.Clone()
+	next := cur.Clone()
 	if next == nil {
 		fail(w, http.StatusInternalServerError, 5001, "配置复制失败，未做任何修改")
 		return
@@ -214,7 +219,8 @@ func (a *API) putConfig(w http.ResponseWriter, r *http.Request) {
 
 	// 落盘成功才发布：先换 live 快照，再让日志级别生效。
 	// 顺序不能反——反了就会出现「日志已变、配置没存」的中间态。
-	a.cfg = next
+	// atomic 换指针保证读侧要么看到旧快照、要么看到新快照，不存在中间态。
+	a.cfgPtr.Store(next)
 	if body.LogLevel != nil {
 		config.SetLogLevel(next.Log.Level)
 	}
@@ -224,10 +230,10 @@ func (a *API) putConfig(w http.ResponseWriter, r *http.Request) {
 	if body.Port != nil && *body.Port != oldPort {
 		restartNeeded = append(restartNeeded, "port")
 	}
-	if body.AllowLAN != nil && a.cfg.Server.Host != oldHost {
+	if body.AllowLAN != nil && a.conf().Server.Host != oldHost {
 		restartNeeded = append(restartNeeded, "allow_lan")
 	}
-	if body.EPGRefreshHour != nil && a.cfg.EPG.RefreshCron != oldEPGCron {
+	if body.EPGRefreshHour != nil && a.conf().EPG.RefreshCron != oldEPGCron {
 		restartNeeded = append(restartNeeded, "epg_refresh_hour")
 	}
 
@@ -247,9 +253,9 @@ func (a *API) activeStreams(w http.ResponseWriter, r *http.Request) {
 // 探测是并发 + 只读前 128KB，不会把带宽打满，但也不要频繁点。
 func (a *API) runProbe(w http.ResponseWriter, r *http.Request) {
 	pr := probe.New(a.st,
-		time.Duration(a.cfg.Probe.TimeoutSec)*time.Second,
-		a.cfg.Probe.Concurrency,
-		a.cfg.Stream.UserAgent)
+		time.Duration(a.conf().Probe.TimeoutSec)*time.Second,
+		a.conf().Probe.Concurrency,
+		a.conf().Stream.UserAgent)
 	res, err := pr.RunOnce(r.Context())
 	if err != nil {
 		fail(w, http.StatusInternalServerError, 5001, err.Error())
@@ -1003,7 +1009,7 @@ func (a *API) refreshEPGSource(w http.ResponseWriter, r *http.Request) {
 // 之后走与远程源完全相同的刷新路径（含解析、优先级、保留策略）。
 func (a *API) importEPG(w http.ResponseWriter, r *http.Request) {
 	// 限制请求体大小，避免上传把内存吃光
-	maxBytes := a.cfg.EPG.MaxBytes()
+	maxBytes := a.conf().EPG.MaxBytes()
 	if maxBytes <= 0 {
 		maxBytes = 64 << 20
 	}
@@ -1019,7 +1025,7 @@ func (a *API) importEPG(w http.ResponseWriter, r *http.Request) {
 	}
 	defer file.Close()
 
-	dir := filepath.Join(filepath.Dir(a.cfg.Database.Path), "epg-import")
+	dir := filepath.Join(filepath.Dir(a.conf().Database.Path), "epg-import")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		fail(w, http.StatusInternalServerError, 5001, "创建导入目录失败: "+err.Error())
 		return
@@ -1355,7 +1361,7 @@ func (a *API) deleteRecording(w http.ResponseWriter, r *http.Request) {
 	// 只删我们自己的录制文件，且必须**证明**这个路径属于录制目录。
 	//
 	// 修复前这里是：
-	//   strings.HasPrefix(Clean(rec.Path), Clean(a.cfg.Record.Dir))
+	//   strings.HasPrefix(Clean(rec.Path), Clean(a.conf().Record.Dir))
 	// 两个叠加的问题：
 	//   1. cfg.Record.Dir 在默认配置下是空的（main 把兜底目录放进局部变量，
 	//      从不回写 cfg），Clean("") == "."，前缀判断恒为假 →
@@ -1515,9 +1521,9 @@ func (a *API) webPlay(w http.ResponseWriter, r *http.Request) {
 	q.Set("exp", strconv.FormatInt(exp, 10))
 	q.Set("dk", webDeviceKey)
 
-	path := fmt.Sprintf("%s/live/%d/index.m3u8", a.cfg.Server.Prefix, id)
+	path := fmt.Sprintf("%s/live/%d/index.m3u8", a.conf().Server.Prefix, id)
 	if kind == "remux" {
-		path = fmt.Sprintf("%s/live/%d/remux.m3u8", a.cfg.Server.Prefix, id)
+		path = fmt.Sprintf("%s/live/%d/remux.m3u8", a.conf().Server.Prefix, id)
 	}
 
 	ok(w, map[string]any{

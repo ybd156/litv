@@ -186,7 +186,7 @@ func (a *API) tvDLNACast(w http.ResponseWriter, r *http.Request) {
 	q.Set("dk", dk)
 	q.Set("stream_id", strconv.FormatInt(st.ID, 10))
 	mediaURL := fmt.Sprintf("http://%s:%d/live/%d/stream.ts?%s",
-		dlna.LanIPv4(), a.cfg.Server.Port, ch.ID, q.Encode())
+		dlna.LanIPv4(), a.conf().Server.Port, ch.ID, q.Encode())
 
 	if err := dlna.Cast(r.Context(), body.ControlURL, ch.Name, mediaURL); err != nil {
 		fail(w, http.StatusBadGateway, 5002, "投屏失败: "+err.Error())

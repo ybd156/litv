@@ -21,6 +21,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -43,7 +44,13 @@ import (
 
 // API 聚合所有依赖。
 type API struct {
-	cfg          *config.Config
+	// cfgPtr 存当前配置。**只能**经 conf() 读、经 cfgPtr.Store() 写。
+	//
+	// 以前是裸 `cfg *config.Config`，读侧（全包 70 处）完全不加锁，
+	// 而保存设置时直接 `a.cfg = next` 换指针 —— 这是典型的数据竞争：
+	// 管理台点保存的同时任何请求在播，`-race` 会报，而普通测试发现不了。
+	// 改成 atomic.Pointer 后，读侧无锁且总能拿到一份完整快照。
+	cfgPtr       atomic.Pointer[config.Config]
 	st           *store.Store
 	hub          *stream.Hub
 	remote       *remote.Hub
@@ -148,7 +155,6 @@ func New(cfg *config.Config, st *store.Store, hub *stream.Hub, version string) *
 	// 分片代理走另一个 client（a.segClient），因为它是流式传输，不能设总超时。
 	streamClient := fetch.NewClient(60 * time.Second)
 	a := &API{
-		cfg:          cfg,
 		st:           st,
 		hub:          hub,
 		remote:       remote.NewHub(),
@@ -173,8 +179,17 @@ func New(cfg *config.Config, st *store.Store, hub *stream.Hub, version string) *
 	}
 	a.segClient = &http.Client{Transport: a.segTransport()}
 	a.importSource = a.defaultImportSource
+	// New 里就必须把配置放进 atomic：之后所有读都走 conf()。
+	a.cfgPtr.Store(cfg)
 	return a
 }
+
+// conf 返回当前配置快照。
+//
+// 所有读配置的地方都必须经它，不要直接碰 cfgPtr ——
+// 直接 Load 也能编译，但那就绕过了"这里只有一个入口"的约定，
+// 下次有人改成延迟加载就不知道要同步哪几处。
+func (a *API) conf() *config.Config { return a.cfgPtr.Load() }
 
 // SetTimeshift 注入时移管理器（main 里创建，因为 Hub 也要用它做 tee）。
 func (a *API) SetTimeshift(m *timeshift.Manager) { a.ts = m }
@@ -481,7 +496,7 @@ func (a *API) identityMiddleware(viaGateway bool) func(http.Handler) http.Handle
 						slog.Debug("网关用户", "uid", u.FnosUID, "admin", u.IsAdmin)
 					}
 					ctx = context.WithValue(ctx, ctxIdentity, id)
-				} else if a.cfg.Auth.DevMode {
+				} else if a.conf().Auth.DevMode {
 					// 开发模式：网关没配好时也能进管理台
 					ctx = context.WithValue(ctx, ctxIdentity, auth.Identity{
 						UserID: "dev", Username: "dev", IsAdmin: true, ViaGateway: true,
@@ -514,7 +529,7 @@ func (a *API) identityMiddleware(viaGateway bool) func(http.Handler) http.Handle
 				// R15：token_hours 现在真正生效。<=0 表示不施加 TTL（长期有效，靠吊销）。
 				// >0 时是滑动续期：正常使用的设备不会被迫重绑，
 				// 只有长期不用的设备才自然过期。
-				if d, err := a.st.GetDeviceByToken(ctx, auth.HashToken(tok), a.cfg.Auth.TokenHours); err == nil && d != nil {
+				if d, err := a.st.GetDeviceByToken(ctx, auth.HashToken(tok), a.conf().Auth.TokenHours); err == nil && d != nil {
 					ctx = context.WithValue(ctx, ctxDevice, d)
 					_ = a.st.TouchDevice(ctx, d.ID)
 					// 这里**没有**任何基于 d.Platform 的提权。

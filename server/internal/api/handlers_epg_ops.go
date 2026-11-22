@@ -33,7 +33,7 @@ func (a *API) epgStats(w http.ResponseWriter, r *http.Request) {
 		"covered_days":    coveredDays,
 		"last_sync":       st.LastSync,
 		"db_bytes":        st.DBBytes,
-		"keep_days":       a.cfg.EPG.KeepDays,
+		"keep_days":       a.conf().EPG.KeepDays,
 	})
 }
 
@@ -45,7 +45,7 @@ func (a *API) epgCleanup(w http.ResponseWriter, r *http.Request) {
 	// 空 body 视为「按配置的 keep_days 清理」，不报错
 	_ = decode(r, &body)
 
-	days := a.cfg.EPG.KeepDays
+	days := a.conf().EPG.KeepDays
 	if body.KeepDays != nil {
 		days = *body.KeepDays
 	}

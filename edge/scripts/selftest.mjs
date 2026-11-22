@@ -396,7 +396,9 @@ check(
 check("groups 计数正确", !!data && JSON.stringify(asArr(data?.groups).map((g) => g.name).sort()) ===
   JSON.stringify(["手工", "卫视", "央视", "新闻,财经"].sort()));
 check("sources 是数组且只有 id/name", !!data && Array.isArray(data.sources) &&
-  data.sources.every((s) => typeof s.id === "number" && typeof s.name === "string" && !("url" in s)));
+  data.sources.every((s) => typeof s.id === "number" && typeof s.name === "string" && !("url" in s)),
+  // 失败时把实际值打出来：这条在 CI 上红、本地绿过，靠猜定位不了。
+  JSON.stringify(data?.sources));
 
 // ---------------------------------------------------------------- C. 源清单 / TXT / HTML
 

@@ -1,5 +1,6 @@
 package com.litv.tv.ui
 
+import com.litv.tv.data.LitvUA
 import android.content.Intent
 import androidx.activity.OnBackPressedCallback
 import android.content.pm.ActivityInfo
@@ -338,7 +339,7 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
             applyVideoRatio()
         }
         findViewById<TextView>(R.id.fsEngine)?.setOnClickListener {
-            val order = listOf("auto", "exo", "vlc", "mpv")
+            val order = EngineKind.SELECTABLE_PHONE
             app.prefs.engine = order[(order.indexOf(app.prefs.engine).coerceAtLeast(0) + 1) % order.size]
             syncFsTools()
             // 改了内核要真正重建（同台会命中"复用引擎实例"），见 restartCurrent
@@ -577,9 +578,7 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
         "16:9" -> "16:9"; "4:3" -> "4:3"; "fill" -> "铺满"; else -> "自动"
     }
 
-    private fun engineLabelShort(v: String) = when (v) {
-        "exo" -> "Exo"; "vlc" -> "VLC"; "mpv" -> "mpv"; "avs3" -> "AV3S"; else -> "自动"
-    }
+    private fun engineLabelShort(v: String) = EngineKind.shortLabel(v)
 
     private fun decodeLabelShort(v: String) = when (v) {
         "hard" -> "硬解"; "soft" -> "软解"; else -> "自动"
@@ -1195,7 +1194,7 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
             direct = app.prefs.directMode != "relay",
             onOk = { info ->
                 // R09：带整份线路头，不再只带 UA
-                val headers = info.playHeaders("LITV/1.0 (Android)")
+                val headers = info.playHeaders(LitvUA.ANDROID)
                 val absUrl = app.api.absolute(info.url)
                 // 把链路和实际用的 UA 显示出来，方便确认源站校验的 UA 到底带没带
                 val modeText = if (info.mode == "direct") "服务端签名直连" else "服务端中转"
@@ -1672,7 +1671,7 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
                             identity = PlayCacheStore.identity(app.prefs, 0, phoneCacheMode()),
                             channelId = nb.id,
                             url = app.api.absolute(info.url),
-                            headers = info.playHeaders("LITV/1.0 (Android)"),
+                            headers = info.playHeaders(LitvUA.ANDROID),
                             mode = info.mode,
                             ua = info.ua,
                             expires = info.expires,
@@ -1754,7 +1753,7 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
         }
         e.setOnClickListener {
             android.util.Log.i(TAG, "全屏工具：内核 点击")
-            val order = listOf("auto", "exo", "vlc", "mpv")
+            val order = EngineKind.SELECTABLE_PHONE
             app.prefs.engine = order[(order.indexOf(app.prefs.engine).coerceAtLeast(0) + 1) % order.size]
             syncFsTools()
             restartCurrent()   // 真正生效：重起当前台

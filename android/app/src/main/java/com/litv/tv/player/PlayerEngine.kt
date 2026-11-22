@@ -167,6 +167,39 @@ enum class EngineKind(val key: String, val label: String) {
 
     companion object {
         fun from(key: String?): EngineKind? = entries.firstOrNull { it.key == key }
+
+        /**
+         * 设置页「内核」下拉的顺序（TV）：auto 在首位，其余按**降级链**顺序。
+         *
+         * 为什么不用 `entries` 直接推导：枚举声明顺序是 EXO/MPV/VLC/AVS3，
+         * 而界面上一直是 EXO→VLC→MPV（先快后稳），两者不是一回事。
+         * 这里显式写一次，替换掉 SettingsActivity 与 PlayerActivity 里各自
+         * 重复的 `listOf("auto","exo","vlc","mpv","avs3")`。
+         */
+        val SELECTABLE: List<String> = listOf("auto", EXO.key, VLC.key, MPV.key, AVS3.key)
+
+        /**
+         * 手机端的可选内核：不含 avs3。
+         *
+         * avs3 那条要用户自己准备解码库，手机界面不暴露这个选项
+         * （手机端一直只有 auto/exo/vlc/mpv 四项）。
+         */
+        val SELECTABLE_PHONE: List<String> = listOf("auto", EXO.key, VLC.key, MPV.key)
+
+        /**
+         * 界面上的紧凑名字。
+         *
+         * 与 [label] 的区别：label 是给人看的长描述（"系统硬解 (Media3)"），
+         * 手机播放页那一行放不下，一直用短名。集中在这里，顺带修掉
+         * 之前手写映射里的笔误（"AV3S"）。
+         */
+        fun shortLabel(key: String): String = when (from(key)) {
+            EXO -> "Exo"
+            VLC -> "VLC"
+            MPV -> "mpv"
+            AVS3 -> "AVS3"
+            null -> "自动"
+        }
     }
 }
 

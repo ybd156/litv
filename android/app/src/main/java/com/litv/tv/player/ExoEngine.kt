@@ -1,5 +1,6 @@
 package com.litv.tv.player
 
+import com.litv.tv.data.LitvUA
 import android.content.Context
 import android.net.Uri
 import android.util.Log
@@ -881,7 +882,7 @@ class ExoEngine : PlayerEngine {
 
     private companion object {
         const val TAG = "ExoEngine"
-        const val UA = "LITV/1.0 (Android)"
+        const val UA = LitvUA.ANDROID
     }
 
 }

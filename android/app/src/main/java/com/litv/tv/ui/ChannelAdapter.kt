@@ -1,5 +1,6 @@
 package com.litv.tv.ui
 
+import com.litv.tv.data.LitvUA
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.os.Handler
@@ -312,7 +313,7 @@ class ChannelAdapter(
                     readTimeout = 6000
                     instanceFollowRedirects = true
                     // jsDelivr 对没有 UA 的请求偶尔会慢，带上更稳
-                    setRequestProperty("User-Agent", "LITV/1.0 (Android)")
+                    setRequestProperty("User-Agent", LitvUA.ANDROID)
                 }
                 val bytes = conn.inputStream.use { it.readBytes() }
                 val opts = BitmapFactory.Options().apply { inJustDecodeBounds = true }

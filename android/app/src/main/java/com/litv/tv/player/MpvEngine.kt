@@ -1,5 +1,6 @@
 package com.litv.tv.player
 
+import com.litv.tv.data.LitvUA
 import android.content.Context
 import android.util.Log
 import android.view.SurfaceView
@@ -148,7 +149,7 @@ class MpvEngine(private val avs3Mode: Boolean = false) : PlayerEngine, MPVLib.Li
         opt("cache-pause", "no")
         opt("network-timeout", "15")
         opt("rtsp-transport", "tcp")
-        opt("user-agent", headers["User-Agent"] ?: "LITV/1.0 (Android)")
+        opt("user-agent", headers["User-Agent"] ?: LitvUA.ANDROID)
         // 画面比例：auto 用 no 让 mpv 按视频自身宽高比
         when (aspect) {
             "16:9" -> opt("video-aspect-override", "16:9")

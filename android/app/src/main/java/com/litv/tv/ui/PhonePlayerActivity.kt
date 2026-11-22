@@ -1,5 +1,6 @@
 package com.litv.tv.ui
 
+import com.litv.tv.data.LitvUA
 import android.annotation.SuppressLint
 import android.content.Context
 import android.media.AudioManager
@@ -220,7 +221,7 @@ class PhonePlayerActivity : AppCompatActivity(), PlayerManager.Callback {
                 // R09：带整份线路头，不再只带 UA
                 player.play(
                     ch.id, app.api.absolute(info.url),
-                    info.playHeaders("LITV/1.0 (Android)"),
+                    info.playHeaders(LitvUA.ANDROID),
                     app.prefs.engine,
                 )
                 app.api.epg(ch.id, 0, onOk = { p ->
@@ -260,7 +261,7 @@ class PhonePlayerActivity : AppCompatActivity(), PlayerManager.Callback {
                     val s = list[which]
                     app.api.play(ch.id, s.id, direct = app.prefs.directMode != "relay", onOk = { info ->
                         player.play(ch.id, app.api.absolute(info.url),
-                            info.playHeaders("LITV/1.0 (Android)"),
+                            info.playHeaders(LitvUA.ANDROID),
                             app.prefs.engine)
                     }, onErr = { tip("切换失败：$it") })
                 }

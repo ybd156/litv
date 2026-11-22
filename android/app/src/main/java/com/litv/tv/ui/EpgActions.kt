@@ -1,5 +1,6 @@
 package com.litv.tv.ui
 
+import com.litv.tv.data.LitvUA
 import android.app.Activity
 import android.widget.Toast
 import com.litv.tv.data.Api
@@ -59,7 +60,7 @@ object EpgActions {
                 activity.runOnUiThread {
                     player.play(
                         ch.id, abs,
-                        mapOf("User-Agent" to "LITV/1.0 (Android)"),
+                        mapOf("User-Agent" to LitvUA.ANDROID),
                         engine,
                     )
                     p?.let {

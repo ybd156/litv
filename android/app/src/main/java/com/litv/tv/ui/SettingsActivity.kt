@@ -51,7 +51,7 @@ class SettingsActivity : AppCompatActivity() {
     private lateinit var valueServer: TextView
     private lateinit var status: TextView
 
-    private val engines = listOf("auto", "exo", "vlc", "mpv", "avs3")
+    private val engines = EngineKind.SELECTABLE
     private val decodes = listOf("auto", "hard", "soft")
     private val buffers = listOf(1000, 2000, 3000, 5000, 8000)
 

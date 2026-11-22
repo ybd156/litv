@@ -1,5 +1,6 @@
 package com.litv.tv.player
 
+import com.litv.tv.data.LitvUA
 import android.content.Context
 import android.net.Uri
 import android.util.Log
@@ -430,7 +431,7 @@ class VlcEngine : PlayerEngine {
             // 不是时钟同步。
             if (headers.isNotEmpty()) {
                 addOption(":http-referrer=${headers["Referer"] ?: ""}")
-                addOption(":http-user-agent=${headers["User-Agent"] ?: "LITV/1.0"}")
+                addOption(":http-user-agent=${headers["User-Agent"] ?: LitvUA.ANDROID}")
             }
         }
         mp.media = media

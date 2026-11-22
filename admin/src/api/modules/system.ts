@@ -36,12 +36,6 @@ export function logoutAdmin(): Promise<void> {
   return http.post<void>('auth/logout')
 }
 
-/** 日志正文（兼容旧调用点）。 */
-export async function fetchLogs(lines = 200): Promise<string[]> {
-  const raw = await http.get<unknown>('system/logs', { lines }, { silent: true })
-  return normalizeLogView(raw).lines
-}
-
 /** 日志正文 + 服务端说明（面板空态要用 hint，不能自己猜原因）。 */
 export async function fetchLogView(lines = 200): Promise<LogView> {
   const raw = await http.get<unknown>('system/logs', { lines }, { silent: true })

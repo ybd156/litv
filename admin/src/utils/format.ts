@@ -57,12 +57,6 @@ export function fmtDateTime(v?: string | number | Date | null): string {
   )}`
 }
 
-export function fmtClock(v?: string | number | Date | null): string {
-  const d = toDate(v)
-  if (!d) return '—'
-  return `${pad(d.getHours())}:${pad(d.getMinutes())}`
-}
-
 /** 「多久没更新了」这种口径，比 last_fetch_at 好懂 */
 export function timeAgo(v?: string | number | Date | null): string {
   const d = toDate(v)
@@ -97,11 +91,6 @@ export function fmtCount(n?: number | null): string {
   if (typeof n !== 'number' || !Number.isFinite(n)) return '—'
   if (n >= 10_000) return `${(n / 10_000).toFixed(1)} 万`
   return String(n)
-}
-
-/** 6 位绑定码拆成 3+3，弹窗上更好读 */
-export function splitBindCode(code: string): string[] {
-  return code.replace(/\s/g, '').split('')
 }
 
 export function truncate(text: string, len = 48): string {

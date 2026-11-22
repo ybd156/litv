@@ -21,6 +21,23 @@ export interface ChannelQuery {
   size?: number
 }
 
+/** 把服务端返回归一成 ChannelPage（分页与「按窗口翻全量」两条路径共用）。 */
+function normalizeChannelPage(raw: unknown): ChannelPage {
+  if (Array.isArray(raw)) {
+    return { total: raw.length, items: raw as Channel[] }
+  }
+  const obj = (raw ?? {}) as Record<string, unknown>
+  const items = asArray<Channel>(raw)
+  return {
+    total: typeof obj.total === 'number' ? obj.total : items.length,
+    items,
+    // 客户端解析模式下服务端会把整份列表一次性给全（D1 里没有表，没法分页）
+    clientParse: obj.client_parse === true,
+    rawPaths: Array.isArray(obj.raw_paths) ? obj.raw_paths.map(String) : undefined,
+    policy: parseClientPolicy(obj.policy),
+  }
+}
+
 /**
  * 频道分页列表。
  *
@@ -39,19 +56,39 @@ export async function listChannels(query: ChannelQuery = {}): Promise<ChannelPag
     },
     { silent: true },
   )
-  if (Array.isArray(raw)) {
-    return { total: raw.length, items: raw as Channel[] }
-  }
-  const obj = (raw ?? {}) as Record<string, unknown>
-  const items = asArray<Channel>(raw)
-  return {
-    total: typeof obj.total === 'number' ? obj.total : items.length,
-    items,
-    // 客户端解析模式下服务端会把整份列表一次性给全（D1 里没有表，没法分页）
-    clientParse: obj.client_parse === true,
-    rawPaths: Array.isArray(obj.raw_paths) ? obj.raw_paths.map(String) : undefined,
-    policy: parseClientPolicy(obj.policy),
-  }
+  return normalizeChannelPage(raw)
+}
+
+export interface ChannelWindowQuery {
+  limit?: number
+  offset?: number
+  enabled?: boolean
+  group?: string
+  q?: string
+  sourceId?: number
+}
+
+/**
+ * 按 `limit` / `offset` 取一页。
+ *
+ * 预览页要把整个列表翻完，用的是 limit/offset；而 `listChannels` 走 page/size。
+ * 两套口径混用会在 total 与实际条数不一致时错位（比如客户端解析模式一次性给全），
+ * 所以单独命名，别让调用方去猜哪个参数生效。
+ */
+export async function listChannelWindow(query: ChannelWindowQuery = {}): Promise<ChannelPage> {
+  const raw = await http.get<unknown>(
+    'channels',
+    {
+      limit: query.limit,
+      offset: query.offset,
+      enabled: query.enabled,
+      group: query.group,
+      q: query.q,
+      source_id: query.sourceId,
+    },
+    { silent: true },
+  )
+  return normalizeChannelPage(raw)
 }
 
 /**
@@ -115,20 +152,10 @@ export function patchChannel(id: number, patch: ChannelPatch): Promise<unknown> 
 }
 
 /**
- * 兼容旧调用名。
- *
- * @deprecated 用 `patchChannel(id, patch)`。语义已从「整对象提交」改成「部分更新」，
- * 名字保留只是为了少改调用点；新代码别用。
- */
-export function updateChannel(id: number, patch: ChannelPatch): Promise<unknown> {
-  return patchChannel(id, patch)
-}
-
-/**
  * 设置 / 解除频道的 EPG 映射。
  *
  * ★ 必须走这个专用端点，不能塞进 `PUT /channels/{id}`：
- * 服务端 `mapChannelEPG` 只认 `{epg_id}`；而 `updateChannel` 的请求体里**没有**
+ * 服务端 `mapChannelEPG` 只认 `{epg_id}`；而 `patchChannel` 的请求体里**没有**
  * `epg_id` 字段，且解码开了 `DisallowUnknownFields` —— 塞进去就是
  * 400 `参数错误: json: unknown field "epg_id"`。
  * 传空字符串表示解除映射（`store.SetChannelEpgID(id, "")`）。

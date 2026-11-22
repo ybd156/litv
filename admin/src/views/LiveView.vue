@@ -2,7 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
 import Hls from 'hls.js'
 import { NInput, NSpin, NTag, useMessage } from 'naive-ui'
-import { request } from '@/api'
+import { channelsApi, playApi } from '@/api'
 import PageHeader from '@/components/PageHeader.vue'
 import StateBlock from '@/components/StateBlock.vue'
 
@@ -23,12 +23,6 @@ interface Channel {
   group: string
   logo: string
   stream_count: number
-}
-
-interface WebPlay {
-  kind: string
-  url: string
-  channel: { id: number; name: string; logo: string }
 }
 
 const message = useMessage()
@@ -87,13 +81,25 @@ async function loadChannels() {
     let total = 0
     // 上限只是防止服务端 total 异常时死循环，正常不会触发
     for (let guard = 0; guard < 40; guard++) {
-      const r = await request<{ total: number; items: Channel[] }>('/channels', {
-        query: { limit: PAGE, offset, enabled: true },
-        silent: true,
+      // 走 api 模块（门禁禁止在视图里直接 request）。
+      // 字段在这里显式映射：接口类型里 logo / stream_count 是可选的，
+      // 而本页模板把它们当必有值用。
+      const r = await channelsApi.listChannelWindow({
+        limit: PAGE,
+        offset,
+        enabled: true,
       })
       total = r.total ?? 0
       const items = r.items ?? []
-      all.push(...items)
+      for (const it of items) {
+        all.push({
+          id: it.id,
+          name: it.name,
+          group: it.group,
+          logo: it.logo ?? '',
+          stream_count: it.stream_count ?? 0,
+        })
+      }
       if (items.length === 0 || all.length >= total) break
       offset += items.length
     }
@@ -130,7 +136,7 @@ async function play(ch: Channel) {
   destroyPlayer()
 
   try {
-    const info = await request<WebPlay>(`/web/play/${ch.id}`)
+    const info = await playApi.webPlay(ch.id)
     // 回来时已经切到别的台了：这份响应作废，绝不能碰播放器。
     if (gen !== playGeneration) return
     const el = videoEl.value

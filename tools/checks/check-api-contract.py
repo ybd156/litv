@@ -99,9 +99,48 @@ for method, path, fn in sorted(calls):
 # 白名单里写了、但 edge 侧其实没实现的条目：多半是改了路径忘了同步，必须报出来
 unbacked = sorted(k for k in EDGE_ONLY if not edge_implements(k[1]))
 
+# ---- 4. 分层门禁：视图/组件里不许直接发请求 ----
+#
+# 52 条调用早就在 api/modules 了，但 LiveView / LoginView 还各有一条直连，
+# 而本脚本原先只扫 modules —— **盲区和绕过点是同一个根因**。
+# 这里把「谁能发请求」变成机械约束：只有 api/http.ts 与 api/modules/**、api/mock/** 可以。
+ALLOW_DIRECT = (
+    os.path.join("admin", "src", "api", "modules") + os.sep,
+    os.path.join("admin", "src", "api", "mock") + os.sep,
+)
+ALLOW_FILES = {os.path.join("admin", "src", "api", "http.ts")}
+
+
+def strip_comments(text):
+    """去掉注释再匹配：注释里写「request() 会把 msg 放进 message」不算违规。"""
+    text = re.sub(r"/\*.*?\*/", "", text, flags=re.S)
+    text = re.sub(r"(?m)^\s*//.*$", "", text)
+    text = re.sub(r"(?m)\s//[^\n]*$", "", text)
+    # Vue 模板里的 <!-- --> 也一并去掉
+    text = re.sub(r"<!--.*?-->", "", text, flags=re.S)
+    return text
+
+
+violations = []
+src_root = os.path.join(ROOT, "admin", "src")
+for dirpath, _dirnames, filenames in os.walk(src_root):
+    for fn in filenames:
+        if not fn.endswith((".ts", ".vue")):
+            continue
+        path = os.path.join(dirpath, fn)
+        rel = os.path.relpath(path, ROOT)
+        if any(rel.startswith(d) for d in ALLOW_DIRECT) or rel in ALLOW_FILES:
+            continue
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            text = strip_comments(fh.read())
+        for lineno, line in enumerate(text.splitlines(), 1):
+            if re.search(r"(?<![\w.])request\s*[<(]", line) or re.search(r"(?<![\w.])fetch\s*\(", line):
+                violations.append((rel, lineno, line.strip()[:80]))
+
 print("服务端路由数:", len(routes))
 print("管理台调用数:", len(calls))
 print("边缘独有接口数:", len(EDGE_ONLY))
+print("直连请求违规数:", len(violations))
 print()
 if unbacked:
     print("❌ 白名单里这些路径在 edge/src/index.ts 找不到路由（白名单不能空头开）：")
@@ -111,7 +150,11 @@ if bad:
     print("❌ 对不上的调用:")
     for method, path, fn in bad:
         print(f"   {method:6} /{path:38}  ({fn})")
-if not bad and not unbacked:
+if violations:
+    print("❌ 视图/组件里直接发请求（应搬到 admin/src/api/modules）：")
+    for rel, lineno, line in violations:
+        print(f"   {rel}:{lineno}  {line}")
+if not bad and not unbacked and not violations:
     print("✅ 全部对得上")
 
 # B06：发现不匹配必须返回非零退出码。
@@ -119,7 +162,7 @@ if not bad and not unbacked:
 # 以前这里到此为止，脚本永远 exit 0 —— 即使打印了 ❌，
 # 挂进 CI 也是绿的，等于没有门禁。
 # 一个"只打印不失败"的检查脚本比没有更糟：它给人一种已被守护的错觉。
-if bad or unbacked:
+if bad or unbacked or violations:
     sys.exit(1)
 sys.exit(0)
 

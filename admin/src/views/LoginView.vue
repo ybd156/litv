@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { NButton, NInput, useMessage } from 'naive-ui'
-import { request, setAdminToken } from '@/api'
+import { authApi, setAdminToken } from '@/api'
 import { EDGE_DEPLOY } from '@/deploy'
 
 /**
@@ -35,11 +35,9 @@ async function submit(): Promise<void> {
   loading.value = true
   error.value = ''
   try {
-    const r = await request<{ token: string }>('auth/login', {
-      method: 'POST',
-      // 服务端应急登录只接受 password；多传 username 会被严格 JSON 解码拒绝。
-      body: { password: password.value },
-    })
+    // 走 api 模块（门禁禁止在视图里直接 request）。
+    // 服务端应急登录只接受 password；多传 username 会被严格 JSON 解码拒绝。
+    const r = await authApi.login(password.value)
     setAdminToken(r.token)
     if (!EDGE_DEPLOY && remember.value) localStorage.setItem('litv_admin_user', username.value)
     else localStorage.removeItem('litv_admin_user')

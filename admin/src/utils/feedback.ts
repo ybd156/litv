@@ -45,28 +45,6 @@ export interface ConfirmOptions {
 }
 
 /**
- * 破坏性操作统一走这里：二次确认 + 执行时按钮 loading。
- *
- * @deprecated 危险操作请用 `confirmDanger()`——它强制列出「影响数量 / 级联影响 /
- * 是否可撤销」，避免每个调用点自己写一段深浅不一的文案。
- * 这个函数只留给「有明确自定义说明且不是破坏性操作」的场景。
- */
-export function confirmAction(opts: ConfirmOptions): void {
-  if (!dialog) return
-  const handler = opts.danger === false ? dialog.warning : dialog.error
-  handler({
-    title: opts.title,
-    content: opts.content,
-    positiveText: opts.positiveText ?? '确认',
-    negativeText: opts.negativeText ?? '取消',
-    maskClosable: false,
-    onPositiveClick: async () => {
-      await opts.onConfirm()
-    },
-  })
-}
-
-/**
  * 危险操作的统一确认框。
  *
  * 为什么要有它：之前删源、删频道、批量删、停用频道、删设备、删 EPG 源

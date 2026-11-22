@@ -75,7 +75,9 @@ object LocalHlsProxy {
         okhttp3.OkHttpClient.Builder()
             .protocols(listOf(okhttp3.Protocol.HTTP_1_1))
             .connectTimeout(6, java.util.concurrent.TimeUnit.SECONDS)
-            .readTimeout(20, java.util.concurrent.TimeUnit.SECONDS)
+            // 源站实测 m3u8 中位 3.1 秒、最慢 10 秒；分片更大。
+            // 20 秒会在慢源上误判超时（线上 ERROR_CODE_IO_UNSPECIFIED 的来源之一）。
+            .readTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
             .retryOnConnectionFailure(true)
             // 连接池：默认 5 个空闲连接 / 5 分钟，这里放宽一点，够 27 个台 + 主备线路
             .connectionPool(okhttp3.ConnectionPool(8, 5, java.util.concurrent.TimeUnit.MINUTES))
@@ -424,8 +426,15 @@ object LocalHlsProxy {
             writeBody(out, hit, "video/mp2t")
             return
         }
-        val bytes = runCatching { fetchBytesSmart(real) }.getOrNull()
-        if (bytes == null) {
+        val t0 = System.currentTimeMillis()
+        val bytes = try {
+            fetchBytesSmart(real)
+        } catch (e: Throwable) {
+            // ★ 之前这里静默返回 502，线上出现 ERROR_CODE_IO_UNSPECIFIED 时完全查不到原因
+            //   （不是 403，所以旧日志一个字都没有）。把异常类别和耗时落盘。
+            val cost = System.currentTimeMillis() - t0
+            Log.w(TAG, "自建源分片失败（${cost}ms）：${e.javaClass.simpleName}: ${e.message}")
+            PlayLog.w(TAG, "自建源分片失败 ${cost}ms ${e.javaClass.simpleName}")
             writeStatus(out, 502, "raw segment failed")
             return
         }
@@ -690,8 +699,13 @@ object LocalHlsProxy {
     }
 
     private fun fetchBytes(url: String): ByteArray {
-        // 走共享 OkHttpClient，复用 TCP/TLS 连接
-        val req = okhttp3.Request.Builder().url(url).header("User-Agent", UA_PROXY).build()
+        // 走共享 OkHttpClient，复用 TCP/TLS 连接。
+        // UA 用播放器透传过来的（自建源常按 UA 区分），没有则回退 qqlive。
+        val req = okhttp3.Request.Builder()
+            .url(url)
+            .header("User-Agent", reqUa.ifBlank { UA_PROXY })
+            .apply { reqReferer?.let { header("Referer", it) } }
+            .build()
         httpClient.newCall(req).execute().use { resp ->
             if (!resp.isSuccessful) throw java.io.IOException("HTTP " + resp.code)
             return resp.body?.bytes() ?: throw java.io.IOException("空响应")

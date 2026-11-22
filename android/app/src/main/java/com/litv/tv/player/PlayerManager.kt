@@ -470,7 +470,7 @@ class PlayerManager(
             com.litv.tv.data.PlayLog.w(TAG, "屏幕已熄灭，跳过首帧判定")
             return@Runnable
         }
-        // ★ 还在下载就别判死（真机事故 2026-11-21，MiTV-ASTP0）：
+        // ★ 还在下载就别判死（真机事故 2026-11-21，某 Android 9 电视）：
         // 该源 HLS 单分片 1.9MB、下载 4-5 秒，首帧必然超过 8 秒的判定窗口。
         // 到点就判"有数据无画面" → 切软解（更慢）→ 再降 VLC → VLC 输出撕裂，
         // 用户看到的是"一卡一卡"。缓冲位置在涨说明链路正常，再给一轮。
@@ -692,9 +692,7 @@ class PlayerManager(
         if (surface != null && pendingStartForSurface && !released) {
             pendingStartForSurface = false
             Log.i(TAG, "Surface 就绪，继续挂起的起播")
-            // 必须 force：这是「挂起后恢复」，不能被 250ms 去重挡掉
-            // （第一次 startCurrent 已经把 lastStartAtMs 写过了）
-            main.post { if (!released) startCurrent(force = true) }
+            main.post { if (!released) startCurrent() }
         }
     }
 
@@ -900,9 +898,6 @@ class PlayerManager(
         budgetExpired = true
     }
 
-    /** 上一次真正执行 startCurrent 的时刻（uptime），用于去重。 */
-    private var lastStartAtMs = 0L
-
     /**
      * 起播（幂等）。
      *
@@ -913,14 +908,13 @@ class PlayerManager(
      * 三次「首帧已渲染」，VLC 还会因此并发出两个 LibVLC 实例。
      *
      * 参照 my-tv 的做法（`if (!isPlaying) { prepare(); play() }`）：
-     * 短时间内的重复请求直接忽略。真正需要重建的场景（换台 / 换内核）
-     * 传 force = true。
+     * 短时间内的重复请求直接忽略。
+     *
+     * ⚠ 去重目前是关闭的：实测加上之后手机端完全不播（一条事件都没有），
+     * 说明有某条必需的起播路径被 250ms 窗口挡掉了，而没定位到是哪条。
+     * 现在每次调用都真正执行；要恢复去重，先把 13 个调用点逐条核完。
      */
-    private fun startCurrent(force: Boolean = false) {
-        // ⚠ 去重暂时关闭：实测加上之后手机端完全不播（一条事件都没有），
-        // 说明有某条必需的起播路径被 250ms 窗口挡掉了，而我没定位到是哪条。
-        // 先回到「每次都执行」的已知可用状态，等能复现时再逐条核调用点。
-        lastStartAtMs = android.os.SystemClock.elapsedRealtime()
+    private fun startCurrent() {
         main.removeCallbacks(startTimeout)
 
         // 换内核前给上一个解码器一点时间真正释放。
@@ -1228,8 +1222,8 @@ class PlayerManager(
             callback?.onError(chainFailMessage())
             return
         }
-        // 换内核必须重建，不能被去重挡掉
-        startCurrent(force = true)
+        // 换内核必须重建
+        startCurrent()
     }
 
     /**

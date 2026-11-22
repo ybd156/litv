@@ -348,9 +348,11 @@ class ExoEngine : PlayerEngine {
 
         exoFirstFrameRendered = false
 
-        // 诊断：只打 URL 尾部（含 query），不打完整签名地址
+        // 诊断：只能打脱敏后的地址（scheme+host）+ 长度。
+        // check-playback-security 的 S2 规则会拦「字符串拼接直接打 url」：
+        // 签名地址里的 exp/sig 一旦进了 logcat，就等于把播放凭据抄进日志。
         if (com.litv.tv.BuildConfig.DEBUG) {
-            Log.i(TAG, "prepare url tail=…" + url.takeLast(90) + "  len=" + url.length)
+            Log.i(TAG, "prepare url=" + Redact.url(url) + "  len=" + url.length)
         }
 
         player = p

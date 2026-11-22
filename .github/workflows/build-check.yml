@@ -95,6 +95,15 @@ jobs:
         # 脚本用 --root 自测过：把修复回退掉会精确变红。
         run: python3 tools/checks/check-playback-security.py
 
+      - name: iOS 模型 init 覆盖（存储属性不能漏解）
+        # iOS 用 `init(from decoder:)` 逐字段赋值。漏一个字段不会编译报错，
+        # 只会永远拿到默认值（0 / ""）——界面看起来"没数据"，却查不到原因。
+        # 这个脚本长期 exit 1 无人处理：早期版本把计算属性（Identifiable.id、
+        # isNow/timeText/healthText）也算成待覆盖的存储属性，三条假红把真问题埋了。
+        # 已按 Swift 语法区分存储/计算（含 didSet 例外），并用 --root 做反证：
+        # 删掉一条赋值必红、只改计算属性体不红。当前代码 exit 0。
+        run: python3 tools/checks/check-swift-init-coverage.py
+
   server:
     name: Go 服务端
     runs-on: ubuntu-24.04

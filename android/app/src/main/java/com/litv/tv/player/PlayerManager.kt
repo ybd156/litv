@@ -535,10 +535,14 @@ class PlayerManager(
         main.removeCallbacks(noDataWatchdog)
         main.removeCallbacks(noFrameWatchdog)
         main.removeCallbacks(budgetWatchdog)
-        // 故意**不清零** budgetDeadlineAt。
-        // 清零会让 remainingBudgetMs() 返回 MAX_VALUE，之后每次重试/换内核
-        // 都等于重新获得一份完整预算——总等待可以无限越过初次选台的截止时间。
-        // 只有新的播放（play()）才重新设绝对 deadline。
+        // 这里只撤定时器，**不清零** budgetDeadlineAt：
+        // 清零会让 remainingBudgetMs() 返回 MAX_VALUE，排队的回调会以为预算无限。
+        //
+        // ⚠ 注意 deadline **并不是**「整段起播唯一一份」：startEngine() 每次起内核
+        //   都会重设它（那是为止血 attach() 路径拿到过期 deadline 的回归，见那里注释）。
+        //   叠加后的净效果 = **每次内核尝试各拿一份 36s 预算**，与「整段起播硬预算」
+        //   的原始意图不一致。口径未定，不要按「总预算」理解这段代码
+        //   （docs/refactor §4「起播预算」行 + §18）。
     }
 
     /** 用「还能花多少时间」给下一次等待封顶，避免单次等待越过总预算。 */

@@ -46,29 +46,35 @@ class PlaybackDefaultsTest {
     // ---------------------------------------------------------------- 起播预算（C3）
 
     @Test
-    fun `总预算不小于显式最坏路径之和`() {
-        // 最坏路径 = 无字节阶段 + 有字节无帧阶段 + 一次完整超时重试
-        //          = 12000 + 8000 + 15000 × 1 = 35000
-        // 预算若小于它，就意味着"某一层窗口还没走完就先被总预算掐掉"——
-        // 那等于其中某个阶段是永远不会生效的死代码。
-        val worstPath =
-            PlaybackDefaults.START_NOBYTE_MS +
-                PlaybackDefaults.START_FRAME_MS +
-                PlaybackDefaults.START_TIMEOUT_MS * PlaybackDefaults.RETRY_COUNT
+    fun `单次内核尝试的最坏路径必须落在预算内`() {
+        // ⚠ 这条断言的是**单次内核尝试**（startEngine 之间的那一段），不是整段起播。
+        // 原因是实现口径：PlayerManager.startEngine() 每次起内核都会重设 deadline，
+        // 所以真正生效的是「每次尝试各一份预算」。原版测试把无字节、无帧、一次超时
+        // 三段相加当成"总预算最坏路径"，那三段其实分属不同尝试，等于把漏项固化成绿灯。
+        // 口径本身待定（docs/refactor §4「起播预算」行）；这里先把**单次**能证明的
+        // 关系钉住，任何一条不成立都说明某个阶段会被预算先杀、永远不生效。
+        val noByteChain = PlaybackDefaults.START_NOBYTE_MS * (PlaybackDefaults.RETRY_COUNT + 1)
         assertTrue(
-            "START_BUDGET_MS=${PlaybackDefaults.START_BUDGET_MS} 小于最坏路径 $worstPath，" +
-                "某个阶段永远不会生效",
-            PlaybackDefaults.START_BUDGET_MS >= worstPath,
+            "无字节重试链 ${PlaybackDefaults.START_NOBYTE_MS}×(${PlaybackDefaults.RETRY_COUNT}+1)" +
+                "=$noByteChain 不小于预算 ${PlaybackDefaults.START_BUDGET_MS}：" +
+                "重试或换内核还没走完就会被预算掐掉",
+            noByteChain < PlaybackDefaults.START_BUDGET_MS,
+        )
+        val noFramePath = PlaybackDefaults.START_NOBYTE_MS + PlaybackDefaults.START_FRAME_MS
+        assertTrue(
+            "无字节 + 无帧 $noFramePath 不小于预算 ${PlaybackDefaults.START_BUDGET_MS}：" +
+                "「有数据但不出帧→换软解」这一步永远不会生效",
+            noFramePath < PlaybackDefaults.START_BUDGET_MS,
         )
     }
 
     @Test
-    fun `总预算必须远小于旧的两分钟`() {
+    fun `单次预算必须远小于旧的两分钟`() {
         // 老代码 3 内核 ×(15s 超时 + 15s 重试) ≈ 105s。这条防止有人把预算又调回去。
         //
-        // 上界从 30s 放到 40s：START_NOBYTE_MS 提到 12s 之后，最坏路径是 35s，
-        // 预算必须 ≥35s（上面那条断言），所以 <30s 这个上界和它直接冲突。
-        // 40s 仍然远小于旧代码的 105s，防"调回两分钟"的意图不变。
+        // 上界从 30s 放到 40s：START_NOBYTE_MS 提到 12s 之后，单次尝试的无字节链
+        // 已经是 24s（12×2），预算必须明显高于它（上面那条断言），所以 <30s 与它冲突。
+        // 40s 仍然远小于旧代码的每台 105s，"别调回两分钟"的意图不变。
         assertTrue(
             "START_BUDGET_MS=${PlaybackDefaults.START_BUDGET_MS} 应 < 40000",
             PlaybackDefaults.START_BUDGET_MS < 40_000,

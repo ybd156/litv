@@ -12,6 +12,7 @@ import (
 	"compress/gzip"
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -25,6 +26,38 @@ import (
 
 	"github.com/litv/litv/server/internal/safedial"
 )
+
+// redactURL 只保留 scheme + host + path，丢掉 query、fragment 与 userinfo。
+//
+// 为什么在这一层做：源地址的 query 里常带账号密码或签名（EPG 源、
+// 点播/直播源的 URL 都是这种形态），而这些错误串会被写进
+// `sources.last_error`（落库）、`slog` 日志、以及管理台界面上。
+// 一旦凭据进了库和日志，清理起来比漏一个字段麻烦得多。
+func redactURL(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" {
+		return "(地址无法解析)"
+	}
+	u.RawQuery = ""
+	u.Fragment = ""
+	u.User = nil
+	return u.String()
+}
+
+// safeErr 把 *url.Error 里的 URL 换成脱敏形式；其它错误原样返回。
+//
+// net/http 的传输错误几乎都是 *url.Error，而它的 Error() 会**原样带出完整 URL**
+// ——以前这里直接 `%w` 包一层，等于把签名/凭据连同"请求失败"一起写进日志和库。
+func safeErr(err error) error {
+	if err == nil {
+		return nil
+	}
+	var ue *url.Error
+	if errors.As(err, &ue) {
+		return fmt.Errorf("%s %s: %v", ue.Op, redactURL(ue.URL), ue.Err)
+	}
+	return err
+}
 
 // Result 是抓取结果。
 type Result struct {
@@ -237,7 +270,7 @@ func Get(ctx context.Context, url string, opt Options) (*Result, error) {
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return nil, fmt.Errorf("构造请求失败: %w", err)
+		return nil, fmt.Errorf("构造请求失败: %w", safeErr(err))
 	}
 	ua := opt.UserAgent
 	if ua == "" {
@@ -264,7 +297,7 @@ func Get(ctx context.Context, url string, opt Options) (*Result, error) {
 		case strings.Contains(msg, "context deadline exceeded") || strings.Contains(msg, "Client.Timeout"):
 			return nil, fmt.Errorf("抓取超时（%d 秒）：源站响应太慢，或 NAS 到该站网络不通", int(opt.Timeout.Seconds()))
 		}
-		return nil, fmt.Errorf("请求失败: %w", err)
+		return nil, fmt.Errorf("请求失败: %w", safeErr(err))
 	}
 	defer resp.Body.Close()
 
@@ -274,7 +307,7 @@ func Get(ctx context.Context, url string, opt Options) (*Result, error) {
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, opt.MaxBytes))
 	if err != nil {
-		return nil, fmt.Errorf("读取响应失败: %w", err)
+		return nil, fmt.Errorf("读取响应失败: %w", safeErr(err))
 	}
 	if len(body) == 0 {
 		return nil, fmt.Errorf("响应为空")

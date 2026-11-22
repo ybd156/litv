@@ -174,23 +174,27 @@ export const seedChannels: Channel[] = channelSeeds.map(([name, group, tvg], i) 
 }))
 
 /**
- * 造一个「上游已移除」的样本（`missing: true`）。
+ * 造一个「上游已移除」的样本（`missing_since > 0`）。
  *
  * 服务端用独立列 `channels.src_missing` 记这个状态（**不复用 enabled=0**，
  * 否则和「用户手动停用」永久分不清）。没有样本的话，频道列表里那个
  * 「上游已移除」标签在 mock 模式下永远看不见，改坏了也发现不了。
+ *
+ * ★ 这里曾经写的是 `missing: true` ——一个**服务端从不发送**的字段。后果是：
+ * mock 模式下标签正常，一上真服务端就永远不显示（真 bug 被 mock 盖住了）。
+ * mock 的职责是复刻真实响应的形状，不是复刻界面的期望。
  */
 const missingChannel = seedChannels.find((c) => c.tvg_id === 'dongfang')
 if (missingChannel) {
   missingChannel.enabled = false
-  missingChannel.missing = true
+  missingChannel.missing_since = 1764000000
   missingChannel.stream_count = 0
 }
 
 export const seedStreams: Record<number, ChannelStream[]> = {}
 seedChannels.forEach((c) => {
   // 上游移除的频道线路已被清空，不要再给它造线路
-  if (c.missing) return
+  if ((c.missing_since ?? 0) > 0) return
   const n = c.stream_count ?? 1
   const list: ChannelStream[] = []
   for (let k = 0; k < n; k++) {

@@ -160,16 +160,21 @@ export interface Channel {
   /** 排序值（服务端给，界面不直接编辑，拖拽走 reorder 接口） */
   sort?: number
   /**
-   * 上游已移除：最近一轮源解析里已经没有这个台了。
+   * 上游已移除的时间（Unix 秒，0 或缺省 = 仍然存在）。
    *
    * ★ 服务端用独立列 `channels.src_missing` 记，**不复用 `enabled=0`**——
    * 复用会和「用户手动停用」永久混在一起，界面再也分不清两种状态。
    * 所以这里是三态而不是两态：
-   *   enabled=false + missing=false → 用户自己停的（别去打扰他）
-   *   missing=true                 → 上游没了（线路被清空，用户要知道为什么少台）
-   * 服务端还没带这个键时是 `undefined`，界面退回原来的两态。
+   *   enabled=false + missing_since=0 → 用户自己停的（别去打扰他）
+   *   missing_since>0                → 上游没了（线路被清空，用户要知道为什么少台）
+   *
+   * ★★ 字段名曾经写成 `missing?: boolean`，那是**错的**：服务端（见
+   * `store.Channel`）只发 `missing_since`，从来不发 `missing`；而频道列表
+   * 是原样透传（`normalizeChannelPage` 不映射 item 字段），所以 `row.missing`
+   * 永远 undefined —— 「上游已移除」标签与线路面板提示**一次都没显示过**。
+   * 现在按服务端真实字段名读，判据是 `> 0`。
    */
-  missing?: boolean
+  missing_since?: number
 }
 
 /**

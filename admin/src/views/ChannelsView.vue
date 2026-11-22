@@ -534,9 +534,11 @@ const allColumns = computed<Record<string, DataTableColumns<Channel>[number]>>((
     width: 104,
     render: (row) => {
       // ★ 三态，不是两态：上游已移除 ≠ 用户手动停用。
-      // 服务端用独立列 `channels.src_missing` 记（不复用 enabled=0），DTO 上是 `missing`。
+      // 服务端用独立列 `channels.src_missing` 记（不复用 enabled=0），**下发的是
+      // `missing_since`（Unix 秒，0 = 仍在）**，不是布尔 `missing`——曾经按
+      // `row.missing === true` 判，那个字段服务端从来不发，于是这个标签从未显示过。
       // 这里如果只显示「已停用」，用户会以为是自己关的，永远找不到「为什么少了一个台」。
-      if (row.missing === true) {
+      if ((row.missing_since ?? 0) > 0) {
         return h(
           NTooltip,
           null,
@@ -572,8 +574,8 @@ const columns = computed<DataTableColumns<Channel>>(() => {
           channelId: row.id,
           channelName: row.name,
           // 上游已移除的频道要在线路面板顶部说明一句，否则用户只看到「还没有线路」，
-          // 以为是自己配错了
-          channelMissing: row.missing === true,
+          // 以为是自己配错了。判据同上一处：`missing_since > 0`。
+          channelMissing: (row.missing_since ?? 0) > 0,
           onChanged: markRowChanged,
         }),
     },

@@ -22,6 +22,17 @@ final class VLCControl: ObservableObject {
         #endif
     }
 
+    /// 明确暂停（幂等）：只在正在播时暂停。
+    ///
+    /// 退后台必须用这个、不能用 `togglePause`——后者是"切换"语义，
+    /// 一旦当前已暂停就会把音频**打开**（表现是"切出去反而开始响"）。
+    func pause() {
+        #if canImport(MobileVLCKit)
+        guard let p = player as? VLCMediaPlayer else { return }
+        if p.isPlaying { p.pause() }
+        #endif
+    }
+
     func setMuted(_ muted: Bool) {
         #if canImport(MobileVLCKit)
         guard let p = player as? VLCMediaPlayer else { return }

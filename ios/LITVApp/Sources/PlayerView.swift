@@ -242,9 +242,17 @@ struct PlayerView: View {
                     pausedByBackground = false
                     Task { await start() }
                 }
-            } else if player != nil {
+            } else if usingVLC || player != nil {
+                // ★ 判据必须带上 usingVLC：VLC 路径下 `player` 恒为 nil
+                // （播放在 VLCPlayerView 内部，由 VLCKit 自己持有实例），
+                // 只看 `player != nil` 的话 VLC 路径**永远进不来**——
+                // 表现就是"切到后台/锁屏，声音还在放"。
                 pausedByBackground = true
-                player?.pause()
+                if let p = player {
+                    p.pause()
+                } else {
+                    vlc.pause()
+                }
             }
         }
         .onDisappear {

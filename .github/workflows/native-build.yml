@@ -41,8 +41,18 @@ jobs:
       matrix:
         # 静态列出，不用动态表达式——之前用 fromJSON(format(...)) 生成矩阵，
         # GitHub 直接 startup_failure（连 job 都起不来）。
-        # 只编 arm：仓库里没有 x86 的 libmpv.so，编了 x86 的 ffmpeg 也没人用
-        abi: [arm64-v8a, armeabi-v7a]
+        #
+        # arm 两条是产品 ABI。
+        # x86 是**给本机 Android TV 模拟器**用的：模拟器只有 x86 系统镜像
+        # （本机 `sdk_google_atv_x86` / Android 9），而仓库里从来没有 x86 的
+        # libmpv.so/libplayer.so —— 于是第三个播放内核在模拟器上根本起不来，
+        # 「三内核对比」只剩两个。见 docs/refactor/播放内核重构方案.md §5.2。
+        #
+        # 为什么不在本机编：build-libmpv.sh 是 Linux/WSL 脚本（NDK 的
+        # linux-x86_64 toolchain + meson/ninja），这台 Windows 宿主**没有装 WSL**
+        # （`wsl -l -v` 报 WSL_OPTIONAL_COMPONENT_REQUIRED，装它要管理员+重启）。
+        # CI 的 ubuntu-24.04 runner 正是脚本设计的目标环境。
+        abi: [arm64-v8a, armeabi-v7a, x86]
     env:
       # 0 = 连 mpv 一起编（产出一整套自洽的库）
       # 1 = 只重编 ffmpeg，复用仓库里已有的 libmpv.so

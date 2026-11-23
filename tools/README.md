@@ -12,9 +12,19 @@
 
 | 脚本 | 检查什么 |
 |---|---|
-| `check-api-contract.py` | 服务端路由与客户端/管理台调用的接口是否对得上，提前发现 404 |
+| `check-api-contract.py` | 服务端路由与客户端/管理台调用的接口是否对得上，提前发现 404；同时禁止视图/组件里裸发请求 |
+| `check-versions.py` | 发版五处版本号（`AGENTS.md` §11）是否一致 |
+| `check-field-contract.py` | 跨端字段级契约（字段名 / 单位 / 语义），按 `server/internal/api/client_fields.json` 的清单 |
+| `check-error-codes.py` | 服务端会返回的错误码是否都有管理台文案 |
+| `check-playback-security.py` | 播放层安全不变量（日志脱敏 / TLS / 原生 header） |
 | `check-swift-balance.py` | Swift 文件括号/引号是否配平（本地编不了 iOS，这是廉价的兜底） |
 | `check-swift-init-coverage.py` | `Models.swift` 里的结构体是否都在测试数据里构造过 |
+| `check-continuation.py` | shell 续行命令里有没有插注释（会被截断成半条命令） |
+| `check-gates-not-idle.py` | 上面这些门禁**在空树里也必须变红**——防空转绿灯（把脚本复制进临时空目录再跑一遍） |
+| `check-av-abi.py` | 对比两个 AV3A 原生库的 ABI/导出符号（手动工具，需两个库目录实参） |
+
+以上除 `check-av-abi.py` 外都由 `.github/workflows/build-check.yml` 的 preflight job 跑；
+本地等价入口是 `tools/checks/preflight.sh`（YAML / bash -n / py 语法 / 续行）+ 逐个执行脚本。
 
 ## inspect/ — 分析外部产物
 

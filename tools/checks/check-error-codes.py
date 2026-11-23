@@ -25,6 +25,24 @@ ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 API_DIR = os.path.join(ROOT, "server", "internal", "api")
 ERRORS_TS = os.path.join(ROOT, "admin", "src", "api", "errors.ts")
 
+
+def need(path, what):
+    """扫描目标不存在时给出看得懂的失败，而不是 traceback。
+
+    空目录里跑（门禁体检）以前会抛 FileNotFoundError，红是红了，
+    但读日志的人只看到 Python 栈，容易当成"脚本坏了"。这里把
+    「哪个目标找不到」直接打出来。
+    """
+    if not os.path.exists(path):
+        print(f"❌ 找不到{what}：{path}")
+        print("   扫描目标被改名/移走了？先修路径，不要把这个检查从 preflight 里摘掉。")
+        sys.exit(1)
+    return path
+
+
+need(API_DIR, "服务端 api 目录")
+need(ERRORS_TS, "管理台错误码文案 errors.ts")
+
 # 1. 服务端：fail(...) 的第三个参数、Code: 字面量、以及 *code* = NNNN 常量
 go_codes = {}
 

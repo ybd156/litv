@@ -24,8 +24,23 @@ for _stream in (sys.stdout, sys.stderr):
 # 门禁脚本的路径推导必须自己先被验证一次，否则它守护的一切都是幻觉。
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+
+def need(path, what):
+    """被守护的文件/目录不存在时给出**看得懂**的失败，而不是一段 traceback。
+
+    门禁体检（复制到空树里跑）时，以前这里抛
+    `FileNotFoundError: .../server/internal/api/api.go`：红是红了，但读日志的人
+    只看到 Python 栈，容易判成"脚本坏了"，而不是"扫描目标被改名/移走了"。
+    """
+    if not os.path.exists(path):
+        print(f"❌ 找不到{what}：{path}")
+        print("   扫描目标被改名/移走了？先修路径，不要把这个检查从 preflight 里摘掉。")
+        sys.exit(1)
+    return path
+
+
 # ---- 1. 服务端路由 ----
-api_go = os.path.join(ROOT, "server/internal/api/api.go")
+api_go = need(os.path.join(ROOT, "server/internal/api/api.go"), "服务端路由表")
 src = open(api_go, encoding="utf-8").read()
 routes = set()
 for m in re.finditer(r'\.(Get|Post|Put|Delete|Patch)\("(/api/v1/[^"]+)"', src):
@@ -34,7 +49,7 @@ for m in re.finditer(r'\.(Get|Post|Put|Delete|Patch)\("(/api/v1/[^"]+)"', src):
 
 # ---- 2. 管理台调用 ----
 calls = set()
-mod_dir = os.path.join(ROOT, "admin/src/api/modules")
+mod_dir = need(os.path.join(ROOT, "admin/src/api/modules"), "管理台 API 模块目录")
 for fn in os.listdir(mod_dir):
     if not fn.endswith(".ts"):
         continue
@@ -122,7 +137,7 @@ def strip_comments(text):
 
 
 violations = []
-src_root = os.path.join(ROOT, "admin", "src")
+src_root = need(os.path.join(ROOT, "admin", "src"), "管理台源码目录")
 for dirpath, _dirnames, filenames in os.walk(src_root):
     for fn in filenames:
         if not fn.endswith((".ts", ".vue")):

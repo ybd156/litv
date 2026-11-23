@@ -272,6 +272,12 @@ build_ffmpeg() {
   # 否则 ffmpeg 的 check_pkg_config 找不到 openssl 会直接 die。
   export PKG_CONFIG_PATH="$OUT/$abi-deps/lib/pkgconfig:$prefix/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
 
+  # ★ 参数里不要出现 --disable-postproc：libpostproc 已在 FFmpeg master 被移除，
+  #   而我们钉的 FFMPEG_TAG=094a2f8a2a 正是那一代，configure 会直接
+  #   "Unknown option \"--disable-postproc\"" 退出（2026-11-23 三个 ABI 全灭的真因）。
+  #   没有这个库时本来就不会编它，不需要显式关。
+  #   （注释只能写在这里——写进下面的续行命令里会把命令截断，preflight 的
+  #    check-continuation.py 专门抓这个。）
   "$SRC/ffmpeg/configure" \
     --prefix="$prefix" \
     --target-os=android --arch="${abi%%-*}" \
@@ -280,7 +286,7 @@ build_ffmpeg() {
     --sysroot="$TOOLCHAIN/sysroot" \
     --enable-shared --disable-static \
     --disable-programs --disable-doc \
-    --disable-avdevice --disable-postproc \
+    --disable-avdevice \
     "${avs3_flags[@]}" \
     --extra-cflags="-I$OUT/$abi-deps/include -fPIC -O2" \
     --extra-ldflags="-L$OUT/$abi-deps/lib" \

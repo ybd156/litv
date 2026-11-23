@@ -212,21 +212,31 @@ build_ffmpeg() {
   if [ ! -d "$SRC/ffmpeg" ]; then
     # 用 GitHub 的 tag 归档而不是 ffmpeg.org：后者在国内/代理下经常
     # TLS handshake failure，GitHub 反而稳。
-    local url dirname
+    local url
     case "$FFMPEG_TAG" in
       master)
-        url="https://github.com/FFmpeg/FFmpeg/archive/refs/heads/master.tar.gz"
-        dirname="FFmpeg-master" ;;
+        url="https://github.com/FFmpeg/FFmpeg/archive/refs/heads/master.tar.gz" ;;
       # 纯十六进制 = commit，走 archive/<sha>
       [0-9a-f]*)
-        url="https://github.com/FFmpeg/FFmpeg/archive/${FFMPEG_TAG}.tar.gz"
-        dirname="FFmpeg-${FFMPEG_TAG}" ;;
+        url="https://github.com/FFmpeg/FFmpeg/archive/${FFMPEG_TAG}.tar.gz" ;;
       *)
-        url="https://github.com/FFmpeg/FFmpeg/archive/refs/tags/${FFMPEG_TAG}.tar.gz"
-        dirname="FFmpeg-${FFMPEG_TAG#n}" ;;
+        url="https://github.com/FFmpeg/FFmpeg/archive/refs/tags/${FFMPEG_TAG}.tar.gz" ;;
     esac
     fetch_tar "$url" "$ROOT/dl/ffmpeg-$FFMPEG_TAG.tar.gz" || return 1
-    mkdir -p "$SRC" && tar xzf "$ROOT/dl/ffmpeg-$FFMPEG_TAG.tar.gz" -C "$SRC" && mv "$SRC/$dirname" "$SRC/ffmpeg"
+    mkdir -p "$SRC"
+    tar xzf "$ROOT/dl/ffmpeg-$FFMPEG_TAG.tar.gz" -C "$SRC" \
+      || { err "解包 ffmpeg 失败（压缩包不完整？）"; return 1; }
+    # ★ 目录名不能按 "$FFMPEG_TAG" 硬拼。
+    # 用**短 sha** 请求归档时，GitHub 解出来的顶层目录是**解析后的完整 sha**：
+    #   请求 archive/094a2f8a2a.tar.gz  →  目录 FFmpeg-094a2f8a2a5e7fa64736e067de224ce28fdf5979
+    # 2026-11-23 就是这一条让三个 ABI 全灭（日志：mv: cannot stat '.../FFmpeg-094a2f8a2a'，
+    # 紧接着 "[err] ffmpeg configure 失败"）。改成「解出来的那个 FFmpeg-* 目录」，
+    # 与 URL 形式（分支/tag/短 sha/长 sha）彻底解耦。
+    local extracted
+    extracted="$(ls -d "$SRC"/FFmpeg-* 2>/dev/null | head -1)"
+    [ -n "$extracted" ] || { err "解包后找不到 FFmpeg-* 目录"; return 1; }
+    rm -rf "$SRC/ffmpeg"
+    mv "$extracted" "$SRC/ffmpeg" || { err "重命名 ffmpeg 源码目录失败"; return 1; }
   fi
 
   # 版本校验：CI 缓存会按前缀还原旧的构建产物，光看"文件存在"就跳过

@@ -991,6 +991,10 @@ class VlcEngine : PlayerEngine {
             // VLC 没有可靠的 buffering 状态可读（isPlaying 在卡死时也是 false，
             // 用了会把真卡死也豁免掉）。这里保守填 false：VLC 上的卡死判定维持原样。
             isBuffering = false,
+            // ★ 2026-11-23：`positionMs` 不可靠（见上），但**已显示帧数**是可靠的，
+            // 且与 Exo 的累计帧数同义 —— 这是 VLC 第一次能被 FrameStallDetector 判定，
+            // 也是两个内核之间唯一同尺度的「画面还在不在动」信号。
+            displayedFrames = displayedPictures(),
         )
     }
 

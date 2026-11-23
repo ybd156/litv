@@ -185,6 +185,42 @@ class PlayerManager(
     /** 上一次判定卡死的时刻（elapsedRealtime），用于"稳定播放后把恢复计数归零"。 */
     private var lastStallAt = 0L
 
+    // ---------------------------------------------------------------- 画面停帧观测
+    //
+    // 与 stallWatchdog 的区别（两者必须并存，别合并）：
+    //   · stallWatchdog 判的是「位置不动」，只在**有可靠 position 的内核**上有效。
+    //     Exo 有；VLC 故意返回 -1（libVLC 播 HLS 直播时 time 经常不前进），
+    //     于是那段逻辑对 VLC 全程跳过 —— VLC 侧卡 5 秒、10 秒，日志里一个字都没有。
+    //   · 这里判的是「已显示帧数不动」，两内核都有（Exo 的累计 frameCount / VLC 的
+    //     displayedPictures），是与「卡不卡」最贴近的信号。
+    //
+    // ★ 本版**只记录，不重启**。先用它把「各内核各卡多久、多久一次」量出来，
+    //   再决定动作阈值；反过来先接重启，会把「慢」放大成「重建播放器」。
+    private val frameStall = FrameStallDetector()
+    private val frameWatchIntervalMs = 2_000L
+    private val frameWatchdog: Runnable = object : Runnable {
+        override fun run() {
+            if (released) return
+            val st = runCatching { current?.stats() }.getOrNull()
+            val pr = FrameStallDetector.progressOf(st)
+            val v = frameStall.sample(
+                android.os.SystemClock.elapsedRealtime(),
+                pr?.value ?: -1L,
+                prepared && !userPaused,
+                screenInteractive(),
+            )
+            if (v.state == FrameStallDetector.State.STALLED) {
+                val unit = pr?.unit ?: "?"
+                Log.w(TAG, "画面停帧 ${v.stalledMs}ms（${v.frames}$unit 未变，内核 ${currentKind?.key}）")
+                com.litv.tv.data.PlayLog.w(
+                    TAG,
+                    "画面停帧 ${v.stalledMs / 1000}s（${v.frames}$unit 未增长，内核 ${currentKind?.key}）",
+                )
+            }
+            main.postDelayed(this, frameWatchIntervalMs)
+        }
+    }
+
     private val stallWatchdog: Runnable = Runnable {
         val eng = current
         if (eng == null || !prepared) {
@@ -330,12 +366,18 @@ class PlayerManager(
         lastPosMs = -1L
         lastPosChangeAt = android.os.SystemClock.elapsedRealtime()
         main.postDelayed(stallWatchdog, STALL_CHECK_MS)
+        // 画面停帧观测（只记录）与位置看门狗同一个生命周期，避免各起各的
+        frameStall.reset()
+        main.removeCallbacks(frameWatchdog)
+        main.postDelayed(frameWatchdog, frameWatchIntervalMs)
     }
 
     private fun stopStallWatchdog() {
         main.removeCallbacks(stallWatchdog)
         lastPosMs = -1L
         lastPosChangeAt = 0L
+        main.removeCallbacks(frameWatchdog)
+        frameStall.reset()
     }
 
     // ---------------------------------------------------------------- 起播两阶段 + 总预算

@@ -52,6 +52,16 @@ var exoForceSoftwareDecode: Boolean = false
 var exoFirstFrameRendered: Boolean = false
 
 /**
+ * 累计已渲染帧数（来自 AnalyticsListener.onVideoFrameProcessingOffset）。
+ *
+ * 与 VLC 的 `MediaStats.displayedPictures` 同义，供 [FrameStallDetector] 用。
+ * 每次建播放器/换媒体都归零，否则换台后第一个采样点会带着上一个台的帧数，
+ * 被判成「帧数在涨」而漏掉真正的停帧。
+ */
+@Volatile
+var renderedFrames: Long = 0L
+
+/**
  * 是否启用 tunneled 播放。**只在电视端开启**。
  *
  * 为什么：tunneled 是把解码后的画面交给独立硬件图层显示，
@@ -585,6 +595,7 @@ class ExoEngine : PlayerEngine {
             .build()
 
         exoFirstFrameRendered = false
+        renderedFrames = 0L
         p.addAnalyticsListener(object : androidx.media3.exoplayer.analytics.AnalyticsListener {
             override fun onRenderedFirstFrame(
                 eventTime: androidx.media3.exoplayer.analytics.AnalyticsListener.EventTime,
@@ -607,6 +618,16 @@ class ExoEngine : PlayerEngine {
                 elapsedMs: Long,
             ) {
                 Log.w(TAG, "丢帧 ${droppedFrames} 帧 / ${elapsedMs}ms")
+            }
+
+            // 累计已渲染帧数：与 VLC 的 displayedPictures 同义，是跨内核唯一同尺度的
+            // 「画面还在不在动」信号（见 FrameStallDetector 的类注释）。
+            override fun onVideoFrameProcessingOffset(
+                eventTime: androidx.media3.exoplayer.analytics.AnalyticsListener.EventTime,
+                totalProcessingOffsetUs: Long,
+                frameCount: Int,
+            ) {
+                if (frameCount > 0) renderedFrames = frameCount.toLong()
             }
 
             override fun onAudioUnderrun(
@@ -877,6 +898,7 @@ class ExoEngine : PlayerEngine {
             isBuffering = runCatching {
                 p.playbackState == androidx.media3.common.Player.STATE_BUFFERING
             }.getOrDefault(false),
+            displayedFrames = renderedFrames,
         )
     }
 

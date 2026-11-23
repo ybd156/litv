@@ -153,6 +153,15 @@ data class EngineStats(
      * 「重缓冲 → 判死 → 重建播放器 → 更久才出画」的放大循环。
      */
     val isBuffering: Boolean = false,
+    /**
+     * 内核累计「已显示」帧数。-1 表示该内核不提供。
+     *
+     * 用途：[FrameStallDetector] —— 两个内核之间**唯一同尺度**的「画面还在不在动」
+     * 信号。Exo 取自 AnalyticsListener 的累计 frameCount，VLC 取自
+     * `MediaStats.displayedPictures`。不要用播放位置代替它：VLC 播 HLS 直播时
+     * `player.time` 经常不前进，按位置判卡会把正常播放判成卡死。
+     */
+    val displayedFrames: Long = -1,
 )
 
 /** 内核类型。 */

@@ -98,6 +98,9 @@ class SessionMachine {
 
             SessionState.Acquiring -> when (e) {
                 SessionEvent.EngineStarted -> SessionState.Starting
+                // 首帧没等到「内核接管」也算数：某些路径（VLC 无布局起播、直接
+                // 复用同一内核）不报 prepared，画面已经在播了就不能判非法。
+                SessionEvent.FirstFrame -> SessionState.Playing
                 // 取地址失败：还有下一级就 Degraded，没有就 GaveUp
                 SessionEvent.Degrade -> SessionState.Degraded
                 SessionEvent.GiveUp -> SessionState.GaveUp

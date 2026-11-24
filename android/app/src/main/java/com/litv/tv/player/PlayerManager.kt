@@ -1294,9 +1294,14 @@ class PlayerManager(
                 main.post {
                     // 起播预算已耗尽：内核晚到的事件不再改变状态（终态）
                     if (budgetExpired || released) return@post
+                    val firstPrepare = !prepared
                     prepared = true
                     main.removeCallbacks(startTimeout)
                     main.removeCallbacks(noDataWatchdog)
+                    // 往上层报一次「内核已接管」：这个回调以前从没被转发出去，
+                    // 所以 PlayerActivity.onPrepared 的覆写一直是死代码。
+                    // 只在本次起播的第一回调时转发，重建/重试的后续回调不重复报。
+                    if (firstPrepare) callback?.onPrepared(0, 0)
                     // 已经有字节了：转入阶段二，只看"有没有真的画出第一帧"。
                     if (!firstFrame && engineReportsFirstFrame) {
                         main.removeCallbacks(noFrameWatchdog)

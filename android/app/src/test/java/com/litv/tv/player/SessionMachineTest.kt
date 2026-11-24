@@ -96,10 +96,12 @@ class SessionMachineTest {
     }
 
     @Test
-    fun `取址阶段收到首帧属于乱序，按非法处理`() {
+    fun `首帧早于内核接管回调也能进播放中`() {
+        // 真机实测：Exo 起播时 prepared 回调没往上转发，首帧直接在取址态到达。
+        // 画面已经在播了，就不能判非法、也不能把它卡在取址态。
         val m = machineAt(SessionEvent.Start)
-        assertNull(m.accept(SessionEvent.FirstFrame))
-        assertEquals(SessionState.Acquiring, m.state)
+        assertEquals(SessionState.Playing, m.accept(SessionEvent.FirstFrame))
+        assertEquals(SessionState.Playing, m.state)
     }
 
     @Test

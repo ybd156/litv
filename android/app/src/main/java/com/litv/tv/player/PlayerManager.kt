@@ -499,7 +499,11 @@ class PlayerManager(
     // 否则必然得到 0.00x 这种假警报（2026-11-25 手机实测第一分钟就踩到）。
     private var rateResets = 0
     private var rateLastResets = 0
-    private val rateIntervalMs = 30_000L
+    // 采样器只装一次：startStallWatchdog 在每次换台/HLS 重载都会被调用，
+    // 若每次都 removeCallbacks + 重新 post，30 秒的定时器永远等不到第二次触发
+    // （2026-11-25 手机实测：一行都没打出来）。
+    private var rateArmed = false
+    private val rateIntervalMs = 15_000L
     private val rateTicker: Runnable = object : Runnable {
         override fun run() {
             if (released) return
@@ -542,11 +546,12 @@ class PlayerManager(
         frameStall.reset()
         main.removeCallbacks(frameWatchdog)
         main.postDelayed(frameWatchdog, frameWatchIntervalMs)
-        // 实时比：30 秒一行（只测量，不参与决策）
-        rateLastPos = -1L
-        rateLastAt = 0L
-        main.removeCallbacks(rateTicker)
-        main.postDelayed(rateTicker, rateIntervalMs)
+        // 实时比：只装一次（见 rateArmed 的说明），此后由它自己续命
+        if (!rateArmed) {
+            rateArmed = true
+            main.removeCallbacks(rateTicker)
+            main.postDelayed(rateTicker, rateIntervalMs)
+        }
     }
 
     private fun stopStallWatchdog() {
@@ -555,9 +560,11 @@ class PlayerManager(
         lastPosChangeAt = 0L
         main.removeCallbacks(frameWatchdog)
         frameStall.reset()
-        // 实时比样本一起清：重建/换台期间位置会跳，留着会算出假的「追赶」
-        main.removeCallbacks(rateTicker)
+        // 实时比样本一起清：重建/换台期间位置会跳，留着会算出假的「追赶」。
+        // 注意**不要** removeCallbacks(rateTicker)：采样器是全局只装一次的，
+        // 这里摘掉就再也没人装了（rateArmed 仍为 true）。
         rateLastPos = -1L
+        rateLastFrames = -1L
         rateLastAt = 0L
         // 关掉当前 episode：重建/换内核期间时间在走，若不关，
         // 新内核第一次采样会拿「上一段停帧的起点」算时长，可能立刻又动作一次。

@@ -210,11 +210,9 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
                 // 心跳由会话状态触发，而不是挂在 `/tv/play` 的成功分支上。
                 // 以前那样写，缓存命中/内置源/本地解析/时移四条路径一次都不报，
                 // 管理台的在线时间与「正在播放」只在偶尔走中转时才更新。
-                if (to == SessionState.Playing && src != null &&
-                    heartbeatGate.shouldSend(c.attempt, src.needsHeartbeat)
-                ) {
-                    Log.i(TAG, "心跳：频道 ${src.channelId}（来源 ${src.label}）")
-                    app.api.heartbeat(src.channelId, "playing") { hb -> onChannelsVersion(hb.channelsVersion) }
+                if (to == SessionState.Playing && src != null && heartbeatGate.shouldSend(c.attempt)) {
+                    Log.i(TAG, "心跳：频道 ${src.heartbeatChannelId}（来源 ${src.label}）")
+                    app.api.heartbeat(src.heartbeatChannelId, "playing") { hb -> onChannelsVersion(hb.channelsVersion) }
                 }
             }
         }

@@ -6,7 +6,8 @@ package com.litv.tv.player
  * 没有任何一处「起播发生了」的统一事实可供挂载。
  *
  * 这个类型就是把那条事实显式化：四种来源共用同一组播放参数，差异只在**语义**，
- * 于是心跳/QoE/日志可以在唯一入口按 [needsHeartbeat] 分流，而不是散在四个分支里。
+ * 于是心跳/QoE/日志可以在唯一入口挂一次，而不是散在四个分支里
+ * （心跳要报的频道号见 [heartbeatChannelId]）。
  */
 sealed class PlaySource(
     open val channelId: Long,
@@ -72,17 +73,19 @@ sealed class PlaySource(
         }
 
     /**
-     * 是否需要向服务端报心跳。
+     * 心跳里要报的频道号。
      *
-     * 曾经是 `this is Remote`（只有中转路径报），结果是缓存命中、内置源、
-     * 本地解析、时移四条路径一次都不报——管理台「终端设备」的在线时间与
-     * 「正在播放」只在偶尔走中转时才更新。
+     * 心跳曾经只挂在服务端 `/tv/play` 成功分支上（评审 P0-10），于是缓存命中、
+     * 内置源、本地解析、时移四条路径一次都不报，管理台「终端设备」的在线时间
+     * 与「正在播放」只在偶尔走中转时才更新。
      *
-     * 服务端 `tvHeartbeat` 的实现（`server/internal/api/handlers_client_device.go:161`）
-     * 只做两件事：更新设备的 IP/版本、返回 config/channels 版本号；
-     * `playing_channel` 只解码不校验。所以它**不依赖频道在服务端存在**，
-     * 四条路径都可以报。唯一要挡的是没有真实频道 id 的情况（内置源的合成 id
-     * 可能为 0 或负数），那种报上去只会污染设备记录。
+     * 服务端 `tvHeartbeat`（`server/internal/api/handlers_client_device.go:161`）
+     * 只更新设备的 IP/版本并回传 config/channels 版本号，`playing_channel`
+     * 解码后既不入库也不校验——它的本质是「这台设备还活着」，与来源无关，
+     * 所以四条路径都该报。
+     *
+     * 唯一要处理的是没有真实频道 id 的来源：内置源用合成 id（实测 -1018），
+     * 那种就报 0，表示「在播，但没有服务端认识的频道」。
      */
-    val needsHeartbeat: Boolean get() = channelId > 0
+    val heartbeatChannelId: Long get() = if (channelId > 0) channelId else 0L
 }

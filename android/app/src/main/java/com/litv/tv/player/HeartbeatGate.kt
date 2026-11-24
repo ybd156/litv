@@ -13,6 +13,11 @@ package com.litv.tv.player
  *
  * 判据只有一条：**同一次起播（[attempt]）只发一次**，换台或重试会让
  * `SessionMachine` 的 attempt 递增，于是自然再发一次。
+ *
+ * 心跳不看起播路径：服务端 `tvHeartbeat` 只更新设备的 IP/版本并回传
+ * config/channels 版本号，`playing_channel` 解码后既不入库也不校验，
+ * 本质是「这台设备还活着」。所以每条路径都该报，内置源这类没有真实
+ * 频道 id 的也要报——只是把频道号发 0（见 `PlaySource.heartbeatChannelId`）。
  */
 class HeartbeatGate {
 
@@ -20,11 +25,9 @@ class HeartbeatGate {
 
     /**
      * @param attempt 会话状态机里本次起播的序号（换台/重试会变）
-     * @param needsHeartbeat 这个来源是否需要心跳（见 `PlaySource.needsHeartbeat`）
      * @return true 表示这一次该发
      */
-    fun shouldSend(attempt: Int, needsHeartbeat: Boolean): Boolean {
-        if (!needsHeartbeat) return false
+    fun shouldSend(attempt: Int): Boolean {
         if (attempt == lastAttempt) return false
         lastAttempt = attempt
         return true

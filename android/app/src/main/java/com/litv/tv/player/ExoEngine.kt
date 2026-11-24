@@ -333,9 +333,12 @@ class ExoEngine : PlayerEngine {
         //   /ch/  前面的内置源（央视频，窗口 36 秒，缓冲必须压在窗口内）
         //   /raw/ 前面的自建源（窗口通常 60~100 秒，可以囤更深）
         // 只看 127.0.0.1 会把自建源误判成内置源，用小缓冲去跑慢源 —— 反而更容易卡。
-        val isLocalProxy = url.contains("127.0.0.1") && !url.contains("/raw/")
-        val effBufferMs = if (isLocalProxy) bufferMs else maxOf(bufferMs, 22_000)
-        val cfg = "$decode|$effBufferMs|$exoEnableTunneling|${Av3aLoader.available(ctx)}|local=$isLocalProxy"
+        // ★ S2：缓冲/落后量只从 PlaybackPolicy 取，引擎里不再自己算。
+        //   原来这里有一段 effBufferMs = max(bufferMs, 22_000)，就是「自建源地板」这条
+        //   策略的第二个住址——和 buildPlayer 里的 min/max 各写一套，改一处忘一处。
+        val source = SourceKind.ofUrl(url)
+        val pol = PlaybackPolicy.exo(source, bufferMs, com.litv.tv.data.Prefs(ctx).liveOffsetMs)
+        val cfg = "$decode|${pol.cfgBufferMs}|$exoEnableTunneling|${Av3aLoader.available(ctx)}|local=${source == SourceKind.BUILTIN}"
         val existing = player
         val p: ExoPlayer
         if (existing != null && builtConfig == cfg) {
@@ -352,7 +355,7 @@ class ExoEngine : PlayerEngine {
             p = existing
         } else {
             releaseInternal()
-            p = buildPlayer(ctx, decode, effBufferMs, isLocalProxy)
+            p = buildPlayer(ctx, decode, pol, source)
             player = p
             builtConfig = cfg
         }
@@ -371,26 +374,16 @@ class ExoEngine : PlayerEngine {
         // 画面比例（auto/zoom/fill/16:9/4:3）由 Activity 侧的
         // AspectRatioFrameLayout 负责，引擎不再参与。
         p.setVideoSurface(videoSurface)
-        // 直播延迟：让播放器主动落后直播边缘（默认 20 秒）。
+        // 直播延迟：让播放器主动落后直播边缘。
         //
-        // 贴着边缘跑时，解码慢一点或网络抖一下就掉出 HLS 窗口
-        // （ERROR_CODE_BEHIND_LIVE_WINDOW），表现是"看着看着卡一下"。
-        // 主动落后等于把缓冲垫厚——代价是画面比真实直播晚几秒，
-        // 换来的是不再频繁 seek 重建解码器。
+        // 为什么要落后：贴着边缘跑时，解码慢一点或网络抖一下就掉出 HLS 窗口
+        // （ERROR_CODE_BEHIND_LIVE_WINDOW），表现是「看着看着卡一下」；主动落后
+        // 等于把缓冲垫厚，代价是画面比真实直播晚几秒。
         //
-        // targetOffset 只在 HLS 的直播 playlist 上生效；VOD / 点播没有影响。
-        // 服务器分片窗口不够长时会退化成"贴着边缘"，不会报错。
-        // ★ 2026-11-21：offset 必须给缓冲留够余量。
-        //
-        // 播放位置离直播边缘的距离 =
-        //     targetOffsetMs（主动落后） + minBufferMs（背后还要垫的缓冲）
-        //
-        // 原来 offset=20s、min=14s → 合计 34s，而 HLS 窗口只有约 36s，
-        // 余量仅 2 秒，网络一抖就 ERROR_CODE_BEHIND_LIVE_WINDOW → seek → 重缓冲。
-        // 真机日志里起播 8 秒就出现，随后每 50 秒一次。
-        //
-        // 改成 offset 上限 10 秒：10 + 14 = 24s，窗口留 12 秒余量。
-        val offsetMs = com.litv.tv.data.Prefs(ctx).liveOffsetMs.toLong().coerceIn(4_000L, 10_000L)
+        // 取值与理由见 PlaybackPolicy.exo（offset 与 minBuffer 是**同一条约束**：
+        // 两者之和必须给窗口留够余量），引擎里不再各自夹取。
+        // targetOffset 只在 HLS 的直播 playlist 上生效；VOD / 回看没有影响。
+        val offsetMs = pol.targetOffsetMs
         val liveCfg = androidx.media3.common.MediaItem.LiveConfiguration.Builder()
             .setTargetOffsetMs(offsetMs)
             // 允许极小幅度变速追帧：落后时 0.98 倍慢放追回，超前时 1.02 倍。
@@ -418,94 +411,34 @@ class ExoEngine : PlayerEngine {
     private fun buildPlayer(
         ctx: android.content.Context,
         decode: String,
-        bufferMs: Int,
-        isLocalProxy: Boolean,
+        pol: ExoPolicy,
+        source: SourceKind,
     ): ExoPlayer {
-        // 直播缓冲。
+        // 直播缓冲的取值全部来自 PlaybackPolicy（S2）——本文件不再出现裸缓冲数字。
         //
         // 参数含义（ExoPlayer 的 LoadControl）：
         //   minBufferMs  往前**保持**缓冲多少 -> 决定抗抖动能力
         //   maxBufferMs  缓冲上限
-        //   bufferForPlaybackMs              起播前至少要有多少 -> 决定"多久出画面"
-        //   afterRebufferMs                  欠载恢复后至少要有多少
+        //   bufferForPlaybackMs  起播前至少要有多少 -> 决定「多久出画面」
+        //   afterRebufferMs      欠载恢复后至少要有多少
         //
-        // 原来 minBuffer=800ms：播放器只往前留 0.8 秒，CDN 稍微抖一下就欠载，
-        // 表现就是"播一会儿卡一下"。起播速度由 bufferForPlaybackMs 决定，
-        // 和 minBuffer 无关，所以这里把 minBuffer 放到 5 秒换取抗抖动，
-        // 起播阈值仍保持 300ms（IPTV 对出画时间敏感）。
-        // 往前保持 10 秒缓冲（用户指定）：CDN 抖一下不至于立刻欠载。
-        // 上限至少要比它大，否则 ExoPlayer 会报参数非法。
-        // ★ 跟随设置里的「缓冲」（prefs.bufferMs），不再写死 10 秒。
-        //
-        // 10 秒对直播是错的：服务端 HLS 窗口只有 6 片 × 2 秒 = 12 秒，
-        // 要保 10 秒缓冲，播放位置必然贴着窗口边缘，一抖就
-        // ERROR_CODE_BEHIND_LIVE_WINDOW → seek 回边缘 → 重新缓冲，
-        // 表现就是「越看越卡」。落盘日志里起播 6 秒就掉出去过一次。
-        // 社区直播实践是 1.5~3 秒，这里跟随设置并夹在 1~8 秒。
-        // 下限从 1 秒抬到 12 秒。实测这个源（mursor）的 HLS 分片间隔接近 10 秒：
-        // minBuffer 如果小于一个分片长度，缓冲刚攒够就掉回阈值以下，
-        // 表现是每 15 秒一次「重缓冲：播放中回到 BUFFERING」+「位置回落」。
-        // 起播不受影响 —— 起播深度由 bufferForPlaybackMs(800ms) 控制，不是这个值。
-        // ★ 2026-11-21 改：下限 12s → 20s。
-        //   依据是电视 18.6 小时的播放日志：自建源（分片间隔接近 10 秒）
-        //   在 04~16 时仍有 17~29 次/小时的重缓冲，而同期「加载慢」实测只有
-        //   833~1205ms（属正常波动）——说明不是网络慢，是缓冲攒不住：
-        //   12 秒在 10 秒分片下只剩 1 个分片余量，一抖就跌破阈值。
-        //   提到 20 秒覆盖 2 个分片。代价是直播延迟增加约 8 秒（比卡顿划算）。
-        // ★ 2026-11-21 修正：上一版把这个下限提到 20 秒是错的。
-        //   真机日志立刻出现 ERROR_CODE_BEHIND_LIVE_WINDOW：
-        //     「播放位置掉出直播窗口，seek 回直播边缘」→ 每 6~30 秒一次重缓冲。
-        //   原因：直播的 HLS 窗口只有 6 个分片（日志 segs=6，每片约 6 秒 ≈ 36 秒），
-        //   而 maxBufferMs 上限是 40 秒 —— 比整个窗口还大。
-        //   播放器囤满 40 秒，播放位置就在窗口外，必然掉出去。
-        //   这跟本文件上面那段注释里早写过的坑是同一个：缓冲不能贴窗口边缘。
-        // 下限 14 秒：实测央视频分片约 6 秒，14 秒 = 2.3 个分片，才抗得住一次抖动；
-        // 同时必须 < 直播窗口的一半（窗口 6 片 ≈ 36 秒，一半是 18 秒），
-        // 否则播放位置贴边 → BEHIND_LIVE_WINDOW（这个坑上面刚踩过）。
-        // 分档：内置源必须贴着窗口以内；自建源窗口通常 60~100 秒，可以囤得更深。
-        val minBufferMs = if (isLocalProxy) {
-            bufferMs.coerceIn(14_000, 16_000)
-        } else {
-            bufferMs.coerceIn(20_000, 30_000)
-        }
-        // 上限原来只有 max(缓冲设置, 12s)。实测 cctv17 这类源：
-        // 播放列表（1KB）每次要 880~1450ms、分片（2~3MB）要 870~1213ms，
-        // 两分钟里"加载慢"出现 29 次、重缓冲 2 次 —— 12 秒的池子太薄，
-        // 连续两次慢请求就见底。上限放到"缓冲设置 × 3"（下限 20s、上限 60s），
-        // 让 ExoPlayer 有空间提前囤货。
-        // 上限封在 20 秒：直播不需要囤 60 秒，那是纯浪费内存，
-        // 低端盒子上还会把 GC 压力拉满。
-        // 上限 40 秒：它是"最多囤多少"，不是目标深度，不会和 12 秒窗口冲突
-        // （窗口冲突由 minBufferMs 决定）。20 秒太紧——实测 2.8 小时里
-        // 重缓冲 79 次、判定卡死 10 次，上游拉 1KB 清单要 1.5 秒时没有余量。
-        // ★ 上限必须**明显小于**直播窗口（这里窗口约 36 秒）。
-        //   原来 max = min*4 夹到 40 秒，比窗口还大，必然掉出直播窗口。
-        //   改成 min + 8 秒（10~16 秒的 min 对应 18~24 秒上限），留足余量。
-        val maxBufferMs = if (isLocalProxy) {
-            (minBufferMs + 4_000).coerceIn(minBufferMs + 2_000, 20_000)
-        } else {
-            (minBufferMs + 10_000).coerceIn(minBufferMs + 2_000, 40_000)
-        }
-        // bufferForPlayback 从 300 提到 800：
-        // 实测音频 HAL 的欠载告警全部集中在起播那 4 秒（19 条在 20:42:49~53，
-        // 之后 55 秒安静）。300ms 就开播时管线还没填满，第一秒最容易破音。
-        // 起播慢 0.5 秒，换掉开头那一段电音。
+        // 唯一必须留在这里的约束：**上限要明显小于直播窗口**。内置源窗口 36 秒，
+        // 上限 40 秒的那一版在真机日志里表现为每 6~30 秒一次 BEHIND_LIVE_WINDOW →
+        // seek 回边缘 → 重缓冲（见 PlaybackPolicy.exo 的注释与测试）。
         val loadControl = DefaultLoadControl.Builder()
-            // 第 4 个参数是"重缓冲后要再攒多少才恢复播放"。
-            // 2000 → 1000：实测重缓冲 38 次/小时，每次多等 1 秒就是
-            // 每小时多卡 38 秒；上游慢是常态，早点恢复比攒满更划算。
-            .setBufferDurationsMs(minBufferMs, maxBufferMs, 800, 1000)
+            .setBufferDurationsMs(
+                pol.minBufferMs,
+                pol.maxBufferMs,
+                pol.bufferForPlaybackMs,
+                pol.afterRebufferMs,
+            )
             .setBackBuffer(0, true)                     // 直播不回退缓冲，省内存
             .setPrioritizeTimeOverSizeThresholds(false) // 优先按字节封顶，防低端盒子 OOM
             .build()
 
         // 落一行到 play.log：事后能确认这台设备实际用的缓冲参数，
         // 不用再靠猜（之前排查卡顿时最缺的就是这个数）。
-        com.litv.tv.data.PlayLog.w(
-            TAG,
-            "缓冲参数 min=${minBufferMs}ms max=${maxBufferMs}ms 起播=800ms 恢复=1000ms 档位=" +
-                (if (isLocalProxy) "内置源" else "自建源"),
-        )
+        com.litv.tv.data.PlayLog.w(TAG, pol.describe(source))
 
         // ★ 源配置里的 UA 必须走 setUserAgent，不能只塞进请求头。
         //   ExoPlayer 的 DefaultHttpDataSource 是「先应用 defaultRequestProperties、

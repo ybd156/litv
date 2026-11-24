@@ -257,12 +257,13 @@ class VlcEngine : PlayerEngine {
             //   --audio-time-stretch                音频重采样对齐，不丢样本
             // 时钟同步保持默认，让 VLC 自己平滑校正。
             add("--avcodec-hw=any")          // 尽量硬解
-            // 直播缓冲从 1500ms 降到 800ms。
-            // VLC 的 network-caching 同时决定「起播前等多久」，1500ms 意味着
-            // 至少白等 1.5 秒——参考的 ijkplayer 用 packet-buffering=0 直接跳过这段。
-            // 800ms 在局域网/中转场景够用，再低容易花屏。
-            add("--network-caching=800")
-            add("--live-caching=800")
+            // ★ 缓存参数**不在这里**（S2）。
+            //
+            // 这里曾经写过 `--network-caching=800` / `--live-caching=800`，而 media 级
+            // 又设了一次 `:network-caching=<设置值>`（默认 8000）。media 级优先级更高，
+            // 所以实例级那两行从来没生效过，只造成「到底哪个值在跑」的长期歧义。
+            // 现在唯一来源是 PlaybackPolicy.vlc()，在 startOnMain 里设到 media 上，
+            // 并打一行「本次生效参数」到 play.log。别再往这里加缓存参数。
             // ★ 不要关音频时间伸缩。
             // 关掉之后（原来的 --no-audio-time-stretch），音视频时钟漂移
             // 只能靠丢样本/插零来凑，听感就是"电音"、断续，过一会再同步、
@@ -410,11 +411,17 @@ class VlcEngine : PlayerEngine {
             syncWindowSize(mp)
         }
 
+        // VLC 的网络缓冲（S2）：唯一来源是 PlaybackPolicy.vlc()。
+        // 实例级那两行 `--network-caching/--live-caching` 已删除——它们从来没生效过
+        // （media 级优先级更高），留着只会让人以为「跑的是 800」。
+        val source = SourceKind.ofUrl(url)
+        val vpol = PlaybackPolicy.vlc(source, bufferMs)
         val media = Media(lib, Uri.parse(url)).apply {
-            // VLC 的网络缓冲：把用户设置映射成毫秒
             setHWDecoderEnabled(decode != "soft", false)
-            addOption(":network-caching=${bufferMs.coerceIn(500, 20000)}")
-            addOption(":live-caching=${bufferMs.coerceIn(500, 20000)}")
+            addOption(":network-caching=${vpol.networkCachingMs}")
+            addOption(":live-caching=${vpol.liveCachingMs}")
+            // 落一行到 play.log：真机核对「设置里的缓冲 → VLC 实际缓存」用。
+            com.litv.tv.data.PlayLog.w(TAG, vpol.describe(source))
             // ★ 绝不在这里加 :clock-jitter=0 / :clock-synchro=0。
             //
             // 这两行曾经存在，而且被删过一次又漏回来过（commit 7456a77 只删了

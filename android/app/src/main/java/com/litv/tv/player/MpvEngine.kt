@@ -84,7 +84,7 @@ class MpvEngine(private val avs3Mode: Boolean = false) : PlayerEngine, MPVLib.Li
         MPVLib.listener = this
         fileLoaded = false
 
-        applyOptions(bufferMs, decode, headers)
+        applyOptions(bufferMs, decode, headers, SourceKind.ofUrl(url))
 
         videoSurface?.takeIf { it.isValid }?.let { MPVLib.attachSurface(it) }
         MPVLib.command(arrayOf("loadfile", url, "replace"))
@@ -103,7 +103,12 @@ class MpvEngine(private val avs3Mode: Boolean = false) : PlayerEngine, MPVLib.Li
         created = true
     }
 
-    private fun applyOptions(bufferMs: Int, decode: String, headers: Map<String, String>) {
+    private fun applyOptions(
+        bufferMs: Int,
+        decode: String,
+        headers: Map<String, String>,
+        source: SourceKind,
+    ) {
         fun opt(k: String, v: String) = MPVLib.setOptionString(k, v)
 
         // ---- 硬解策略 ----
@@ -158,17 +163,12 @@ class MpvEngine(private val avs3Mode: Boolean = false) : PlayerEngine, MPVLib.Li
             else -> opt("video-aspect-override", "no")
         }
 
-        // ---- 缓冲：秒数 → 字节（照抄实测映射表）----
-        val secs = (bufferMs / 1000).coerceIn(1, 30)
-        val maxBytesMB = when {
-            secs <= 2 -> 32
-            secs <= 4 -> 64
-            secs <= 9 -> 128
-            else -> 256
-        }
-        opt("demuxer-max-bytes", "${maxBytesMB}MiB")
-        opt("demuxer-max-back-bytes", "${(maxBytesMB / 4).coerceAtLeast(4)}MiB")
-        opt("demuxer-readahead-secs", secs.coerceAtLeast(1).toString())
+        // ---- 缓冲：秒数 → 字节（映射表在 PlaybackPolicy.mpv，S2）----
+        val mp = PlaybackPolicy.mpv(source, bufferMs)
+        opt("demuxer-max-bytes", "${mp.maxBytesMiB}MiB")
+        opt("demuxer-max-back-bytes", "${mp.maxBackBytesMiB}MiB")
+        opt("demuxer-readahead-secs", mp.readaheadSecs.toString())
+        com.litv.tv.data.PlayLog.w(TAG, mp.describe(source))
 
         // ---- 自定义请求头 ----
         if (headers.isNotEmpty()) {

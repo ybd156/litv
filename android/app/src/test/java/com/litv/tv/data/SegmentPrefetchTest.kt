@@ -84,3 +84,44 @@ class SegmentPrefetchTest {
         assertEquals(2, s.prefetchHitCount)
     }
 }
+
+class PlaylistUrlsTest {
+
+    private val playlist = """
+        #EXTM3U
+        #EXT-X-VERSION:3
+        #EXT-X-TARGETDURATION:4
+        #EXTINF:4.0,
+        seg100.ts
+        #EXTINF:4.0,
+        ./seg101.ts
+        #EXTINF:4.0,
+        https://cdn2.example/abs/seg102.ts
+    """.trimIndent()
+
+    @Test
+    fun `解析媒体行并按目录拼相对地址`() {
+        val urls = PlaylistUrls.mediaUrls(playlist, "https://cdn1.example/live/ch1/index.m3u8?sign=abc")
+        assertEquals(
+            listOf(
+                "https://cdn1.example/live/ch1/seg100.ts",
+                "https://cdn1.example/live/ch1/seg101.ts",
+                "https://cdn2.example/abs/seg102.ts",
+            ),
+            urls,
+        )
+    }
+
+    @Test
+    fun `标签行一个有都不能混进来`() {
+        val urls = PlaylistUrls.mediaUrls(playlist, "https://cdn1.example/live/ch1/index.m3u8")
+        assertTrue("不能把 #EXTINF 当成分片", urls.none { it.contains("#") })
+        assertEquals(3, urls.size)
+    }
+
+    @Test
+    fun `空清单返回空`() {
+        assertTrue(PlaylistUrls.mediaUrls("", "https://a/b.m3u8").isEmpty())
+        assertTrue(PlaylistUrls.mediaUrls("#EXTM3U\n#EXT-X-ENDLIST", "https://a/b.m3u8").isEmpty())
+    }
+}

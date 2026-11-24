@@ -75,6 +75,14 @@ object LocalHlsProxy {
     /** 多久没有播放器来要，就停掉保活（换台/退出后别一直打源站）。 */
     private const val RAW_IDLE_MS = 30_000L
 
+    /**
+     * 分片慢到这个程度就标记「下次换线路」。
+     *
+     * 4 秒的依据：正常分片 1~2 秒；一片 4 秒以上，播放器的缓冲就会被它吃掉一格，
+     * 连续两片就进重缓冲。这时换线路的收益大于「再等等看」。
+     */
+    private const val SEGMENT_SLOW_SWITCH_MS = 4_000L
+
     private data class CachedM3u8(val text: String, val at: Long, val realBase: String)
 
     /** 线路地址缓存：bkliveinfo 不能每 2 秒调一次，会被限流。 */
@@ -765,8 +773,7 @@ object LocalHlsProxy {
         val t0 = System.currentTimeMillis()
         val bytes = try {
             fetchBytesSmart(real)
-        } catch (e: Throwable) {
-            // 把真实原因暴露出来：这段原来用 runCatching 吞掉了异常，
+        } catch (e: Throwable) {            // 把真实原因暴露出来：这段原来用 runCatching 吞掉了异常，
             // 只留下一个 "segment failed"，根本不知道是 403、超时还是解码问题。
             Log.w(TAG, "分片拉取失败（${real.take(90)}…）：${e.javaClass.simpleName}: ${e.message}")
             // ★ 403 几乎都是「分片地址过期」：playlist 里带的是签名 URL，有时效，
@@ -805,6 +812,17 @@ object LocalHlsProxy {
                     onTooMany403?.invoke(target)
                 }
             }
+            // ★ 2026-11-24：分片级换线路。
+            //   这一片在当前线路上拿不到（或 403 之后仍然拿不到），
+            //   立刻去备用线路取**同一位置**的片子顶上，而不是把 502 甩给播放器
+            //   （播放器拿到 502 只会重试同一条死路，直到判死换内核）。
+            val alt = runCatching { alternateLineSegment(real) }.getOrNull()
+            if (alt != null) {
+                synchronized(segCache) { segCache[real] = alt }
+                if (fail403.get() != 0) fail403.set(0)
+                writeBody(out, alt, "video/mp2t")
+                return
+            }
             writeStatus(out, 502, "segment failed: " + (msg.ifBlank { e.javaClass.simpleName }))
             return
         }
@@ -812,9 +830,76 @@ object LocalHlsProxy {
         Log.i(TAG, "SEG bytes=" + bytes.size)
         // 只在慢的时候落盘：正常分片 1~2 秒，超过 3 秒就是 CDN 抖动，正是要抓的东西
         if (cost > 3000) PlayLog.w(TAG, "分片慢 ${cost}ms / ${bytes.size / 1024}KB")
+        // 这一片虽然拿到了，但慢到会直接把播放器拖进重缓冲：标记下次换线路。
+        // 只在「还有别的线路」时才有意义，内置源才有；自建源单线时它是个空动作。
+        if (cost > SEGMENT_SLOW_SWITCH_MS) {
+            needRotateLine = true
+            PlayLog.w(TAG, "分片慢 ${cost}ms → 下次取流换线路")
+        }
         synchronized(segCache) { segCache[real] = bytes }
         if (fail403.get() != 0) fail403.set(0)   // 能拉到分片说明链路恢复，计数归零
         writeBody(out, bytes, "video/mp2t")
+    }
+
+    /**
+     * 分片级换线路：用**另一条线路**取同一位置的分片。
+     *
+     * 为什么需要：内置源（央视频）一次会返回 playurl + backurl_list 多条线路，
+     * 但它们的分片地址各自带签名、互不通用。旧实现只会在 403 时「下次取流换条线」，
+     * 属于**整条链路重来**；而真机上更常见的是「某一片特别慢/偶发 5xx」——
+     * 这时候换整条线路代价太大（要重新取流、重新拉清单），把这一片从别的线补上就够。
+     *
+     * 怎么对齐：分片地址里没有序号，只能按它在自己清单里的**位置**去备线清单里取同一位。
+     * 直播窗口大约同长，位差一般 0~1 片，画面最多跳一下，比黑屏/判死好得多。
+     * 代价：失败时多两次网络调用（取线路 + 取备线清单），所以只在这一片已经失败时才做。
+     */
+    private fun alternateLineSegment(real: String): ByteArray? {
+        val id = curChannelId
+        if (id <= 0) return null
+        val ch = runCatching { YspClient.channelOf(id) }.getOrNull() ?: return null
+        val lines = runCatching { YspClient.lines(ch, timeoutMs = 5_000) }.getOrNull().orEmpty()
+        if (lines.size < 2) return null
+        val idx = segmentIndexOf(id, real) ?: return null
+        for (i in lines.indices) {
+            if (i == lineIndex) continue
+            val url = runCatching { segmentUrlAt(lines[i].url, idx) }.getOrNull() ?: continue
+            val bytes = runCatching { fetchBytesSmart(url) }.getOrNull() ?: continue
+            lineIndex = i
+            needRotateLine = false
+            Log.i(TAG, "分片换线路成功 → 第 " + (i + 1) + "/" + lines.size + " 条")
+            PlayLog.w(TAG, "分片换线路成功 → 第 " + (i + 1) + "/" + lines.size + " 条")
+            return bytes
+        }
+        Log.w(TAG, "分片换线路也失败（共 ${lines.size} 条）")
+        return null
+    }
+
+    /** 这一片在当前频道的清单里排第几（0 起）。找不到就无法对齐，换线路直接放弃。 */
+    private fun segmentIndexOf(channelId: Long, real: String): Int? {
+        val text = cache[channelId]?.text ?: return null
+        var i = 0
+        for (line in text.lineSequence()) {
+            val s = line.trim()
+            if (s.isEmpty() || s.startsWith("#") || !s.startsWith("/seg/")) continue
+            val enc = s.removePrefix("/seg/")
+            val u = runCatching {
+                String(
+                    Base64.decode(enc, Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING),
+                    Charsets.UTF_8,
+                )
+            }.getOrNull()
+            if (u == real) return i
+            i++
+        }
+        return null
+    }
+
+    /** 取某条线路 playlist 里第 index 个分片地址。 */
+    private fun segmentUrlAt(playlistUrl: String, index: Int): String? {
+        val text = fetchText(playlistUrl, UA_PROXY, timeoutMs = 4_000, readMs = 5_000)
+        val segs = PlaylistUrls.mediaUrls(text, playlistUrl)
+        if (segs.isEmpty()) return null
+        return segs[index.coerceIn(0, segs.size - 1)]
     }
 
     // ---------------------------------------------------------------- HTTP

@@ -45,6 +45,29 @@ object SegmentPrefetch {
 }
 
 /**
+ * m3u8 里的「媒体分片地址」解析（纯逻辑，可单测）。
+ *
+ * 分片级换线路要用它：拿到备用线路的 playlist 后，按序号取出与当前请求
+ * 同一位置的片子。规则只有三条，但每条都踩过：
+ *   · 跳过 `#` 开头的标签行（#EXTINF / #EXT-X-…）
+ *   · 相对地址按 playlist 所在目录拼接
+ *   · `./x.ts` 这种带点的相对路径要去掉 `./` 再拼（否则变成 `/dir/./x.ts`）
+ */
+object PlaylistUrls {
+
+    fun mediaUrls(text: String, playlistUrl: String): List<String> {
+        val base = playlistUrl.substringBefore('?').substringBeforeLast('/') + "/"
+        val out = ArrayList<String>(16)
+        for (raw in text.lineSequence()) {
+            val line = raw.trim()
+            if (line.isEmpty() || line.startsWith("#")) continue
+            out.add(if (line.startsWith("http")) line else base + line.removePrefix("./"))
+        }
+        return out
+    }
+}
+
+/**
  * 分片健康统计。
  *
  * 为什么需要：要证明「并发预取有用」，不能只看体感，得有两组可比的数——

@@ -283,25 +283,32 @@ build_ffmpeg() {
     avs3_flags=(--enable-libuavs3d)
   fi
 
-  # 32 位 x86 的 nasm/yasm 汇编目标不能进共享库：
-  #   ld.lld: error: relocation R_386_32 cannot be used against local symbol; recompile with -fPIC
-  # （2026-11-24 首次编 x86 时踩到，只有 x86 中招；arm/arm64 的汇编本身是 PIC。）
-  # 模拟器上的 x86 只做「功能与稳定性对比」，不需要 SIMD 性能，直接关掉 x86asm。
+  # 32 位 x86 的汇编不能进共享库，而且不止 nasm 那一层：
+  #   1) ld.lld: relocation R_386_32 cannot be used against local symbol（--disable-x86asm 能挡 nasm）
+  #   2) libswscale/x86/rgb2rgb_template.c: inline assembly requires more registers than available
+  #      —— 这是 C 里的内联汇编，--disable-x86asm 管不到，必须 --disable-asm 才一起挡掉。
+  # 模拟器上的 x86 只做「功能与稳定性对比」，不需要 SIMD 性能。
   local asm_flags=()
   if [ "$abi" = "x86" ]; then
-    asm_flags=(--disable-x86asm)
+    asm_flags=(--disable-asm)
   fi
 
   # openssl 装到 $prefix，必须让 pkg-config 找到它的 .pc，
   # 否则 ffmpeg 的 check_pkg_config 找不到 openssl 会直接 die。
   export PKG_CONFIG_PATH="$OUT/$abi-deps/lib/pkgconfig:$prefix/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
 
-  # ★ 参数里不要出现 --disable-postproc：libpostproc 已在 FFmpeg master 被移除，
-  #   而我们钉的 FFMPEG_TAG=094a2f8a2a 正是那一代，configure 会直接
+  # ★ 参数里不要出现 --disable-postproc：libpostproc 已被 FFmpeg 从 master 移除。
+  #   当初钉 FFMPEG_TAG=094a2f8a2a（n8 那一代）时，configure 直接
   #   "Unknown option \"--disable-postproc\"" 退出（2026-11-23 三个 ABI 全灭的真因）。
-  #   没有这个库时本来就不会编它，不需要显式关。
+  #   现在虽然钉回 n6.1（那边还有 postproc），也不加——不需要就交给默认值，
+  #   免得以后换版本又撞同一个坑。
   #   （注释只能写在这里——写进下面的续行命令里会把命令截断，preflight 的
   #    check-continuation.py 专门抓这个。）
+  # ★ --disable-vulkan：IPTV 用不到；而且 armeabi-v7a 上它的 hwcontext_vulkan.c
+  #   在新 clang 的 -Werror=incompatible-function-pointer-types 下直接编不过
+  #   （2026-11-24 的失败点：PFN_vkDebugUtilsMessengerCallbackEXT 函数指针类型不兼容）。
+  #   extra-cflags 里的 -Wno-incompatible-function-pointer-types 是同一类问题的兜底
+  #   （mpv 侧也有同样的 const/函数指针代差）。
   "$SRC/ffmpeg/configure" \
     --prefix="$prefix" \
     --target-os=android --arch="${abi%%-*}" \
@@ -311,9 +318,10 @@ build_ffmpeg() {
     --enable-shared --disable-static \
     --disable-programs --disable-doc \
     --disable-avdevice \
+    --disable-vulkan \
     "${avs3_flags[@]}" \
     "${asm_flags[@]}" \
-    --extra-cflags="-I$OUT/$abi-deps/include -fPIC -O2" \
+    --extra-cflags="-I$OUT/$abi-deps/include -fPIC -O2 -Wno-incompatible-function-pointer-types" \
     --extra-ldflags="-L$OUT/$abi-deps/lib" \
     --enable-jni --enable-mediacodec \
     --enable-decoder=h264,hevc,mpeg2video,avs2,avs3,mp3,aac,ac3,eac3,dca,flac,opus,vorbis \

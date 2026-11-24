@@ -86,6 +86,13 @@ android {
         // instrumented test 需要一个 runner（模拟器验证央视频取流用）
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
+        // ★ 构建身份：设备上「装的是不是这一次构建」不能靠 APK mtime 判断
+        //   （AGENTS §6 1b 记录过：构建期间改源码会给出假绿灯，mtime 比源码新但文件没进包）。
+        //   CI 用 GITHUB_SHA 的短 sha；本地构建显示 dev —— 本地与 CI 产物本来就该能区分。
+        //   判据改成：设备日志里的 BUILD sha == 本次构建的 commit。
+        val buildSha = System.getenv("GITHUB_SHA")?.take(7) ?: "dev"
+        buildConfigField("String", "BUILD_SHA", "\"$buildSha\"")
+
         // 架构过滤走下面的 splits.abi —— 两者互斥，不能同时用。
     }
 

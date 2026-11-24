@@ -52,6 +52,11 @@ class LitvApp : Application() {
         // 加密 DNS 的开关与端点来自本地偏好：进程一启动就同步给解析器，
         // 否则第一次取流会先用默认值（阿里）跑一轮，用户改了设置也要等下次启动才生效。
         com.litv.tv.data.PlayLog.init(this)
+        // ★ 构建身份：这是「设备上装的是哪一次构建」的唯一可靠判据。
+        //   以前靠比 APK 与源码的 mtime，构建中改源码就会给出假绿灯（AGENTS §6 1b）。
+        //   真机验证时对照：这里打印的 sha 必须等于要验证的那个 commit。
+        Log.i(TAG, "BUILD sha=${BuildConfig.BUILD_SHA} v=${BuildConfig.VERSION_NAME}(${BuildConfig.VERSION_CODE})")
+        com.litv.tv.data.PlayLog.w(TAG, "BUILD sha=${BuildConfig.BUILD_SHA} v=${BuildConfig.VERSION_NAME}")
         com.litv.tv.data.NetState.start(this)
         DohDns.attach(this)
         DohDns.configure(prefs.dohEnabled(), prefs.dohProvider)

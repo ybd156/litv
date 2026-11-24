@@ -213,6 +213,9 @@ object LocalHlsProxy {
     /** 连续 403 计数，成功拉到一个分片就清零。 */
     private val fail403 = java.util.concurrent.atomic.AtomicInteger(0)
 
+    /** 上一次把 MEDIA-SEQUENCE 写进日志的时刻（30 秒一行，避免刷屏）。 */
+    @Volatile private var lastSeqLogAt = 0L
+
     /** 当前用第几条线路（0 起）。 */
     @Volatile private var lineIndex = 0
 
@@ -785,6 +788,20 @@ object LocalHlsProxy {
             tagUriPrefix = "/rawfile/",
             encode = ::b64enc,
         )
+        // ★ 供给侧测量之一：MEDIA-SEQUENCE 的推进速率（2026-11-25）。
+        //
+        //   为什么需要它：判断「卡」的时候，必须分清两种完全不同的原因 ——
+        //     · 源站没在产片：seq 长时间不变 → 客户端做什么都没用，只能换源；
+        //     · 源站在产片、我们取/送得慢：seq 正常推进 → 才轮到调参数、换线路。
+        //   以前只能从「112 秒拉了 20 片」反推带宽，把播放冻结期间的消费速率
+        //   当成了取片速率（结论已作废）。这里直接记源站自己的进度，30 秒最多一行。
+        val seq = Regex("#EXT-X-MEDIA-SEQUENCE:(\\d+)").find(playlistText)?.groupValues?.get(1)
+        val nowMs = System.currentTimeMillis()
+        if (seq != null && nowMs - lastSeqLogAt >= 30_000L) {
+            lastSeqLogAt = nowMs
+            Log.i(TAG, "MEDIA-SEQUENCE=$seq ch=$id")
+            PlayLog.w(TAG, "清单推进 seq=$seq")
+        }
         cache[id] = CachedM3u8(rw.text, System.currentTimeMillis(), playlistUrl)
         Log.i(TAG, "M3U8 ch=$id bytes=" + rw.text.length + " segs=" + rw.mediaUrls.size)
         PlayLog.w(TAG, "M3U8 ch=$id bytes=" + rw.text.length)

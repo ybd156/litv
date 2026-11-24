@@ -88,8 +88,12 @@ class LitvApp : Application() {
             private val h = android.os.Handler(android.os.Looper.getMainLooper())
             private val pauseAll = Runnable {
                 if (everResumed && resumed <= 0) {
-                    Log.i(TAG, "应用退到后台，暂停播放")
-                    runCatching { player.pause() }
+                    // ★ 2026-11-25：改成暂停「所有还活着的播放器」。
+                    //   原来是 player.pause()，而 player 是一个从未起播的 Application 实例：
+                    //   真机实测（手机首页→设置页→按 HOME）日志打了这句、AudioTrack 仍 state:started，
+                    //   也就是「退后台声音继续」这个老问题一直没被兜住。命中数进日志，0 就说明又打空了。
+                    val n = com.litv.tv.player.LivePlayers.pauseAll()
+                    Log.i(TAG, "应用退到后台，暂停播放（命中 $n 个）")
                 }
             }
 
@@ -143,19 +147,13 @@ class LitvApp : Application() {
         }
     }
 
-    /**
-     * 退后台兜底用的播放器实例。
-     *
-     * ★ 2026-11-25 更正（原注释写的是「全局唯一播放器，配合 PlaybackService 常驻」，
-     *   那是**没有发生过的事**）：没有任何 Activity 把正在播的 PlayerManager 交给它，
-     *   所以 `pauseAll` 里的 `player.pause()` 作用在一个从未起播的实例上 —— 真正让
-     *   退后台停播的是各 Activity 自己 onPause 里的 pause()。
-     *   这里保留只是为了让「按 HOME 后声音还在」这条兜底路径仍有落点；
-     *   删掉它之前必须先把播放器所有权收敛到单一 owner（评审 P0-1，独立立项）。
-     */
-    val player: com.litv.tv.player.PlayerManager by lazy {
-        com.litv.tv.player.PlayerManager(this, prefs)
-    }
+    // ★ 2026-11-25 删除了 `val player: PlayerManager by lazy { ... }`。
+    //
+    //   它从来没有接管过正在播的播放器（只有退后台兜底读它），却因为 `by lazy`
+    //   在第一次 `pause()` 时**创建了第 4 个 PlayerManager 实例**，还顺手注册了
+    //   一个 ACTION_SCREEN_OFF 接收器。真机实测证明它暂停的是空对象：
+    //   手机首页→设置页→按 HOME，日志打了「暂停播放」，AudioTrack 仍然 state:started。
+    //   兜底改走 `LivePlayers.pauseAll()`（见上），这条假路径就没人需要了。
 
     companion object {
         private const val TAG = "LitvApp"

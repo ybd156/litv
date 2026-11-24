@@ -87,6 +87,8 @@ class PlayerManager(
     init {
         // 必须在构造时就注册：息屏发生在任何时候，晚注册就等于漏掉这一次。
         registerScreenReceiver()
+        // 登记到活着的实例清单：退后台兜底靠它找到「真正在播的那个」
+        LivePlayers.register(this)
     }
 
     private val main = Handler(Looper.getMainLooper())
@@ -1572,6 +1574,8 @@ class PlayerManager(
         released = true
         // 广播接收器必须反注册，否则 Activity 销毁后还持有 Manager（泄漏）
         unregisterScreenReceiver()
+        // 从「活着的实例」清单里摘掉，别让退后台兜底去暂停一个已释放的播放器
+        LivePlayers.unregister(this)
         cancelPendingEngineStart()
         removeStartTimers()
         main.removeCallbacks(budgetWatchdog)

@@ -230,6 +230,19 @@ class PlayerManager(
                             "停帧持续 ${v.stalledMs / 1000}s（${v.frames}$unit 未增长，内核 ${currentKind?.key}）",
                         )
                     }
+                    // ★ 2026-11-24：帧数停住超过阈值就**动手恢复**。
+                    //
+                    // 真机证据：画面冻在 250 帧、持续 120 秒以上，而同一时刻
+                    //   · AudioTrack 每秒都在写帧（声音照常）
+                    //   · 本地代理分片 100% 预取命中、p50 70ms（取流没问题）
+                    //   · Exo 不上报 BUFFERING，位置看门狗也不触发（position 在走）
+                    // 也就是「声音在走、画面不出」——位置看门狗天生抓不到这种情况，
+                    // 以前只能一直冻着。现在由帧判据接管，复用同一条恢复路径。
+                    if (v.stalledMs >= FRAME_STALL_ACTION_MS) {
+                        Log.w(TAG, "画面停帧 ${v.stalledMs}ms 超过阈值，重建播放器")
+                        com.litv.tv.data.PlayLog.w(TAG, "画面停帧超阈值，重建播放器")
+                        recoverFromStall(v.stalledMs)
+                    }
                 }
 
                 FrameStallDetector.State.RECOVERED -> {
@@ -323,36 +336,47 @@ class PlayerManager(
 
         if (lastPosChangeAt > 0 && isStalled(pos, lastPosMs, frozenMs, STALL_FROZEN_MS)) {
             lastPosChangeAt = android.os.SystemClock.elapsedRealtime()
-            lastStallAt = clock
-            stallRecovered++
-            if (stallRecovered > MAX_STALL_RECOVER) {
-                // 反复卡死说明不是偶发抖动，重启也没用，别再无限循环
-                Log.e(TAG, "已自动恢复 $MAX_STALL_RECOVER 次仍然卡死，本轮停止重试")
-                com.litv.tv.data.PlayLog.w(TAG, "已自动恢复 $MAX_STALL_RECOVER 次仍然卡死，本轮停止重试")
-                stopStallWatchdog()
-                callback?.onError("播放反复卡死，正在等待自动重试（也可换台）")
-                // 以前这里是**永久放弃**：屏幕停在"所有内核均失败"，不换台就永远不动。
-                // 源侧抖动是暂时的，60 秒后再试一次；期间用户换台也会正常重置。
-                main.postDelayed(giveUpRetry, GIVE_UP_RETRY_MS)
-                return@Runnable
-            }
-            Log.w(TAG, "判定卡死，第 $stallRecovered 次自动恢复")
-            com.litv.tv.data.PlayLog.w(TAG, "判定卡死，第 $stallRecovered 次自动恢复")
-            // QoE：把"这次到底冻了多久"报上去。服务端的 StallRate / rebuffer_ratio
-            // 在此之前**恒为 0**（客户端只报过 start），面板会显示"卡顿率 0%"主动误导。
-            callback?.onStall(frozenMs.toInt())
-            if (stallRecovered >= 2 && directMode) {
-                // 同一个台连续卡两次，多半是这条直连线路有问题。
-                // 交给上层改走服务端中转（和「直连首个内核失败」走同一条路）。
-                Log.w(TAG, "连续卡死，改走服务端中转")
-                com.litv.tv.data.PlayLog.w(TAG, "连续卡死，改走服务端中转")
-                directMode = false
-                onDirectFailed?.invoke("反复卡死")
-                return@Runnable
-            }
-            startCurrent()
+            recoverFromStall(frozenMs)
         }
         main.postDelayed(stallWatchdog, STALL_CHECK_MS)
+    }
+
+    /**
+     * 卡顿恢复的唯一入口（位置看门狗与画面帧判据共用）。
+     *
+     * 抽出来是因为两条判据抓的是不同的卡：位置不动 vs 画面不出。动作必须一致，
+     * 否则会出现「两套恢复策略互相打架」——这个仓库已经吃过一次（重复 stop 互锁）。
+     */
+    private fun recoverFromStall(frozenMs: Long) {
+        val clock = android.os.SystemClock.elapsedRealtime()
+        lastStallAt = clock
+        stallRecovered++
+        if (stallRecovered > MAX_STALL_RECOVER) {
+            // 反复卡死说明不是偶发抖动，重启也没用，别再无限循环
+            Log.e(TAG, "已自动恢复 $MAX_STALL_RECOVER 次仍然卡死，本轮停止重试")
+            com.litv.tv.data.PlayLog.w(TAG, "已自动恢复 $MAX_STALL_RECOVER 次仍然卡死，本轮停止重试")
+            stopStallWatchdog()
+            callback?.onError("播放反复卡死，正在等待自动重试（也可换台）")
+            // 以前这里是**永久放弃**：屏幕停在"所有内核均失败"，不换台就永远不动。
+            // 源侧抖动是暂时的，60 秒后再试一次；期间用户换台也会正常重置。
+            main.postDelayed(giveUpRetry, GIVE_UP_RETRY_MS)
+            return
+        }
+        Log.w(TAG, "判定卡死，第 $stallRecovered 次自动恢复")
+        com.litv.tv.data.PlayLog.w(TAG, "判定卡死，第 $stallRecovered 次自动恢复")
+        // QoE：把"这次到底冻了多久"报上去。服务端的 StallRate / rebuffer_ratio
+        // 在此之前**恒为 0**（客户端只报过 start），面板会显示"卡顿率 0%"主动误导。
+        callback?.onStall(frozenMs.toInt())
+        if (stallRecovered >= 2 && directMode) {
+            // 同一个台连续卡两次，多半是这条直连线路有问题。
+            // 交给上层改走服务端中转（和「直连首个内核失败」走同一条路）。
+            Log.w(TAG, "连续卡死，改走服务端中转")
+            com.litv.tv.data.PlayLog.w(TAG, "连续卡死，改走服务端中转")
+            directMode = false
+            onDirectFailed?.invoke("反复卡死")
+            return
+        }
+        startCurrent()
     }
 
     /** 卡死放弃后的延时重试（60 秒一次，直到用户切台或暂停）。 */
@@ -1446,6 +1470,17 @@ class PlayerManager(
          * 说明链路已经正常，再不让计数回落，长看同一个台迟早被"累计 4 次"判死。
          */
         const val STABLE_PLAY_RESET_MS = 5 * 60_000L
+
+        /**
+         * 画面停帧多久就动手恢复。
+         *
+         * 取 10 秒而不是位置看门狗的 16 秒，是因为这条判据抓的是**另一种卡**：
+         * 真机（2026-11-24）画面冻在 250 帧、持续 120 秒以上，同一时刻
+         * AudioTrack 每秒都在写帧、代理分片 100% 命中、Exo 也不报 BUFFERING，
+         * 位置看门狗因此完全不触发 —— 声音在走、画面不出，只能干等。
+         * 10 秒的代价是一次重建（约 2~3 秒），比冻两分钟好得多。
+         */
+        const val FRAME_STALL_ACTION_MS = 10_000L
     }
 }
 

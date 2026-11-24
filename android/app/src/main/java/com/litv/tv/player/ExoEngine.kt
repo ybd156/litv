@@ -52,7 +52,14 @@ var exoForceSoftwareDecode: Boolean = false
 var exoFirstFrameRendered: Boolean = false
 
 /**
- * 累计已渲染帧数（来自 AnalyticsListener.onVideoFrameProcessingOffset）。
+ * 累计已渲染帧数。
+ *
+ * ★ 2026-11-24 修正：主信号换成 `VideoFrameMetadataListener`（每渲染一帧回调一次）。
+ *   原来用的是 `AnalyticsListener.onVideoFrameProcessingOffset` 里的 frameCount ——
+ *   那个回调**只在帧有处理偏移（迟到了）时才触发**，播放顺畅时根本不回调，
+ *   计数器就停在最后一次的值上。真机因此出现「日志说停帧 30 秒，而同一时刻
+ *   隔 4 秒截的两张图完全不同」——判据把正常播放误判成卡死，
+ *   还触发了不必要的重建。旧的 frameCount 保留成下限兜底（永远只增不减）。
  *
  * 与 VLC 的 `MediaStats.displayedPictures` 同义，供 [FrameStallDetector] 用。
  * 每次建播放器/换媒体都归零，否则换台后第一个采样点会带着上一个台的帧数，
@@ -529,6 +536,16 @@ class ExoEngine : PlayerEngine {
 
         exoFirstFrameRendered = false
         renderedFrames = 0L
+        // ★ 每渲染一帧回调一次 —— 这才是「画面还在不在动」的真信号。
+        //   （旧的 onVideoFrameProcessingOffset 只在帧迟到时才回调，顺的时候不回调，
+        //     会把正常播放误判成停帧，见 renderedFrames 的注释。）
+        runCatching {
+            p.setVideoFrameMetadataListener { _, _, _, _ ->
+                renderedFrames = renderedFrames + 1
+            }
+        }.onFailure {
+            Log.w(TAG, "挂帧回调失败（退回旧口径）：" + it.javaClass.simpleName)
+        }
         p.addAnalyticsListener(object : androidx.media3.exoplayer.analytics.AnalyticsListener {
             override fun onRenderedFirstFrame(
                 eventTime: androidx.media3.exoplayer.analytics.AnalyticsListener.EventTime,
@@ -560,7 +577,10 @@ class ExoEngine : PlayerEngine {
                 totalProcessingOffsetUs: Long,
                 frameCount: Int,
             ) {
-                if (frameCount > 0) renderedFrames = frameCount.toLong()
+                // 兜底：这个回调只在帧迟到时才来，所以只当「下限」用，绝不能回退计数器
+                if (frameCount > 0 && frameCount.toLong() > renderedFrames) {
+                    renderedFrames = frameCount.toLong()
+                }
             }
 
             override fun onAudioUnderrun(

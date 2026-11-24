@@ -67,7 +67,22 @@ ENABLE_AVS3="${ENABLE_AVS3:-0}"
 # 固定到仓库里现有 libmpv.so 所对应的那个 ffmpeg commit。
 # 从旧 libavutil.so 的版本串里读出来的：N-126627-g094a2f8a2a。
 # 只有用同一个 commit 重编，libmpv 引用的符号才一定都在。
-FFMPEG_TAG="${FFMPEG_TAG:-094a2f8a2a}"
+#
+# ★ 2026-11-24 改：默认换成 **n6.1**，与脚本里钉的 mpv v0.36.0 配对。
+#
+# 为什么不能继续用 094a2f8a2a（n8 那一代）：mpv 0.36 用的是已被 ffmpeg 删除的 API，
+# 真机日志（Native Build 45191092177）：
+#   ad_spdif.c: use of undeclared identifier 'FF_PROFILE_UNKNOWN'
+#   ad_spdif.c: 'FF_PROFILE_DTS_HD_HRA'
+#   af_lavcac3enc.c: call to undeclared function 'avcodec_close'
+#   af_lavcac3enc.c: no member named 'ch_layouts' / 'sample_fmts' in 'struct AVCodec'
+# FF_PROFILE_* 在 7.0 改名成 AV_PROFILE_*，avcodec_close / AVCodec.ch_layouts 也在 7.x 被移除。
+#
+# 上面"必须同一个 commit"的约束**只在复用仓库里预编译的 libmpv.so 时成立**
+# （SKIP_MPV=1 那条路）。现在 SKIP_MPV=0，mpv 和 ffmpeg 一起从源码编，
+# 只要两者配对即可 —— n6.1 ↔ mpv 0.36 是同一代，API 对得上。
+# 真要换回 n8，就得同时把 mpv 升到 0.41+（并处理 0.37+ 的 libplacebo 硬依赖）。
+FFMPEG_TAG="${FFMPEG_TAG:-n6.1}"
 
 # 只重编 ffmpeg（复用仓库里已有的 libmpv.so）。
 #
@@ -268,6 +283,15 @@ build_ffmpeg() {
     avs3_flags=(--enable-libuavs3d)
   fi
 
+  # 32 位 x86 的 nasm/yasm 汇编目标不能进共享库：
+  #   ld.lld: error: relocation R_386_32 cannot be used against local symbol; recompile with -fPIC
+  # （2026-11-24 首次编 x86 时踩到，只有 x86 中招；arm/arm64 的汇编本身是 PIC。）
+  # 模拟器上的 x86 只做「功能与稳定性对比」，不需要 SIMD 性能，直接关掉 x86asm。
+  local asm_flags=()
+  if [ "$abi" = "x86" ]; then
+    asm_flags=(--disable-x86asm)
+  fi
+
   # openssl 装到 $prefix，必须让 pkg-config 找到它的 .pc，
   # 否则 ffmpeg 的 check_pkg_config 找不到 openssl 会直接 die。
   export PKG_CONFIG_PATH="$OUT/$abi-deps/lib/pkgconfig:$prefix/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
@@ -288,6 +312,7 @@ build_ffmpeg() {
     --disable-programs --disable-doc \
     --disable-avdevice \
     "${avs3_flags[@]}" \
+    "${asm_flags[@]}" \
     --extra-cflags="-I$OUT/$abi-deps/include -fPIC -O2" \
     --extra-ldflags="-L$OUT/$abi-deps/lib" \
     --enable-jni --enable-mediacodec \

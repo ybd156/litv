@@ -63,6 +63,18 @@ object LocalHlsProxy {
     /** 失败后重试的门槛：只有在这个时间内就失败的才值得再试一次。 */
     private const val FAST_FAIL_MS = 3_000L
 
+    /**
+     * 自建源 playlist 的「保活」间隔。
+     *
+     * 真机实测（2026-11-24，新包）：分片预取生效后，播放器的每一次「加载慢」
+     * 都是 **1KB、trackType=-1** —— 不是分片，是 m3u8 清单本身，1.7~4.7 秒。
+     * 源站拉清单就是这么慢，但它只是「现在有哪些分片」，完全可以提前拉好。
+     */
+    private const val RAW_KEEPALIVE_MS = 3_000L
+
+    /** 多久没有播放器来要，就停掉保活（换台/退出后别一直打源站）。 */
+    private const val RAW_IDLE_MS = 30_000L
+
     private data class CachedM3u8(val text: String, val at: Long, val realBase: String)
 
     /** 线路地址缓存：bkliveinfo 不能每 2 秒调一次，会被限流。 */
@@ -375,26 +387,69 @@ object LocalHlsProxy {
             writeStatus(out, 400, "bad raw url")
             return
         }
-        // 清单缓存 5 秒：源站慢的时候，播放器 2~4 秒一次的刷新不该每次都打源站。
+        // 有播放器在要这条清单 → 保活线程开始提前刷新它
+        markRawActive(realUrl)
+
         val cached = rawCache[realUrl]
-        if (cached != null && System.currentTimeMillis() - cached.at < 5_000L) {
+        // ★ 2026-11-24 第二轮：**有缓存就立刻给，永不阻塞**。
+        //   实测（23:11–23:15）源站清单会整段挂住 20 秒（「清单拉取失败 20022ms」），
+        //   而这一版之前「缓存超过 8 秒就阻塞重拉」——播放器于是跟着等 20 秒，
+        //   缓冲区 22 秒被抽干，画面停 50 秒以上。
+        //   清单只是「现在有哪些分片」，晚几秒的清单照样能播；真正要新鲜的是分片。
+        if (cached != null) {
+            refreshRawAsync(realUrl)
             writeBody(out, cached.text.toByteArray(Charsets.UTF_8), "application/vnd.apple.mpegurl")
             return
         }
-        // ★ 超时必须给足：实测源站拉一个 1~2KB 的 m3u8 **中位 3.1 秒、p90 4.5 秒、最慢 10 秒**，
-        //   而 open() 的默认超时是 3 秒（那是为内置源的 2KB 清单定的）。
-        //   用默认值的结果就是真机日志里成片的「加载失败 502，第 1/5…第 5/5 次重试」。
-        val text = runCatching { fetchText(realUrl, reqUa, timeoutMs = 10_000) }.getOrNull()
-        if (text.isNullOrBlank()) {
-            // 源站这一次没给：有旧清单就先用旧的顶着，播放器不至于立刻断
-            if (cached != null) {
-                writeBody(out, cached.text.toByteArray(Charsets.UTF_8), "application/vnd.apple.mpegurl")
-            } else {
-                writeStatus(out, 502, "raw playlist failed")
-            }
+        val fresh = fetchAndRewriteRaw(realUrl)
+        if (fresh != null) {
+            writeBody(out, fresh.toByteArray(Charsets.UTF_8), "application/vnd.apple.mpegurl")
             return
         }
-        // 改写分片地址 → /rawseg/{b64}
+        writeStatus(out, 502, "raw playlist failed")
+    }
+
+    /** 同一条清单同时只允许一个刷新在跑（播放器和保活线程会抢）。 */
+    private val rawRefreshInFlight = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+
+    /** 后台刷新：有缓存时走这里，绝不让调用方等源站。 */
+    private fun refreshRawAsync(realUrl: String) {
+        val c = rawCache[realUrl]
+        val age = if (c == null) Long.MAX_VALUE else System.currentTimeMillis() - c.at
+        if (age < RAW_KEEPALIVE_MS) return
+        if (!rawRefreshInFlight.add(realUrl)) return
+        val submitted = runCatching {
+            prefetchPool.execute {
+                try {
+                    fetchAndRewriteRaw(realUrl)
+                } finally {
+                    rawRefreshInFlight.remove(realUrl)
+                }
+            }
+        }.isSuccess
+        if (!submitted) rawRefreshInFlight.remove(realUrl)
+    }
+
+
+    /**
+     * 拉一次清单、改写成 /rawseg/{b64}、写进缓存，并把窗口尾部交给预取。
+     *
+     * 单独抽出来是为了让「阻塞路径」和「保活线程」用同一份逻辑，
+     * 不出现两套改写规则（以前内置源/自建源/回看各写一遍，已经吃过亏）。
+     */
+    private fun fetchAndRewriteRaw(realUrl: String): String? {
+        val t0 = System.currentTimeMillis()
+        // ★ 超时给足但**别给成 10+10=20 秒**：实测源站会整段挂住，
+        //   20 秒的连接+读取叠加直接把播放器缓冲抽干（真机 23:11 出现
+        //   「清单拉取失败 20022ms」，同期画面停 56 秒）。
+        //   连接 4 秒、读取 6 秒：单次最多 10 秒，失败还有下一次（保活每 3 秒一次）。
+        val text = runCatching {
+            fetchText(realUrl, reqUa, timeoutMs = 4_000, readMs = 6_000)
+        }.getOrNull()
+        if (text.isNullOrBlank()) {
+            PlayLog.w(TAG, "清单拉取失败 ${System.currentTimeMillis() - t0}ms")
+            return null
+        }
         val base = realUrl.substringBeforeLast('/') + "/"
         val sb = StringBuilder()
         val segs = ArrayList<String>(8)
@@ -411,13 +466,57 @@ object LocalHlsProxy {
         }
         val rewritten = sb.toString()
         rawCache[realUrl] = CachedM3u8(rewritten, System.currentTimeMillis(), realUrl)
-        writeBody(out, rewritten.toByteArray(Charsets.UTF_8), "application/vnd.apple.mpegurl")
-        // ★ 预取前 2 个分片：源站慢，等播放器来要就晚了。
-        //   拿到清单时立刻并行拉，播放器请求时多半已经命中缓存。
         // ★ 预取窗口**尾部**：直播是滑动窗口，播放器从边缘往前播。
         //   旧实现写的是 segs.take(2)（最旧的两片），等于预取了它早就不用的东西。
         prefetchWindow(segs)
+        return rewritten
     }
+
+    // ---------------------------------------------------------------- 清单保活
+
+    @Volatile private var rawActiveUrl: String? = null
+    @Volatile private var rawActiveAt = 0L
+    @Volatile private var rawKeeperStarted = false
+
+    /**
+     * 记录「现在这条清单有人在播」，并按需启动保活线程。
+     *
+     * 为什么要保活：源站清单慢是改不了的，但**什么时候拉**可以改。
+     * 播放器来要时才拉 → 它必须等；后台每 3 秒拉一次 → 它每次都命中缓存。
+     */
+    private fun markRawActive(url: String) {
+        rawActiveUrl = url
+        rawActiveAt = System.currentTimeMillis()
+        if (rawKeeperStarted) return
+        synchronized(this) {
+            if (rawKeeperStarted) return
+            rawKeeperStarted = true
+            Thread({
+                while (true) {
+                    try {
+                        Thread.sleep(1_000)
+                        val u = rawActiveUrl ?: continue
+                        // 已经没人看了：别再打源站
+                        if (System.currentTimeMillis() - rawActiveAt > RAW_IDLE_MS) continue
+                        val c = rawCache[u]
+                        val age = if (c == null) Long.MAX_VALUE else System.currentTimeMillis() - c.at
+                        if (age >= RAW_KEEPALIVE_MS) {
+                            refreshRawAsync(u)
+                            rawKeepCount++
+                        }
+                    } catch (e: InterruptedException) {
+                        // 进程退出，线程跟着结束
+                    } catch (e: Throwable) {
+                        Log.w(TAG, "清单保活失败 " + e.javaClass.simpleName)
+                    }
+                }
+            }, "litv-raw-keeper").apply { isDaemon = true }.start()
+        }
+    }
+
+    /** 保活刷新次数（只用于判断它是否真的在跑）。 */
+    @Volatile private var rawKeepCount = 0L
+
 
     private val prefetchPool = Executors.newFixedThreadPool(SegmentPrefetch.MAX_PARALLEL)
 
@@ -720,10 +819,15 @@ object LocalHlsProxy {
 
     // ---------------------------------------------------------------- HTTP
 
-    private fun open(url: String, timeoutMs: Int = 3000, ua: String = UA_PROXY): HttpURLConnection {
+    private fun open(
+        url: String,
+        timeoutMs: Int = 3000,
+        ua: String = UA_PROXY,
+        readMs: Int = timeoutMs,
+    ): HttpURLConnection {
         val c = URL(url).openConnection() as HttpURLConnection
         c.connectTimeout = timeoutMs
-        c.readTimeout = timeoutMs
+        c.readTimeout = readMs
         c.instanceFollowRedirects = true
         c.setRequestProperty("User-Agent", ua)
         // 回看的 CDN（tlivecloud-playback-cdn）会主动 `Connection reset`，
@@ -733,8 +837,13 @@ object LocalHlsProxy {
         return c
     }
 
-    private fun fetchText(url: String, ua: String = UA_PROXY, timeoutMs: Int = 3000): String {
-        val c = open(url, timeoutMs, ua)
+    private fun fetchText(
+        url: String,
+        ua: String = UA_PROXY,
+        timeoutMs: Int = 3000,
+        readMs: Int = timeoutMs,
+    ): String {
+        val c = open(url, timeoutMs, ua, readMs)
         return try {
             if (c.responseCode !in 200..299) throw java.io.IOException("HTTP ${c.responseCode}")
             c.inputStream.readBytes().toString(Charsets.UTF_8)

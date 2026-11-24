@@ -52,6 +52,17 @@ object LocalHlsProxy {
      *  m3u8 **内容**仍然每次都拉（保证 MEDIA-SEQUENCE 推进），只是不再每次重取线路。 */
     private const val LINE_TTL_MS = 15_000L
 
+    /**
+     * 播放器来要某片、而这片正在被后台预取时，最多等它多久。
+     *
+     * 等的好处：不重复打源站（源站每多一次请求就更慢一轮）。
+     * 不能等太久：播放器那边也是有超时的，等过它就没意义了。
+     */
+    private const val WAIT_INFLIGHT_MS = 1_200L
+
+    /** 失败后重试的门槛：只有在这个时间内就失败的才值得再试一次。 */
+    private const val FAST_FAIL_MS = 3_000L
+
     private data class CachedM3u8(val text: String, val at: Long, val realBase: String)
 
     /** 线路地址缓存：bkliveinfo 不能每 2 秒调一次，会被限流。 */
@@ -336,8 +347,11 @@ object LocalHlsProxy {
     @Volatile private var reqReferer: String? = null
 
     private val rawCache = ConcurrentHashMap<String, CachedM3u8>()
-    private val rawSegCache = object : LinkedHashMap<String, ByteArray>(8, 0.75f, true) {
-        override fun removeEldestEntry(e: MutableMap.MutableEntry<String, ByteArray>) = size > 12
+    private val rawSegCache = object : LinkedHashMap<String, ByteArray>(16, 0.75f, true) {
+        // ★ 2026-11-24：12 → 24。
+        //   预取窗口是 6 片，缓存只留 12 会让「刚预取好、还没播到就被挤掉」反复发生。
+        //   分片约 2~3MB，24 片上限约 60MB，对电视（2GB）和手机都可接受。
+        override fun removeEldestEntry(e: MutableMap.MutableEntry<String, ByteArray>) = size > 24
     }
 
     private fun b64enc(s: String): String =
@@ -400,24 +414,54 @@ object LocalHlsProxy {
         writeBody(out, rewritten.toByteArray(Charsets.UTF_8), "application/vnd.apple.mpegurl")
         // ★ 预取前 2 个分片：源站慢，等播放器来要就晚了。
         //   拿到清单时立刻并行拉，播放器请求时多半已经命中缓存。
-        prefetchRawSegments(segs.take(2))
+        // ★ 预取窗口**尾部**：直播是滑动窗口，播放器从边缘往前播。
+        //   旧实现写的是 segs.take(2)（最旧的两片），等于预取了它早就不用的东西。
+        prefetchWindow(segs)
     }
 
-    private val prefetchPool = Executors.newFixedThreadPool(2)
+    private val prefetchPool = Executors.newFixedThreadPool(SegmentPrefetch.MAX_PARALLEL)
 
-    private fun prefetchRawSegments(segs: List<String>) {
-        val todo = segs.filter { s -> synchronized(rawSegCache) { rawSegCache[s] } == null }
+    /** 正在拉的地址：避免「后台预取」和「播放器来要」重复打源站。 */
+    private val segInFlight = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+
+    /** 由预取提前拉好的地址（只用来算预取命中率）。 */
+    private val segPrefetched = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+
+    private val segHealth = SegmentHealth()
+
+    /**
+     * 拿到 playlist 就把窗口尾部若干片**并发**预取。
+     *
+     * 为什么要并发：源站单片 p50 约 1.9 秒、尾部 5~11.5 秒（真机 2026-11-24）。
+     * 播放器是串行要分片的，串行就等于吞吐 = 1/单片耗时，缓冲永远填不满；
+     * 并发 6 路后同样的源能跑出数倍吞吐，缓冲才有机会堆到 minBuffer。
+     */
+    private fun prefetchWindow(segs: List<String>) {
+        val cached = synchronized(rawSegCache) { rawSegCache.keys.toSet() }
+        val todo = SegmentPrefetch.plan(segs, cached, segInFlight)
         if (todo.isEmpty()) return
-        runCatching {
-            prefetchPool.execute {
-                todo.forEach { url ->
-                    runCatching {
+        for (url in todo) {
+            if (!segInFlight.add(url)) continue
+            val submitted = runCatching {
+                prefetchPool.execute {
+                    val t0 = System.currentTimeMillis()
+                    try {
                         val bytes = fetchBytesSmart(url)
+                        val cost = System.currentTimeMillis() - t0
                         synchronized(rawSegCache) { rawSegCache[url] = bytes }
-                        Log.i(TAG, "预取分片 " + bytes.size / 1024 + "KB")
+                        segPrefetched.add(url)
+                        segHealth.onFetch(cost, ok = true)
+                        Log.i(TAG, "预取分片 " + bytes.size / 1024 + "KB " + cost + "ms")
+                    } catch (e: Throwable) {
+                        segHealth.onFetch(System.currentTimeMillis() - t0, ok = false)
+                        Log.w(TAG, "预取失败 " + e.javaClass.simpleName)
+                    } finally {
+                        segInFlight.remove(url)
+                        segHealth.takeSummaryIfDue()?.let { PlayLog.w(TAG, it) }
                     }
                 }
-            }
+            }.isSuccess
+            if (!submitted) segInFlight.remove(url)
         }
     }
 
@@ -429,23 +473,51 @@ object LocalHlsProxy {
             return
         }
         synchronized(rawSegCache) { rawSegCache[real] }?.let { hit ->
+            segHealth.onHit(fromPrefetch = segPrefetched.contains(real))
             writeBody(out, hit, "video/mp2t")
             return
         }
+        // 预取正在拉这一片：短等一下它，别让两边各打一次源站。
+        val waitUntil = System.currentTimeMillis() + WAIT_INFLIGHT_MS
+        while (segInFlight.contains(real) && System.currentTimeMillis() < waitUntil) {
+            Thread.sleep(50)
+            synchronized(rawSegCache) { rawSegCache[real] }?.let { hit ->
+                segHealth.onHit(fromPrefetch = true)
+                writeBody(out, hit, "video/mp2t")
+                return
+            }
+        }
         val t0 = System.currentTimeMillis()
-        val bytes = try {
-            fetchBytes(real, reqUa)
+        var bytes: ByteArray? = null
+        var lastErr: Throwable? = null
+        try {
+            bytes = fetchBytes(real, reqUa)
         } catch (e: Throwable) {
+            lastErr = e
+        }
+        // 只有**很快**失败才重试一次（多半是瞬时 5xx/连接重置）。
+        // 慢慢失败（撞满超时）再重试一次只会把播放器的等待翻倍。
+        if (bytes == null && System.currentTimeMillis() - t0 <= FAST_FAIL_MS) {
+            try {
+                bytes = fetchBytes(real, reqUa)
+            } catch (e: Throwable) {
+                lastErr = e
+            }
+        }
+        val cost = System.currentTimeMillis() - t0
+        val body = bytes
+        if (body == null) {
             // ★ 之前这里静默返回 502，线上出现 ERROR_CODE_IO_UNEXPECified 时完全查不到原因
             //   （不是 403，所以旧日志一个字都没有）。把异常类别和耗时落盘。
-            val cost = System.currentTimeMillis() - t0
-            Log.w(TAG, "自建源分片失败（${cost}ms）：${e.javaClass.simpleName}: ${e.message}")
-            PlayLog.w(TAG, "自建源分片失败 ${cost}ms ${e.javaClass.simpleName}")
+            Log.w(TAG, "自建源分片失败（${cost}ms）：${lastErr?.javaClass?.simpleName}: ${lastErr?.message}")
+            PlayLog.w(TAG, "自建源分片失败 ${cost}ms ${lastErr?.javaClass?.simpleName}")
+            segHealth.onFetch(cost, ok = false)
             writeStatus(out, 502, "raw segment failed")
             return
         }
-        synchronized(rawSegCache) { rawSegCache[real] = bytes }
-        writeBody(out, bytes, "video/mp2t")
+        segHealth.onFetch(cost, ok = true)
+        synchronized(rawSegCache) { rawSegCache[real] = body }
+        writeBody(out, body, "video/mp2t")
     }
 
     private fun servePlaylist(path: String, out: OutputStream) {

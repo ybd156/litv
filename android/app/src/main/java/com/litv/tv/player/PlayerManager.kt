@@ -209,13 +209,38 @@ class PlayerManager(
                 prepared && !userPaused,
                 screenInteractive(),
             )
-            if (v.state == FrameStallDetector.State.STALLED) {
-                val unit = pr?.unit ?: "?"
-                Log.w(TAG, "画面停帧 ${v.stalledMs}ms（${v.frames}$unit 未变，内核 ${currentKind?.key}）")
-                com.litv.tv.data.PlayLog.w(
-                    TAG,
-                    "画面停帧 ${v.stalledMs / 1000}s（${v.frames}$unit 未增长，内核 ${currentKind?.key}）",
-                )
+            // 一段停帧只写两行：开始时一行、恢复时一行（中间只按里程碑补报）。
+            //
+            // ★ 2026-11-24 改：以前按固定 10 秒重复上报，一次 126 秒的卡死
+            //   在日志里是 13 行“画面停帧”，于是「停帧次数」根本不是事件数。
+            //   现在数「画面停帧」开头的行就是事件数，时长看「画面恢复」那行。
+            val unit = pr?.unit ?: "?"
+            when (v.state) {
+                FrameStallDetector.State.STALLED -> {
+                    if (v.firstReport) {
+                        Log.w(TAG, "画面停帧 ${v.stalledMs}ms（${v.frames}$unit 未变，内核 ${currentKind?.key}）")
+                        com.litv.tv.data.PlayLog.w(
+                            TAG,
+                            "画面停帧 ${v.stalledMs / 1000}s（${v.frames}$unit 未增长，内核 ${currentKind?.key}）",
+                        )
+                    } else {
+                        Log.w(TAG, "停帧持续 ${v.stalledMs}ms（${v.frames}$unit 未变，内核 ${currentKind?.key}）")
+                        com.litv.tv.data.PlayLog.w(
+                            TAG,
+                            "停帧持续 ${v.stalledMs / 1000}s（${v.frames}$unit 未增长，内核 ${currentKind?.key}）",
+                        )
+                    }
+                }
+
+                FrameStallDetector.State.RECOVERED -> {
+                    Log.i(TAG, "画面恢复（停帧 ${v.stalledMs}ms，内核 ${currentKind?.key}）")
+                    com.litv.tv.data.PlayLog.w(
+                        TAG,
+                        "画面恢复（停帧 ${v.stalledMs / 1000}s，内核 ${currentKind?.key}）",
+                    )
+                }
+
+                else -> Unit
             }
             main.postDelayed(this, frameWatchIntervalMs)
         }

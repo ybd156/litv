@@ -1,0 +1,120 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  手机端回看 / 时移控制条。
+
+  和电视端（activity_player.xml 里的 replayBar）同一套东西，差别只在交互：
+    · 电视用方向键 + OK，所以按钮要 44dp、带焦点环；
+    · 手机是触摸，所以进度用 **SeekBar 直接拖**，按钮可以小一点、平铺均分。
+  两边共用的只有 `ReplayClock`（纯逻辑，算播放头）与 `PlayerManager.seekTo`。
+
+  为什么进度条是 SeekBar 而不是 ProgressBar：
+  手机上「拖进度」是唯一自然的操作；电视上才靠左右键 10 秒一跳。
+  拖动时只改时间码预览，松手才真正 seek —— 避免拖动过程中每像素一次 seek
+  把内核打崩（VLC 的 seek 是排队的，连续 seek 会积压）。
+-->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/replayBar"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:background="@drawable/bg_osd_card"
+    android:orientation="vertical"
+    android:paddingStart="10dp"
+    android:paddingTop="8dp"
+    android:paddingEnd="10dp"
+    android:paddingBottom="8dp"
+    android:visibility="gone">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:gravity="center_vertical"
+        android:orientation="horizontal">
+
+        <TextView
+            android:id="@+id/replayTitle"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:ellipsize="end"
+            android:maxLines="1"
+            android:textColor="@color/text_primary"
+            android:textSize="13sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/replayClock"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="8dp"
+            android:textColor="@color/accent"
+            android:textSize="13sp"
+            android:textStyle="bold" />
+    </LinearLayout>
+
+    <SeekBar
+        android:id="@+id/replayProgress"
+        android:layout_width="match_parent"
+        android:layout_height="28dp"
+        android:layout_marginTop="2dp"
+        android:max="1000"
+        android:progressTint="@color/accent"
+        android:thumbTint="@color/accent" />
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:gravity="center_vertical"
+        android:orientation="horizontal">
+
+        <TextView
+            android:id="@+id/rbBack"
+            android:layout_width="0dp"
+            android:layout_height="36dp"
+            android:layout_marginEnd="4dp"
+            android:layout_weight="1"
+            android:background="@drawable/bg_focusable"
+            android:clickable="true"
+            android:gravity="center"
+            android:text="« 30 秒"
+            android:textColor="@color/text_primary"
+            android:textSize="12sp" />
+
+        <TextView
+            android:id="@+id/rbPlay"
+            android:layout_width="0dp"
+            android:layout_height="36dp"
+            android:layout_marginEnd="4dp"
+            android:layout_weight="1"
+            android:background="@drawable/bg_focusable"
+            android:clickable="true"
+            android:gravity="center"
+            android:text="暂停"
+            android:textColor="@color/text_primary"
+            android:textSize="12sp" />
+
+        <TextView
+            android:id="@+id/rbFwd"
+            android:layout_width="0dp"
+            android:layout_height="36dp"
+            android:layout_marginEnd="4dp"
+            android:layout_weight="1"
+            android:background="@drawable/bg_focusable"
+            android:clickable="true"
+            android:gravity="center"
+            android:text="30 秒 »"
+            android:textColor="@color/text_primary"
+            android:textSize="12sp" />
+
+        <TextView
+            android:id="@+id/rbLive"
+            android:layout_width="0dp"
+            android:layout_height="36dp"
+            android:layout_weight="1.4"
+            android:background="@drawable/bg_focusable"
+            android:clickable="true"
+            android:gravity="center"
+            android:text="回到直播"
+            android:textColor="@color/accent"
+            android:textSize="12sp" />
+    </LinearLayout>
+</LinearLayout>

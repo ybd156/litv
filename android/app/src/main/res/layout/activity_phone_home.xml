@@ -245,6 +245,18 @@
                             style="@style/PhoneCtlSmall"
                             android:text="⛶" />
                     </LinearLayout>
+
+                    <!-- 回看控制条：只有回看/时移时才显示，跟控件浮层一起显隐。
+                         放在底部两条工具行之上（那两行占 30dp + 自身高度），
+                         否则「回到直播」会被静音/全屏按钮压住点不到。 -->
+                    <include
+                        layout="@layout/view_replay_bar"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_gravity="bottom"
+                        android:layout_marginStart="12dp"
+                        android:layout_marginEnd="12dp"
+                        android:layout_marginBottom="68dp" />
                 </FrameLayout>
             </FrameLayout>
 

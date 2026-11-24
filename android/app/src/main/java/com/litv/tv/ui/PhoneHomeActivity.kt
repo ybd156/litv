@@ -35,6 +35,10 @@ import com.litv.tv.data.PlayCache
 import com.litv.tv.data.PlayCacheStore
 import com.litv.tv.player.EngineKind
 import com.litv.tv.player.PlayerManager
+import com.litv.tv.player.ClockText
+import com.litv.tv.player.ReplayClock
+import com.litv.tv.player.ReplaySteps
+import com.litv.tv.player.ReplayWindow
 
 /**
  * 手机端主界面 —— 单页四 Tab，不开新页面。
@@ -69,6 +73,24 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
     private lateinit var gestureTip: TextView
     private lateinit var btnPlayPause: android.widget.ImageView
     private lateinit var btnMute: TextView
+
+    // ---- 回看 / 时移控制条（布局见 res/layout/view_replay_bar.xml）----
+    // 与电视端共用纯逻辑 ReplayControls（播放头按墙钟自己算），
+    // 差别只在交互：电视用方向键、手机是 SeekBar 直接拖。
+    private lateinit var replayBar: View
+    private lateinit var replayTitle: TextView
+    private lateinit var replayClock: TextView
+    private lateinit var replayProgress: android.widget.SeekBar
+    private lateinit var rbPlay: TextView
+
+    /** 当前回看窗口；**null = 直播**。这是「是不是回看」的唯一真相（同电视端）。 */
+    private var replayWindow: ReplayWindow? = null
+    private var replayHead: ReplayClock? = null
+    private var replayChannelId = 0L
+    /** 回看播完正在切回直播：防止 500ms ticker 重复收尾 */
+    private var replayEnding = false
+    /** 用户正拖着进度条：拖动期间不自动收起控件，也不按播放头刷新进度 */
+    private var userSeeking = false
 
     // 频道页
     private lateinit var list: RecyclerView
@@ -193,6 +215,11 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
         gestureTip = findViewById(R.id.gestureTip)
         btnPlayPause = findViewById(R.id.btnPlayPause)
         btnMute = findViewById(R.id.btnMute)
+        replayBar = findViewById(R.id.replayBar)
+        replayTitle = findViewById(R.id.replayTitle)
+        replayClock = findViewById(R.id.replayClock)
+        replayProgress = findViewById(R.id.replayProgress)
+        rbPlay = findViewById(R.id.rbPlay)
 
         list = findViewById(R.id.list)
         status = findViewById(R.id.status)
@@ -310,6 +337,9 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
     private fun setupControls() {
         btnPlayPause.setOnClickListener {
             if (currentChannel == null) { switchTab(TAB_CHANNEL); return@setOnClickListener }
+            // 回看时中央按钮与 rbPlay 是同一个状态：两边都要跟着走，
+            // 否则「暂停」了时间码却继续走、或者按钮图标和实际状态相反。
+            if (replayWindow != null) { toggleReplayPause(); return@setOnClickListener }
             if (paused) {
                 player.resume(); paused = false; btnPlayPause.setImageResource(R.drawable.ic_pause)
             } else {
@@ -356,6 +386,34 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
         // 投屏：发现由服务端做（iOS 拿不到多播权限，安卓也统一走服务端）
         findViewById<TextView>(R.id.btnCast).setOnClickListener { openCastPicker() }
 
+        // ---- 回看控制条 ----
+        findViewById<TextView>(R.id.rbBack).setOnClickListener { seekReplayBy(-ReplaySteps.BUTTON_STEP_MS) }
+        findViewById<TextView>(R.id.rbFwd).setOnClickListener { seekReplayBy(ReplaySteps.BUTTON_STEP_MS) }
+        rbPlay.setOnClickListener { toggleReplayPause() }
+        findViewById<TextView>(R.id.rbLive).setOnClickListener { backToLive("已切回直播") }
+        // 拖动只更新时间码预览，松手才 seek：VLC 的 seek 是在单线程队列里排队的，
+        // 拖动过程中每移动一点就 seek 会把队列堆满，松手后还要"追"好几秒。
+        replayProgress.setOnSeekBarChangeListener(object : android.widget.SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(sb: android.widget.SeekBar?, progress: Int, fromUser: Boolean) {
+                if (!fromUser) return
+                val win = replayWindow ?: return
+                replayClock.text = ClockText.pair(win.durationMs * progress / 1000, win.durationMs)
+            }
+
+            override fun onStartTrackingTouch(sb: android.widget.SeekBar?) {
+                userSeeking = true
+                // 拖动期间别让 4 秒自动收条把进度条抽走
+                main.removeCallbacks(controlsHideRunnable)
+            }
+
+            override fun onStopTrackingTouch(sb: android.widget.SeekBar?) {
+                userSeeking = false
+                val win = replayWindow ?: return
+                seekReplayTo(win.durationMs * (sb?.progress ?: 0) / 1000)
+                showControls()
+            }
+        })
+
         // 点画面：呼出/收起控件浮层（现代播放器的通用交互）。
         // 原来点一下就直接暂停，用户完全看不到有哪些控件。
         surface.setOnClickListener { toggleControls() }
@@ -386,11 +444,17 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
     /** 呼出控件，4 秒后自动收起（播放中不遮挡画面）。 */
     private fun showControls() {
         findViewById<View>(R.id.playerControls)?.visibility = View.VISIBLE
-        Handler(Looper.getMainLooper()).removeCallbacks(controlsHideRunnable)
-        Handler(Looper.getMainLooper()).postDelayed(controlsHideRunnable, 4000)
+        main.removeCallbacks(controlsHideRunnable)
+        // 回看暂停时不自动收条：「继续 / 快进」是暂停后马上要点的东西，
+        // 4 秒后消失会逼用户再点一次画面才找回来。
+        if (replayWindow != null && paused) return
+        main.postDelayed(controlsHideRunnable, 4000)
     }
 
     private fun hideControls() {
+        // 正在拖进度条 / 回看暂停：这两种状态收条等于把用户手上的操作抽走
+        if (userSeeking) return
+        if (replayWindow != null && paused) return
         findViewById<View>(R.id.playerControls)?.visibility = View.GONE
     }
 
@@ -1024,8 +1088,9 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
 
     private fun playChannel(ch: Channel) {
         controlsFlashedForChannel = false
-        playingTimeshift = false
-        renderLiveBadge()
+        // 切台 / 「回到直播」都从这里起播，回看状态必须一起清掉：
+        // 否则控制条会挂在直播画面上、播放头还在按回看窗口往前跑。
+        clearReplay()
         // 「同一台又播了一次」= 几乎一定是卡住/失败后的重播。
         // 这种情况必须重建播放器：否则缓存命中会跳过 prepare，重播等于
         // 什么都没做，画面一直卡着（和电视端是同一类 bug）。
@@ -1449,10 +1514,9 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
                         setTextColor(getColor(R.color.accent))
                         isClickable = true
                         setOnClickListener {
-                            playingTimeshift = true
-                            renderLiveBadge()
-                            EpgActions.replay(this@PhoneHomeActivity, app.api, player,
-                                currentChannel ?: return@setOnClickListener, app.prefs.engine, p)
+                            // 「回放」角标由 enterReplay 置位：回看地址还在取的路上就先把
+                            // 角标切成回放，失败时会停在「回放」上误导用户。
+                            openReplayFor(currentChannel ?: return@setOnClickListener, p)
                         }
                     }
                     reservedStarts.contains(p.startAt) -> {
@@ -1477,9 +1541,7 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
                     val ch = currentChannel ?: return@setOnClickListener
                     android.util.Log.i(TAG, "节目单点击：${p.title} finished=$finished")
                     if (finished) {
-                        playingTimeshift = true
-                        renderLiveBadge()
-                        EpgActions.replay(this@PhoneHomeActivity, app.api, player, ch, app.prefs.engine, p)
+                        openReplayFor(ch, p)
                     } else {
                         // 本地记录即可：预约是"到点提醒我"，不需要服务端参与
                         com.litv.tv.data.ReminderStore.add(this@PhoneHomeActivity, p.startAt, ch.id, p.title)
@@ -1540,6 +1602,199 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
         }
         dateBarScroll = scroll
         return scroll
+    }
+
+    // ---------------------------------------------------------------- 回看 / 时移
+
+    /** 播放头用 elapsedRealtime：它不受系统时间被改动影响，和电视端一致。 */
+    private fun now() = android.os.SystemClock.elapsedRealtime()
+
+    private fun toast(msg: String) {
+        android.widget.Toast.makeText(this, msg, android.widget.Toast.LENGTH_SHORT).show()
+    }
+
+    /**
+     * 回看控制条的 500ms 心跳。
+     *
+     * 进度**不能**读 `player.currentPosition`：VLC 播 HLS 时 time 根本不前进，
+     * Exo 每次重载播放列表位置会回落，mpv 只有部分流给 time-pos。
+     * 所以播放头由 `ReplayClock` 按墙钟自己算，这里只是把算出来的值画上去。
+     */
+    private val replayTicker = object : Runnable {
+        override fun run() {
+            if (replayWindow == null) return
+            refreshReplayBar()
+            main.postDelayed(this, 500)
+        }
+    }
+
+    /**
+     * 打开回看：内置源（央视频）走本地代理生成回看 m3u8，
+     * 其它源走服务端时移缓冲 `/tv/timeshift`。两条路的窗口时长来源不同，
+     * 但进入回看之后的一切（播放头、控制条、收尾）完全一样。
+     */
+    private fun openReplayFor(ch: Channel, p: EpgProgram?) {
+        val startSec = p?.startAt ?: (System.currentTimeMillis() / 1000 - 600)
+        val endSec = p?.endAt ?: (startSec + 1800)
+        val title = if (p != null) ch.name + " · " + p.title else ch.name + " · 回看"
+
+        if (com.litv.tv.data.YspClient.isYspChannel(ch.id)) {
+            // 央视频只留 7 天；更早的节目点进去会是空列表，直接说清楚
+            if (startSec < System.currentTimeMillis() / 1000 - 7 * 86400) {
+                toast("央视频只提供最近 7 天的回看")
+                return
+            }
+            val url = com.litv.tv.data.LocalHlsProxy.replayUrlFor(ch.id, startSec, endSec)
+            if (url == null) {
+                toast("回看不可用：本地代理未启动")
+                return
+            }
+            currentChannel = ch
+            playName.text = ch.name
+            playHint.visibility = View.GONE
+            loading.visibility = View.VISIBLE
+            playRoute.text = "内置源回看（本地代理）"
+            player.directMode = false
+            player.play(ch.id, url, mapOf("User-Agent" to "qqlive"), app.prefs.engine, bustCache = false)
+            enterReplay(ch, ReplayWindow(((endSec - startSec) * 1000L).coerceAtLeast(1L), title), 0L)
+            return
+        }
+
+        app.api.timeshift(ch.id, onOk = { info ->
+            if (!info.enabled || info.availableSeconds <= 0) {
+                runOnUiThread { toast("这个台暂时没有可回看的缓冲") }
+                return@timeshift
+            }
+            runOnUiThread {
+                currentChannel = ch
+                playName.text = ch.name
+                playHint.visibility = View.GONE
+                loading.visibility = View.VISIBLE
+                playRoute.text = "服务端时移（回看）"
+                player.play(
+                    ch.id, app.api.absolute(info.url),
+                    mapOf("User-Agent" to LitvUA.ANDROID), app.prefs.engine,
+                )
+                val minutes = (info.availableSeconds + 59) / 60
+                enterReplay(
+                    ch,
+                    ReplayWindow(info.availableSeconds * 1000L, title + "（约 " + minutes + " 分钟）"),
+                    0L,
+                )
+            }
+        }, onErr = { msg ->
+            runOnUiThread { toast("回看不可用：$msg") }
+        })
+    }
+
+    /**
+     * 进入回看态：置窗口、造播放头、把控制条露出来。
+     *
+     * `player.replayMode = true` 是给 PlayerManager 看的：回看地址是**滑窗 HLS，
+     * 没有 EXT-X-ENDLIST**，Exo 走到末尾不会发 ENDED，不特殊标记的话
+     * 会走「直播流结束 → 换内核 → 全失败」那条误报路径（电视端踩过）。
+     */
+    private fun enterReplay(ch: Channel, window: ReplayWindow, startAtMs: Long = 0L) {
+        replayWindow = window
+        replayChannelId = ch.id
+        replayEnding = false
+        userSeeking = false
+        paused = false
+        btnPlayPause.setImageResource(R.drawable.ic_pause)
+        player.replayMode = true
+        replayHead = ReplayClock(window.durationMs).also { it.reset(now(), startAtMs) }
+        replayTitle.text = window.title.ifBlank { ch.name }
+        rbPlay.text = "暂停"
+        replayBar.visibility = View.VISIBLE
+        playingTimeshift = true
+        renderLiveBadge()
+        main.removeCallbacks(replayTicker)
+        main.post(replayTicker)
+        refreshReplayBar()
+        showControls()
+        android.util.Log.i(TAG, "进入回看：" + window.title + " 时长 " + window.durationMs / 1000 + "s")
+    }
+
+    /** 退出回看态（回直播 / 切台 / 退出界面都走这里，必须可重入）。 */
+    private fun clearReplay() {
+        replayWindow = null
+        replayHead = null
+        replayChannelId = 0L
+        replayEnding = false
+        userSeeking = false
+        main.removeCallbacks(replayTicker)
+        if (::replayBar.isInitialized) replayBar.visibility = View.GONE
+        if (::player.isInitialized) player.replayMode = false
+        if (playingTimeshift) {
+            playingTimeshift = false
+            renderLiveBadge()
+        }
+    }
+
+    /** PlayerManager 判定回看播完（它自己也可能先报，两条路都要能收尾）。 */
+    override fun onReplayFinished() {
+        if (replayWindow == null) return
+        backToLive("回看结束，已回到直播")
+    }
+
+    private fun refreshReplayBar() {
+        val win = replayWindow ?: return
+        val head = replayHead ?: return
+        val pos = head.tick(now())
+        replayClock.text = ClockText.pair(pos, win.durationMs)
+        if (!userSeeking && win.durationMs > 0) {
+            replayProgress.progress = ((pos * 1000) / win.durationMs).toInt().coerceIn(0, 1000)
+        }
+        // 播到窗口末尾自己收尾 —— 回看没有 ENDLIST，内核不会告诉我们「完了」
+        if (win.durationMs > 0 && pos >= win.durationMs && !paused) onReplayReachedEnd()
+    }
+
+    private fun onReplayReachedEnd() {
+        if (replayEnding) return
+        replayEnding = true
+        backToLive("回看结束，已回到直播")
+    }
+
+    private fun seekReplayBy(deltaMs: Long) {
+        val head = replayHead ?: return
+        seekReplayTo(head.positionMs + deltaMs)
+    }
+
+    private fun seekReplayTo(targetMs: Long) {
+        val win = replayWindow ?: return
+        val head = replayHead ?: return
+        val target = ReplaySteps.clamp(targetMs, win.durationMs)
+        head.seekTo(now(), target)
+        if (!player.seekTo(target)) {
+            // 换内核都拖不动 = 这段流不支持拖动；能拖但没生效 = 内核还没准备好
+            toast(if (player.seekable()) "跳转没生效，试试换内核" else "这段内容不支持拖动")
+        }
+        refreshReplayBar()
+        main.removeCallbacks(replayTicker)
+        main.postDelayed(replayTicker, 500)
+    }
+
+    private fun toggleReplayPause() {
+        val head = replayHead ?: return
+        if (replayWindow == null) return
+        if (paused) {
+            head.resume(now()); player.resume(); paused = false
+            btnPlayPause.setImageResource(R.drawable.ic_pause); rbPlay.text = "暂停"
+        } else {
+            head.pause(now()); player.pause(); paused = true
+            btnPlayPause.setImageResource(R.drawable.ic_play); rbPlay.text = "继续"
+        }
+        refreshReplayBar()
+        showControls()
+    }
+
+    private fun backToLive(notice: String) {
+        val id = replayChannelId
+        val fallback = currentChannel
+        clearReplay()
+        val target = fallback ?: all.firstOrNull { it.id == id }
+        if (target != null) playChannel(target)
+        toast(notice)
     }
 
     // ---------------------------------------------------------------- PlayerManager.Callback
@@ -1771,6 +2026,9 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
     override fun onResume() {
         bindFsTools()
         resumeOrRebuildAfterBackground()
+        // 回看的播放头在 onPause 里冻住了（见那里的说明），回前台接着走。
+        // 用户自己暂停的那种不动：时间码要停在他按下暂停的那一刻。
+        if (!paused) replayHead?.resume(now())
         // 「正在播 / 进度 / 下一档」每 30 秒自己刷新（先把旧的摘掉，避免重复排队）
         Handler(Looper.getMainLooper()).removeCallbacks(nowTicker)
         Handler(Looper.getMainLooper()).postDelayed(nowTicker, 30_000)
@@ -1862,12 +2120,18 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
         }
         // 只暂停，不改 paused —— 那是用户的意图，回来还要按它恢复
         pausedAtMs = System.currentTimeMillis()
+        // 回看的播放头按墙钟算，退到后台墙钟照样走。不在这里冻住，
+        // 回前台时间码就会凭空往前跳一段（暂停期间画面是停的）。
+        replayHead?.pause(now())
         android.util.Log.i(TAG, "onPause: 记录后台起点")
         player.pause()
     }
 
     override fun onDestroy() {
         app.api.onAuthExpired = null
+        // 回看心跳先摘掉：它每 500ms 摸一次视图和 player，
+        // 等 player 释放完再跑就会碰到已经归零的对象。
+        clearReplay()
         super.onDestroy()
         // 播放器归本 Activity：界面走就释放，状态归零。
         if (::player.isInitialized) {

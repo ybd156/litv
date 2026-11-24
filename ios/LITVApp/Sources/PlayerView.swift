@@ -665,7 +665,7 @@ struct PlayerView: View {
 
     /// 从节目单某一档发起回看。
     ///
-    /// 与 Android 的 `EpgActions.replay` 一致：服务端的时移接口是**按整台**给地址
+    /// 与 Android 手机页的 `PhoneHomeActivity.openReplayFor` 一致：服务端的时移接口是**按整台**给地址
     /// （`/api/v1/tv/timeshift/{id}`，不带节目时间），所以这里等于"从这档节目处
     /// 发起回看"，实际播放的是该台时移缓冲的起点，不按节目精确定位。
     private func replayProgram(_ p: EpgProgram) async {

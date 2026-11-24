@@ -212,7 +212,10 @@ class MpvEngine(private val avs3Mode: Boolean = false) : PlayerEngine, MPVLib.Li
     }
 
     override fun snapshot(): android.graphics.Bitmap? =
-        if (MPVLib.available) runCatching { MPVLib.grabThumbnail() }.getOrNull() else null
+        // 2026-11-24：JNI 桥改为与本仓库 ffmpeg 同代自编（native/libplayer-jni），
+        // 上游签名带 dimension 参数（缩略图边长，px）。这里要的是"整屏冻结帧"，
+        // 传 1920 保持与电视一致；传小值会让换台幕布变糊。
+        if (MPVLib.available) runCatching { MPVLib.grabThumbnail(1920) }.getOrNull() else null
 
     override fun stats(): EngineStats {
         if (!MPVLib.available) return EngineStats()

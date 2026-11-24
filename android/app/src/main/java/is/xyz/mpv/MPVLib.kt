@@ -79,7 +79,7 @@ object MPVLib {
 
     external fun attachSurface(surface: Surface?)
     external fun detachSurface()
-    external fun grabThumbnail(): Bitmap?
+    external fun grabThumbnail(dimension: Int): Bitmap?
 
     // ---------------- native 反向调用（JNI 会直接找这些方法） ----------------
     // 注意：这些**不能**是 private，否则 JNI 找不到。

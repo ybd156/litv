@@ -609,6 +609,56 @@ CROSS
   ok "mpv[$abi] 完成"
 }
 
+# ---------------------------------------------------------------- 3.5 libplayer（JNI 桥）
+#
+# 为什么必须自己编：`libplayer.so` 是 is.xyz.mpv 的 JNI 桥（Kotlin 侧 MPVLib.kt 调它），
+# 它和 ffmpeg 是**强耦合**的 —— 2026-11-24 真机证据：
+#   旧 libplayer.so 引用 av_jni_set_android_app_ctx（ffmpeg 7/8 才有），
+#   而我们为配 mpv 0.36 用的是 n6.1 → dlopen 直接失败
+#   `cannot locate symbol "av_jni_set_java_vm"` → 「内核 mpv 不可用，跳过」。
+# 所以 JNI 桥必须和 ffmpeg 同一代一起编，源码 vendored 在 native/libplayer-jni/
+# （来自 mpv-android，GPL，见该目录 LICENSE.mpv-android）。
+build_player_jni() {
+  local abi="$1" prefix
+  prefix="$OUT/$abi"
+  local jni="$PROJ/native/libplayer-jni"
+  [ -f "$jni/Android.mk" ] || { err "缺少 libplayer JNI 源码（native/libplayer-jni/Android.mk）"; return 1; }
+  [ -f "$prefix/lib/libmpv.so" ] || { err "libplayer[$abi] 需要先有 libmpv.so"; return 1; }
+
+  say "编译 libplayer（JNI 桥）[$abi]"
+  local nb="$NDK/ndk-build"
+  [ -x "$nb" ] || nb="$NDK/build/ndk-build"
+  [ -x "$nb" ] || { err "找不到 ndk-build: $NDK"; return 1; }
+
+  local bdir="$SRC/libplayer-build-$abi"
+  rm -rf "$bdir" && mkdir -p "$bdir" || return 1
+
+  # Android.mk 从 PREFIX*/lib 取预编译库、从 PREFIX*/include 取头文件，
+  # 我们每个 ABI 只有一个前缀，所以四个变量都指向同一个目录。
+  (
+    cd "$jni" || exit 1
+    "$nb" \
+      NDK_PROJECT_PATH="$bdir" \
+      APP_BUILD_SCRIPT="$jni/Android.mk" \
+      NDK_APPLICATION_MK="$jni/Application.mk" \
+      APP_ABI="$abi" \
+      APP_PLATFORM=android-21 \
+      APP_CFLAGS="-Wno-error" \
+      PREFIX32="$prefix" PREFIX64="$prefix" PREFIX_X86="$prefix" PREFIX_X64="$prefix" \
+      NDK_OUT="$bdir/obj" NDK_LIBS_OUT="$bdir/libs" \
+      -j"$JOBS" >>"$bdir/build.log" 2>&1
+  ) || {
+    err "libplayer[$abi] 编译失败，日志尾部："
+    tail -25 "$bdir/build.log" 2>/dev/null
+    return 1
+  }
+
+  local so="$bdir/libs/$abi/libplayer.so"
+  [ -f "$so" ] || { err "libplayer[$abi] 没产出 .so"; return 1; }
+  cp -f "$so" "$prefix/lib/libplayer.so" || return 1
+  ok "libplayer[$abi] 完成"
+}
+
 # ---------------------------------------------------------------- 4. 汇总到工程
 collect() {
   local abi="$1" dest="$PROJ/app/src/main/jniLibs/$abi"
@@ -628,7 +678,7 @@ collect() {
   else
     err "找不到 llvm-strip，产物会很大"
   fi
-  for so in libmpv.so libavcodec.so libavformat.so libavutil.so libswscale.so libswresample.so; do
+  for so in libmpv.so libplayer.so libavcodec.so libavformat.so libavutil.so libswscale.so libswresample.so; do
     [ -f "$OUT/$abi/lib/$so" ] && cp -f "$OUT/$abi/lib/$so" "$dest/" && echo "  → $abi/$so"
   done
   # 清理带版本号的符号链接副本
@@ -659,6 +709,8 @@ for abi in $ABIS; do
     say "跳过 mpv（SKIP_MPV=1，复用仓库里已有的 libmpv.so）"
   else
     build_mpv   "$abi" || { err "mpv[$abi] 失败，跳过该 ABI"; continue; }
+    # JNI 桥必须和上面这套 ffmpeg/libmpv 同一代编，否则 dlopen 会缺符号
+    build_player_jni "$abi" || { err "libplayer[$abi] 失败，跳过该 ABI"; continue; }
   fi
   collect       "$abi"
 done

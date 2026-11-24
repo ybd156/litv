@@ -685,7 +685,11 @@ collect() {
   else
     err "找不到 llvm-strip，产物会很大"
   fi
-  for so in libmpv.so libplayer.so libavcodec.so libavformat.so libavutil.so libswscale.so libswresample.so; do
+  # 注意 libavfilter：mpv 需要它（`avfilter_version` 等），而仓库里那份是**旧 ffmpeg**
+  # 编的。漏拷会让 APK 里出现「新 libmpv + 旧 libavfilter」这种混装，
+  # 真机表现为 `cannot locate symbol "avfilter_version" referenced by libmpv.so`
+  # （2026-11-24 踩过：collect 的名单里漏了 avfilter）。
+  for so in libmpv.so libplayer.so libavcodec.so libavformat.so libavutil.so libavfilter.so libswscale.so libswresample.so; do
     [ -f "$OUT/$abi/lib/$so" ] && cp -f "$OUT/$abi/lib/$so" "$dest/" && echo "  → $abi/$so"
   done
   # 清理带版本号的符号链接副本
@@ -748,6 +752,9 @@ for abi in $ABIS; do
     [ -f "$OUT/$abi/lib/libplayer.so" ] || { err "$abi 本次没编出 libplayer.so（JNI 桥，SKIP_MPV=0 要求必须编）"; missing=1; }
   fi
   [ -f "$OUT/$abi/lib/libavformat.so" ] || { err "$abi 没有编出 libavformat.so"; missing=1; }
+  # libavfilter 也要查：它是 mpv 的硬依赖，仓库里那份是旧 ffmpeg 编的，
+  # 漏编/漏拷会让 APK 里新 libmpv 配旧 libavfilter（`avfilter_version` 找不到）。
+  [ -f "$OUT/$abi/lib/libavfilter.so" ] || { err "$abi 没有编出 libavfilter.so"; missing=1; }
 done
 [ "$missing" = "0" ] || { err "有 ABI 没编出产物，构建失败"; exit 1; }
 

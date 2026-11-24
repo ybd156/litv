@@ -630,29 +630,47 @@ class PlayerManager(
 
     private val vlcFrameRecheck = Runnable {
         if (released) return@Runnable
+        // 息屏时显示管线停摆，`displayedPictures` 必然不动（真机实测电视息屏后恒 0）。
+        // 不挡这一句就会「判没画面 → 重建一次 → 再判没画面 → 不再重试」，
+        // 用户回来看到的是「明明在播，日志却说无画面」+ 白重建一轮播放器。
+        if (!screenInteractive()) {
+            Log.i(TAG, "屏幕已熄灭，跳过画面复检")
+            com.litv.tv.data.PlayLog.w(TAG, "屏幕已熄灭，跳过画面复检")
+            return@Runnable
+        }
         val v = current as? VlcEngine ?: return@Runnable
         val a = v.displayedPictures()
         if (a < 0) return@Runnable
         main.postDelayed({
             if (released) return@postDelayed
-            val v2 = current as? VlcEngine ?: return@postDelayed
-            val b = v2.displayedPictures()
-            if (b < 0) return@postDelayed
-            val delta = b - a
-            // 阈值从 5 降到 2：实测起播阶段帧率本来就低（缓冲刚结束、关键帧稀疏），
-            // 4 帧被判"没画面"会误触发重建，重建后再缓冲，形成卡顿循环。
-            if (delta < 2) {
-                if (vlcFrameRetried) {
-                    Log.w(TAG, "复检：仍无画面（已显示帧 $a -> $b），不再重试，等用户换台")
-                    com.litv.tv.data.PlayLog.w(TAG, "VLC 起播后无画面（$a -> $b）")
-                } else {
+            val v2 = current as? VlcEngine
+            val b = v2?.displayedPictures() ?: -1
+            if (v2 != null && b < 0) return@postDelayed
+            // 判定交给 VlcFrameJudge：息屏 / 内核已换掉都不下结论（见该类注释）。
+            when (VlcFrameJudge.judge(
+                screenInteractive = screenInteractive(),
+                enginePresent = v2 != null,
+                framesDelta = if (v2 != null) (b - a).toInt() else 0,
+                alreadyRetried = vlcFrameRetried,
+            )) {
+                VlcFrameDecision.SkipAsleep -> {
+                    Log.i(TAG, "屏幕已熄灭，跳过画面复检")
+                    com.litv.tv.data.PlayLog.w(TAG, "屏幕已熄灭，跳过画面复检")
+                }
+                VlcFrameDecision.SkipNoEngine -> Unit
+                VlcFrameDecision.Rebuild -> {
                     vlcFrameRetried = true
-                    Log.w(TAG, "复检：画面未推进（已显示帧 $a -> $b，仅 $delta 帧），重建一次")
+                    Log.w(TAG, "复检：画面未推进（已显示帧 $a -> $b，仅 ${b - a} 帧），重建一次")
                     retryNow()
                 }
-            } else {
-                vlcFrameRetried = false
-                Log.i(TAG, "复检：画面正常（已显示帧 $a -> $b，$delta 帧）")
+                VlcFrameDecision.GiveUp -> {
+                    Log.w(TAG, "复检：仍无画面（已显示帧 $a -> $b），不再重试，等用户换台")
+                    com.litv.tv.data.PlayLog.w(TAG, "VLC 起播后无画面（$a -> $b）")
+                }
+                VlcFrameDecision.Normal -> {
+                    vlcFrameRetried = false
+                    Log.i(TAG, "复检：画面正常（已显示帧 $a -> $b，${b - a} 帧）")
+                }
             }
         }, VLC_FRAME_SAMPLE_MS)
     }

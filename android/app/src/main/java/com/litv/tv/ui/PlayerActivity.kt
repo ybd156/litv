@@ -32,12 +32,16 @@ import com.litv.tv.data.PlaybackErrorCard
 import com.litv.tv.data.PlayCacheStore
 import com.litv.tv.data.RelayDecision
 import com.litv.tv.data.TvStream
+import com.litv.tv.player.ClockText
 import com.litv.tv.player.EngineKind
 import com.litv.tv.player.HeartbeatGate
 import com.litv.tv.player.PlayRequestGate
 import com.litv.tv.player.PlaySource
 import com.litv.tv.player.PlaybackCoordinator
 import com.litv.tv.player.PlayerManager
+import com.litv.tv.player.ReplayClock
+import com.litv.tv.player.ReplaySteps
+import com.litv.tv.player.ReplayWindow
 import com.litv.tv.player.SessionState
 import com.litv.tv.player.WatchClock
 import java.text.SimpleDateFormat
@@ -104,6 +108,41 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
     /** OSD 右下角码率。 */
     private lateinit var osdRate: TextView
     private lateinit var osdProgress: ProgressBar
+
+    // ---- 回看控制条（内置源回看 / 服务端时移） ----
+    private lateinit var replayBar: LinearLayout
+    private lateinit var replayTitle: TextView
+    private lateinit var replayClock: TextView
+    private lateinit var replayProgress: ProgressBar
+    private lateinit var rbBack: TextView
+    private lateinit var rbPlay: TextView
+    private lateinit var rbFwd: TextView
+    private lateinit var rbLive: TextView
+
+    /**
+     * 当前回看窗口；**null = 直播**。
+     *
+     * 这个字段就是"现在是不是回看"的唯一真相：键位分发、OSD、看门狗都看它。
+     * 不要再用"来源是不是 Timeshift"来判断——内置源回看走的也是
+     * [PlaySource.Builtin]，按来源判会把直播和回看混成一种。
+     */
+    private var replayWindow: ReplayWindow? = null
+    /** 回看播放头（墙钟推进，暂停/seek 都记在这里）。 */
+    private var replayHead: ReplayClock? = null
+    /** 回看对应的频道（「回到直播」用它切回去）。 */
+    private var replayChannelId = 0L
+    private var replayBarVisible = false
+    /** 回看里用户按了暂停（控制条按钮状态用）。 */
+    private var replayPaused = false
+
+    /** 控制条刷新：500ms 够跟手，又不至于每帧都碰 UI。 */
+    private val replayTicker = object : Runnable {
+        override fun run() {
+            if (replayWindow == null) return
+            refreshReplayBar()
+            main.postDelayed(this, 500)
+        }
+    }
     private lateinit var panel: LinearLayout
     private lateinit var panelTitle: TextView
     /** 源 id -> 源名，面板标题要用。 */
@@ -700,6 +739,18 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         osdBadges = findViewById(R.id.osdBadges)
         osdRate = findViewById(R.id.osdRate)
         osdProgress = findViewById(R.id.osdProgress)
+        replayBar = findViewById(R.id.replayBar)
+        replayTitle = findViewById(R.id.replayTitle)
+        replayClock = findViewById(R.id.replayClock)
+        replayProgress = findViewById(R.id.replayProgress)
+        rbBack = findViewById(R.id.rbBack)
+        rbPlay = findViewById(R.id.rbPlay)
+        rbFwd = findViewById(R.id.rbFwd)
+        rbLive = findViewById(R.id.rbLive)
+        rbBack.setOnClickListener { seekReplay(-ReplaySteps.BUTTON_STEP_MS) }
+        rbFwd.setOnClickListener { seekReplay(+ReplaySteps.BUTTON_STEP_MS) }
+        rbPlay.setOnClickListener { toggleReplayPause() }
+        rbLive.setOnClickListener { backToLive() }
         panel = findViewById(R.id.channelPanel)
         panelTitle = findViewById(R.id.panelTitle)
         panelList = findViewById(R.id.panelList)
@@ -959,6 +1010,17 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
                 app.prefs.engine,
             ),
         )
+        // 节目时长 = 这段回看的总长，控制条据此画进度。
+        // 起播是异步的，但窗口信息不依赖播放器——先挂上，
+        // 起播失败时 clearReplay 会在下次换台时兜掉。
+        exitPanelForReplay()
+        enterReplay(
+            ch,
+            ReplayWindow(
+                durationMs = ((end - start) * 1000L).coerceAtLeast(1L),
+                title = "${ch.name} · ${p?.title ?: "回看"}",
+            ),
+        )
     }
 
     private fun openTimeshiftFor(ch: Channel, p: com.litv.tv.data.EpgProgram? = null) {
@@ -982,6 +1044,14 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
                         ch.id, abs,
                         mapOf("User-Agent" to LitvUA.ANDROID),
                         app.prefs.engine,
+                    ),
+                )
+                exitPanelForReplay()
+                enterReplay(
+                    ch,
+                    ReplayWindow(
+                        durationMs = info.availableSeconds * 1000L,
+                        title = "${ch.name} · 回看（约 $minutes 分钟）",
                     ),
                 )
             },
@@ -1391,6 +1461,9 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         // 用户主动换台（含切回同一个内置源）就清掉「已降级」记录，
         // 否则切回内置源再卡住时不会重新降级。
         if (!isFallback) fallbackDoneFor = 0L
+        // 用户主动换台就退出回看态：直播流没有时间轴，
+        // 控制条留在这里会让「快进」按到一个不可 seek 的内容上。
+        if (!isFallback) clearReplay()
         // 取走本次的转场方向并立刻清零：只有 switchBy 会写它，
         // 其余入口（点列表/数字键/恢复/重试）拿到的都是 0 = 只淡出。
         slideDir = pendingSlideDir
@@ -2431,6 +2504,190 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         if (osdVisible) hideOsd() else showOsd()
     }
 
+    // ------------------------------------------------------------ 回看控制条
+
+    /** 单调时钟：进度必须按 elapsedRealtime 走，不能用 System.currentTimeMillis（会跳）。 */
+    private fun now(): Long = android.os.SystemClock.elapsedRealtime()
+
+    /**
+     * 起播回看后把频道面板/节目单收起来。
+     *
+     * 从节目单点「回看」时，节目单本身是盖在播放器上面的——不收起来，
+     * 用户看到的就是"点了回看，画面没变"，控制条也被面板挡在下面。
+     * 节目单带收起动画，所以用它的回调关面板，避免两段动画打架。
+     */
+    private fun exitPanelForReplay() {
+        if (epgVisible) {
+            closeEpg { if (panelVisible) closePanel() }
+        } else if (panelVisible) {
+            closePanel()
+        }
+    }
+
+    /**
+     * 进入回看/时移。
+     *
+     * 必须在起播**之后**调：窗口时长只有 EPG / 服务端知道，
+     * 播放器自己拿不到——回看是 HLS 分片，没有 EXT-X-ENDLIST，`durationMs()` 恒为 -1。
+     *
+     * @param startAtMs 起播位置。央视频回看从节目开头起（0）；
+     *                  服务端时移是"最近 N 分钟"的滑动缓冲，也从 0 开始。
+     */
+    private fun enterReplay(ch: Channel, window: ReplayWindow, startAtMs: Long = 0L) {
+        replayWindow = window
+        replayChannelId = ch.id
+        replayPaused = false
+        // 回看的 ENDED 是「节目播完了」，不是「直播断流」——交给 onReplayFinished。
+        player.replayMode = true
+        replayHead = ReplayClock(window.durationMs).also {
+            it.reset(nowMs = now(), positionMs = startAtMs)
+        }
+        replayTitle.text = window.title.ifBlank { ch.name }
+        rbPlay.text = "暂停"
+        main.removeCallbacks(replayTicker)
+        main.post(replayTicker)
+        showReplayBar()
+        // 先亮 4 秒再收起：让用户知道"这里能调进度"，
+        // 又不会永远压在画面上——电视用户主要还是要看画面。
+        main.postDelayed({ if (replayWindow != null) hideReplayBar() }, 4000)
+        Log.i(TAG, "进入回看：${window.title} 时长 ${window.durationMs / 1000}s")
+    }
+
+    /** 回到直播态：清空回看窗口，键位与 OSD 都恢复成直播语义。 */
+    private fun clearReplay() {
+        if (replayWindow != null) Log.i(TAG, "退出回看，回到直播")
+        replayWindow = null
+        replayHead = null
+        replayChannelId = 0L
+        replayPaused = false
+        if (::player.isInitialized) player.replayMode = false
+        main.removeCallbacks(replayTicker)
+        hideReplayBar()
+    }
+
+    /**
+     * 回看播到节目结尾。
+     *
+     * 不能走「播放出错」那条路：那时候屏幕上是「所有内核均失败…直播流结束」，
+     * 但用户看到的分明是节目播完了。切回直播，并且明确说一句发生了什么。
+     */
+    override fun onReplayFinished() {
+        if (replayWindow == null) return
+        Log.i(TAG, "回看结束，切回直播")
+        backToLive("回看结束，已回到直播")
+    }
+
+    private fun showReplayBar() {
+        if (replayWindow == null) return
+        // 面板/设置菜单打开时不叠一层：它们自己占满底部。
+        if (panelVisible || menuVisible) return
+        hideOsd()
+        replayBarVisible = true
+        replayBar.visibility = View.VISIBLE
+        refreshReplayBar()
+        rbBack.requestFocus()
+    }
+
+    private fun hideReplayBar() {
+        replayBarVisible = false
+        if (::replayBar.isInitialized) replayBar.visibility = View.GONE
+    }
+
+    private fun refreshReplayBar() {
+        val win = replayWindow ?: return
+        val head = replayHead ?: return
+        val pos = head.tick(now())
+        replayClock.text = ClockText.pair(pos, win.durationMs)
+        val permille = if (win.durationMs > 0) (pos * 1000 / win.durationMs).toInt() else 0
+        replayProgress.progress = permille.coerceIn(0, 1000)
+        // 播到结尾就自动回直播。
+        //
+        // 不能指望内核报 ENDED：回看是**滑窗 HLS**，没有 EXT-X-ENDLIST，
+        // Exo 到末尾只会停在那里不再前进（`durationMs()` 也恒为 -1），
+        // 真机实测把播放头跳到 240s 之后一个 ENDED 都不会来。
+        // 时间轴本来就是我们自己按窗口时长算的，那就由它来收尾。
+        if (win.durationMs > 0 && pos >= win.durationMs && !replayPaused) {
+            onReplayReachedEnd()
+        }
+    }
+
+    /** 回看播到窗口末尾：收条 + 记一行 + 回直播。**只由 UI 线程调用**。 */
+    private fun onReplayReachedEnd() {
+        if (replayWindow == null) return
+        Log.i(TAG, "回看播到结尾（${replayWindow?.durationMs?.div(1000)}s），切回直播")
+        replayPaused = true // 防止本轮 ticker 再进来
+        backToLive("回看结束，已回到直播")
+    }
+
+    /**
+     * 快退/快进。
+     *
+     * 先动播放头再让内核 seek：时间码立刻响应，比等内核回调更跟手。
+     * 内核拒绝（直播流、或 VLC 没拿到 seekable）就明确提示，
+     * 不做静默失败——用户会以为遥控器坏了。
+     */
+    private fun seekReplay(deltaMs: Long) {
+        val head = replayHead ?: return
+        val target = head.seekBy(now(), deltaMs)
+        val ok = player.seekTo(target)
+        if (!ok) toastTip(if (player.seekable()) "跳转没生效，试试换内核" else "这段内容不支持拖动")
+        refreshReplayBar()
+        if (!replayBarVisible) showReplayBar()
+        main.removeCallbacks(replayTicker)
+        main.post(replayTicker)
+    }
+
+    private fun toggleReplayPause() {
+        val head = replayHead ?: return
+        replayPaused = !replayPaused
+        if (replayPaused) {
+            head.pause(now())
+            session.pause()
+            rbPlay.text = "继续"
+        } else {
+            head.resume(now())
+            session.resume()
+            rbPlay.text = "暂停"
+        }
+        refreshReplayBar()
+    }
+
+    /**
+     * 「回到直播」：切回同一个台的直播流。
+     *
+     * @param notice 结束后提示什么。两种场景说法不同：用户主动点按钮是
+     *   「已切回直播」，回看播完自动回来是「回看结束，已回到直播」。
+     */
+    private fun backToLive(notice: String = "已切回直播") {
+        val id = replayChannelId
+        clearReplay()
+        if (id != 0L) {
+            switchToChannelById(id)
+        } else {
+            // 拿不到 id（理论上不会）就退回切台，别把用户留在回看里。
+            current?.let { playChannel(it) }
+        }
+        toastTip(notice)
+    }
+
+    /** 控制条里 ↑↓ 在四个按钮之间移动焦点。 */
+    private fun moveReplayFocus(delta: Int) {
+        val order = arrayOf(rbBack, rbPlay, rbFwd, rbLive)
+        val cur = order.indexOfFirst { it === currentFocus }
+        val next = ((if (cur < 0) 0 else cur) + delta).coerceIn(0, order.size - 1)
+        order[next].requestFocus()
+    }
+
+    /** 控制条可见时 OK = 执行当前焦点按钮。 */
+    private fun clickFocusedReplayButton(): Boolean {
+        val f = currentFocus as? View ?: return false
+        if (f.id != R.id.rbBack && f.id != R.id.rbPlay && f.id != R.id.rbFwd && f.id != R.id.rbLive) {
+            return false
+        }
+        f.performClick()
+        return true
+    }
+
     /** 放开焦点限制并把面板淡入。落焦点前不能放开，否则「全部」会先抢到焦点。 */
     private fun revealPanel() {
         if (!panelVisible) return
@@ -2882,6 +3139,14 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
                 closeEpg { restorePanelScroll(pos, top) }
                 return true
             }
+            // 右键必须自己拦：节目单两块（日期列 / 节目列）都没写 nextFocusRight，
+            // 交给系统做焦点搜索时从日期列按右键什么也不会发生 —— 表现就是
+            // "节目单打开了，但进不去节目列，回看按钮永远点不到"。
+            // 方向语义统一由 movePanelFocus 决定，这里只补一条右移。
+            if (action == KeyEvent.ACTION_DOWN && code == KeyEvent.KEYCODE_DPAD_RIGHT) {
+                movePanelFocus(+1)
+                return true
+            }
             return super.dispatchKeyEvent(event)
         }
 
@@ -2931,6 +3196,48 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
                 }
             }
             return super.dispatchKeyEvent(event)
+        }
+
+        // 回看 / 时移：方向键语义与直播不同。
+        //
+        // 直播里 ← 是频道页、→ 是设置；回看里这两个键必须变成快退/快进。
+        // 否则用户看回看时按 ← 蹦出来的是频道列表，而「往前 10 秒」这个
+        // 最基本的需求反而没有入口。设置菜单改由 MENU 键进。
+        if (replayWindow != null) {
+            if (action == KeyEvent.ACTION_DOWN) {
+                when (code) {
+                    KeyEvent.KEYCODE_DPAD_LEFT -> {
+                        seekReplay(-ReplaySteps.KEY_STEP_MS); return true
+                    }
+                    KeyEvent.KEYCODE_DPAD_RIGHT -> {
+                        seekReplay(+ReplaySteps.KEY_STEP_MS); return true
+                    }
+                    KeyEvent.KEYCODE_DPAD_UP -> if (replayBarVisible) {
+                        moveReplayFocus(-1); return true
+                    }
+                    KeyEvent.KEYCODE_DPAD_DOWN -> if (replayBarVisible) {
+                        moveReplayFocus(+1); return true
+                    }
+                    KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER,
+                    KeyEvent.KEYCODE_NUMPAD_ENTER -> {
+                        // 控制条收起时 OK = 重新显示；显示时 OK = 执行焦点按钮
+                        if (!replayBarVisible || !clickFocusedReplayButton()) showReplayBar()
+                        return true
+                    }
+                    KeyEvent.KEYCODE_MENU -> {
+                        toggleSettingsMenu(); return true
+                    }
+                    KeyEvent.KEYCODE_BACK -> if (replayBarVisible) {
+                        // 先收控制条，再按一次才是"退出播放"
+                        hideReplayBar(); return true
+                    }
+                }
+            } else if (action == KeyEvent.ACTION_UP &&
+                (code == KeyEvent.KEYCODE_DPAD_LEFT || code == KeyEvent.KEYCODE_DPAD_RIGHT)
+            ) {
+                // 抬起也吞掉，避免松手时落到直播分支上
+                return true
+            }
         }
 
         when (code) {
@@ -3903,6 +4210,13 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         // 离开前台：解除常亮，允许系统息屏；同时暂停播放（下面一行）
         window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         pausedAtMs = System.currentTimeMillis()
+        // 回看时时间码是按墙钟推的，播放被暂停了就必须同时停表，
+        // 否则退后台十分钟回来控制条会显示"已经播到十分钟后"。
+        if (replayWindow != null) {
+            replayHead?.pause(now())
+            replayPaused = true
+            rbPlay.text = "继续"
+        }
         session.pause()
         app.remote.onCommand = null
         // 跨端续播：离开时记下看到哪个台，别的设备打开就能"接着看"
@@ -3948,6 +4262,8 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         main.removeCallbacksAndMessages(null)
         // 离开页面后到达的 /tv/play 回调一律作废，别再往已销毁的界面上写。
         playGate.invalidate()
+        // 回看控制条：先停 ticker 再放播放器，避免销毁后还有回调往 View 上写
+        clearReplay()
         session.release()
         // 下次进页面是新的观看，不该被上一次的 attempt 挡掉心跳
         heartbeatGate.reset()

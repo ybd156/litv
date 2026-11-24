@@ -117,6 +117,21 @@ interface PlayerEngine {
      */
     fun bufferedMs(): Long = 0L
 
+    /**
+     * 跳到某个绝对位置（毫秒）。返回 false 表示这个内核不支持或当前流的不可 seek。
+     *
+     * 只有回看/时移这类**有限时长**内容才允许调：直播流 seek 到窗口外会被
+     * 播放器判死或直接拉到边缘，而用户只是想看「刚才那一段」，应该走服务端
+     * 的时移地址重新起播（见 `PlaySource.Timeshift`），不是对直播 seek。
+     */
+    fun seekTo(positionMs: Long): Boolean = false
+
+    /** 当前内容能否 seek。直播 HLS 通常为 false。 */
+    fun seekable(): Boolean = false
+
+    /** 内容总时长（毫秒）。-1 表示拿不到（直播、或内核不报）。 */
+    fun durationMs(): Long = -1L
+
     /** 内核能力自检：比如 libmpv.so 不存在时返回 false。 */
     fun isAvailable(context: Context): Boolean
 

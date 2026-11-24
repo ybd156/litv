@@ -211,6 +211,27 @@ class MpvEngine(private val avs3Mode: Boolean = false) : PlayerEngine, MPVLib.Li
         return runCatching { !MPVLib.getPropertyBoolean("pause") }.getOrDefault(false)
     }
 
+    /** 回看/时移 seek：mpv 的 seek 用绝对秒 + `absolute` 模式。 */
+    override fun seekTo(positionMs: Long): Boolean {
+        if (!MPVLib.available || !seekable()) return false
+        val sec = (positionMs.coerceAtLeast(0L) / 1000.0)
+        return runCatching {
+            MPVLib.command(arrayOf("seek", sec.toString(), "absolute"))
+            true
+        }.getOrDefault(false)
+    }
+
+    override fun seekable(): Boolean {
+        if (!MPVLib.available) return false
+        return runCatching { MPVLib.getPropertyBoolean("seekable") }.getOrDefault(false)
+    }
+
+    override fun durationMs(): Long {
+        if (!MPVLib.available) return -1L
+        return runCatching { (MPVLib.getPropertyDouble("duration") * 1000.0).toLong() }
+            .getOrDefault(-1L)
+    }
+
     override fun snapshot(): android.graphics.Bitmap? =
         // 2026-11-24：JNI 桥改为与本仓库 ffmpeg 同代自编（native/libplayer-jni），
         // 上游签名带 dimension 参数（缩略图边长，px）。这里要的是"整屏冻结帧"，

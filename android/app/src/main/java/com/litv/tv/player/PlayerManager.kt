@@ -43,9 +43,26 @@ class PlayerManager(
          * @param frozenMs 画面冻结时长（毫秒）
          */
         fun onStall(frozenMs: Int) = Unit
+
+        /**
+         * 回看/时移**正常播到结尾**。
+         *
+         * 直播流的 ENDED 是异常（要重连/换内核），回看的 ENDED 是节目播完了，
+         * 是完全正常的事。二者必须分开处理，否则节目一播完就弹出
+         * 「播放出错：所有内核均失败…… 直播流结束」，把一个正常结束报成故障。
+         */
+        fun onReplayFinished() = Unit
     }
 
     var callback: Callback? = null
+
+    /**
+     * 当前播的是回看/时移（有限时长内容）。
+     *
+     * 只影响一件事：`onEnded` 时不再按「直播断流」重连换内核，而是交给上层
+     * （切回直播）。由 `PlayerActivity.enterReplay/clearReplay` 维护。
+     */
+    var replayMode = false
 
     /**
      * 上一次回到前台之前，是否真的经历过**息屏**。
@@ -1433,6 +1450,13 @@ class PlayerManager(
                 //   · 起播预算是起播阶段计时，早就用完了。
                 main.post {
                     if (released || userPaused) return@post
+                    // 回看播完是**正常结束**：重连同一段回看只会从头再放一遍，
+                    // 换内核也一样（VOD 已经到 ENDLIST 了）。交给上层切回直播。
+                    if (replayMode) {
+                        Log.i(TAG, "回看播放到结尾，交回上层")
+                        callback?.onReplayFinished()
+                        return@post
+                    }
                     if (endedRetries < 2) {
                         endedRetries++
                         Log.w(TAG, "直播流结束，重连第 ${endedRetries} 次（同一线路）")
@@ -1547,6 +1571,31 @@ class PlayerManager(
         stopStallWatchdog()
         current?.pause()
     }
+
+    /**
+     * 回看/时移跳转。
+     *
+     * 只给「有限时长」的内容用（内置源回看、服务端时移）。直播流不要调：
+     * 上层在直播态根本不会显示控制条，这里再用 `seekable()` 兜一道，
+     * 失败就如实返回 false 并记日志——静默失败会让用户以为按键没反应。
+     */
+    fun seekTo(positionMs: Long): Boolean {
+        val e = current ?: return false
+        val ok = runCatching { e.seekTo(positionMs) }.getOrDefault(false)
+        if (ok) {
+            com.litv.tv.data.PlayLog.w(TAG, "回看跳转 ${positionMs / 1000}s（内核 ${currentKind?.key}）")
+        } else {
+            Log.w(TAG, "回看跳转被拒绝 ${positionMs / 1000}s（内核 ${currentKind?.key}，seekable=${e.seekable()}）")
+            com.litv.tv.data.PlayLog.w(TAG, "回看跳转被拒绝 ${positionMs / 1000}s（内核 ${currentKind?.key}）")
+        }
+        return ok
+    }
+
+    /** 当前内容能否 seek（直播一般 false）。 */
+    fun seekable(): Boolean = runCatching { current?.seekable() == true }.getOrDefault(false)
+
+    /** 当前内容总时长（毫秒），-1 = 拿不到。 */
+    fun contentDurationMs(): Long = runCatching { current?.durationMs() ?: -1L }.getOrDefault(-1L)
 
     fun resume() {
         userPaused = false

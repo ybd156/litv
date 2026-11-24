@@ -836,6 +836,27 @@ class ExoEngine : PlayerEngine {
     override fun bufferedMs(): Long =
         runCatching { player?.bufferedPosition ?: 0L }.getOrDefault(0L)
 
+    /**
+     * 回看/时移 seek。
+     *
+     * 必须显式判 `isCurrentMediaItemSeekable`：对直播 HLS 调 seekTo 会把
+     * 播放器推到窗口外，Exo 随后报 `BEHIND_LIVE_WINDOW` 并卡在那里
+     * （ExoEngine 内部专门有一段处理这个错误，说明真机上发生过）。
+     * 这里在入口挡掉，让上层走「换时移地址重起播」的路子。
+     */
+    override fun seekTo(positionMs: Long): Boolean = runCatching {
+        val p = player ?: return false
+        if (!p.isCurrentMediaItemSeekable) return false
+        p.seekTo(positionMs.coerceAtLeast(0L))
+        true
+    }.getOrDefault(false)
+
+    override fun seekable(): Boolean =
+        runCatching { player?.isCurrentMediaItemSeekable == true }.getOrDefault(false)
+
+    override fun durationMs(): Long =
+        runCatching { player?.duration ?: -1L }.getOrDefault(-1L)
+
     override fun stats(): EngineStats {
         val p = player ?: return EngineStats()
         val vf = p.videoFormat

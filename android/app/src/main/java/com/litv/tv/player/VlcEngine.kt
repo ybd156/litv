@@ -871,6 +871,26 @@ class VlcEngine : PlayerEngine {
         VlcOps.exec.execute { runCatching { p.pause() } }
     }
 
+    /**
+     * 回看/时移 seek（setTime）。
+     *
+     * 走 VlcOps 串行队列：libVLC 的 time/stop 都在同一个内部输入线程上做，
+     * 主线程直接 setTime 与队列里的 stop 撞上会重演 2026-11-17 那次
+     * `libvlc_media_player_stop` 三方互锁 ANR。
+     */
+    override fun seekTo(positionMs: Long): Boolean {
+        val p = player ?: return false
+        if (runCatching { !p.isSeekable }.getOrDefault(true)) return false
+        VlcOps.exec.execute { runCatching { p.time = positionMs.coerceAtLeast(0L) } }
+        return true
+    }
+
+    override fun seekable(): Boolean =
+        runCatching { player?.isSeekable == true }.getOrDefault(false)
+
+    override fun durationMs(): Long =
+        runCatching { player?.length ?: -1L }.getOrDefault(-1L)
+
     // libvlc 的 stop/release 要等 vout/音频线程收尾，主线程做会卡死（ANR）。
     // 统一走 VlcOps：与 release 串行，绝不再出现两个线程同时 stop。
     override fun stop() {

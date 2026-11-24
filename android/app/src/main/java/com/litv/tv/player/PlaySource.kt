@@ -15,7 +15,7 @@ sealed class PlaySource(
     open val engine: String,
     open val bustCache: Boolean,
 ) {
-    /** 服务端 `/tv/play` 签发的直播地址（唯一会向服务端报心跳/QoE 的路径）。 */
+    /** 服务端签发的直播地址（历史心跳只挂在这一条路径上）。 */
     class Remote(
         override val channelId: Long,
         override val url: String,
@@ -71,6 +71,18 @@ sealed class PlaySource(
             is Timeshift -> "时移"
         }
 
-    /** 是否需要向服务端报心跳与 QoE：只有服务端签发的地址才有服务端那一侧的记账。 */
-    val needsHeartbeat: Boolean get() = this is Remote
+    /**
+     * 是否需要向服务端报心跳。
+     *
+     * 曾经是 `this is Remote`（只有中转路径报），结果是缓存命中、内置源、
+     * 本地解析、时移四条路径一次都不报——管理台「终端设备」的在线时间与
+     * 「正在播放」只在偶尔走中转时才更新。
+     *
+     * 服务端 `tvHeartbeat` 的实现（`server/internal/api/handlers_client_device.go:161`）
+     * 只做两件事：更新设备的 IP/版本、返回 config/channels 版本号；
+     * `playing_channel` 只解码不校验。所以它**不依赖频道在服务端存在**，
+     * 四条路径都可以报。唯一要挡的是没有真实频道 id 的情况（内置源的合成 id
+     * 可能为 0 或负数），那种报上去只会污染设备记录。
+     */
+    val needsHeartbeat: Boolean get() = channelId > 0
 }

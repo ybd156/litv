@@ -154,12 +154,18 @@ class PlaybackCoordinatorTest {
     }
 
     @Test
-    fun `只有服务端签发的来源需要心跳`() {
+    fun `四条起播路径都该报心跳，没有真实频道 id 的不报`() {
+        // 评审 P0-10：心跳以前只挂在中转路径上，缓存/内置源/本地解析/时移全漏。
+        // 服务端 tvHeartbeat 只更新设备信息并回版本号，不校验频道是否存在。
         assertTrue(remote().needsHeartbeat)
-        assertFalse(PlaySource.Cached(1, "u", emptyMap(), "exo").needsHeartbeat)
-        assertFalse(PlaySource.Local(1, "u", emptyMap(), "exo").needsHeartbeat)
+        assertTrue(PlaySource.Cached(1, "u", emptyMap(), "exo").needsHeartbeat)
+        assertTrue(PlaySource.Local(1, "u", emptyMap(), "exo").needsHeartbeat)
+        assertTrue(PlaySource.Timeshift(1, "u", emptyMap(), "exo").needsHeartbeat)
         val builtin = PlaySource.Builtin(1, "u", emptyMap(), "exo")
-        assertFalse(builtin.needsHeartbeat)
+        assertTrue(builtin.needsHeartbeat)
+        // 合成 id（内置源可能没有真实频道 id）不报，否则只会污染设备记录
+        assertFalse(PlaySource.Builtin(0, "u", emptyMap(), "exo").needsHeartbeat)
+        assertFalse(PlaySource.Local(-1, "u", emptyMap(), "exo").needsHeartbeat)
         // 内置源按 URL 签名校验，绝不能加 _t 缓存参数
         assertFalse(builtin.bustCache)
         assertEquals("内置源", builtin.label)

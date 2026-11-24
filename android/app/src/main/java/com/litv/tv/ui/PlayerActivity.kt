@@ -33,6 +33,7 @@ import com.litv.tv.data.PlayCacheStore
 import com.litv.tv.data.RelayDecision
 import com.litv.tv.data.TvStream
 import com.litv.tv.player.EngineKind
+import com.litv.tv.player.HeartbeatGate
 import com.litv.tv.player.PlayRequestGate
 import com.litv.tv.player.PlaySource
 import com.litv.tv.player.PlaybackCoordinator
@@ -206,9 +207,21 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         ).also { c ->
             c.listener = { from, to, src ->
                 Log.i(TAG, "会话 ${from.name} → ${to.name}（来源 ${src?.label ?: "-"}，第 ${c.attempt} 次）")
+                // 心跳由会话状态触发，而不是挂在 `/tv/play` 的成功分支上。
+                // 以前那样写，缓存命中/内置源/本地解析/时移四条路径一次都不报，
+                // 管理台的在线时间与「正在播放」只在偶尔走中转时才更新。
+                if (to == SessionState.Playing && src != null &&
+                    heartbeatGate.shouldSend(c.attempt, src.needsHeartbeat)
+                ) {
+                    Log.i(TAG, "心跳：频道 ${src.channelId}（来源 ${src.label}）")
+                    app.api.heartbeat(src.channelId, "playing") { hb -> onChannelsVersion(hb.channelsVersion) }
+                }
             }
         }
     }
+
+    /** 同一次起播只报一次心跳（换台/重试 attempt 变了再报）。 */
+    private val heartbeatGate = HeartbeatGate()
     private lateinit var panelAdapter: ChannelAdapter
     private lateinit var epgAdapter: EpgAdapter
 
@@ -1593,7 +1606,8 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
                 // 底部信息条：线路 x/y 与延迟
                 refreshLineInfo(ch.id, info.streamId)
                 renderInfoBar()
-                app.api.heartbeat(ch.id, "playing") { hb -> onChannelsVersion(hb.channelsVersion) }
+                // 心跳不在这里发：它挂在会话状态上（见 session.listener 里进 Playing 那段）。
+                // 挂在这里等于只有走 `/tv/play` 的路径才有心跳，缓存/内置源/本地解析全漏。
             },
             onErr = { msg ->
                 // 过期请求的失败提示同样要丢：它会把新台的信息盖成旧台的错误。
@@ -3937,6 +3951,8 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         // 离开页面后到达的 /tv/play 回调一律作废，别再往已销毁的界面上写。
         playGate.invalidate()
         session.release()
+        // 下次进页面是新的观看，不该被上一次的 attempt 挡掉心跳
+        heartbeatGate.reset()
         super.onDestroy()
     }
 

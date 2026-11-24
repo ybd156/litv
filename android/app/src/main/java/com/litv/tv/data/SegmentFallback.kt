@@ -48,8 +48,8 @@ object SegmentFallback {
     }
 
     sealed class Outcome {
-        data class Ready(val plan: Plan) : Outcome
-        data class Skip(val reason: Reason) : Outcome
+        data class Ready(val plan: Plan) : Outcome()
+        data class Skip(val reason: Reason) : Outcome()
     }
 
     /**

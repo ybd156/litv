@@ -743,6 +743,9 @@ for abi in $ABIS; do
     fi
   else
     [ -f "$OUT/$abi/lib/libmpv.so" ] || { err "$abi 本次没编出 libmpv.so（SKIP_MPV=0 要求必须编）"; missing=1; }
+    # libplayer 也必须本次真编出来：jniLibs 里有提交进仓库的旧二进制，
+    # 少了这条，JNI 编译失败会「沿用旧文件」把 CI 混绿（2026-11-24 踩过）。
+    [ -f "$OUT/$abi/lib/libplayer.so" ] || { err "$abi 本次没编出 libplayer.so（JNI 桥，SKIP_MPV=0 要求必须编）"; missing=1; }
   fi
   [ -f "$OUT/$abi/lib/libavformat.so" ] || { err "$abi 没有编出 libavformat.so"; missing=1; }
 done

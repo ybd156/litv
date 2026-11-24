@@ -11,6 +11,7 @@
 
 extern "C" {
     #include <libavcodec/jni.h>
+    #include <libavcodec/version.h>
 }
 
 #include "log.h"
@@ -46,8 +47,13 @@ static void prepare_environment(JNIEnv *env, jobject appctx) {
     if (global_appctx)
         env->DeleteGlobalRef(global_appctx);
     global_appctx = env->NewGlobalRef(appctx);
+    // av_jni_set_android_app_ctx 是 ffmpeg 7/8 才有的 API；本仓库为配 mpv 0.36
+    // 钉的是 n6.1（libavcodec 60.x），那里没有这个函数，直接调会编译失败。
+    // 老 API 只需要 av_jni_set_java_vm（上面已调），足够 JNI 桥工作。
+#if LIBAVCODEC_VERSION_MAJOR >= 61
     if (global_appctx)
         av_jni_set_android_app_ctx(global_appctx, NULL);
+#endif
 
     init_methods_cache(env);
 }

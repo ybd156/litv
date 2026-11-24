@@ -656,6 +656,13 @@ build_player_jni() {
   local so="$bdir/libs/$abi/libplayer.so"
   [ -f "$so" ] || { err "libplayer[$abi] 没产出 .so"; return 1; }
   cp -f "$so" "$prefix/lib/libplayer.so" || return 1
+
+  # 同代校验：libplayer 引用的 av_jni_* 必须被同目录 libav* 定义。
+  # 少了这一步就会出现「CI 绿、真机 dlopen 缺符号」（2026-11-24 踩过）。
+  if command -v python3 >/dev/null 2>&1; then
+    python3 "$PROJ/../tools/checks/check-player-jni.py" "$prefix/lib" \
+      || { err "libplayer[$abi] 与 ffmpeg 不同代（见上）"; return 1; }
+  fi
   ok "libplayer[$abi] 完成"
 }
 

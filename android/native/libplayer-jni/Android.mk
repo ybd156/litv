@@ -51,11 +51,9 @@ LOCAL_MODULE := libavfilter
 LOCAL_SRC_FILES := $(PREFIX)/lib/$(LOCAL_MODULE).so
 include $(PREBUILT_SHARED_LIBRARY)
 
-include $(CLEAR_VARS)
-LOCAL_MODULE := libavdevice
-LOCAL_SRC_FILES := $(PREFIX)/lib/$(LOCAL_MODULE).so
-LOCAL_EXPORT_C_INCLUDES := $(PREFIX)/include
-include $(PREBUILT_SHARED_LIBRARY)
+# libavdevice 不注册预编译库：本仓库 ffmpeg 是 --disable-avdevice 编的，
+# 没有 libavdevice.so，ndk-build 会报「LOCAL_SRC_FILES points to a missing file」；
+# libplayer 的 LOCAL_SHARED_LIBRARIES 本来也不需要它。
 
 include $(CLEAR_VARS)
 LOCAL_MODULE := libmpv

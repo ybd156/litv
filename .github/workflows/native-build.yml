@@ -142,6 +142,13 @@ jobs:
           # 导致门禁静默失效、给出假的「兼容」结论。
           python3 tools/checks/check-av-abi.py             android/app/src/main/jniLibs/${{ matrix.abi }}             /tmp/old-libs
 
+      - name: 校验 libplayer 与 ffmpeg 同代（JNI 符号闭环）
+        # 为什么必须有：仓库里提交着旧的 libplayer.so，/collect/ 只会覆盖同名文件，
+        # 编失败也照样能把旧文件传上来 → CI 绿、真机 dlopen 缺符号（2026-11-24 踩过）。
+        # 这条检查直接看 APK 里那套库的 .dynsym：libplayer/libmpv 引用的 av_jni_*
+        # 必须被同目录 libav* 定义，且 libplayer 必须导出 JNI 入口。
+        run: python3 tools/checks/check-player-jni.py android/app/src/main/jniLibs/${{ matrix.abi }}
+
       - name: 校验 TLS 真的编进去了
         run: |
           abi="${{ matrix.abi }}"

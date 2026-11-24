@@ -7,6 +7,7 @@ import android.media.AudioManager
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.util.Log
 import android.view.GestureDetector
 import android.view.MotionEvent
 import android.view.SurfaceView
@@ -22,7 +23,11 @@ import com.litv.tv.R
 import com.litv.tv.data.Bootstrap
 import com.litv.tv.data.Channel
 import com.litv.tv.player.EngineKind
+import com.litv.tv.player.HeartbeatGate
+import com.litv.tv.player.PlaySource
+import com.litv.tv.player.PlaybackCoordinator
 import com.litv.tv.player.PlayerManager
+import com.litv.tv.player.SessionState
 import kotlin.math.abs
 import kotlin.math.roundToInt
 
@@ -50,6 +55,37 @@ class PhonePlayerActivity : AppCompatActivity(), PlayerManager.Callback {
     private lateinit var gestureTip: TextView
 
     private lateinit var player: PlayerManager
+
+    /**
+     * 起播唯一入口（决策稿 `docs/design/05-播放器所有权收敛.md` §4 第 3 步）。
+     *
+     * 本页以前只有「/tv/play」一条路径，心跳还挂在它的成功回调里；接上 Coordinator 后
+     * 与 TV 端共用同一套会话台账与心跳出口，非法迁移只记日志、不改行为。
+     * 用 lazy：首次访问一定在 onCreate 的 `player = …` 之后。
+     */
+    private val session: PlaybackCoordinator by lazy {
+        PlaybackCoordinator(
+            start = { src -> player.play(src.channelId, src.url, src.headers, src.engine, src.bustCache) },
+            pauseImpl = { player.pause() },
+            resumeImpl = { player.resume() },
+            stopImpl = { player.stop() },
+            releaseImpl = { player.release() },
+            onIllegal = { from, what -> Log.i(TAG, "会话状态机：$what（当前 ${from.name}）") },
+        ).also { c ->
+            c.listener = { from, to, src ->
+                Log.i(TAG, "会话 ${from.name} → ${to.name}（来源 ${src?.label ?: "-"}，第 ${c.attempt} 次）")
+                // 心跳由会话状态触发（与 TV 端一致），不再挂在取址成功回调里
+                if (to == SessionState.Playing && src != null && heartbeatGate.shouldSend(c.attempt)) {
+                    Log.i(TAG, "心跳：频道 ${src.heartbeatChannelId}（来源 ${src.label}）")
+                    app.api.heartbeat(src.heartbeatChannelId, "playing")
+                }
+            }
+        }
+    }
+
+    /** 同一次起播只报一次心跳（换台/重试 attempt 变了再报）。 */
+    private val heartbeatGate = HeartbeatGate()
+
     private var channels: List<Channel> = emptyList()
     private var index = 0
     private var current: Channel? = null
@@ -78,10 +114,10 @@ class PhonePlayerActivity : AppCompatActivity(), PlayerManager.Callback {
                 // 双击 = 暂停/继续。以前这里做的是"重新加载当前台"，
                 // 但用户对双击的肌肉记忆是播放器暂停，不是刷新。
                 if (player.isPlaying) {
-                    player.pause()
+                    session.pause()
                     tip("已暂停")
                 } else {
-                    player.resume()
+                    session.resume()
                     tip("继续播放")
                 }
                 main.removeCallbacks(hideOsd)
@@ -219,16 +255,19 @@ class PhonePlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         app.api.play(ch.id, direct = app.prefs.directMode != "relay",
             onOk = { info ->
                 // R09：带整份线路头，不再只带 UA
-                player.play(
-                    ch.id, app.api.absolute(info.url),
-                    info.playHeaders(LitvUA.ANDROID),
-                    app.prefs.engine,
+                session.play(
+                    PlaySource.Remote(
+                        ch.id, app.api.absolute(info.url),
+                        info.playHeaders(LitvUA.ANDROID),
+                        app.prefs.engine,
+                    ),
                 )
                 app.api.epg(ch.id, 0, onOk = { p ->
                     programs = p
                     renderNow()
                 }, onErr = {})
-                app.api.heartbeat(ch.id, "playing")
+                // 心跳不在这里发：会话进入「播放中」时由 session.listener 统一报，
+                // 否则本页换台/重试会重复报、其它起播路径又是一次都不报。
             },
             onErr = { msg ->
                 loading.visibility = View.GONE
@@ -260,9 +299,13 @@ class PhonePlayerActivity : AppCompatActivity(), PlayerManager.Callback {
                 .setItems(labels) { _, which ->
                     val s = list[which]
                     app.api.play(ch.id, s.id, direct = app.prefs.directMode != "relay", onOk = { info ->
-                        player.play(ch.id, app.api.absolute(info.url),
-                            info.playHeaders(LitvUA.ANDROID),
-                            app.prefs.engine)
+                        session.play(
+                            PlaySource.Remote(
+                                ch.id, app.api.absolute(info.url),
+                                info.playHeaders(LitvUA.ANDROID),
+                                app.prefs.engine,
+                            ),
+                        )
                     }, onErr = { tip("切换失败：$it") })
                 }
                 .setNegativeButton("取消", null)
@@ -342,8 +385,17 @@ class PhonePlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         osdEngine.text = kind.label
     }
 
-    override fun onPrepared(width: Int, height: Int) = Unit
-    override fun onPlaying() { loading.visibility = View.GONE }
+    override fun onPrepared(width: Int, height: Int) {
+        // 内核已接管（`PlayerManager` 只在首次 prepared 才转发，重建/重试不会重复报）
+        session.onEngineStarted()
+    }
+
+    override fun onPlaying() {
+        loading.visibility = View.GONE
+        // 首帧真的出来了。本页没有 VLC 的「无布局起播」路径，但沿用 TV 端的写法：
+        // 状态机已进入播放中就不再重复迁移（Exo 会先报这个、后报 prepared）。
+        if (session.state != SessionState.Playing) session.onFirstFrame()
+    }
     override fun onError(message: String) {
         loading.visibility = View.GONE
         tip("播放出错：$message")
@@ -357,7 +409,8 @@ class PhonePlayerActivity : AppCompatActivity(), PlayerManager.Callback {
     override fun onPause() {
         super.onPause()
         pausedAtMs = System.currentTimeMillis()
-        player.pause()
+        // 走会话：停播这件事也要进台账（否则状态机以为还在播，恢复时迁移就是乱的）
+        session.pause()
     }
 
     override fun onResume() {
@@ -365,7 +418,7 @@ class PhonePlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         // 与电视端同一份逻辑：离开前台的时长要在清空 pausedAtMs 之前取
         val awayMs = if (pausedAtMs > 0L) System.currentTimeMillis() - pausedAtMs else 0L
         pausedAtMs = 0L
-        player.resume()
+        session.resume()
         // 交两次 Surface：本页只在 onCreate 交过一次、没有 SurfaceHolder 回调，
         // 息屏唤醒后如果 Surface 被销毁，就再也没人交了 ——
         // PlayerManager 会挂起等待，表现就是永久黑屏。
@@ -384,11 +437,13 @@ class PhonePlayerActivity : AppCompatActivity(), PlayerManager.Callback {
     }
     override fun onDestroy() {
         main.removeCallbacksAndMessages(null)
-        player.release()
+        session.release()
+        heartbeatGate.reset()
         super.onDestroy()
     }
 
     companion object {
+        private const val TAG = "LITV"
         const val EXTRA_CHANNEL_ID = "channel_id"
 
         /**

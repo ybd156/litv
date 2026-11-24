@@ -2,6 +2,7 @@ package com.litv.tv.data
 
 import android.util.Base64
 import android.util.Log
+import com.litv.tv.player.Redact
 import java.io.BufferedOutputStream
 import java.io.OutputStream
 import java.net.HttpURLConnection
@@ -25,6 +26,7 @@ import java.util.concurrent.Executors
  *   /ch/{channelId}.m3u8  → 现场向央视频取流，把 playlist 里的分片地址改写成
  *                           /seg/{base64url(原始地址)}，返回给播放器
  *   /seg/{base64url}      → 解出原始分片地址，代拉字节并原样转发
+ *   /rawfile/{base64url}  → 密钥 / fMP4 init 段这类小文件的透传（不进分片缓存、不预取）
  *
  * playlist 缓存 15 秒：直播 m3u8 每 5 秒左右推进一次，缓存太短会疯狂取流，
  * 太长会让播放器拿到过期分片（分片地址约 30 秒失效）。
@@ -274,33 +276,25 @@ object LocalHlsProxy {
             return
         }
 
-        val base = runCatching { java.net.URI(realUrl!!) }.getOrNull()
-        val rewritten = buildString {
-            for (raw in text!!.lineSequence()) {
-                val line = raw.trim()
-                when {
-                    line.isEmpty() -> append('\n')
-                    line.startsWith("#") -> append(line).append('\n')
-                    else -> {
-                        val abs = if (line.startsWith("http")) line
-                        else base?.resolve(line)?.toString() ?: line
-                        val enc = Base64.encodeToString(
-                            abs.toByteArray(Charsets.UTF_8),
-                            Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING,
-                        )
-                        append("/seg/").append(enc).append('\n')
-                    }
-                }
-            }
-        }
+        // 清单改写统一走 PlaylistRewrite（三处调用点共用一份规则）：
+        //   · `/` 开头的分片地址按 playlist 的 origin 解析，不再拼成 `base//path`；
+        //   · #EXT-X-MAP / #EXT-X-KEY / #EXT-X-MEDIA 的 URI 一起改写 —— 不改的话
+        //     fMP4/CMAF 拿不到 init 段、AES-128 拿不到密钥，经代理整条播不了。
+        val rw = PlaylistRewrite.rewrite(
+            text = text,
+            playlistUrl = realUrl!!,
+            segPrefix = "/seg/",
+            tagUriPrefix = "/rawfile/",
+            encode = ::b64enc,
+        )
         val windowSec = runCatching {
-            Regex("#EXTINF:([0-9.]+)").findAll(text!!).sumOf { it.groupValues[1].toDouble() }.toLong()
+            Regex("#EXTINF:([0-9.]+)").findAll(text).sumOf { it.groupValues[1].toDouble() }.toLong()
         }.getOrDefault(20L).coerceAtLeast(5L)
 
         cur.nextStart = from + windowSec
         cur.issued += 1
         Log.i(TAG, "回看 ch=$id from=$from window=${windowSec}s 第${cur.issued}次")
-        writeBody(out, rewritten.toByteArray(Charsets.UTF_8), "application/vnd.apple.mpegurl")
+        writeBody(out, rw.text.toByteArray(Charsets.UTF_8), "application/vnd.apple.mpegurl")
     }
 
     fun stop() {
@@ -333,12 +327,17 @@ object LocalHlsProxy {
                     }
                 }
                 val path = requestLine.split(' ').getOrNull(1) ?: return@use
-                Log.i(TAG, "REQ " + requestLine.take(80))
+                // ★ 只打「方法 + 路由类别 + 长度」。
+                //   原来打 `requestLine.take(80)`：`/raw/<base64>` 的前 80 字符里
+                //   就藏着源站地址前缀（base64 可逆），等于把用户私有源站写进 logcat。
+                Log.i(TAG, "REQ " + requestMethod(requestLine) + " " + routeKind(path) + " len=" + requestLine.length)
                 val out = BufferedOutputStream(c.getOutputStream())
                 when {
                     path.startsWith("/ch/") -> servePlaylist(path, out)
                     path.startsWith("/rp/") -> serveReplay(path, out)
                     path.startsWith("/seg/") -> serveSegment(path, out)
+                    // 密钥 / fMP4 init 段：只透传，不进分片缓存、不预取。
+                    path.startsWith("/rawfile/") -> serveRawFile(path, out)
                     // 通用 HLS 代理：自建源也走本地，才能预取分片 + 缓存 + 复用连接。
                     path.startsWith("/raw/") -> serveRaw(path, out)
                     path.startsWith("/rawseg/") -> serveRawSeg(path, out)
@@ -347,6 +346,26 @@ object LocalHlsProxy {
                 runCatching { out.flush() }
             }
         }.onFailure { e -> Log.w(TAG, "请求处理失败: ${e.message}") }
+    }
+
+    /** 请求行里的方法（GET/POST…）；只取空格前那一小段，请求行本身不进日志。 */
+    private fun requestMethod(requestLine: String): String =
+        requestLine.substringBefore(' ').take(8).ifBlank { "?" }
+
+    /**
+     * 路由类别（**不含** base64 段）。
+     *
+     * ★ 为什么不能打完整路径：`/raw/<base64>` 里的 base64 解出来就是源站地址，
+     *   打前 80 个字符已经够还原出 host + 路径前缀。只留类别，长度另打。
+     */
+    private fun routeKind(path: String): String = when {
+        path.startsWith("/seg/") -> "seg"
+        path.startsWith("/rawseg/") -> "rawseg"
+        path.startsWith("/rawfile/") -> "rawfile"
+        path.startsWith("/raw/") -> "raw"
+        path.startsWith("/ch/") -> "ch"
+        path.startsWith("/rp/") -> "rp"
+        else -> "other"
     }
 
     // ---------------------------------------------------------------- 通用 HLS 代理（自建源）
@@ -458,26 +477,20 @@ object LocalHlsProxy {
             PlayLog.w(TAG, "清单拉取失败 ${System.currentTimeMillis() - t0}ms")
             return null
         }
-        val base = realUrl.substringBeforeLast('/') + "/"
-        val sb = StringBuilder()
-        val segs = ArrayList<String>(8)
-        for (line in text.lineSequence()) {
-            val s = line.trim()
-            if (s.isEmpty()) continue
-            if (s.startsWith("#")) {
-                sb.append(s).append('\n')
-            } else {
-                val abs = if (s.startsWith("http")) s else base + s.removePrefix("./")
-                segs.add(abs)
-                sb.append("/rawseg/").append(b64enc(abs)).append('\n')
-            }
-        }
-        val rewritten = sb.toString()
-        rawCache[realUrl] = CachedM3u8(rewritten, System.currentTimeMillis(), realUrl)
+        // 与内置源/回看共用同一份改写规则：媒体行 → /rawseg/，
+        // KEY / MAP 的 URI → /rawfile/（不经这一步，加密源与 fMP4 源全都播不了）。
+        val rw = PlaylistRewrite.rewrite(
+            text = text,
+            playlistUrl = realUrl,
+            segPrefix = "/rawseg/",
+            tagUriPrefix = "/rawfile/",
+            encode = ::b64enc,
+        )
+        rawCache[realUrl] = CachedM3u8(rw.text, System.currentTimeMillis(), realUrl)
         // ★ 预取窗口**尾部**：直播是滑动窗口，播放器从边缘往前播。
         //   旧实现写的是 segs.take(2)（最旧的两片），等于预取了它早就不用的东西。
-        prefetchWindow(segs)
-        return rewritten
+        prefetchWindow(rw.mediaUrls)
+        return rw.text
     }
 
     // ---------------------------------------------------------------- 清单保活
@@ -627,6 +640,40 @@ object LocalHlsProxy {
         writeBody(out, body, "video/mp2t")
     }
 
+    /**
+     * `/rawfile/{base64url}` —— `#EXT-X-MAP` 的 init 段、`#EXT-X-KEY` 的 AES 密钥这类小文件。
+     *
+     * 为什么不复用 `/rawseg/`：
+     *   · 那些走分片缓存（LRU 24 片、按 MB 计），密钥只有 16 字节、init 段也不是 TS，
+     *     塞进去只会把真正的分片挤出去；
+     *   · 分片缓存路径会按窗口预取，密钥/init 段没有「窗口」概念。
+     * 所以这里**只透传**：不缓存、不预取、不记账进分片统计，Content-Type 用 octet-stream。
+     */
+    private fun serveRawFile(path: String, out: OutputStream) {
+        val enc = path.removePrefix("/rawfile/").substringBefore('?')
+        val real = b64dec(enc)
+        if (real.isNullOrBlank()) {
+            writeStatus(out, 400, "bad raw file")
+            return
+        }
+        val t0 = System.currentTimeMillis()
+        // UA 顺序：央视频的 CDN 认 `qqlive`（内置源的分片就是用它取的），自建源认请求带来的 UA。
+        // 这里两类都会经过，所以先按内置源试；失败再按请求 UA 试一次。
+        // 这两类文件都很小（密钥 16B、init 段几十 KB），两次上限各 6s / 4s。
+        val bytes = runCatching { fetchBytes(real, UA_PROXY, timeoutMs = 6_000L) }.getOrNull()
+            ?: if (reqUa != UA_PROXY) {
+                runCatching { fetchBytes(real, reqUa, timeoutMs = 4_000L) }.getOrNull()
+            } else {
+                null
+            }
+        if (bytes == null) {
+            Log.w(TAG, "附带文件拉取失败（${Redact.url(real)}）${System.currentTimeMillis() - t0}ms")
+            writeStatus(out, 502, "raw file failed")
+            return
+        }
+        writeBody(out, bytes, "application/octet-stream")
+    }
+
     private fun servePlaylist(path: String, out: OutputStream) {
         val id = path.removePrefix("/ch/").substringBefore('.').toLongOrNull()
         if (id == null) {
@@ -728,30 +775,20 @@ object LocalHlsProxy {
             return
         }
 
-        // 把分片地址改写成 /seg/{base64url}
-        val base = runCatching { java.net.URI(realUrl) }.getOrNull()
-        val rewritten = buildString {
-            for (raw in text.lineSequence()) {
-                val line = raw.trim()
-                when {
-                    line.isEmpty() -> append('\n')
-                    line.startsWith("#") -> append(line).append('\n')
-                    else -> {
-                        val abs = if (line.startsWith("http")) line
-                        else base?.resolve(line)?.toString() ?: line
-                        val enc = Base64.encodeToString(
-                            abs.toByteArray(Charsets.UTF_8),
-                            Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING,
-                        )
-                        append("/seg/").append(enc).append('\n')
-                    }
-                }
-            }
-        }
-        cache[id] = CachedM3u8(rewritten, System.currentTimeMillis(), realUrl)
-        Log.i(TAG, "M3U8 ch=$id bytes=" + rewritten.length + " segs=" + rewritten.count { it == '/' } )
-        PlayLog.w(TAG, "M3U8 ch=$id bytes=" + rewritten.length)
-        writeBody(out, rewritten.toByteArray(Charsets.UTF_8), "application/vnd.apple.mpegurl")
+        // 把分片地址改写成 /seg/{base64url}（规则见 PlaylistRewrite）
+        val playlistUrl = realUrl ?: return
+        val playlistText = text ?: return
+        val rw = PlaylistRewrite.rewrite(
+            text = playlistText,
+            playlistUrl = playlistUrl,
+            segPrefix = "/seg/",
+            tagUriPrefix = "/rawfile/",
+            encode = ::b64enc,
+        )
+        cache[id] = CachedM3u8(rw.text, System.currentTimeMillis(), playlistUrl)
+        Log.i(TAG, "M3U8 ch=$id bytes=" + rw.text.length + " segs=" + rw.mediaUrls.size)
+        PlayLog.w(TAG, "M3U8 ch=$id bytes=" + rw.text.length)
+        writeBody(out, rw.text.toByteArray(Charsets.UTF_8), "application/vnd.apple.mpegurl")
     }
 
     private fun serveSegment(path: String, out: OutputStream) {
@@ -773,14 +810,26 @@ object LocalHlsProxy {
         val t0 = System.currentTimeMillis()
         val bytes = try {
             fetchBytesSmart(real)
-        } catch (e: Throwable) {            // 把真实原因暴露出来：这段原来用 runCatching 吞掉了异常，
+        } catch (e: Throwable) {
+            // 把真实原因暴露出来：这段原来用 runCatching 吞掉了异常，
             // 只留下一个 "segment failed"，根本不知道是 403、超时还是解码问题。
-            Log.w(TAG, "分片拉取失败（${real.take(90)}…）：${e.javaClass.simpleName}: ${e.message}")
+            // ★ 但地址必须脱敏：real 是带签名的源站分片地址，`take(90)` 正好吃到
+            //   host + 路径前缀 + 签名参数（Redact 只留 scheme+host+port 与「有没有 query」）。
+            Log.w(TAG, "分片拉取失败（${Redact.url(real)}）：${e.javaClass.simpleName}: ${e.message}")
             // ★ 403 几乎都是「分片地址过期」：playlist 里带的是签名 URL，有时效，
             //   而我们缓存了 m3u8。播放器重试时会拿着旧 playlist 里的旧地址反复打 403。
             //   这里直接清掉全部 playlist 缓存，下次请求就会重新取流、拿到新地址。
             //   （缓存很小，清全部的代价远低于精确追踪「这个分片属于哪个频道」）
             val msg = e.message ?: ""
+            // ★★ 序号必须在清缓存**之前**取（见 SegmentFallback 的类注释）。
+            //    旧顺序是「先 cache.clear() 再让 alternateLineSegment 去 cache 里数序号」，
+            //    缓存已空 → 序号恒 null → 换线路一次都没真正发生过，403 依旧原样 502。
+            //    这里用清缓存前的清单把序号定下来，后面换线直接按它去备线清单取同一位。
+            val failIndex = SegmentFallback.indexOf(
+                playlist = cache[curChannelId]?.text,
+                served = real,
+                decode = ::b64dec,
+            )
             if (msg.contains("403")) {
                 // 403 时清 playlist + 线路，强制重新 ticket + 取流。
                 //
@@ -798,7 +847,7 @@ object LocalHlsProxy {
                 //   分片地址照样 403 → 播放器重试 5 次 → 黑屏（真机 112 次）。
                 needRotateLine = true
                 val cnt = fail403.incrementAndGet()
-                Log.i(TAG, "分片 403（清 playlist=$n、线路；下次换线路）连续第 $cnt 次")
+                Log.i(TAG, "分片 403（清 playlist=$n、线路；对齐序号=${failIndex ?: "-"}）连续第 $cnt 次")
                 PlayLog.w(TAG, "分片 403，连续第 $cnt 次")
                 // 连续 3 次 403 就降级。
                 //
@@ -816,7 +865,10 @@ object LocalHlsProxy {
             //   这一片在当前线路上拿不到（或 403 之后仍然拿不到），
             //   立刻去备用线路取**同一位置**的片子顶上，而不是把 502 甩给播放器
             //   （播放器拿到 502 只会重试同一条死路，直到判死换内核）。
-            val alt = runCatching { alternateLineSegment(real) }.getOrNull()
+            //   failIndex 是清缓存之前算好的序号 —— 传进去，别再让被调方自己去缓存里找。
+            val alt = runCatching { alternateLineSegment(failIndex) }.getOrNull()
+            // 换线记账落盘：内置源不走预取、片计数一直是 0，靠这一句让换线次数看得见。
+            segHealth.takeSummaryIfDue()?.let { PlayLog.w(TAG, it) }
             if (alt != null) {
                 synchronized(segCache) { segCache[real] = alt }
                 if (fail403.get() != 0) fail403.set(0)
@@ -851,55 +903,66 @@ object LocalHlsProxy {
      *
      * 怎么对齐：分片地址里没有序号，只能按它在自己清单里的**位置**去备线清单里取同一位。
      * 直播窗口大约同长，位差一般 0~1 片，画面最多跳一下，比黑屏/判死好得多。
-     * 代价：失败时多两次网络调用（取线路 + 取备线清单），所以只在这一片已经失败时才做。
+     *
+     * ★ 两条硬约束（2026-11-24 修）：
+     *   ① [index] 由调用方在**清缓存之前**算好传进来（见 [SegmentFallback.indexOf]）。
+     *      旧实现让本函数自己去 `cache[channelId]` 里数序号，而调用点已经清空缓存，
+     *      于是序号恒 null —— 换线路一次都没真正发生过。
+     *   ② 整条路径有总预算 [SegmentFallback.TOTAL_BUDGET_MS]。旧实现
+     *      `lines(5s)` + 每条备线清单（4+5s）+ 分片（OkHttp 默认 20s）叠起来最坏 34 秒，
+     *      全程占着 handle 线程，播放器那边早就判死换内核了。
      */
-    private fun alternateLineSegment(real: String): ByteArray? {
+    private fun alternateLineSegment(index: Int?): ByteArray? {
         val id = curChannelId
         if (id <= 0) return null
+        val idx = index ?: return null
         val ch = runCatching { YspClient.channelOf(id) }.getOrNull() ?: return null
-        val lines = runCatching { YspClient.lines(ch, timeoutMs = 5_000) }.getOrNull().orEmpty()
-        if (lines.size < 2) return null
-        val idx = segmentIndexOf(id, real) ?: return null
-        for (i in lines.indices) {
-            if (i == lineIndex) continue
-            val url = runCatching { segmentUrlAt(lines[i].url, idx) }.getOrNull() ?: continue
-            val bytes = runCatching { fetchBytesSmart(url) }.getOrNull() ?: continue
+        val deadline = System.currentTimeMillis() + SegmentFallback.TOTAL_BUDGET_MS
+        val lines = runCatching {
+            YspClient.lines(ch, timeoutMs = SegmentFallback.linesTimeoutMs(SegmentFallback.TOTAL_BUDGET_MS))
+        }.getOrNull().orEmpty()
+        val targets = SegmentFallback.targets(lines.size, lineIndex)
+        if (targets.isEmpty()) return null
+
+        // 记账：到这里才是「真的要去备线上取一片」，成功与否都要能看见。
+        segHealth.onLineSwitchTry()
+        var pending = targets.size
+        for (i in targets) {
+            // 剩余时间平摊给还没试的备线；不够一片的最低耗时就直接停手，
+            // 不把一个必然超时的请求硬塞给源站。
+            val per = SegmentFallback.perLineMs(deadline - System.currentTimeMillis(), pending) ?: break
+            pending--
+            // 清单 1~2KB、分片 2~3MB：时间对半分，清单那边一般用不满。
+            val half = (per / 2).coerceAtLeast(1L).toInt()
+            val url = runCatching { segmentUrlAt(lines[i].url, idx, half, half) }.getOrNull() ?: continue
+            val bytes = runCatching { fetchBytesSmart(url, timeoutMs = (per - half).coerceAtLeast(1L)) }
+                .getOrNull() ?: continue
             lineIndex = i
             needRotateLine = false
+            segHealth.onLineSwitchOk()
             Log.i(TAG, "分片换线路成功 → 第 " + (i + 1) + "/" + lines.size + " 条")
             PlayLog.w(TAG, "分片换线路成功 → 第 " + (i + 1) + "/" + lines.size + " 条")
             return bytes
         }
-        Log.w(TAG, "分片换线路也失败（共 ${lines.size} 条）")
+        Log.w(
+            TAG,
+            "分片换线路也失败（共 ${lines.size} 条，剩余预算 " +
+                (deadline - System.currentTimeMillis()).coerceAtLeast(0L) + "ms）",
+        )
         return null
     }
 
-    /** 这一片在当前频道的清单里排第几（0 起）。找不到就无法对齐，换线路直接放弃。 */
-    private fun segmentIndexOf(channelId: Long, real: String): Int? {
-        val text = cache[channelId]?.text ?: return null
-        var i = 0
-        for (line in text.lineSequence()) {
-            val s = line.trim()
-            if (s.isEmpty() || s.startsWith("#") || !s.startsWith("/seg/")) continue
-            val enc = s.removePrefix("/seg/")
-            val u = runCatching {
-                String(
-                    Base64.decode(enc, Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING),
-                    Charsets.UTF_8,
-                )
-            }.getOrNull()
-            if (u == real) return i
-            i++
-        }
-        return null
-    }
-
-    /** 取某条线路 playlist 里第 index 个分片地址。 */
-    private fun segmentUrlAt(playlistUrl: String, index: Int): String? {
-        val text = fetchText(playlistUrl, UA_PROXY, timeoutMs = 4_000, readMs = 5_000)
-        val segs = PlaylistUrls.mediaUrls(text, playlistUrl)
-        if (segs.isEmpty()) return null
-        return segs[index.coerceIn(0, segs.size - 1)]
+    /**
+     * 取某条线路 playlist 里第 [index] 个分片地址。
+     *
+     * 序号超出该线窗口时**不 clamp**（旧实现 `coerceIn` 会取到最后一片，
+     * 等于把已经播过的内容塞给播放器）：直接返回 null，让调用方跳过这条备线。
+     */
+    private fun segmentUrlAt(playlistUrl: String, index: Int, timeoutMs: Int, readMs: Int): String? {
+        val text = fetchText(playlistUrl, UA_PROXY, timeoutMs = timeoutMs, readMs = readMs)
+        val segs = PlaylistRewrite.mediaUrls(text, playlistUrl)
+        val at = SegmentFallback.pickIndex(index, segs.size) ?: return null
+        return segs[at]
     }
 
     // ---------------------------------------------------------------- HTTP
@@ -938,29 +1001,33 @@ object LocalHlsProxy {
     }
 
     /**
-     * 回看的 CDN 用 Cronet（Chromium TLS 栈），其余用 HttpURLConnection。
+     * 取字节：回看 CDN 对 TLS 栈敏感，统一走 OkHttp（原因见 [okHttpFetch] 里的实测结论）。
      *
-     * 为什么分开：`tlivecloud-playback-cdn.ysp.cctv.cn` 对 TLS 栈敏感，
-     * HttpURLConnection 一律 Connection reset；而直播 CDN 用 HttpURLConnection 没问题，
-     * 没必要让直播也承担 Cronet 的初始化开销。
+     * @param timeoutMs > 0 时给**这一次**调用一个硬上限（覆盖 client 的 20 秒 readTimeout）。
+     *        换线路属于「这一片已经失败」之后的补救，必须能被总预算掐断，
+     *        否则一次补救就能把 handle 线程占满 20 秒。
      */
-    private fun fetchBytesSmart(url: String): ByteArray {
+    private fun fetchBytesSmart(url: String, timeoutMs: Long = 0L): ByteArray {
         val isReplay = url.contains("playback-cdn", ignoreCase = true) ||
             url.contains("tlivecloud", ignoreCase = true)
-        if (!isReplay) return fetchBytes(url)
+        if (!isReplay) return fetchBytes(url, timeoutMs = timeoutMs)
         // 回看 CDN 对 TLS 栈敏感，实测结论：
         //   HttpURLConnection（Conscrypt）   → 连 m3u8 都 Connection reset
         //   Cronet（Chromium BoringSSL）     → m3u8 能过，分片 ERR_CONNECTION_RESET
         //   **OkHttp（自带 TLS + 强制 h1.1）→ m3u8 和分片都 200**
         // 所以回看统一走 OkHttp，Cronet 已移除（省下每 ABI 约 3MB）。
-        return okHttpFetch(url)
+        return okHttpFetch(url, timeoutMs)
     }
 
     /** 用 OkHttp 取字节。强制 HTTP/1.1（回看 CDN 在 h2 上会 RST）。 */
-    private fun okHttpFetch(url: String): ByteArray {
+    private fun okHttpFetch(url: String, timeoutMs: Long = 0L): ByteArray {
         // 同样走共享 client（回看 CDN 对 TLS 栈敏感，必须 OkHttp）
         val req = okhttp3.Request.Builder().url(url).header("User-Agent", UA_PROXY).build()
-        httpClient.newCall(req).execute().use { resp ->
+        val call = httpClient.newCall(req)
+        if (timeoutMs > 0L) {
+            call.timeout().timeout(timeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS)
+        }
+        call.execute().use { resp ->
             if (!resp.isSuccessful) throw java.io.IOException("OkHttp HTTP " + resp.code)
             return resp.body?.bytes() ?: throw java.io.IOException("OkHttp 空响应")
         }
@@ -970,7 +1037,7 @@ object LocalHlsProxy {
         return fetchBytesSmart(url).toString(Charsets.UTF_8)
     }
 
-    private fun fetchBytes(url: String, ua: String = UA_PROXY): ByteArray {
+    private fun fetchBytes(url: String, ua: String = UA_PROXY, timeoutMs: Long = 0L): ByteArray {
         // 走共享 OkHttpClient，复用 TCP/TLS 连接。
         //
         // ★ ua 必须**按调用方传入**，不能读全局 reqUa：
@@ -980,7 +1047,12 @@ object LocalHlsProxy {
             .url(url)
             .header("User-Agent", ua.ifBlank { UA_PROXY })
             .build()
-        httpClient.newCall(req).execute().use { resp ->
+        val call = httpClient.newCall(req)
+        // 换线补救路径要用到这次调用的硬上限（见 fetchBytesSmart 的注释）。
+        if (timeoutMs > 0L) {
+            call.timeout().timeout(timeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS)
+        }
+        call.execute().use { resp ->
             if (!resp.isSuccessful) throw java.io.IOException("HTTP " + resp.code)
             return resp.body?.bytes() ?: throw java.io.IOException("空响应")
         }

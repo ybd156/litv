@@ -83,6 +83,23 @@ class SegmentPrefetchTest {
         assertEquals(3, s.hitCount)
         assertEquals(2, s.prefetchHitCount)
     }
+
+    @Test
+    fun `换线记账不受片数门槛限制，摘要行能看见`() {
+        // reportEvery 故意设得比片数大得多：内置源不走预取，片计数一直是 0，
+        // 如果换线也必须等够 20 片才出摘要，那新路径在只播内置源的设备上永远不可观测。
+        val h = SegmentHealth(reportEvery = 100)
+        h.onLineSwitchTry()
+        h.onLineSwitchTry()
+        h.onLineSwitchOk()
+        val line = h.takeSummaryIfDue()
+        assertTrue("一次片都没拉、但有换线，也要给摘要", line != null)
+        assertTrue("摘要行必须带换线次数", line!!.contains("换线 2 次/成功 1 次"))
+        assertEquals(1, h.snapshot().switchOk)
+        // 取过即清零，不会每次请求都刷一行
+        assertNull(h.takeSummaryIfDue())
+        assertEquals(0, h.snapshot().switchTry)
+    }
 }
 
 class PlaylistUrlsTest {

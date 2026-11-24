@@ -89,13 +89,24 @@ RULES = [
         "日志里出现原始 url（签名参数 / 私有源站地址会进 logcat）",
         # 只匹配**真正把 url 拼进日志**的写法；`Redact.url(url)` 不匹配，
         # 因为它拿走的是 Redact 的返回值，不是裸 url。
-        re.compile(r'\+\s*(?:url|fullUrl|playUrl|rawUrl)\s*\.\s*take\s*\('),
+        #
+        # ★ 2026-11-24：变量名集合漏了 LocalHlsProxy 的分片变量 `real`（以及
+        #   `segUrl` / `seg`）。真身是
+        #   `Log.w(TAG, "分片拉取失败（${real.take(90)}…")` —— `real` 就是带签名的
+        #   分片地址，take(90) 正好吃到 host + 路径前缀 + 签名参数，
+        #   而这条规则只认 url|fullUrl|playUrl|rawUrl，于是门禁一路绿灯。
+        re.compile(
+            r'\+\s*(?:url|fullUrl|playUrl|rawUrl|real|segUrl|seg)\s*\.\s*take\s*\('
+        ),
         "改用 Redact.url(url)：只保留 scheme+host+port 与「有没有 query」。",
     ),
     (
         "S2",
         "日志里用字符串拼接打了 url（未脱敏）",
-        re.compile(r'Log\.[vdiew]\(\s*[^,]+,\s*"[^"]*"\s*\+\s*(?:url|fullUrl|playUrl|rawUrl)\b'),
+        re.compile(
+            r'Log\.[vdiew]\(\s*[^,]+,\s*"[^"]*"\s*\+\s*'
+            r'(?:url|fullUrl|playUrl|rawUrl|real|segUrl|seg)\b'
+        ),
         "改用 Redact.url(url)，或只打 scheme+host。",
     ),
     (
@@ -125,7 +136,10 @@ RULES = [
         "S6",
         "日志用了 Kotlin/Swift 字符串模板打 url（S1/S2 只抓 '+' 拼接，会漏这种写法）",
         # `Log.d(TAG, "prepare $url")` / `"…${url}…"` —— 拼接型规则抓不到
-        re.compile(r'Log\.[vdiew]\([^)\n]*\$\{?(?:url|fullUrl|playUrl|rawUrl)\b'),
+        # 变量名集合与 S1/S2 保持一致（含分片变量 real / segUrl / seg）。
+        re.compile(
+            r'Log\.[vdiew]\([^)\n]*\$\{?(?:url|fullUrl|playUrl|rawUrl|real|segUrl|seg)\b'
+        ),
         "改用 Redact.url(url)。模板插值同样会把签名参数原样打进 logcat。",
     ),
 ]

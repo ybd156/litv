@@ -47,24 +47,14 @@ object SegmentPrefetch {
 /**
  * m3u8 里的「媒体分片地址」解析（纯逻辑，可单测）。
  *
- * 分片级换线路要用它：拿到备用线路的 playlist 后，按序号取出与当前请求
- * 同一位置的片子。规则只有三条，但每条都踩过：
- *   · 跳过 `#` 开头的标签行（#EXTINF / #EXT-X-…）
- *   · 相对地址按 playlist 所在目录拼接
- *   · `./x.ts` 这种带点的相对路径要去掉 `./` 再拼（否则变成 `/dir/./x.ts`）
+ * 解析规则已经统一收到 [PlaylistRewrite] 里（`/` 开头按 origin、其余按目录，
+ * 用 `java.net.URI.resolve` 而不是字符串拼接）。这里保留一个薄的转发入口，
+ * 只因为「分片级换线路按序号取片」这条路径不需要改写整份清单。
  */
 object PlaylistUrls {
 
-    fun mediaUrls(text: String, playlistUrl: String): List<String> {
-        val base = playlistUrl.substringBefore('?').substringBeforeLast('/') + "/"
-        val out = ArrayList<String>(16)
-        for (raw in text.lineSequence()) {
-            val line = raw.trim()
-            if (line.isEmpty() || line.startsWith("#")) continue
-            out.add(if (line.startsWith("http")) line else base + line.removePrefix("./"))
-        }
-        return out
-    }
+    fun mediaUrls(text: String, playlistUrl: String): List<String> =
+        PlaylistRewrite.mediaUrls(text, playlistUrl)
 }
 
 /**
@@ -88,6 +78,16 @@ class SegmentHealth(private val reportEvery: Int = 20) {
     private var hitCount = 0
     private var prefetchHitCount = 0
 
+    /**
+     * 换线记账（2026-11-24 新增）。
+     *
+     * 为什么必须记：分片级换线路修好之后，「403 还多不多」不再能说明问题——
+     * 403 可能照样发生、但每次都被备线补上了。没有这两个数，就看不出
+     * 「换线到底有没有发生、有没有成」，等于把一段黑盒逻辑接进播放链路。
+     */
+    private var switchTry = 0
+    private var switchOk = 0
+
     /** 记一次真实拉取。 */
     @Synchronized
     fun onFetch(costMs: Long, ok: Boolean) {
@@ -108,6 +108,18 @@ class SegmentHealth(private val reportEvery: Int = 20) {
         if (fromPrefetch) prefetchHitCount++
     }
 
+    /** 记一次换线尝试（已经拿到对齐序号、且确实还有备线时才调）。 */
+    @Synchronized
+    fun onLineSwitchTry() {
+        switchTry++
+    }
+
+    /** 记一次换线成功（备线真的取回了同一位置的片子）。 */
+    @Synchronized
+    fun onLineSwitchOk() {
+        switchOk++
+    }
+
     @Synchronized
     fun snapshot(): Snapshot = Snapshot(
         count = count,
@@ -119,14 +131,20 @@ class SegmentHealth(private val reportEvery: Int = 20) {
         failCount = failCount,
         hitCount = hitCount,
         prefetchHitCount = prefetchHitCount,
+        switchTry = switchTry,
+        switchOk = switchOk,
     )
 
     /**
      * 每 [reportEvery] 片返回一行摘要，否则 null。取完即清零，便于按窗口观察。
+     *
+     * ★ 换线也不算「片」：只要这一窗口里记过换线尝试（哪怕内置源根本不走预取、
+     *   [count] 一直是 0），也要给一行 —— 否则换线记账在只播内置源的设备上永远打不出来，
+     *   等于新路径不可观测。
      */
     @Synchronized
     fun takeSummaryIfDue(): String? {
-        if (count < reportEvery) return null
+        if (count < reportEvery && switchTry == 0 && switchOk == 0) return null
         val s = snapshot()
         val rate = if (s.hitCount > 0) s.prefetchHitCount * 100 / s.hitCount else 0
         count = 0
@@ -136,10 +154,13 @@ class SegmentHealth(private val reportEvery: Int = 20) {
         failCount = 0
         hitCount = 0
         prefetchHitCount = 0
+        switchTry = 0
+        switchOk = 0
         sampleCount = 0
         sampleCursor = 0
         return "分片统计 ${s.count} 片：p50 ${s.p50Ms}ms p90 ${s.p90Ms}ms max ${s.maxMs}ms" +
-            " 慢片 ${s.slowCount} 失败 ${s.failCount} 预取命中 $rate%"
+            " 慢片 ${s.slowCount} 失败 ${s.failCount} 预取命中 $rate%" +
+            " 换线 ${s.switchTry} 次/成功 ${s.switchOk} 次"
     }
 
     private fun percentile(p: Int): Long {
@@ -160,6 +181,10 @@ class SegmentHealth(private val reportEvery: Int = 20) {
         val failCount: Int,
         val hitCount: Int,
         val prefetchHitCount: Int,
+        /** 换线尝试次数（拿到序号、确有备线才计）。 */
+        val switchTry: Int = 0,
+        /** 换线成功次数。 */
+        val switchOk: Int = 0,
     )
 
     companion object {

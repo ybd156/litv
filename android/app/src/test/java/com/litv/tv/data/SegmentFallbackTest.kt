@@ -127,7 +127,9 @@ class SegmentFallbackTest {
         val plan = (o as SegmentFallback.Outcome.Ready).plan
         assertEquals(1, plan.index)
         assertEquals(listOf(1, 2), plan.targets)
-        assertEquals(SegmentFallback.LINES_TIMEOUT_MS, plan.linesTimeoutMs)
+        // linesTimeoutMs 是 Int（要直接喂给 YspClient.lines 的 timeoutMs），
+        // 常量 LINES_TIMEOUT_MS 是 Long（与 TOTAL_BUDGET_MS 同族），比较前必须转换。
+        assertEquals(SegmentFallback.LINES_TIMEOUT_MS.toInt(), plan.linesTimeoutMs)
         assertEquals(SegmentFallback.TOTAL_BUDGET_MS, plan.budgetMs)
 
         // 三条备线分 4200ms → 每条 1400ms

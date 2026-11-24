@@ -92,10 +92,14 @@ class SegmentPrefetchTest {
         h.onLineSwitchTry()
         h.onLineSwitchTry()
         h.onLineSwitchOk()
+        // ★ 断言顺序有讲究：takeSummaryIfDue() 取完即清零（见它的实现），
+        //   所以计数必须在**取摘要之前**看，否则永远读到 0。
+        val snap = h.snapshot()
+        assertEquals(2, snap.switchTry)
+        assertEquals(1, snap.switchOk)
         val line = h.takeSummaryIfDue()
         assertTrue("一次片都没拉、但有换线，也要给摘要", line != null)
         assertTrue("摘要行必须带换线次数", line!!.contains("换线 2 次/成功 1 次"))
-        assertEquals(1, h.snapshot().switchOk)
         // 取过即清零，不会每次请求都刷一行
         assertNull(h.takeSummaryIfDue())
         assertEquals(0, h.snapshot().switchTry)

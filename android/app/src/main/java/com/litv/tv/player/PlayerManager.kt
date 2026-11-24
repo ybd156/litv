@@ -482,6 +482,40 @@ class PlayerManager(
         startStallWatchdog()
     }
 
+    // ---------------------------------------------------------------- 实时比（只测量，不决策）
+    //
+    // 为什么另起一套：`direct` 模式的自建源是**直连** m3u8、不经本地代理，
+    // 代理侧的 MEDIA-SEQUENCE 探针在它们身上一行都不会出（2026-11-25 手机实测）。
+    // 位置是三个内核都有的信号，于是用「位置增量 ÷ 墙钟增量」回答同一个问题：
+    // 是源站没在产片，还是我们跟不上实时。
+    //
+    // 特别注意：这里**只打印**，不进任何阈值判断 —— 先量准，再谈改参数。
+    private var rateLastPos = -1L
+    private var rateLastAt = 0L
+    private val rateIntervalMs = 30_000L
+    private val rateTicker: Runnable = object : Runnable {
+        override fun run() {
+            if (released) return
+            val now = android.os.SystemClock.elapsedRealtime()
+            val pos = runCatching { current?.stats()?.positionMs ?: -1L }.getOrDefault(-1L)
+            if (prepared && !userPaused && pos >= 0) {
+                if (rateLastPos >= 0 && rateLastAt > 0) {
+                    PlaybackRate.describe(pos - rateLastPos, now - rateLastAt)?.let {
+                        Log.i(TAG, it)
+                        com.litv.tv.data.PlayLog.w(TAG, it)
+                    }
+                }
+                rateLastPos = pos
+                rateLastAt = now
+            } else {
+                // 暂停 / 息屏 / 未起播：丢掉样本，别把这段静默算进分母。
+                rateLastPos = -1L
+                rateLastAt = 0L
+            }
+            main.postDelayed(this, rateIntervalMs)
+        }
+    }
+
     private fun startStallWatchdog() {
         main.removeCallbacks(stallWatchdog)
         lastPosMs = -1L
@@ -491,6 +525,11 @@ class PlayerManager(
         frameStall.reset()
         main.removeCallbacks(frameWatchdog)
         main.postDelayed(frameWatchdog, frameWatchIntervalMs)
+        // 实时比：30 秒一行（只测量，不参与决策）
+        rateLastPos = -1L
+        rateLastAt = 0L
+        main.removeCallbacks(rateTicker)
+        main.postDelayed(rateTicker, rateIntervalMs)
     }
 
     private fun stopStallWatchdog() {
@@ -499,6 +538,10 @@ class PlayerManager(
         lastPosChangeAt = 0L
         main.removeCallbacks(frameWatchdog)
         frameStall.reset()
+        // 实时比样本一起清：重建/换台期间位置会跳，留着会算出假的「追赶」
+        main.removeCallbacks(rateTicker)
+        rateLastPos = -1L
+        rateLastAt = 0L
         // 关掉当前 episode：重建/换内核期间时间在走，若不关，
         // 新内核第一次采样会拿「上一段停帧的起点」算时长，可能立刻又动作一次。
         // 阶梯计数不清零 —— 换内核之后仍要按顺序升级。

@@ -1,0 +1,56 @@
+package com.litv.tv.player
+
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
+import org.junit.Test
+
+/**
+ * 「实时比」的判据测试。
+ *
+ * 这几条锁的是**测量口径**，不是播放行为：
+ * 写错分母（漏掉暂停时段、把换台的负增量算进去）会让日志给出
+ * 「0.3x 在掉队」这种假警报，比不测更糟。
+ */
+class PlaybackRateTest {
+
+    @Test
+    fun `正常跟播约等于一`() {
+        assertEquals(1.0, PlaybackRate.ratio(30_000, 30_000)!!, 1e-9)
+        assertFalse(PlaybackRate.isBehind(30_000, 30_000))
+    }
+
+    @Test
+    fun `掉队时小于一，描述里带标记`() {
+        assertEquals(0.7, PlaybackRate.ratio(21_000, 30_000)!!, 1e-9)
+        assertTrue(PlaybackRate.describe(21_000, 30_000)!!.contains("在掉队"))
+        assertTrue(PlaybackRate.isBehind(21_000, 30_000))
+    }
+
+    @Test
+    fun `追赶时大于一，不报警`() {
+        val r = PlaybackRate.ratio(45_000, 30_000)!!
+        assertTrue(r > 1.4)
+        assertFalse(PlaybackRate.isBehind(45_000, 30_000))
+    }
+
+    @Test
+    fun `墙钟为零不产生样本`() {
+        assertNull(PlaybackRate.ratio(1_000, 0))
+        assertNull(PlaybackRate.describe(1_000, 0))
+        assertFalse(PlaybackRate.isBehind(1_000, 0))
+    }
+
+    @Test
+    fun `位置回退不算样本`() {
+        // 换台 / seek / 内核重建都会让位置回退，算进分母就会出现负的「实时比」
+        assertNull(PlaybackRate.ratio(-5_000, 30_000))
+    }
+
+    @Test
+    fun `刚好等于阈值不算掉队`() {
+        assertFalse(PlaybackRate.isBehind(95, 100))
+        assertTrue(PlaybackRate.isBehind(94, 100))
+    }
+}

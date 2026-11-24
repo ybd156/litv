@@ -144,11 +144,14 @@ class LitvApp : Application() {
     }
 
     /**
-     * 全局唯一的播放器。
+     * 退后台兜底用的播放器实例。
      *
-     * 放在 Application 而不是 Activity：Activity 重建（旋屏、返回再进）不该
-     * 重建播放器；配合 [com.litv.tv.player.PlaybackService] 常驻，
-     * 播放器和它的缓冲可以一直活着，再次打开时只接 Surface 就行。
+     * ★ 2026-11-25 更正（原注释写的是「全局唯一播放器，配合 PlaybackService 常驻」，
+     *   那是**没有发生过的事**）：没有任何 Activity 把正在播的 PlayerManager 交给它，
+     *   所以 `pauseAll` 里的 `player.pause()` 作用在一个从未起播的实例上 —— 真正让
+     *   退后台停播的是各 Activity 自己 onPause 里的 pause()。
+     *   这里保留只是为了让「按 HOME 后声音还在」这条兜底路径仍有落点；
+     *   删掉它之前必须先把播放器所有权收敛到单一 owner（评审 P0-1，独立立项）。
      */
     val player: com.litv.tv.player.PlayerManager by lazy {
         com.litv.tv.player.PlayerManager(this, prefs)

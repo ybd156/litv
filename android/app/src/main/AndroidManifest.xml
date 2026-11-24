@@ -103,11 +103,11 @@
             </intent-filter>
         </receiver>
 
-        <!-- 播放常驻服务：持有全局播放器，退到后台不被回收 -->
-        <service
-            android:name=".player.PlaybackService"
-            android:exported="false"
-            android:foregroundServiceType="mediaPlayback" />
+        <!-- 2026-11-25：删掉了 `.player.PlaybackService`。
+             它从来没有被启动过（ensureRunning/playerOrNull 零调用者），
+             声明 `foregroundServiceType="mediaPlayback"` 只会让人以为存在常驻播放
+             —— 实际播放器由各 Activity 自己持有。真正的所有权收敛（单一 owner）
+             是独立的重构项，不在这次清理里做。 -->
 
     </application>
 </manifest>

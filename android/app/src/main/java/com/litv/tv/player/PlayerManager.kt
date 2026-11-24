@@ -306,6 +306,8 @@ class PlayerManager(
             if (pos != lastPosMs) {
                 if (lastPosMs >= 0 && pos < lastPosMs) {
                     Log.i(TAG, "位置回落 ${lastPosMs}ms -> ${pos}ms（HLS 重载，正常）")
+                    // 记一次重置：实时比在这段里没有物理意义，采样时会跳过比例
+                    rateResets++
                 }
                 lastPosMs = pos
                 lastPosChangeAt = now
@@ -491,26 +493,41 @@ class PlayerManager(
     //
     // 特别注意：这里**只打印**，不进任何阈值判断 —— 先量准，再谈改参数。
     private var rateLastPos = -1L
+    private var rateLastFrames = -1L
     private var rateLastAt = 0L
+    // 这段采样里发生过几次位置重置（HLS 滑窗/换台/重建）。有重置就不算实时比 ——
+    // 否则必然得到 0.00x 这种假警报（2026-11-25 手机实测第一分钟就踩到）。
+    private var rateResets = 0
+    private var rateLastResets = 0
     private val rateIntervalMs = 30_000L
     private val rateTicker: Runnable = object : Runnable {
         override fun run() {
             if (released) return
             val now = android.os.SystemClock.elapsedRealtime()
-            val pos = runCatching { current?.stats()?.positionMs ?: -1L }.getOrDefault(-1L)
-            if (prepared && !userPaused && pos >= 0) {
-                if (rateLastPos >= 0 && rateLastAt > 0) {
-                    PlaybackRate.describe(pos - rateLastPos, now - rateLastAt)?.let {
-                        Log.i(TAG, it)
-                        com.litv.tv.data.PlayLog.w(TAG, it)
-                    }
+            val stats = runCatching { current?.stats() }.getOrNull()
+            val pos = stats?.positionMs ?: -1L
+            val frames = stats?.displayedFrames ?: -1L
+            if (prepared && !userPaused && (pos >= 0 || frames >= 0)) {
+                if (rateLastAt > 0L) {
+                    val line = PlaybackRate.describeSample(
+                        framesDelta = if (frames >= 0 && rateLastFrames >= 0) frames - rateLastFrames else -1L,
+                        posDeltaMs = if (pos >= 0 && rateLastPos >= 0) pos - rateLastPos else -1L,
+                        wallDeltaMs = now - rateLastAt,
+                        resets = rateResets - rateLastResets,
+                    )
+                    Log.i(TAG, line)
+                    com.litv.tv.data.PlayLog.w(TAG, line)
                 }
                 rateLastPos = pos
+                rateLastFrames = frames
                 rateLastAt = now
+                rateLastResets = rateResets
             } else {
                 // 暂停 / 息屏 / 未起播：丢掉样本，别把这段静默算进分母。
                 rateLastPos = -1L
+                rateLastFrames = -1L
                 rateLastAt = 0L
+                rateLastResets = rateResets
             }
             main.postDelayed(this, rateIntervalMs)
         }

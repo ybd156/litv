@@ -53,4 +53,40 @@ class PlaybackRateTest {
         assertFalse(PlaybackRate.isBehind(95, 100))
         assertTrue(PlaybackRate.isBehind(94, 100))
     }
+
+    @Test
+    fun `帧率样本按秒折算`() {
+        // 300 帧 / 30 秒 = 10 帧/秒
+        assertEquals(10.0, PlaybackRate.framesPerSecond(300, 30_000)!!, 1e-9)
+        assertNull(PlaybackRate.framesPerSecond(300, 0))
+        assertNull(PlaybackRate.framesPerSecond(-1, 30_000))
+    }
+
+    /**
+     * 直播 HLS 的滑动窗口会让位置周期性回落。第一版直接相除，实测立刻给出
+     * `实时比 0.00x ← 在掉队`（画面却是好的）—— 这条锁住「有重置就不算比例」。
+     */
+    @Test
+    fun `有位置重置时只报帧推进，不给实时比`() {
+        val line = PlaybackRate.describeSample(
+            framesDelta = 750,
+            posDeltaMs = 19,
+            wallDeltaMs = 30_000,
+            resets = 3,
+        )
+        assertTrue(line.contains("750"))
+        assertTrue(line.contains("帧/秒"))
+        assertTrue(line.contains("实时比不适用"))
+        assertFalse(line.contains("在掉队"))
+        // 同一个样本，没有重置时才算比例
+        assertFalse(PlaybackRate.isBehind(19, 30_000, resets = 3))
+        assertTrue(PlaybackRate.isBehind(19, 30_000, resets = 0))
+    }
+
+    @Test
+    fun `没有重置时正常给实时比`() {
+        val line = PlaybackRate.describeSample(900, 30_000, 30_000, 0)
+        assertTrue(line.contains("1.00x"))
+        assertFalse(line.contains("不适用"))
+    }
 }

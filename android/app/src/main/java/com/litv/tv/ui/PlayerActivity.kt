@@ -3762,7 +3762,15 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         if (!::player.isInitialized) return
         pausedAtMs = 0L
         val ch = current ?: return
-        if (ch.id != player.playingChannelId) return
+        if (ch.id != player.playingChannelId) {
+            // 后台期间换了台：播放器里还是旧台，**不能** resume()（会把旧台拉起来）。
+            // 但 onPause 置上的「用户暂停」标记必须现在清掉 —— 否则接下来由
+            // 网络回调触发的 play() 会带着它起播，帧判据 / 位置看门狗 / onEnded
+            // 重连三处永久短路，而且日志里一条都没有（这就是「卡住不自愈」）。
+            Log.i(TAG, "回前台：当前台 ${ch.id} 与播放器 ${player.playingChannelId} 不一致，跳过续播")
+            player.onForegroundPendingStart()
+            return
+        }
         // 不在 onResume 里重建：那一刻 Surface 可能还没就绪，
         // VLC 会无 vout 起播（音频时钟异常 → 电音），而且 surfaceCreated
         // 可能再触发一次 → 两个播放器同时出声。
@@ -3865,6 +3873,17 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
     override fun onDestroy() {
         main.removeCallbacks(dayRolloverTick)
         app.api.onAuthExpired = null
+        // ★ 2026-11-25：网络状态监听必须摘掉。
+        //
+        // NetState 是**进程级单例**，listeners 是 CopyOnWriteArrayList；注册进去的
+        // 闭包持有本 Activity + main Handler。以前 onDestroy 没移除，每进出一次
+        // 播放页就泄漏一个 Activity（电视长期不关 App，攒几个就是 OOM），
+        // 而且网络恢复时还会往已销毁的界面写 switchTip。
+        addrListener?.let {
+            com.litv.tv.data.NetState.removeListener(it)
+            Log.i(TAG, "onDestroy：已移除网络状态监听")
+        }
+        addrListener = null
         // QoE：离开播放页时补一条 stop（带 watch_ms）。必须在清 Handler 之前调，
         // 因为它会走一次异步网络请求。
         reportStopIfWatched()

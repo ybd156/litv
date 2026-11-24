@@ -194,17 +194,24 @@ class PlayerManager(
     //   · 这里判的是「已显示帧数不动」，两内核都有（Exo 的累计 frameCount / VLC 的
     //     displayedPictures），是与「卡不卡」最贴近的信号。
     //
-    // ★ 本版**只记录，不重启**。先用它把「各内核各卡多久、多久一次」量出来，
-    //   再决定动作阈值；反过来先接重启，会把「慢」放大成「重建播放器」。
+    // ★ 2026-11-25：判据（停多久）与动作（做什么）分开放。
+    //   frameStall 只报状态；动作交给 StallActionGate 按 episode 闸门决定 ——
+    //   以前把「stalledMs >= 10s」直接当动作条件，一次长停帧会在 30/60/120s
+    //   每个里程碑各重建一次，还共用 stallRecovered 把解码问题记成线路问题。
     private val frameStall = FrameStallDetector()
+    private val frameStallGate = StallActionGate(
+        actionAfterMs = FRAME_STALL_ACTION_MS,
+        minIntervalMs = FRAME_STALL_ACTION_INTERVAL_MS,
+    )
     private val frameWatchIntervalMs = 2_000L
     private val frameWatchdog: Runnable = object : Runnable {
         override fun run() {
             if (released) return
             val st = runCatching { current?.stats() }.getOrNull()
             val pr = FrameStallDetector.progressOf(st)
+            val now = android.os.SystemClock.elapsedRealtime()
             val v = frameStall.sample(
-                android.os.SystemClock.elapsedRealtime(),
+                now,
                 pr?.value ?: -1L,
                 prepared && !userPaused,
                 screenInteractive(),
@@ -230,19 +237,9 @@ class PlayerManager(
                             "停帧持续 ${v.stalledMs / 1000}s（${v.frames}$unit 未增长，内核 ${currentKind?.key}）",
                         )
                     }
-                    // ★ 2026-11-24：帧数停住超过阈值就**动手恢复**。
-                    //
-                    // 真机证据：画面冻在 250 帧、持续 120 秒以上，而同一时刻
-                    //   · AudioTrack 每秒都在写帧（声音照常）
-                    //   · 本地代理分片 100% 预取命中、p50 70ms（取流没问题）
-                    //   · Exo 不上报 BUFFERING，位置看门狗也不触发（position 在走）
-                    // 也就是「声音在走、画面不出」——位置看门狗天生抓不到这种情况，
-                    // 以前只能一直冻着。现在由帧判据接管，复用同一条恢复路径。
-                    if (v.stalledMs >= FRAME_STALL_ACTION_MS) {
-                        Log.w(TAG, "画面停帧 ${v.stalledMs}ms 超过阈值，重建播放器")
-                        com.litv.tv.data.PlayLog.w(TAG, "画面停帧超阈值，重建播放器")
-                        recoverFromStall(v.stalledMs)
-                    }
+                    // 动作不在这里做：帧数停住只是**判据**，同一个 episode
+                    // 在里程碑上会反复报 STALLED，直接动作就会重建好几次。
+                    // 统一交给下面的 StallActionGate 按 episode 闸门决定。
                 }
 
                 FrameStallDetector.State.RECOVERED -> {
@@ -255,7 +252,31 @@ class PlayerManager(
 
                 else -> Unit
             }
-            main.postDelayed(this, frameWatchIntervalMs)
+            // ★ 2026-11-25：动作判定（重建 / 换内核 / 放弃）交给 StallActionGate。
+            //
+            // 旧接线是 `if (v.stalledMs >= FRAME_STALL_ACTION_MS) recoverFromStall(...)`，
+            // 于是同一段长停帧会在每个里程碑（30/60/120s）各重建一次；每次还
+            // stallRecovered++，三次后撞上 MAX_STALL_RECOVER 直接判死，
+            // 而且共用 stallRecovered 把解码/渲染问题记成「直连线路差」。
+            //
+            // 现在：STALLED 提供首行与真实时长，OK 表示「这段还没恢复、只是这一拍
+            // 没有新报告」，闸门据此按 episode 计时，能停在首行后约 10s 动手；
+            // RECOVERED / IDLE（暂停、息屏）关闭 episode，避免把旧时长带过来。
+            val action = when (v.state) {
+                FrameStallDetector.State.STALLED ->
+                    frameStallGate.onStalled(now, v.stalledMs, v.firstReport)
+
+                FrameStallDetector.State.OK -> frameStallGate.onTick(now)
+
+                else -> {
+                    frameStallGate.endEpisode()
+                    StallAction.NONE
+                }
+            }
+            if (action != StallAction.NONE) handleFrameStallAction(action)
+            // 放弃之后不再采样：下一次重试由 giveUpRetry 在 60 秒后发起，
+            // 那一轮 retryNow() 会 reset 闸门并重新排帧看门狗。
+            if (!frameStallGate.isGivenUp) main.postDelayed(this, frameWatchIntervalMs)
         }
     }
 
@@ -342,10 +363,57 @@ class PlayerManager(
     }
 
     /**
-     * 卡顿恢复的唯一入口（位置看门狗与画面帧判据共用）。
+     * 画面停帧的动作执行（**独立于**位置看门狗的那一套计数）。
      *
-     * 抽出来是因为两条判据抓的是不同的卡：位置不动 vs 画面不出。动作必须一致，
-     * 否则会出现「两套恢复策略互相打架」——这个仓库已经吃过一次（重复 stop 互锁）。
+     * 与 [recoverFromStall] 的区别（2026-11-25 拆开）：
+     *   · 这里**不碰** `stallRecovered` 与 `directMode`。画面不出、帧数不涨是
+     *     解码/渲染问题，换线路修不好；旧代码共用 stallRecovered，把这类问题
+     *     记成「直连线路差」，QoE 与服务端换线路的判断同时失真。
+     *   · 同一段停帧至多动作一次，两次动作至少隔 20 秒，阶梯为
+     *     重建 → 换内核 → 放弃（见 [StallActionGate]）。
+     *
+     * QoE 仍在动作时上报一次 `onStall`：闸门保证每段停帧最多一次动作，
+     * 因此「停帧次数」与「事件数」一致，不再被里程碑拆成好几次。
+     */
+    private fun handleFrameStallAction(action: StallAction) {
+        val frozenMs = frameStallGate.lastActionStalledMs
+        val n = frameStallGate.actionCount
+        // 两条看门狗可能同时盯上同一次卡顿：帧判据先动作时，把位置看门狗的
+        // 计时基准一并推到现在，免得 16 秒那条在 1 秒后又判定一次并重建。
+        // 只挪基准，不改位置判据本身（isStalled 的阈值语义完全不动）。
+        lastPosChangeAt = android.os.SystemClock.elapsedRealtime()
+        callback?.onStall(frozenMs.toInt())
+        when (action) {
+            StallAction.REBUILD_SAME -> {
+                Log.w(TAG, "画面停帧 ${frozenMs}ms，第 $n 次动作：重建当前内核")
+                com.litv.tv.data.PlayLog.w(TAG, "画面停帧 ${frozenMs / 1000}s，重建当前内核（第 $n 次）")
+                startCurrent()
+            }
+
+            StallAction.NEXT_ENGINE -> {
+                Log.w(TAG, "画面停帧 ${frozenMs}ms，第 $n 次动作：换下一个内核")
+                com.litv.tv.data.PlayLog.w(TAG, "画面停帧 ${frozenMs / 1000}s，换下一个内核（第 $n 次）")
+                tryNext("画面停帧")
+            }
+
+            StallAction.GIVE_UP -> {
+                Log.e(TAG, "画面停帧已恢复 ${n - 1} 次仍卡，本轮停止重试")
+                com.litv.tv.data.PlayLog.w(TAG, "画面停帧已恢复 ${n - 1} 次仍卡，本轮停止重试")
+                stopStallWatchdog()
+                callback?.onError("播放反复停帧，正在等待自动重试（也可换台）")
+                main.postDelayed(giveUpRetry, GIVE_UP_RETRY_MS)
+            }
+
+            StallAction.NONE -> Unit
+        }
+    }
+
+    /**
+     * 位置看门狗的恢复入口（**只管位置不动这一类卡**）。
+     *
+     * 2026-11-25 起画面帧判据不再走这里，改由 [handleFrameStallAction] +
+     * [StallActionGate] 独立计数 —— 两种卡的原因不同，不该共用一份
+     * `stallRecovered` / `directMode` 的账。
      */
     private fun recoverFromStall(frozenMs: Long) {
         val clock = android.os.SystemClock.elapsedRealtime()
@@ -403,6 +471,10 @@ class PlayerManager(
     fun retryNow() {
         if (pendingChannelId <= 0) return
         stallRecovered = 0
+        // 用户/系统发起的重试 = 新的一轮，画面停帧的阶梯（重建→换内核→放弃）重新给满。
+        // 与 stallRecovered 的归零对称，否则放弃后 60 秒的自动重试会因为
+        // 闸门还停在 GIVE_UP 而一次动作都做不了。
+        frameStallGate.reset()
         lastPosMs = -1
         lastPosChangeAt = 0
         prepared = false
@@ -415,7 +487,7 @@ class PlayerManager(
         lastPosMs = -1L
         lastPosChangeAt = android.os.SystemClock.elapsedRealtime()
         main.postDelayed(stallWatchdog, STALL_CHECK_MS)
-        // 画面停帧观测（只记录）与位置看门狗同一个生命周期，避免各起各的
+        // 画面停帧检测与位置看门狗同一个生命周期，避免各起各的
         frameStall.reset()
         main.removeCallbacks(frameWatchdog)
         main.postDelayed(frameWatchdog, frameWatchIntervalMs)
@@ -427,6 +499,10 @@ class PlayerManager(
         lastPosChangeAt = 0L
         main.removeCallbacks(frameWatchdog)
         frameStall.reset()
+        // 关掉当前 episode：重建/换内核期间时间在走，若不关，
+        // 新内核第一次采样会拿「上一段停帧的起点」算时长，可能立刻又动作一次。
+        // 阶梯计数不清零 —— 换内核之后仍要按顺序升级。
+        frameStallGate.endEpisode()
     }
 
     // ---------------------------------------------------------------- 起播两阶段 + 总预算
@@ -907,6 +983,22 @@ class PlayerManager(
         }
         prepared = false
         stallRecovered = 0
+        // ★ 2026-11-25：起播必须清掉「用户暂停」标记。
+        //
+        // 旧版只在 resume() 里清。Activity onPause 把它置 true 之后，回前台如果走的是
+        // 「网络回调 → play()」这条路（resumeOrRebuildAfterBackground 因频道不一致早退，
+        // 没有调 resume()），标记会一直是 true，于是：
+        //   · 帧判据（prepared && !userPaused）永不成立；
+        //   · 位置看门狗每 4 秒直接跳过；
+        //   · onEnded 的直播重连直接 return；
+        // 三条监测永久失效，而且日志里一个字都没有——用户看到的就是「卡住不自愈」。
+        if (userPaused) {
+            userPaused = false
+            Log.i(TAG, "起播复位用户暂停标记（此前被 onPause 置位）")
+            com.litv.tv.data.PlayLog.w(TAG, "起播复位用户暂停标记（此前被 onPause 置位）")
+        }
+        // 换台 = 新的一轮：画面停帧的动作阶梯（重建→换内核→放弃）重新开始
+        frameStallGate.reset()
         main.removeCallbacks(giveUpRetry)
         // 重试额度也必须按次重置。
         // 以前只重置上面两个：如果上一个台是"重试过一次才成功"的，
@@ -1369,6 +1461,30 @@ class PlayerManager(
         current?.play()
         if (prepared) startStallWatchdog()
     }
+
+    /**
+     * 回到前台、但当前选中的台还**没有**在这个播放器里起播（播放器里仍是旧台）。
+     *
+     * 场景：离开后台期间换了台，`resumeOrRebuildAfterBackground()` 发现
+     * `ch.id != playingChannelId` 必须早退（不能把旧台 resume 起来）。
+     *
+     * 这里要做两件事，缺一不可：
+     *  1. 清「用户暂停」标记 —— 否则随后由网络回调触发的 play() 会带着它起播，
+     *     帧判据 / 位置看门狗 / onEnded 重连三处永久短路且零日志
+     *     （play() 里另有一次复位兜底，这里清是为了让「回前台的这一刻」就正确）。
+     *  2. **停掉两条看门狗** —— 此刻内核还停在 pause 状态，若放开看门狗，
+     *     位置/帧判据会在 10~16 秒后把「暂停」误判成「卡死」，把旧台重建起来
+     *     在后台出声。下一次 play() 起播、onPlaying 会重新排看门狗。
+     */
+    fun onForegroundPendingStart() {
+        if (userPaused) {
+            userPaused = false
+            Log.i(TAG, "清除用户暂停标记（回前台待重新起播）")
+            com.litv.tv.data.PlayLog.w(TAG, "清除用户暂停标记（回前台待重新起播）")
+        }
+        stopStallWatchdog()
+    }
+
     fun setVolume(v: Float) = current?.setVolume(v)
     fun stats(): EngineStats = current?.stats() ?: EngineStats()
     fun engineLabel(): String = currentKind?.label ?: ""
@@ -1481,6 +1597,14 @@ class PlayerManager(
          * 10 秒的代价是一次重建（约 2~3 秒），比冻两分钟好得多。
          */
         const val FRAME_STALL_ACTION_MS = 10_000L
+
+        /**
+         * 两次画面停帧动作之间的最小间隔。
+         *
+         * 一次重建本身要 2~3 秒；刚重建完就允许再动作，会把「慢」放大成
+         * 连续重建。20 秒也留出了「重建后观察画面是否恢复」的窗口。
+         */
+        const val FRAME_STALL_ACTION_INTERVAL_MS = 20_000L
     }
 }
 

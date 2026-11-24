@@ -289,6 +289,9 @@ class VlcEngine : PlayerEngine {
             return
         }
         releaseInternal()
+        // releaseInternal() 刚把代际加一，这里取到的就是**本次** prepare 的代际。
+        // 后台线程建好 MediaPlayer 后要拿它回来比对（见 startOnMain）。
+        val seq = prepareSeq.get()
 
         // ★ LibVLC 的初始化必须放到后台线程。
         //   首次 dlopen 42MB 的 libvlc.so + 扫描插件要好几秒，在主线程做就是 ANR
@@ -303,7 +306,9 @@ class VlcEngine : PlayerEngine {
             }
             val main = android.os.Handler(android.os.Looper.getMainLooper())
             if (lib == null) {
-                main.post { listener?.onError("VLC 初始化失败") }
+                main.post {
+                    if (seq == prepareSeq.get()) listener?.onError("VLC 初始化失败")
+                }
                 return@Thread
             }
             // ★ MediaPlayer 的构造同样是重活（要建 vout/音频输出线程），
@@ -312,22 +317,50 @@ class VlcEngine : PlayerEngine {
                 MediaPlayer(lib)
             } catch (t: Throwable) {
                 android.util.Log.e(TAG, "MediaPlayer 创建失败: " + t.message, t)
-                main.post { listener?.onError("VLC 播放器创建失败") }
+                main.post {
+                    if (seq == prepareSeq.get()) listener?.onError("VLC 播放器创建失败")
+                }
                 return@Thread
             }
-            main.post { startOnMain(mp, url, headers, bufferMs, decode) }
+            main.post { startOnMain(mp, seq, url, headers, bufferMs, decode) }
         }.start()
     }
 
-    /** 初始化完成后的实际起播（主线程）。 */
+    /**
+     * 异步 prepare 的代际号。
+     *
+     * 为什么必须有：prepare() 先 releaseInternal()，再起一个裸线程建 MediaPlayer，
+     * 建好后 `main.post { startOnMain(mp) }` 才把 mp 赋给 [player] 字段。在 LibVLC
+     * 首次初始化那几秒里再点一次换台（或换内核再切回 VLC）时，前一个 mp **还不在
+     * 字段里**，releaseInternal() 找不到它 → 两个 MediaPlayer 同时播放
+     * （注释里记过 playback too early / inserting zeroes —— 音频时钟互相打架）。
+     *
+     * 规则：releaseInternal() 递增代际；startOnMain 只在代际仍匹配时接管，
+     * 不匹配就把这个孤儿 stop + release 丢掉。
+     */
+    private val prepareSeq = java.util.concurrent.atomic.AtomicInteger(0)
+
+    /**
+     * 初始化完成后的实际起播（主线程）。
+     *
+     * @param seq 建立这个 mp 时的代际；与当前代际不一致说明期间又 prepare / release 过
+     */
     private fun startOnMain(
         mp: MediaPlayer,
+        seq: Int,
         url: String,
         headers: Map<String, String>,
         bufferMs: Int,
         decode: String,
     ) {
+        if (seq != prepareSeq.get()) {
+            // 这个 mp 从未写进 player 字段，释放路径看不到它 —— 只能在这里丢弃。
+            // 不丢就是两个实例同时出声。
+            discardLatePlayer(mp, "代际 $seq ≠ 当前 ${prepareSeq.get()}")
+            return
+        }
         val lib = libVlc ?: run {
+            discardLatePlayer(mp, "LibVLC 已释放")
             listener?.onError("VLC 未初始化")
             return
         }
@@ -863,6 +896,9 @@ class VlcEngine : PlayerEngine {
      * 所有权因此清晰：谁创建谁销毁，且不在热路径上反复重建。
      */
     private fun releaseInternal() {
+        // 递增代际：作废所有「已经建好、但还没上主线程」的 MediaPlayer。
+        // 它们不在 player 字段里，下面这段释放代码看不到（见 prepareSeq 说明）。
+        prepareSeq.incrementAndGet()
         // 先把引用摘掉：之后任何 stop/play 都拿不到这个播放器，避免和这里的
         // release 抢同一把 libvlc 锁（ANR 就是这么来的，见 VlcOps 的注释）。
         val p = player
@@ -876,6 +912,23 @@ class VlcEngine : PlayerEngine {
             } catch (t: Throwable) {
                 Log.w(TAG, "释放 VLC 播放器出错", t)
             }
+        }
+    }
+
+    /**
+     * 丢弃一个「被后一次 prepare 顶掉、从未写进 [player] 字段」的播放器。
+     *
+     * 必须走 [VlcOps] 那条单线程：stop/release 与正常的 stop 串行，
+     * 否则又会出现两个线程同时 stop 的互锁（见 VlcOps 注释）。
+     */
+    private fun discardLatePlayer(mp: MediaPlayer, why: String) {
+        android.util.Log.w(TAG, "丢弃过期的 VLC 播放器（$why）")
+        com.litv.tv.data.PlayLog.w(TAG, "丢弃过期的 VLC 播放器（$why）")
+        VlcOps.exec.execute {
+            runCatching { mp.stop() }
+            runCatching { mp.vlcVout.detachViews() }
+            runCatching { mp.release() }
+                .onFailure { Log.w(TAG, "丢弃过期播放器时 release 出错", it) }
         }
     }
 

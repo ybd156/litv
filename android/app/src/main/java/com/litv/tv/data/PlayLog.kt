@@ -31,8 +31,37 @@ object PlayLog {
     private const val KEEP_LINES = 24_000
 
     @Volatile private var file: File? = null
+
+    /**
+     * 时间格式器。
+     *
+     * `SimpleDateFormat` **不是线程安全的**，旧版在锁外调用 `fmt.format(Date())`，
+     * 而写日志的线程有主线程、看门狗、Exo/VLC 回调、vlc-ops……并发下会串出
+     * 乱码时间戳，极端情况下抛 `ArrayIndexOutOfBoundsException`。
+     * 现在只在 [writeLine] 的 `synchronized(lock)` 里用（且只在 [io] 单线程上执行），
+     * 两重保证下不再有并发访问。
+     *
+     * 没有换 `java.time`：minSdk = 21 且没有开 coreLibraryDesugaring，
+     * `DateTimeFormatter` 在 Android 8.0 以下会直接 `NoClassDefFoundError`。
+     */
     private val fmt = SimpleDateFormat("MM-dd HH:mm:ss.SSS", Locale.US)
     private val lock = Any()
+
+    /**
+     * 写盘单线程。
+     *
+     * 为什么必须异步：2MB 轮转要 `readLines()` 整文件再 `writeText()`，
+     * 旧版在**调用线程**做——而调用方经常是主线程（看门狗、Exo 的回调），
+     * 一次轮转就是几百毫秒的卡顿。现在调用方只入队，落盘与轮转都在这里做，
+     * 顺带把「同一把文件描述符上的顺序写」串行化。
+     */
+    private val io = java.util.concurrent.Executors.newSingleThreadExecutor { r ->
+        Thread(r, "play-log").apply { isDaemon = true }
+    }
+
+    /** 待写条数；日志被刷爆时宁可丢行，也不能把调用方（可能是主线程）拖住。 */
+    private val pending = java.util.concurrent.atomic.AtomicInteger(0)
+    private const val MAX_PENDING = 512
 
     fun init(ctx: Context) {
         if (file != null) return
@@ -56,7 +85,8 @@ object PlayLog {
     fun exportTo(ctx: Context): String? {
         val src = file ?: return null
         if (!src.isFile) return null
-        val text = runCatching { src.readText() }.getOrNull() ?: return null
+        // 与写盘/轮转互斥：否则可能正好读到被 writeText() 截断一半的轮转中间态。
+        val text = synchronized(lock) { runCatching { src.readText() }.getOrNull() } ?: return null
         val name = "litv-play.log"
         return try {
             if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
@@ -86,9 +116,34 @@ object PlayLog {
         }
     }
 
+    /**
+     * 追加一行。
+     *
+     * 调用方（可能是主线程）只做「取时间戳 + 入队」；格式化、轮转、落盘都在
+     * [io] 单线程上，不阻塞调用方。
+     */
     fun w(tag: String, msg: String) {
         val f = file ?: return
-        val line = "${fmt.format(Date())} $tag: $msg\n"
+        // 时间戳必须在**调用线程**取：排队久了之后写盘时刻已经不是事件时刻。
+        val ts = System.currentTimeMillis()
+        if (pending.get() >= MAX_PENDING) return
+        pending.incrementAndGet()
+        try {
+            io.execute {
+                try {
+                    writeLine(f, ts, tag, msg)
+                } finally {
+                    pending.decrementAndGet()
+                }
+            }
+        } catch (t: Throwable) {
+            // executor 已关闭（进程退出中）：丢弃这一行，不能抛到调用方
+            pending.decrementAndGet()
+        }
+    }
+
+    /** 轮转 + 追加，只在 [io] 单线程上执行；[lock] 同时挡住 exportTo 的读。 */
+    private fun writeLine(f: File, ts: Long, tag: String, msg: String) {
         synchronized(lock) {
             runCatching {
                 if (f.length() > MAX_BYTES) {
@@ -96,7 +151,8 @@ object PlayLog {
                     val keep = f.readLines().takeLast(KEEP_LINES)
                     f.writeText(keep.joinToString("\n", postfix = "\n"))
                 }
-                f.appendText(line)
+                // 格式化在锁内（SimpleDateFormat 非线程安全，见 fmt 的说明）
+                f.appendText("${fmt.format(Date(ts))} $tag: $msg\n")
             }
         }
     }

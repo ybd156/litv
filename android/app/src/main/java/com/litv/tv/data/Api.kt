@@ -91,13 +91,34 @@ class Api(private val prefs: Prefs) {
 
             override fun onResponse(c: Call, resp: Response) {
                 resp.use {
+                    // ★ 2026-11-25：HTTP 401 就是「凭据不被接受」，必须先于解析判定。
+                    // 以前只认响应体里的 code==2003，裸 401（服务端或边缘 Worker 直接
+                    // 回状态码、没有信封）会落到下面的 text.isBlank() 分支，只显示
+                    // 「服务器返回空响应（HTTP 401）」：凭据不清理、不回绑定页。
+                    //
+                    // 403 单独处理：AGENTS §6 明确 401=未认证、403=已认证但无权限，
+                    // 不能混用。只有「403 且没有 JSON 信封」才说明是网关拒绝凭据；
+                    // 带信封的 403 交给下面正常解析（用服务端 msg），否则一次权限
+                    // 拒绝就会把用户的设备凭据清掉、逼其重新绑定。
+                    if (it.code == 401) {
+                        main.post { onAuthExpired?.invoke() }
+                        main.post { onErr("登录已失效，请重新绑定设备") }
+                        return
+                    }
                     val text = try {
                         it.body?.string().orEmpty()
                     } catch (e: Exception) {
                         ""
                     }
                     if (text.isBlank()) {
-                        main.post { onErr("服务器返回空响应（HTTP ${it.code}）") }
+                        // 403 且体为空：没有任何信封，说明是网关/边缘层直接拒绝凭据，
+                        // 与 401 走同一条恢复路径（文案分开，便于日志区分）。
+                        if (it.code == 403) {
+                            main.post { onAuthExpired?.invoke() }
+                            main.post { onErr("设备凭据被拒绝，请重新绑定设备") }
+                        } else {
+                            main.post { onErr("服务器返回空响应（HTTP ${it.code}）") }
+                        }
                         return
                     }
                     try {
@@ -114,7 +135,14 @@ class Api(private val prefs: Prefs) {
                         else gson.fromJson(dataEl, clazz)
                         main.post { onOk(value) }
                     } catch (e: Exception) {
-                        main.post { onErr("解析响应失败：${e.message}") }
+                        // 403 但响应体不是 JSON 信封（HTML 错误页、代理拦截页等）：
+                        // 同样属于「凭据不被接受」，按 403 处理，而不是报解析失败。
+                        if (it.code == 403) {
+                            main.post { onAuthExpired?.invoke() }
+                            main.post { onErr("设备凭据被拒绝，请重新绑定设备") }
+                        } else {
+                            main.post { onErr("解析响应失败：${e.message}") }
+                        }
                     }
                 }
             }
@@ -144,6 +172,14 @@ class Api(private val prefs: Prefs) {
 
             override fun onResponse(c: Call, resp: Response) {
                 resp.use {
+                    // 与 call() 同一处修正：裸 401 没有信封，必须按状态码直接进
+                    // 「凭据失效」路径（否则只显示「空响应」并停在原地）。
+                    // 403 只在其响应体不是信封时才算凭据被拒（AGENTS §6 不混用）。
+                    if (it.code == 401) {
+                        main.post { onAuthExpired?.invoke() }
+                        main.post { onErr("登录已失效，请重新绑定设备") }
+                        return
+                    }
                     val text = try {
                         it.body?.string().orEmpty()
                     } catch (e: Exception) {

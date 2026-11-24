@@ -34,7 +34,10 @@ import com.litv.tv.data.RelayDecision
 import com.litv.tv.data.TvStream
 import com.litv.tv.player.EngineKind
 import com.litv.tv.player.PlayRequestGate
+import com.litv.tv.player.PlaySource
+import com.litv.tv.player.PlaybackCoordinator
 import com.litv.tv.player.PlayerManager
+import com.litv.tv.player.SessionState
 import com.litv.tv.player.WatchClock
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -182,6 +185,30 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
     private var streamLatency = 0
 
     private lateinit var player: PlayerManager
+
+    /**
+     * 起播唯一入口（决策稿 `docs/design/05-播放器所有权收敛.md` §7 第 2 步）。
+     *
+     * 四条路径（缓存 / 内置源 / 本地解析 / 服务端）都走 [PlaybackCoordinator.play]，
+     * 会话状态记在 `SessionMachine` 里，非法迁移只打日志、**不改行为**。
+     * 用 lazy：首次访问一定在 `player` 初始化之后。
+     */
+    private val session: PlaybackCoordinator by lazy {
+        PlaybackCoordinator(
+            start = { src -> player.play(src.channelId, src.url, src.headers, src.engine, src.bustCache) },
+            pauseImpl = { player.pause() },
+            resumeImpl = { player.resume() },
+            stopImpl = { player.stop() },
+            releaseImpl = { player.release() },
+            onIllegal = { from, what ->
+                Log.i(TAG, "会话状态机：$what（当前 ${from.name}）")
+            },
+        ).also { c ->
+            c.listener = { from, to, src ->
+                Log.i(TAG, "会话 ${from.name} → ${to.name}（来源 ${src?.label ?: "-"}，第 ${c.attempt} 次）")
+            }
+        }
+    }
     private lateinit var panelAdapter: ChannelAdapter
     private lateinit var epgAdapter: EpgAdapter
 
@@ -914,10 +941,12 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         }
         toastTip("回看：" + (p?.title ?: "所选时段"))
         player.directMode = false
-        player.play(
-            ch.id, url,
-            mapOf("User-Agent" to "qqlive"),
-            app.prefs.engine, bustCache = false,
+        session.play(
+            PlaySource.Builtin(
+                ch.id, url,
+                mapOf("User-Agent" to "qqlive"),
+                app.prefs.engine,
+            ),
         )
     }
 
@@ -937,10 +966,12 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
                 val abs = app.api.absolute(info.url)
                 val minutes = info.availableSeconds / 60
                 toastTip("回看中（可回看约 $minutes 分钟）")
-                player.play(
-                    ch.id, abs,
-                    mapOf("User-Agent" to LitvUA.ANDROID),
-                    app.prefs.engine,
+                session.play(
+                    PlaySource.Timeshift(
+                        ch.id, abs,
+                        mapOf("User-Agent" to LitvUA.ANDROID),
+                        app.prefs.engine,
+                    ),
                 )
             },
             onErr = { toastTip("回看不可用：$it") })
@@ -1439,7 +1470,7 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         val cacheUsable = cached != null && !forceRebuild
         if (cacheUsable) {
             Log.i(TAG, "缓存起播 ${ch.name}，签名还剩 ${cached!!.expires - nowSec}s")
-            player.play(ch.id, app.api.absolute(cached.url), cached.headers, app.prefs.engine)
+            session.play(PlaySource.Cached(ch.id, app.api.absolute(cached.url), cached.headers, app.prefs.engine))
         }
 
         // 内置源（央视频）：地址由客户端现算（cKey 签名 + bkliveinfo 换流），
@@ -1480,7 +1511,7 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
                         // 而代理链路偶发取流失败会被误判成源站连不上。
                         player.directMode = proxyUrl == null
                         // 央视频按 URL 签名校验：不能加 _t 缓存参数，否则 CDN 直接 403
-                        player.play(ch.id, line, mapOf("User-Agent" to "qqlive"), app.prefs.engine, bustCache = false)
+                        session.play(PlaySource.Builtin(ch.id, line, mapOf("User-Agent" to "qqlive"), app.prefs.engine))
                         // ★ 内置源不走 app.api.play 的 onOk 回调，而 refreshEpg 只挂在那条路上 ——
                         //   漏了这一句，换台后节目单会一直留着上一个台的（真机反馈「每个节目单内容都一样」）。
                         //   先清空再重取，避免重取完成前旧数据继续显示；OSD 也一并刷。
@@ -1500,7 +1531,7 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         if (localUrl != null && streamId == 0L && !forceRelayOnce) {
             Log.i(TAG, "客户端直连起播 ${ch.name}（本地解析）")
             player.directMode = true
-            player.play(ch.id, localUrl, com.litv.tv.data.M3uClient.headersOf(ch.id), app.prefs.engine)
+            session.play(PlaySource.Local(ch.id, localUrl, com.litv.tv.data.M3uClient.headersOf(ch.id), app.prefs.engine))
         } else app.api.play(ch.id, streamId,
             direct = wantDirect,
             onOk = { info ->
@@ -1556,7 +1587,7 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
                 // 但 forceRebuild（失败重试）时必须走到这里：否则缓存命中 →
                 // 上面那次 prepare 被跳过 → 这里也被跳过 → 重试什么也没做。
                 if (!cacheUsable || forceRebuild) {
-                    player.play(ch.id, abs, headers, app.prefs.engine)
+                    session.play(PlaySource.Remote(ch.id, abs, headers, app.prefs.engine))
                 }
                 refreshEpg(ch.id)
                 // 底部信息条：线路 x/y 与延迟
@@ -3007,7 +3038,10 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         }
     }
 
-    override fun onPrepared(width: Int, height: Int) = Unit
+    override fun onPrepared(width: Int, height: Int) {
+        // 内核已接管媒体（还没出画面）：会话从「取址」进入「等首帧」。
+        session.onEngineStarted()
+    }
 
 
     /**
@@ -3305,7 +3339,17 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         endCurtain()
     }
 
+    /**
+     * 首帧信号有两条来源（Exo 的 `onFirstFrame`、VLC 走的 `onPlaying`），
+     * 只让会话记一次，避免第二条把「播放中」判成非法迁移刷日志。
+     */
+    private fun markFirstFrame() {
+        if (session.state != SessionState.Playing) session.onFirstFrame()
+    }
+
     override fun onFirstFrame() {
+        // 会话记账：首帧到了才算真的在播（VLC 不发这条，靠 onPlaying 兜）。
+        markFirstFrame()
         // 起播计时与观看窗口都从"真正看到画面"开始算 —— 转圈的那几十秒不算观看时长，
         // 否则 rebuffer ratio 的分母会被拉大、显得卡顿率更低（自欺欺人）。
         hasRenderedFrame = true
@@ -3324,6 +3368,8 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
 
     override fun onPlaying() {
         hasRenderedFrame = true
+        // VLC 不发 onFirstFrame，onPlaying 是它的等价信号；已记账时不再重复。
+        markFirstFrame()
         prefetchNeighbours()
         // VLC 永远不发 onFirstFrame，而启动画面只在 onFirstFrame 里撤，
         // 另一条路是 12 秒兜底超时——所以 VLC 下声音早出来了、画面也在播，
@@ -3775,7 +3821,7 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         // VLC 会无 vout 起播（音频时钟异常 → 电音），而且 surfaceCreated
         // 可能再触发一次 → 两个播放器同时出声。
         // VLC 的重建改到 surfaceCreated 里做（Surface 真正就绪时）。
-        runCatching { player.resume() }
+        runCatching { session.resume() }
     }
 
     override fun onResume() {
@@ -3845,7 +3891,7 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         // 离开前台：解除常亮，允许系统息屏；同时暂停播放（下面一行）
         window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         pausedAtMs = System.currentTimeMillis()
-        player.pause()
+        session.pause()
         app.remote.onCommand = null
         // 跨端续播：离开时记下看到哪个台，别的设备打开就能"接着看"
         current?.let { app.api.saveProgress(it.id, 0) }
@@ -3890,7 +3936,7 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         main.removeCallbacksAndMessages(null)
         // 离开页面后到达的 /tv/play 回调一律作废，别再往已销毁的界面上写。
         playGate.invalidate()
-        player.release()
+        session.release()
         super.onDestroy()
     }
 

@@ -597,6 +597,20 @@
                         android:layout_weight="1"
                         android:scrollbars="none" />
 
+                    <!-- 节目列为空时的说明：区分"还在加载"和"这个台真没节目"。
+                         以前两件事都表现为一整列空白，用户只能说"节目单没了"。 -->
+                    <TextView
+                        android:id="@+id/epgEmpty"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:paddingStart="12dp"
+                        android:paddingTop="12dp"
+                        android:paddingEnd="12dp"
+                        android:paddingBottom="12dp"
+                        android:textColor="@color/text_secondary"
+                        android:textSize="14sp"
+                        android:visibility="gone" />
+
                 </LinearLayout>
             </LinearLayout>
 

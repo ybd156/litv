@@ -283,6 +283,9 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
     private lateinit var panelAdapter: ChannelAdapter
     private lateinit var epgAdapter: EpgAdapter
 
+    /** 节目列为空时给一行说明，区分「还在加载」和「这个台今天没节目」。 */
+    private lateinit var epgEmpty: TextView
+
     private var channels: List<Channel> = emptyList()
 
     // ---------------------------------------------------------------- 内置源自动降级
@@ -988,6 +991,7 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         epgAdapter = EpgAdapter()
         epgList.layoutManager = LinearLayoutManager(this)
         epgList.adapter = epgAdapter
+        epgEmpty = findViewById(R.id.epgEmpty)
         // C3：点节目看详情。之前这个回调根本没接线，点节目毫无反应。
         epgAdapter.onProgramClick = { p -> onProgramAction(p) }
         // C4：点标题切换分类
@@ -2990,10 +2994,24 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         ensureEpgForPanel()
         epgTitle.text = epgTitleText()
         applyEpgCapability()
-        epgAdapter.submit(filteredPrograms())
+        val list = filteredPrograms()
+        epgAdapter.submit(list)
         epgAdapter.setReserved(reservedStarts)
+        showEpgEmptyHint(list.isEmpty())
         val pos = epgAdapter.currentPosition()
         if (pos >= 0) epgList.scrollToPosition(pos)
+    }
+
+    /** 节目列空的时候给一句话，别让用户对着一整列空白猜。 */
+    private fun showEpgEmptyHint(empty: Boolean) {
+        if (!::epgEmpty.isInitialized) return
+        epgEmpty.visibility = if (empty) View.VISIBLE else View.GONE
+        if (!empty) return
+        epgEmpty.text = when {
+            !app.epg.ready -> "节目单加载中…"
+            epgCategory != null -> "这个分类下没有节目，点标题可切回全部"
+            else -> "这个台今天没有节目单"
+        }
     }
 
     /**

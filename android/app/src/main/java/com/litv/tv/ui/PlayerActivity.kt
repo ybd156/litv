@@ -1114,7 +1114,9 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
      * 服务端版本还没拿到时按「能」处理，避免刚进面板就用错结论把按钮藏起来。
      */
     private fun replayCapableOf(ch: Channel?): Boolean {
-        if (ch == null) return false
+        // 查不到频道时按「能」处理：宁可多画一个按钮，也不能因为查不到就把
+        // 内置源（央视频）本来就有的回看一起藏掉——真机反馈过一次。
+        if (ch == null) return true
         return com.litv.tv.data.ReplayCapability.canReplay(
             isBuiltin = com.litv.tv.data.YspClient.isYspChannel(ch.id),
             serverVersion = serverVersion,
@@ -1123,9 +1125,16 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
 
     /** 按当前节目单所属频道，决定节目行要不要画「回看」。 */
     private fun applyEpgCapability() {
-        val ch = allChannels.firstOrNull { it.id == epgProgramsChannelId }
-            ?: current?.takeIf { it.id == epgProgramsChannelId }
-        epgAdapter.setReplayCapable(replayCapableOf(ch))
+        // ★ 只按 id 判，不要查 allChannels：client_parse 模式下
+        //   `allChannels = parsed.channels`（不含央视频），内置源频道查不到，
+        //   一查空就把内置源本来就有的「回看」全藏了——真机上就是这么退化的。
+        val id = epgProgramsChannelId
+        val capable = id == 0L || com.litv.tv.data.ReplayCapability.canReplay(
+            isBuiltin = com.litv.tv.data.YspClient.isYspChannel(id),
+            serverVersion = serverVersion,
+        )
+        Log.i(TAG, "回看角标：ch=$id server=$serverVersion capable=$capable")
+        epgAdapter.setReplayCapable(capable)
     }
 
     private fun onProgramAction(p: com.litv.tv.data.EpgProgram) {

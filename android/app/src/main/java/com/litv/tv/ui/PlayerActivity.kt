@@ -39,6 +39,7 @@ import com.litv.tv.player.PlayRequestGate
 import com.litv.tv.player.PlaySource
 import com.litv.tv.player.PlaybackCoordinator
 import com.litv.tv.player.PlayerManager
+import com.litv.tv.player.Redact
 import com.litv.tv.player.ReplayClock
 import com.litv.tv.player.ReplayEnd
 import com.litv.tv.player.ReplayEndJudge
@@ -3029,7 +3030,7 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
             Log.w(TAG, "节目单还没加载，且没有 xmltv 地址（bootstrap 未给出）")
             return
         }
-        Log.i(TAG, "打开面板时节目单还没就绪，立即补拉：$url")
+        Log.i(TAG, "打开面板时节目单还没就绪，立即补拉：${Redact.url(url)}")
         app.epg.ensure(url) { ok ->
             main.post {
                 Log.i(TAG, "节目单补拉结束 ok=$ok")

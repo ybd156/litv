@@ -152,6 +152,9 @@ class XmltvEpg(private val context: Context) {
 
     fun ensure(url: String, onReady: (Boolean) -> Unit) {
         if (url.isBlank()) {
+            // 静默返回过一次，结果节目列整列空白却查不到原因（用户报「节目单没了」时
+            // logcat 里一条 XmltvEpg 相关的行都没有）。前置条件不满足必须留下痕迹。
+            Log.w(TAG, "节目单地址为空，跳过加载（服务端没下发 epg_url）")
             onReady(false)
             return
         }

@@ -2987,12 +2987,41 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
     }
 
     private fun refreshEpgColumn() {
+        ensureEpgForPanel()
         epgTitle.text = epgTitleText()
         applyEpgCapability()
         epgAdapter.submit(filteredPrograms())
         epgAdapter.setReserved(reservedStarts)
         val pos = epgAdapter.currentPosition()
         if (pos >= 0) epgList.scrollToPosition(pos)
+    }
+
+    /**
+     * 面板要显示节目单，但 xmltv 还没加载完时补拉一次，完成后自己刷新这一列。
+     *
+     * 为什么要在这里补：解析被刻意推迟到起播后（见 applyBootstrap 里的 epgDelay），
+     * 冷启动后马上开面板就会看到一整列空白，而且**没有人再刷新它** ——
+     * 用户看到的就是「节目单没了」。开面板是明确的「我现在要看节目单」信号，
+     * 此时补拉一次，比等定时器靠谱。
+     */
+    private fun ensureEpgForPanel() {
+        if (app.epg.ready) return
+        val url = lastEpgUrl
+        if (url.isBlank()) {
+            Log.w(TAG, "节目单还没加载，且没有 xmltv 地址（bootstrap 未给出）")
+            return
+        }
+        Log.i(TAG, "打开面板时节目单还没就绪，立即补拉：$url")
+        app.epg.ensure(url) { ok ->
+            main.post {
+                Log.i(TAG, "节目单补拉结束 ok=$ok")
+                if (!ok || isFinishing || isDestroyed) return@post
+                // 这里必须重新走 refreshEpg：programs 是「当前台的节目切片」，
+                // 光刷列表（refreshEpgColumn）只会把**加载前那份空数据**再画一遍。
+                val id = if (epgProgramsChannelId > 0) epgProgramsChannelId else (current?.id ?: 0L)
+                if (id > 0) refreshEpg(id) else refreshEpgColumn()
+            }
+        }
     }
 
 

@@ -34,7 +34,11 @@ import com.litv.tv.data.EpgProgram
 import com.litv.tv.data.PlayCache
 import com.litv.tv.data.PlayCacheStore
 import com.litv.tv.player.EngineKind
+import com.litv.tv.player.HeartbeatGate
+import com.litv.tv.player.PlaybackCoordinator
 import com.litv.tv.player.PlayerManager
+import com.litv.tv.player.PlaySource
+import com.litv.tv.player.SessionState
 import com.litv.tv.player.ClockText
 import com.litv.tv.player.ReplayClock
 import com.litv.tv.player.ReplaySteps
@@ -102,6 +106,54 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
 
     private lateinit var player: PlayerManager
     private val main = Handler(Looper.getMainLooper())
+
+    /**
+     * 起播 / 暂停 / 恢复 / 停止 / 释放的**唯一入口**
+     * （决策稿 `docs/design/05-播放器所有权收敛.md` §7 第 2 步，与电视端 [PlayerActivity] 同构）。
+     *
+     * 首页原来有六处 `player.play(...)`、一处自己发心跳、四处直接调生命周期，
+     * 「起播发生了」这件事没有单一事实：缓存命中 / 内置源 / 本地解析 / 时移
+     * 四条路一次心跳都不报，管理台的在线时间与「正在播放」只在偶尔走中转时才更新。
+     *
+     * 全仓唯一的 `PlayerManager(` 构造点也在这个 lazy 里：会话与播放器同生共死。
+     * 用 lazy 是为了让 `start` 的 lambda 一定能拿到已初始化的 `player`。
+     */
+    private val session: PlaybackCoordinator by lazy {
+        player = com.litv.tv.player.PlayerManager(this, app.prefs).also { it.callback = this }
+        PlaybackCoordinator(
+            start = { src -> player.play(src.channelId, src.url, src.headers, src.engine, src.bustCache) },
+            pauseImpl = { player.pause() },
+            resumeImpl = { player.resume() },
+            stopImpl = { player.stop() },
+            releaseImpl = { player.release() },
+            onIllegal = { from, what ->
+                android.util.Log.i(TAG, "会话状态机：$what（当前 ${from.name}）")
+            },
+        ).also { c ->
+            c.listener = { from, to, src ->
+                android.util.Log.i(
+                    TAG,
+                    "会话 ${from.name} → ${to.name}（来源 ${src?.label ?: "-"}，第 ${c.attempt} 次）",
+                )
+                // 心跳由会话状态触发，而不是挂在 `/tv/play` 的成功分支上。
+                if (to == SessionState.Playing && src != null && heartbeatGate.shouldSend(c.attempt)) {
+                    android.util.Log.i(TAG, "心跳：频道 ${src.heartbeatChannelId}（来源 ${src.label}）")
+                    app.api.heartbeat(src.heartbeatChannelId, "playing")
+                }
+            }
+        }
+    }
+
+    /** 同一次起播只报一次心跳（换台 / 重试 attempt 变了再报）。 */
+    private val heartbeatGate = HeartbeatGate()
+
+    /**
+     * 会话当前持有的台号（0 = 没有）。
+     *
+     * 只读用途（Surface 重建判断、restartCurrent 兜底、内核改了要不要重起）
+     * 一律读会话，不再去摸播放器内部字段——两处各记一份就是漂移的源头。
+     */
+    private fun sessionChannelId(): Long = session.current?.channelId ?: 0L
 
     private var all: List<Channel> = emptyList()
     private val favorites = mutableSetOf<Long>()
@@ -246,7 +298,10 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
         // 起播进行到哪一步」，状态散在十几个字段里，退后台回来黑屏、
         // VLC 回来黑屏、首帧反复重建都是它的衍生问题。
         // 代价是每次进播放页重建一次（约 0.7 秒），换来状态干净。
-        player = com.litv.tv.player.PlayerManager(this, app.prefs).also { it.callback = this }
+        // 播放器实例在 [session] 的 lazy 里创建（全仓唯一的 `PlayerManager(` 构造点）。
+        // 这里先取一次会话，保证下面 attach 和 Surface 回调拿到的 player 已经就绪。
+        val coord = session
+        android.util.Log.i(TAG, "播放器就绪（会话 ${coord.state.name}）")
         // 视频输出统一交给 PlayerManager：Exo / VLC / mpv 都往同一个 Surface 上画。
         // 不再用 media3 的 PlayerView——它和裸 SurfaceView 并存时，
         // 「同一个播放器再绑一次」是空操作，新 Surface 应用不上，
@@ -281,7 +336,8 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
                 // 判据是"**播放器还持有这个台**"，不是"此刻正在播"。
                 // 切走的瞬间经常正处在缓冲/重连状态，isPlaying 为 false，
                 // 用它会误判成"播放器已停"→ 重新拉流，用户看到的就是"回来要重播"。
-                val sameChannel = ch != null && player.playingChannelId == ch.id
+                // 台号读会话的当前来源（`PlaySource.channelId`），不再读播放器内部字段。
+                val sameChannel = ch != null && sessionChannelId() == ch.id
 
                 if (sameChannel) {
                     // 播放器一直活着（Service 保活），缓冲也在：
@@ -341,9 +397,9 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
             // 否则「暂停」了时间码却继续走、或者按钮图标和实际状态相反。
             if (replayWindow != null) { toggleReplayPause(); return@setOnClickListener }
             if (paused) {
-                player.resume(); paused = false; btnPlayPause.setImageResource(R.drawable.ic_pause)
+                session.resume(); paused = false; btnPlayPause.setImageResource(R.drawable.ic_pause)
             } else {
-                player.pause(); paused = true; btnPlayPause.setImageResource(R.drawable.ic_play)
+                session.pause(); paused = true; btnPlayPause.setImageResource(R.drawable.ic_play)
             }
         }
 
@@ -574,7 +630,7 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
         val vlcHold = runCatching {
             ::player.isInitialized && player.engineKey() == "vlc" && !paused
         }.getOrDefault(false)
-        if (vlcHold) runCatching { player.pause() }
+        if (vlcHold) runCatching { session.pause() }
 
         findViewById<View>(R.id.bottomTabs)?.visibility = if (on) View.GONE else View.VISIBLE
         // 全屏时连频道名标题也藏掉——用户要的是"只剩画面"
@@ -625,7 +681,7 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
         // 提前到布局落定（120ms 的重算之后）即可，让重挂在**正在播**的流上发生。
         if (vlcHold) {
             findViewById<View>(R.id.videoBox)?.postDelayed({
-                runCatching { if (::player.isInitialized) player.resume() }
+                runCatching { if (::player.isInitialized) session.resume() }
                 android.util.Log.i(TAG, "全屏过渡完成，恢复 VLC 播放（避免 pts_delay 追帧卡顿）")
             }, 150)
         }
@@ -850,7 +906,7 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
             if (sv != null && sv.isValid) {
                 player.attach(sv, findViewById(R.id.videoBox))
                 // resume() 才是「继续播」；play() 是「换台播放」，签名不同
-                if (!paused) player.resume()
+                if (!paused) session.resume()
             }
         }
     }
@@ -993,7 +1049,7 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
             // 关键：如果服务里的播放器**已经在播这个台**（退后台再回来、
             // 或者 Activity 被重建），只接上就行，不要重新拉流——
             // 否则 Service 保活省下的时间会全部赔回去。
-            if (player.playingChannelId == last.id && player.isPlaying) {
+            if (sessionChannelId() == last.id && session.state == SessionState.Playing) {
                 android.util.Log.i(TAG, "播放器已在播 ${last.name}，直接接上，不重新拉流")
                 currentChannel = last
                 playName.text = last.name
@@ -1194,9 +1250,11 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
                         }
                         playRoute.text = if (proxyUrl != null) "内置源（本地代理）" else "内置源（直连）"
                         player.directMode = proxyUrl == null
-                        player.play(
-                            ch.id, line, mapOf("User-Agent" to "qqlive"),
-                            app.prefs.engine, bustCache = false,
+                        // 内置源：不走缓存（bustCache 恒 false），与电视端同一接法
+                        session.play(
+                            PlaySource.Builtin(
+                                ch.id, line, mapOf("User-Agent" to "qqlive"), app.prefs.engine,
+                            ),
                         )
                         val local = epgIdOf(ch).takeIf { it.isNotBlank() }?.let { app.epg.programsFor(it) }
                         programs = local?.map {
@@ -1217,7 +1275,11 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
         if (directUrl != null) {
             // 地址是客户端自己从源 m3u 里解析出来的
             playRoute.text = "客户端直连（本地解析）" + uaLine(com.litv.tv.data.M3uClient.headersOf(ch.id))
-            player.play(ch.id, directUrl, com.litv.tv.data.M3uClient.headersOf(ch.id), app.prefs.engine)
+            session.play(
+                PlaySource.Local(
+                    ch.id, directUrl, com.litv.tv.data.M3uClient.headersOf(ch.id), app.prefs.engine,
+                ),
+            )
             // ★ 这里 return 会跳过下面那段"本地节目单优先"的加载，
             //   于是 programs 一直是空的 → 界面永远「暂无节目单」。
             //   客户端模式下必须在这里自己把节目单填上。
@@ -1251,7 +1313,9 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
             android.util.Log.i(TAG, "缓存起播 ${ch.name}，签名还剩 ${cached!!.expires - nowSec}s")
             playRoute.text = (if (cached.mode == "direct") "服务端签名直连（缓存地址）" else "服务端中转（缓存地址）") +
                 " · " + (if (cached.ua.isBlank()) "默认 UA" else "UA: " + cached.ua.take(30))
-            player.play(ch.id, app.api.absolute(cached.url), cached.headers, app.prefs.engine)
+            session.play(
+                PlaySource.Cached(ch.id, app.api.absolute(cached.url), cached.headers, app.prefs.engine),
+            )
         }
 
         app.api.play(
@@ -1279,9 +1343,9 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
 
                 if (!cacheUsable) {
                     // 没有可用缓存：现在才起播
-                    player.play(ch.id, absUrl, headers, app.prefs.engine)
+                    session.play(PlaySource.Remote(ch.id, absUrl, headers, app.prefs.engine))
                 }
-                app.api.heartbeat(ch.id, "playing")
+                // 心跳不在这里发：它挂在会话状态上（见 session.listener 里进 Playing 那段）。
             },
             onErr = { msg ->
                 // 缓存已经起播时不要把错误糊上去打断用户
@@ -1655,7 +1719,10 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
             loading.visibility = View.VISIBLE
             playRoute.text = "内置源回看（本地代理）"
             player.directMode = false
-            player.play(ch.id, url, mapOf("User-Agent" to "qqlive"), app.prefs.engine, bustCache = false)
+            // 内置源回看走的是本地代理生成的 m3u8，来源仍记内置源（同电视端 openYspReplay）
+            session.play(
+                PlaySource.Builtin(ch.id, url, mapOf("User-Agent" to "qqlive"), app.prefs.engine),
+            )
             enterReplay(ch, ReplayWindow(((endSec - startSec) * 1000L).coerceAtLeast(1L), title), 0L)
             return
         }
@@ -1671,9 +1738,11 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
                 playHint.visibility = View.GONE
                 loading.visibility = View.VISIBLE
                 playRoute.text = "服务端时移（回看）"
-                player.play(
-                    ch.id, app.api.absolute(info.url),
-                    mapOf("User-Agent" to LitvUA.ANDROID), app.prefs.engine,
+                session.play(
+                    PlaySource.Timeshift(
+                        ch.id, app.api.absolute(info.url),
+                        mapOf("User-Agent" to LitvUA.ANDROID), app.prefs.engine,
+                    ),
                 )
                 val minutes = (info.availableSeconds + 59) / 60
                 enterReplay(
@@ -1778,10 +1847,10 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
         val head = replayHead ?: return
         if (replayWindow == null) return
         if (paused) {
-            head.resume(now()); player.resume(); paused = false
+            head.resume(now()); session.resume(); paused = false
             btnPlayPause.setImageResource(R.drawable.ic_pause); rbPlay.text = "暂停"
         } else {
-            head.pause(now()); player.pause(); paused = true
+            head.pause(now()); session.pause(); paused = true
             btnPlayPause.setImageResource(R.drawable.ic_play); rbPlay.text = "继续"
         }
         refreshReplayBar()
@@ -1829,7 +1898,10 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
         }
     }
 
-    override fun onPrepared(width: Int, height: Int) = Unit
+    override fun onPrepared(width: Int, height: Int) {
+        // 会话记账：地址已交给内核（纯记账，不改行为）
+        session.onEngineStarted()
+    }
 
     private fun loadReminders() {
         reservedStarts.clear()
@@ -1845,6 +1917,9 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
         window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         loading.visibility = View.GONE
         playHint.visibility = View.GONE
+        // 会话记账：首帧真的出来了。心跳挂在「进 Playing」那一刻（见 session.listener），
+        // 所以必须有这一句，否则状态机永远停在 Starting，一次心跳都不会发。
+        if (session.state != SessionState.Playing) session.onFirstFrame()
         // 只在**这个台第一次出画面**时闪一下控件。
         // 以前每次进 playing 都闪：缓冲卡一下、重连一次就冒出一条控件，
         // 看着像界面在抽搐。
@@ -1972,7 +2047,7 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
         // 它的 id 在解析结果里不存在，拿去重启会永远停在「正在解析频道地址…」。
         val hasUrl = { ch: Channel -> com.litv.tv.data.M3uClient.urlOf(ch.id) != null }
         val target = currentChannel?.takeIf(hasUrl)
-            ?: all.firstOrNull { it.id == player.playingChannelId && hasUrl(it) }
+            ?: all.firstOrNull { it.id == sessionChannelId() && hasUrl(it) }
             ?: all.firstOrNull(hasUrl)
             ?: currentChannel
             ?: all.firstOrNull()
@@ -2056,7 +2131,7 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
         // ★ 设置页的「播放内核 / 解码方式」只写 prefs、不重建播放器（bindCycle），
         //   所以改完回到这里必须自己比对一次，否则用户以为改了、其实当前台没变。
         //   只比对"本次起播实际用的值"，不同才重起，避免每次回到前台都重连。
-        if (::player.isInitialized && player.playingChannelId > 0 &&
+        if (::player.isInitialized && sessionChannelId() > 0 &&
             (appliedEngine != app.prefs.engine || appliedDecode != app.prefs.decode)
         ) {
             android.util.Log.i(
@@ -2104,8 +2179,8 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
         pausedAtMs = 0L
         val ch = currentChannel ?: return
         if (paused) return
-        if (ch.id != player.playingChannelId) return
-        runCatching { player.resume() }
+        if (ch.id != sessionChannelId()) return
+        runCatching { session.resume() }
     }
 
     override fun onPause() {
@@ -2124,7 +2199,7 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
         // 回前台时间码就会凭空往前跳一段（暂停期间画面是停的）。
         replayHead?.pause(now())
         android.util.Log.i(TAG, "onPause: 记录后台起点")
-        player.pause()
+        session.pause()
     }
 
     override fun onDestroy() {
@@ -2137,7 +2212,9 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
         if (::player.isInitialized) {
             player.callback = null
             player.attach(null, null)
-            runCatching { player.release() }
+            // 释放也走会话（终态只会真正下发一次），释放完把心跳闸门归零。
+            runCatching { session.release() }
+            heartbeatGate.reset()
         }
     }
 

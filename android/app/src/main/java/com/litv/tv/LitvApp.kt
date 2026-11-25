@@ -125,6 +125,41 @@ class LitvApp : Application() {
             override fun onActivityDestroyed(a: android.app.Activity) {}
         })
 
+        // 屏幕熄灭就停播 —— 电视上按电源键**只关面板**，系统不会把前台 Activity
+        // 推到后台（2026-11-25 实测：`mWakefulness=Asleep`、`Display Power: state=OFF`，
+        // 而 `ResumedActivity` 仍是 `PlayerActivity`），所以 onPause 与上面那条
+        // 「所有 Activity 都不在前台」的兜底都不会触发，表现就是「屏幕黑了声音还在」。
+        // 亮屏只恢复这次因息屏被暂停的那些（用户自己按的暂停、息屏后才起播的都不动）。
+        val screenReceiver = object : android.content.BroadcastReceiver() {
+            override fun onReceive(c: android.content.Context?, i: android.content.Intent?) {
+                when (i?.action) {
+                    android.content.Intent.ACTION_SCREEN_OFF -> {
+                        // 默认停播；偏好设成「无动作」的人才继续放声音。
+                        val action = com.litv.tv.player.ScreenOffPlan.of(prefs.screenOffAction)
+                        if (action == com.litv.tv.player.ScreenOffAction.None) {
+                            Log.i(TAG, "屏幕熄灭，按设置不处理（息屏处理=无动作）")
+                            return
+                        }
+                        val n = com.litv.tv.player.LivePlayers.pauseAllForScreenOff()
+                        Log.i(TAG, "屏幕熄灭，暂停播放（命中 $n 个）")
+                    }
+                    android.content.Intent.ACTION_SCREEN_ON -> {
+                        val n = com.litv.tv.player.LivePlayers.resumeAfterScreenOn()
+                        if (n > 0) Log.i(TAG, "屏幕点亮，恢复播放（$n 个）")
+                    }
+                }
+            }
+        }
+        androidx.core.content.ContextCompat.registerReceiver(
+            this,
+            screenReceiver,
+            android.content.IntentFilter().apply {
+                addAction(android.content.Intent.ACTION_SCREEN_OFF)
+                addAction(android.content.Intent.ACTION_SCREEN_ON)
+            },
+            androidx.core.content.ContextCompat.RECEIVER_NOT_EXPORTED
+        )
+
         // libmpv 的可用性放到后台再查：
         // MPVLib.available 会触发 System.loadLibrary("mpv")，在 onCreate 里同步做
         // 会拖慢冷启动（该 ABI 没有 .so 时还要抛一次异常）。启动日志晚一行无所谓。

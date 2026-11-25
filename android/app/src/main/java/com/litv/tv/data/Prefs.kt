@@ -206,6 +206,16 @@ class Prefs(ctx: Context) {
         set(v) = sp.edit().putString(K_DECODE, v).apply()
 
     /**
+     * 息屏时怎么处理播放：`pause`（默认，停播、亮屏接着播）或 `none`（无动作）。
+     *
+     * 默认必须是 pause —— 电视/手机的息屏不会走 Activity 生命周期，没有这条
+     * 兜底就是「屏幕黑了声音还在响」。留 `none` 是给「息屏当背景音」的人。
+     */
+    var screenOffAction: String
+        get() = sp.getString(K_SCREEN_OFF_ACTION, SCREEN_OFF_PAUSE) ?: SCREEN_OFF_PAUSE
+        set(v) = sp.edit().putString(K_SCREEN_OFF_ACTION, v).apply()
+
+    /**
      * 频道列表来源：`server`（默认，服务端下发）或 `client`（客户端自己拉 m3u 解析）。
      *
      * 默认必须是 server —— 服务端下发是现状且更稳；客户端解析要用户显式打开，
@@ -393,6 +403,9 @@ class Prefs(ctx: Context) {
         const val K_SHOW_PLAY_STATUS = "show_play_status"
         const val K_ENGINE = "engine"
         const val K_DECODE = "decode"
+        const val K_SCREEN_OFF_ACTION = "screen_off_action"
+        const val SCREEN_OFF_PAUSE = "pause"
+        const val SCREEN_OFF_NONE = "none"
         const val K_CHANNEL_SOURCE = "channel_source"
         const val K_DL_KEY = "dl_key"
         const val K_BUFFER = "buffer_ms"

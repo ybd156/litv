@@ -28,6 +28,7 @@ class SettingsActivity : AppCompatActivity() {
 
     private lateinit var valueEngine: TextView
     private lateinit var valueDecode: TextView
+    private lateinit var valueScreenOff: TextView
     private lateinit var valueBuffer: TextView
     private lateinit var valueLiveOffset: TextView
     private lateinit var valueExportLog: TextView
@@ -79,6 +80,7 @@ class SettingsActivity : AppCompatActivity() {
 
         valueEngine = findViewById(R.id.valueEngine)
         valueDecode = findViewById(R.id.valueDecode)
+        valueScreenOff = findViewById(R.id.valueScreenOff)
         valueBuffer = findViewById(R.id.valueBuffer)
         valueLiveOffset = findViewById(R.id.valueLiveOffset)
         valueExportLog = findViewById(R.id.valueExportLog)
@@ -107,6 +109,14 @@ class SettingsActivity : AppCompatActivity() {
         }
         bindCycle(R.id.rowDecode, valueDecode, decodes, app.prefs.decode) { v ->
             app.prefs.decode = v; labelDecode(v)
+        }
+        // 息屏处理：默认停播（电视按电源键只关面板，不走生命周期，不处理就会「息屏还在响」）
+        bindCycle(R.id.rowScreenOff, valueScreenOff, listOf("停播", "无动作"),
+            com.litv.tv.player.ScreenOffPlan.label(
+                com.litv.tv.player.ScreenOffPlan.of(app.prefs.screenOffAction)
+            )) { v ->
+            app.prefs.screenOffAction = com.litv.tv.player.ScreenOffPlan.valueOf(v)
+            valueScreenOff.text = v
         }
         bindCycle(R.id.rowBuffer, valueBuffer, buffers.map { it.toString() },
             app.prefs.bufferMs.toString()) { v ->
@@ -350,6 +360,9 @@ class SettingsActivity : AppCompatActivity() {
     private fun refreshAllLabels() {
         labelEngine(app.prefs.engine)
         labelDecode(app.prefs.decode)
+        valueScreenOff.text = com.litv.tv.player.ScreenOffPlan.label(
+            com.litv.tv.player.ScreenOffPlan.of(app.prefs.screenOffAction)
+        )
         labelBuffer(app.prefs.bufferMs)
         labelLiveOffset(app.prefs.liveOffsetMs)
         labelAspect(app.prefs.aspect)

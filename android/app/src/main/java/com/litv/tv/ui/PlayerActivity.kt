@@ -2379,6 +2379,14 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
                 cycleRow(row, "画面比例", listOf("auto", "16:9", "4:3", "fill"), app.prefs.aspect) { v ->
                     app.prefs.aspect = v
                 }
+                // 息屏处理：电视按电源键只关面板，不走生命周期，所以要单独给一档
+                // 「息屏还放声音」的选择；默认停播。
+                val screenOffLabel = com.litv.tv.player.ScreenOffPlan.label(
+                    com.litv.tv.player.ScreenOffPlan.of(app.prefs.screenOffAction)
+                )
+                cycleRow(row, "息屏处理", listOf("停播", "无动作"), screenOffLabel) { v ->
+                    app.prefs.screenOffAction = com.litv.tv.player.ScreenOffPlan.valueOf(v)
+                }
             }
             "interact" -> {
                 subMenuTitle?.visibility = android.view.View.GONE
@@ -2699,6 +2707,21 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         if (::player.isInitialized) player.replayMode = false
         main.removeCallbacks(replayTicker)
         hideReplayBar()
+    }
+
+    /**
+     * 暂停太久再回来：直播已经往前走了，别续播旧缓冲。
+     *
+     * 由 `PlayerManager.resume()` 在「暂停超过 30 秒且不是回看」时调用。
+     * 这里用 `playChannel` 重新起播当前台 —— 走的是同一条正常起播链路
+     * （重新取地址、重新绑 Surface、会话记账），比在内核里 seek 到边缘更可靠：
+     * 内置源的分片地址带 15 秒签名，旧缓冲里的那些早就过期了。
+     */
+    override fun onResumeStale(): Boolean {
+        val ch = current ?: return false
+        Log.i(TAG, "暂停已久，重新起播回到直播边缘：${ch.name}(${ch.id})")
+        playChannel(ch)
+        return true
     }
 
     /**

@@ -21,7 +21,7 @@ import com.litv.tv.data.Prefs
 class PlayerManager(
     private val context: Context,
     private val prefs: Prefs,
-) {
+) : ScreenPausable {
 
     interface Callback {
         /** 内核切换了（OSD 上可以提示"正在用 mpv 播放"）。 */
@@ -52,6 +52,16 @@ class PlayerManager(
          * 「播放出错：所有内核均失败…… 直播流结束」，把一个正常结束报成故障。
          */
         fun onReplayFinished() = Unit
+
+        /**
+         * 暂停太久，直播已经往前走了：请上层重连到直播边缘。
+         *
+         * 返回 true 表示上层已经接手（自己重新起播），播放器就不要再
+         * `resume()` 续播旧缓冲了——续播的结果是先放一段旧内容、
+         * 再撞 `BEHIND_LIVE_WINDOW` 跳边缘，等于让用户看两次跳变。
+         * 返回 false（默认）时播放器照旧续播，行为与以前完全一致。
+         */
+        fun onResumeStale(): Boolean = false
     }
 
     var callback: Callback? = null
@@ -203,6 +213,9 @@ class PlayerManager(
     private var lastPosChangeAt = 0L
     private var stallRecovered = 0
     private var userPaused = false
+
+    /** 进入暂停的时刻（elapsedRealtime），0 = 没暂停。用于判断「停太久该重回直播边缘」。 */
+    private var pausedAtMs = 0L
 
     /** 上一次判定卡死的时刻（elapsedRealtime），用于"稳定播放后把恢复计数归零"。 */
     private var lastStallAt = 0L
@@ -1581,10 +1594,11 @@ class PlayerManager(
         EngineKind.AVS3 -> MpvEngine(avs3Mode = true)
     }
 
-    fun pause() {
+    override fun pause() {
         // 用户切走（Activity onPause）时暂停，这时位置当然不前进——
         // 看门狗必须停掉，否则会误判成卡死并自动重启播放。
         userPaused = true
+        if (pausedAtMs == 0L) pausedAtMs = android.os.SystemClock.elapsedRealtime()
         stopStallWatchdog()
         current?.pause()
     }
@@ -1614,7 +1628,21 @@ class PlayerManager(
     /** 当前内容总时长（毫秒），-1 = 拿不到。 */
     fun contentDurationMs(): Long = runCatching { current?.durationMs() ?: -1L }.getOrDefault(-1L)
 
-    fun resume() {
+    override fun resume() {
+        // 停久了就别「接着播」：直播已经往前走了，续播只会先放一段旧内容
+        // 再撞 BEHIND_LIVE_WINDOW 跳边缘（电视实测如此）。交给上层重连到直播边缘，
+        // 回看不受影响（回看本来就该从暂停处接着看，所以 replayMode 时不判）。
+        val pausedMs = if (pausedAtMs > 0) android.os.SystemClock.elapsedRealtime() - pausedAtMs else 0L
+        pausedAtMs = 0L
+        if (!replayMode && prepared && ScreenOffPlan.onScreenOn(pausedMs) == ScreenOffPlan.ResumeAction.RejoinLive) {
+            val handled = runCatching { callback?.onResumeStale() == true }.getOrDefault(false)
+            if (handled) {
+                Log.i(TAG, "暂停 ${pausedMs / 1000}s 后回到直播边缘（重连，不续播）")
+                com.litv.tv.data.PlayLog.w(TAG, "暂停 ${pausedMs / 1000}s 后回到直播边缘（重连，不续播）")
+                userPaused = false
+                return
+            }
+        }
         userPaused = false
         current?.play()
         if (prepared) startStallWatchdog()

@@ -275,6 +275,13 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
                     Log.i(TAG, "心跳：频道 ${src.heartbeatChannelId}（来源 ${src.label}）")
                     app.api.heartbeat(src.heartbeatChannelId, "playing") { hb -> onChannelsVersion(hb.channelsVersion) }
                 }
+                // 回看真的播起来了 → 清掉这个台的「失败冷却」，角标恢复。
+                // 以「进 Playing」为判据而不是「点了回看」：点了也可能立刻失败。
+                if (to == SessionState.Playing && replayWindow != null) {
+                    val id = replayOrigin?.channel?.id ?: current?.id ?: 0L
+                    com.litv.tv.data.ReplayFailureMemo.clear(id)
+                    applyEpgCapability()
+                }
             }
         }
     }
@@ -1123,17 +1130,35 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         )
     }
 
+    /**
+     * 记一次「回看失败」：冷却期内不再给这个台画「回看」角标。
+     *
+     * 判据只覆盖「部署方式支不支持」是不够的——央视频回看 CDN 抽风时角标照画、
+     * 点进去必失败，用户只能反复进死路。这里把「刚失败过」也纳入显示判据，
+     * 成功播一次即清除（见 session.listener 进 Playing 那段）。
+     */
+    private fun noteReplayFailure(why: String) {
+        val id = replayOrigin?.channel?.id ?: current?.id ?: 0L
+        com.litv.tv.data.ReplayFailureMemo.markFailed(id, System.currentTimeMillis())
+        Log.w(TAG, "回看失败记账：ch=$id（$why），${com.litv.tv.data.ReplayFailureMemo.COOLDOWN_MS / 60000} 分钟内不再画这个台的回看角标")
+        applyEpgCapability()
+    }
+
     /** 按当前节目单所属频道，决定节目行要不要画「回看」。 */
     private fun applyEpgCapability() {
+        // 播放层也会调它（回看失败/成功时刷新角标），那时面板可能一次都没打开过。
+        if (!::epgAdapter.isInitialized) return
         // ★ 只按 id 判，不要查 allChannels：client_parse 模式下
         //   `allChannels = parsed.channels`（不含央视频），内置源频道查不到，
         //   一查空就把内置源本来就有的「回看」全藏了——真机上就是这么退化的。
         val id = epgProgramsChannelId
-        val capable = id == 0L || com.litv.tv.data.ReplayCapability.canReplay(
+        val base = id == 0L || com.litv.tv.data.ReplayCapability.canReplay(
             isBuiltin = com.litv.tv.data.YspClient.isYspChannel(id),
             serverVersion = serverVersion,
         )
-        Log.i(TAG, "回看角标：ch=$id server=$serverVersion capable=$capable")
+        val cooling = com.litv.tv.data.ReplayFailureMemo.isCoolingDown(id, System.currentTimeMillis())
+        val capable = base && !cooling
+        Log.i(TAG, "回看角标：ch=$id server=$serverVersion base=$base cooling=$cooling capable=$capable")
         epgAdapter.setReplayCapable(capable)
     }
 
@@ -2671,11 +2696,13 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
                 Log.w(TAG, "回看中途中断（${secs}s / ${total}s），第 $replayRetries 次按当前位置重开")
                 if (!reopenReplayAt(pos)) {
                     Log.w(TAG, "回看重开失败（来源不支持按位置重开），回到直播")
+                    noteReplayFailure("重开失败")
                     backToLive("回看中断，已回到直播")
                 }
             }
             ReplayEnd.GiveUp -> {
                 Log.w(TAG, "回看连续中断 $replayRetries 次，回到直播")
+                noteReplayFailure("连续中断")
                 backToLive("回看中断，已回到直播")
             }
         }
@@ -3914,6 +3941,17 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
 
     override fun onError(message: String) {
         hideLoading()
+
+        // 回看失败不走进直播那套「换线路 / 重试直连」：
+        // 内置源回看只有「本地代理直连央视频 playback CDN」这一条链路，没有可换的线路；
+        // 留在「播放出错 · 按 OK 重试」上，用户按一次还是同一个死地址，只会更困惑。
+        // 这里直接说人话并退回直播，同时记一笔冷却，10 分钟内不再画这个台的回看角标。
+        if (replayWindow != null) {
+            Log.w(TAG, "回看起播失败，退回直播（详情见上方引擎日志）")
+            noteReplayFailure("起播失败")
+            backToLive("回看暂时不可用，已回到直播")
+            return
+        }
 
         // 恢复顺序（真机事故后调整过）：
         //   ① 先换同一台的下一条线路 ② 再考虑重试直连 ③ 都不行才提示

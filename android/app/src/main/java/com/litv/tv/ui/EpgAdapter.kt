@@ -35,6 +35,21 @@ class EpgAdapter : RecyclerView.Adapter<EpgAdapter.VH>() {
     /** 已预约的节目起点，用来把「预约」显示成「已预约」。 */
     private var reserved: Set<Long> = emptySet()
 
+    /**
+     * 这个台能不能回看。
+     *
+     * 不能回看的台（例如边缘部署下的 MCP/自建源）**不画「回看」角标**：
+     * 以前每行都画，点下去必然失败，而失败提示又被展开的面板压住，
+     * 用户看到的就是"点了没反应"。判断逻辑在 PlayerActivity.replayCapableOf。
+     */
+    private var replayCapable = true
+
+    fun setReplayCapable(capable: Boolean) {
+        if (replayCapable == capable) return
+        replayCapable = capable
+        notifyDataSetChanged()
+    }
+
     fun setReserved(starts: Set<Long>) {
         reserved = starts.toSet()
         notifyDataSetChanged()
@@ -74,7 +89,9 @@ class EpgAdapter : RecyclerView.Adapter<EpgAdapter.VH>() {
         holder.title.alpha = if (isNow) 1f else 0.88f
 
         // ---- 动作：正在播 / 回看 / 预约
-        holder.action.visibility = View.VISIBLE
+        // 已播但该台不支持回看：不画角标（留空），别给一个点了必然失败的按钮
+        holder.action.visibility =
+            if (isPast && !replayCapable) View.GONE else View.VISIBLE
         when {
             isNow -> {
                 holder.action.text = "正在播"

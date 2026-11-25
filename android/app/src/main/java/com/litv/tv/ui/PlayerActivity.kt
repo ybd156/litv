@@ -1093,9 +1093,35 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
      *
      * 现在：正在播 -> 提示；已播完 -> 直接回看；未播 -> 直接预约（再按取消）。
      */
+    /**
+     * 这个台的已播节目能不能回看。
+     *
+     * 内置源（央视频）：客户端本地代理直连回看 CDN，任何部署都能回看。
+     * 其它源：只能走服务端 `/tv/timeshift`，边缘实例（`server.version=edge`）没有这个接口，
+     * 点了必然失败——所以干脆不画按钮，别让用户对着一个死按钮点。
+     * 服务端版本还没拿到时按「能」处理，避免刚进面板就用错结论把按钮藏起来。
+     */
+    private fun replayCapableOf(ch: Channel?): Boolean {
+        if (ch == null) return false
+        return com.litv.tv.data.ReplayCapability.canReplay(
+            isBuiltin = com.litv.tv.data.YspClient.isYspChannel(ch.id),
+            serverVersion = serverVersion,
+        )
+    }
+
+    /** 按当前节目单所属频道，决定节目行要不要画「回看」。 */
+    private fun applyEpgCapability() {
+        val ch = allChannels.firstOrNull { it.id == epgProgramsChannelId }
+            ?: current?.takeIf { it.id == epgProgramsChannelId }
+        epgAdapter.setReplayCapable(replayCapableOf(ch))
+    }
+
     private fun onProgramAction(p: com.litv.tv.data.EpgProgram) {
         val ch = current ?: return
         val now = System.currentTimeMillis() / 1000
+        // 点了没反应时唯一能分清「没点到」和「点了但走不到起播」的线索：
+        // 面板开着时 switchTip 被浮层压住看不见，只能靠这行日志。
+        Log.i(TAG, "点节目：${p.title} ${p.startAt}..${p.endAt} now=$now ch=${ch.name}(${ch.id})")
         // 记下当前焦点在节目列的位置：预约后要重新提交列表（星标/已预约要刷新），
         // 提交会清掉焦点，不还回去的话焦点会跳出节目列、落到日期列上。
         val keepPos = run {
@@ -1107,6 +1133,13 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
 
             p.endAt in 1 until now -> {
                 // 已播完：直接回看
+                if (!replayCapableOf(ch)) {
+                    // 按钮已经不画了，但键盘仍能聚焦到这一行，所以这里再兜一层：
+                    // 给一句真话，不要静默发一个注定失败的请求。
+                    Log.i(TAG, "该台不支持回看，忽略：${ch.name}(${ch.id}) server=$serverVersion")
+                    toastTip("这个台不支持回看")
+                    return
+                }
                 openTimeshiftFor(ch, p)
             }
 
@@ -1177,6 +1210,7 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         // 记下服务端当前的频道指纹作为基线：之后心跳里发现不一样才重拉，
         // 避免每次心跳都白拉一次列表。
         if (b.channelsVersion.isNotBlank()) knownChannelsVersion = b.channelsVersion
+        serverVersion = b.server.version
         lastListRefreshAt = System.currentTimeMillis()
         allChannels = withBuiltin(b.channels)
         favoriteIds.clear()
@@ -2947,6 +2981,7 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
 
     private fun refreshEpgColumn() {
         epgTitle.text = epgTitleText()
+        applyEpgCapability()
         epgAdapter.submit(filteredPrograms())
         epgAdapter.setReserved(reservedStarts)
         val pos = epgAdapter.currentPosition()
@@ -3062,6 +3097,9 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
             panelRightGap.layoutParams = it
         }
         epgTitle.text = epgTitleText()
+        // 展开节目单时也要按这个台的「能不能回看」决定按钮画不画：
+        // 这条路径没走 refreshEpgColumn（数据已经在手，只是重新提交一次）。
+        applyEpgCapability()
         epgAdapter.submit(filteredPrograms())
         val pos = epgAdapter.currentPosition()
         if (pos >= 0) epgList.scrollToPosition(pos)
@@ -4024,6 +4062,16 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
 
     /** 服务端频道列表指纹（bootstrap 时记下，心跳里比对） */
     private var knownChannelsVersion = ""
+
+    /**
+     * 服务端版本（bootstrap 的 `server.version`）。
+     *
+     * 用来判断「这个台的节目能不能回看」：内置源（央视频）由客户端本地代理直连回看 CDN，
+     * 任何部署都有；其它源只能靠服务端时移接口，而边缘实例（`version=edge`）不提供该接口。
+     * 以前不做判断，所有台的已播节目都画「回看」，点下去必然失败，
+     * 失败提示又被展开的面板压住 —— 看到的就是"点了没反应"。
+     */
+    private var serverVersion = ""
 
     /** 上次拉列表的时间（毫秒）。打开面板时据此判断要不要先刷一次。 */
     private var lastListRefreshAt = 0L

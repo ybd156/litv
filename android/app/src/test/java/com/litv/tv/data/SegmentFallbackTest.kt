@@ -139,4 +139,17 @@ class SegmentFallbackTest {
         assertEquals(0, SegmentFallback.linesTimeoutMs(-5))
         assertNotNull(SegmentFallback.perLineMs(SegmentFallback.MIN_LINE_MS, 1))
     }
+
+    /**
+     * 内置源频道号是负数（-1001/-1002…），它们的线路列表最全（playurl + backurl_list）。
+     * 判据写成 `> 0` 会把内置源挡在分片换线之外，一次 403 只能等清单轮换（6~10 秒），
+     * 表现就是「播着播着卡一下」。
+     */
+    @Test
+    fun `负数的内置源频道也能走分片换线，只有 0 才是非法`() {
+        assertTrue(SegmentFallback.canFallback(-1001L))
+        assertTrue(SegmentFallback.canFallback(-1002L))
+        assertTrue(SegmentFallback.canFallback(8831L))
+        assertEquals(false, SegmentFallback.canFallback(0L))
+    }
 }

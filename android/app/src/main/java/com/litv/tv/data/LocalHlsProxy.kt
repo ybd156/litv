@@ -985,7 +985,10 @@ object LocalHlsProxy {
      */
     private fun alternateLineSegment(index: Int?): ByteArray? {
         val id = curChannelId
-        if (id <= 0) return null
+        // ★ 判据必须是 != 0：内置源频道号是负数（-1001…），它们的线路列表最全。
+        //   旧判据 `id <= 0` 把内置源挡在门外，一次分片 403 只能等清单轮换（6~10 秒），
+        //   表现就是「播着播着卡一下」。
+        if (!SegmentFallback.canFallback(id)) return null
         val idx = index ?: return null
         val ch = runCatching { YspClient.channelOf(id) }.getOrNull() ?: return null
         val deadline = System.currentTimeMillis() + SegmentFallback.TOTAL_BUDGET_MS

@@ -91,6 +91,16 @@ object SegmentFallback {
         return null
     }
 
+    /**
+     * 这个频道号能不能做分片级换线。
+     *
+     * ★ 判据是 `!= 0`，**不是 `> 0`**：内置源（央视频）的频道号是负数（-1001/-1002…），
+     *   而它们的线路列表恰恰最全（playurl + backurl_list）。旧判据写成 `<= 0` 时，
+     *   内置源一次分片 403 换线直接被跳过，只能等下一次清单轮换（约 6~10 秒）才恢复，
+     *   表现就是「播着播着画面卡一下」。
+     */
+    fun canFallback(channelId: Long): Boolean = channelId != 0L
+
     /** 备线下标：跳过当前线路；单线时为空。 */
     fun targets(lineCount: Int, currentLine: Int): List<Int> =
         if (lineCount <= 1) emptyList() else (0 until lineCount).filter { it != currentLine }

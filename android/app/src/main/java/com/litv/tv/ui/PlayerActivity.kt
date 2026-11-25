@@ -515,6 +515,13 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
                     // 设置开着的时候点一下空白（比如二级面板右侧那片），
                     // 触摸穿透到 root，直接把 OSD 呼出来了。
                     if (panelVisible || menuVisible) return false
+                    // 回看模式下点屏幕要出「回看控制条」，不是频道信息条。
+                    // 原来这里不分模式，回看里点一下就弹出 OSD（频道名/内核/线路），
+                    // 用户以为「点回看没进控制界面」。
+                    if (replayWindow != null) {
+                        if (replayBarVisible) hideReplayBar() else showReplayBar()
+                        return true
+                    }
                     if (osdVisible) hideOsd() else showOsd()
                     return true
                 }

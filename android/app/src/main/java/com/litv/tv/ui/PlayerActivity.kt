@@ -1037,7 +1037,7 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         exitPanelForReplay()
         // 记住"这一段怎么重新打开"：VLC 一个分片抖动就报 ENDED，
         // 那时要靠它按播放头位置把同一段回看接上（见 onReplayFinished）。
-        replayOrigin = ReplayOrigin(ch, start, end, p?.title ?: "回看")
+        replayOrigin = ReplayOrigin(ch, start, end, "${ch.name} · ${p?.title ?: "回看"}")
         replayRetries = 0
         enterReplay(
             ch,

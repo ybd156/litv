@@ -136,6 +136,9 @@ class PlayerManager(
     /** 直播流意外结束后的同线路重连次数（换台清零）。 */
     private var endedRetries = 0
 
+    /** 本次 play() 的起始时刻，用来丢掉「上一个媒体」迟到的 ENDED。 */
+    private var playStartedAt = 0L
+
     /** 网络类失败（DNS/连接）的重试次数：换台时清零。 */
     private var netRetry = 0
 
@@ -1111,6 +1114,7 @@ class PlayerManager(
         retried = 0
         // 换台：直播流结束的重连额度也重新给满
         endedRetries = 0
+        playStartedAt = android.os.SystemClock.elapsedRealtime()
         // 换台重新给一次"画面复检"的重建额度，避免上一个台用光后拖累下一个台
         vlcFrameRetried = false
         // 网络类失败的重试额度同理：上一个台把额度用光，不该拖累下一个台
@@ -1450,6 +1454,17 @@ class PlayerManager(
                 //   · 起播预算是起播阶段计时，早就用完了。
                 main.post {
                     if (released || userPaused) return@post
+                    // ★ 起播瞬间的 ENDED 是**上一个媒体**的残留事件。
+                    //
+                    // 换台 / 进回看时我们会 stop 掉旧媒体，libvlc 的 EndReached 会晚一步到达；
+                    // 如果它在新的 play() 之后才被投递，就会被当成「新流已经结束」。
+                    // 实测（模拟器 AVD litvtv，VLC 内核）：每次进回看都在 0s 收到 ENDED，
+                    // 于是「中途断→按位置重开」连跑两次、直接放弃回直播，节目一秒都没播。
+                    val sincePlay = android.os.SystemClock.elapsedRealtime() - playStartedAt
+                    if (sincePlay < ENDED_STALE_MS) {
+                        Log.i(TAG, "忽略起播 ${sincePlay}ms 内的 ENDED（疑似上一个媒体的残留）")
+                        return@post
+                    }
                     // 回看播完是**正常结束**：重连同一段回看只会从头再放一遍，
                     // 换内核也一样（VOD 已经到 ENDLIST 了）。交给上层切回直播。
                     if (replayMode) {
@@ -1703,6 +1718,15 @@ class PlayerManager(
 
         /** 复检的采样窗口：这段时间内已显示帧数增长不到 2 帧即视为没在出画。 */
         const val VLC_FRAME_SAMPLE_MS = 1000L
+
+        /**
+         * 起播后多久之内的 ENDED 判为「上一个媒体的残留事件」。
+         *
+         * 1.5 秒：真正的空清单/取流失败至少也要走完一次 HTTP 往返 + 解复用初始化，
+         * 而这个残留事件实测在 0~100ms 内到达；给到 1.5 秒既能盖住慢设备，
+         * 又不会把真的「秒失败」长期漏掉（起播预算与无数据看门狗仍在兜底）。
+         */
+        const val ENDED_STALE_MS = 1500L
 
         /**
          * 播放位置完全不变多久算卡死。

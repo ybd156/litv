@@ -109,5 +109,8 @@ class ReplayControlsTest {
         assertEquals("00:00", ClockText.fmt(-1L))
         assertEquals("05:00 / 30:00", ClockText.pair(300_000L, 1_800_000L))
         assertEquals("05:00 / --:--", ClockText.pair(300_000L, -1L))
+        // 总长跨过 1 小时，左边也要补齐位数，否则秒位错行（模拟器上就是 00:57 / 1:00:00）
+        assertEquals("00:00:57 / 01:00:00", ClockText.pair(57_000L, 3_600_000L))
+        assertEquals("01:02:03 / 02:02:00", ClockText.pair(3_723_000L, 7_320_000L))
     }
 }

@@ -125,7 +125,26 @@ object ClockText {
         return if (h > 0L) "$h:${two(m)}:${two(s)}" else "${two(m)}:${two(s)}"
     }
 
-    /** 进度条右侧：`已播 / 总长`。 */
-    fun pair(positionMs: Long, durationMs: Long): String =
-        "${fmt(positionMs)} / ${if (durationMs > 0L) fmt(durationMs) else "--:--"}"
+    /**
+     * 进度条右侧：`已播 / 总长`。
+     *
+     * 两边的位数必须一致：一段 1 小时的节目左右写成 `00:57 / 1:00:00`
+     * 时，两个数的秒位不在同一列，读起来像两个不相干的数字（真机上就是这个样子）。
+     * 所以总长跨过 1 小时后，已播也补成 `hh:mm:ss`。
+     */
+    fun pair(positionMs: Long, durationMs: Long): String {
+        if (durationMs <= 0L) return "${fmt(positionMs)} / --:--"
+        return if (durationMs >= 3_600_000L) {
+            "${wide(positionMs)} / ${wide(durationMs)}"
+        } else {
+            "${fmt(positionMs)} / ${fmt(durationMs)}"
+        }
+    }
+
+    /** 固定 `hh:mm:ss`，用于总长跨小时的场合。 */
+    private fun wide(ms: Long): String {
+        val total = ms.coerceAtLeast(0L) / 1000L
+        fun two(v: Long) = if (v < 10L) "0$v" else v.toString()
+        return "${two(total / 3600L)}:${two((total % 3600L) / 60L)}:${two(total % 60L)}"
+    }
 }

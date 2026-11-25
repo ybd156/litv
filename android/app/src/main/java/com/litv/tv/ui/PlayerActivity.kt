@@ -40,6 +40,8 @@ import com.litv.tv.player.PlaySource
 import com.litv.tv.player.PlaybackCoordinator
 import com.litv.tv.player.PlayerManager
 import com.litv.tv.player.ReplayClock
+import com.litv.tv.player.ReplayEnd
+import com.litv.tv.player.ReplayEndJudge
 import com.litv.tv.player.ReplaySteps
 import com.litv.tv.player.ReplayWindow
 import com.litv.tv.player.SessionState
@@ -134,6 +136,25 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
     private var replayBarVisible = false
     /** 回看里用户按了暂停（控制条按钮状态用）。 */
     private var replayPaused = false
+
+    /**
+     * 这段回看怎么重新打开（中途断了、或要跳到没法 seek 的位置时用）。
+     *
+     * 只有央视频（内置源）回看能按偏移重开：它的地址就是
+     * `/rp/<频道>/<起始秒>/<结束秒>.m3u8`，起始秒往前推一点就是"从那里开始"。
+     * 服务端时移是"最近 N 分钟"的滑动缓冲，没有可换算的起点，所以留 null。
+     */
+    private var replayOrigin: ReplayOrigin? = null
+
+    /** 已经重开过几次（限次，避免上游真挂时无限重连）。 */
+    private var replayRetries = 0
+
+    private data class ReplayOrigin(
+        val channel: Channel,
+        val startSec: Long,
+        val endSec: Long,
+        val title: String,
+    )
 
     /** 控制条刷新：500ms 够跟手，又不至于每帧都碰 UI。 */
     private val replayTicker = object : Runnable {
@@ -1014,6 +1035,10 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         // 起播是异步的，但窗口信息不依赖播放器——先挂上，
         // 起播失败时 clearReplay 会在下次换台时兜掉。
         exitPanelForReplay()
+        // 记住"这一段怎么重新打开"：VLC 一个分片抖动就报 ENDED，
+        // 那时要靠它按播放头位置把同一段回看接上（见 onReplayFinished）。
+        replayOrigin = ReplayOrigin(ch, start, end, p?.title ?: "回看")
+        replayRetries = 0
         enterReplay(
             ch,
             ReplayWindow(
@@ -2560,21 +2585,74 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         replayHead = null
         replayChannelId = 0L
         replayPaused = false
+        replayOrigin = null
+        replayRetries = 0
         if (::player.isInitialized) player.replayMode = false
         main.removeCallbacks(replayTicker)
         hideReplayBar()
     }
 
     /**
-     * 回看播到节目结尾。
+     * 回看收到 ENDED。
      *
-     * 不能走「播放出错」那条路：那时候屏幕上是「所有内核均失败…直播流结束」，
-     * 但用户看到的分明是节目播完了。切回直播，并且明确说一句发生了什么。
+     * 内核分不清「真播完」和「中途断了」：VLC 一个分片取流失败就直接报流结束
+     * （2026-11-25 实测 `Connection reset by peer` 一次，播了 16 秒就 ENDED，
+     * 窗口是一小时）。所以这里必须自己判：播放头到末尾才算播完，
+     * 否则按当前位置把同一段回看重开，限次。
      */
     override fun onReplayFinished() {
-        if (replayWindow == null) return
-        Log.i(TAG, "回看结束，切回直播")
-        backToLive("回看结束，已回到直播")
+        val win = replayWindow ?: return
+        val head = replayHead ?: return
+        val pos = head.positionMs
+        val secs = pos / 1000
+        val total = win.durationMs / 1000
+        when (ReplayEndJudge.decide(pos, win.durationMs, replayRetries)) {
+            ReplayEnd.Finished -> {
+                Log.i(TAG, "回看播到结尾（${secs}s / ${total}s），切回直播")
+                backToLive("回看结束，已回到直播")
+            }
+            ReplayEnd.Restart -> {
+                replayRetries++
+                Log.w(TAG, "回看中途中断（${secs}s / ${total}s），第 $replayRetries 次按当前位置重开")
+                if (!reopenReplayAt(pos)) {
+                    Log.w(TAG, "回看重开失败（来源不支持按位置重开），回到直播")
+                    backToLive("回看中断，已回到直播")
+                }
+            }
+            ReplayEnd.GiveUp -> {
+                Log.w(TAG, "回看连续中断 $replayRetries 次，回到直播")
+                backToLive("回看中断，已回到直播")
+            }
+        }
+    }
+
+    /**
+     * 从 [positionMs] 处把当前这段回看重新打开。
+     *
+     * 央视频回看的地址自带起止秒，把起始秒按偏移往前推就是"从那里开始"；
+     * 时移没有可换算的起点，返回 false 由调用方降级（提示或回直播）。
+     *
+     * @return 是否真的重开了。
+     */
+    private fun reopenReplayAt(positionMs: Long): Boolean {
+        val o = replayOrigin ?: return false
+        val win = replayWindow ?: return false
+        val offsetSec = (positionMs / 1000L).coerceAtLeast(0L)
+        val start = o.startSec + offsetSec
+        // 起点推到收尾处就没意义了（只剩几秒），当作播完。
+        if (start >= o.endSec - 5L) return false
+        val url = com.litv.tv.data.LocalHlsProxy.replayUrlFor(o.channel.id, start, o.endSec) ?: return false
+        player.directMode = false
+        session.play(
+            PlaySource.Builtin(
+                o.channel.id, url,
+                mapOf("User-Agent" to "qqlive"),
+                app.prefs.engine,
+            ),
+        )
+        Log.i(TAG, "回看重开：${o.title} 从 ${offsetSec}s（新起点 $start）")
+        enterReplay(o.channel, win.copy(title = o.title), startAtMs = positionMs)
+        return true
     }
 
     private fun showReplayBar() {
@@ -2623,14 +2701,33 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
      * 快退/快进。
      *
      * 先动播放头再让内核 seek：时间码立刻响应，比等内核回调更跟手。
-     * 内核拒绝（直播流、或 VLC 没拿到 seekable）就明确提示，
-     * 不做静默失败——用户会以为遥控器坏了。
+     * 内核拒绝时**先试着按目标位置重开这段回看**——改成本地拼的只追加清单后
+     * Exo 视其为 live，`isCurrentMediaItemSeekable=false`，seek 一律被拒
+     * （2026-11-25 实测 `回看跳转被拒绝 41s（内核 exo）`）。重开对 VLC/Exo 都成立。
+     * 两条路都不行才提示，不做静默失败——用户会以为遥控器坏了。
      */
     private fun seekReplay(deltaMs: Long) {
         val head = replayHead ?: return
+        val from = head.positionMs
         val target = head.seekBy(now(), deltaMs)
+        if (target == from) {
+            toastTip(if (deltaMs > 0) "已经到最后了" else "已经回到开头了")
+            showBarAndTick()
+            return
+        }
         val ok = player.seekTo(target)
-        if (!ok) toastTip(if (player.seekable()) "跳转没生效，试试换内核" else "这段内容不支持拖动")
+        if (!ok && !reopenReplayAt(target)) {
+            // 两条路都不通：把播放头拨回去，别让时间码骗人。
+            head.seekTo(now(), from)
+            toastTip(if (player.seekable()) "跳转没生效，试试换内核" else "这段内容不支持拖动")
+        } else if (!ok) {
+            toastTip(if (deltaMs > 0) "快进到 ${ClockText.fmt(target)}" else "快退到 ${ClockText.fmt(target)}")
+        }
+        showBarAndTick()
+    }
+
+    /** 控制条刷新与 500ms ticker 重新挂上（seek/重开之后都要走一遍）。 */
+    private fun showBarAndTick() {
         refreshReplayBar()
         if (!replayBarVisible) showReplayBar()
         main.removeCallbacks(replayTicker)

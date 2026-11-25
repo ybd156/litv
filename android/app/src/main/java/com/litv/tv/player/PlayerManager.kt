@@ -1453,7 +1453,9 @@ class PlayerManager(
                     // 回看播完是**正常结束**：重连同一段回看只会从头再放一遍，
                     // 换内核也一样（VOD 已经到 ENDLIST 了）。交给上层切回直播。
                     if (replayMode) {
-                        Log.i(TAG, "回看播放到结尾，交回上层")
+                        // 回看里的 ENDED 有两种含义（真播完 / 中途断），内核分不清，
+                        // 交给上层按播放头位置判——这里不加任何"就是播完了"的假设。
+                        Log.i(TAG, "回看 ENDED，交回上层判断")
                         callback?.onReplayFinished()
                         return@post
                     }

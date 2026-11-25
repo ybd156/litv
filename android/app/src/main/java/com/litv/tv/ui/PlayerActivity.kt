@@ -116,7 +116,7 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
     private lateinit var replayBar: LinearLayout
     private lateinit var replayTitle: TextView
     private lateinit var replayClock: TextView
-    private lateinit var replayProgress: ProgressBar
+    private lateinit var replayProgress: android.widget.SeekBar
     private lateinit var rbBack: TextView
     private lateinit var rbPlay: TextView
     private lateinit var rbFwd: TextView
@@ -137,6 +137,8 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
     private var replayBarVisible = false
     /** 回看里用户按了暂停（控制条按钮状态用）。 */
     private var replayPaused = false
+    /** 正在拖进度条：这期间 ticker 别去改进度，否则手一松就被拽回去。 */
+    private var replayScrubbing = false
 
     /**
      * 这段回看怎么重新打开（中途断了、或要跳到没法 seek 的位置时用）。
@@ -530,7 +532,11 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
                     // 原来这里不分模式，回看里点一下就弹出 OSD（频道名/内核/线路），
                     // 用户以为「点回看没进控制界面」。
                     if (replayWindow != null) {
-                        if (replayBarVisible) hideReplayBar() else showReplayBar()
+                        // 触屏语义对齐播放器习惯：点画面中间就是暂停/继续。
+                        // 条收着的时候先唤出来——否则暂停了却没有时间码可看，
+                        // 用户会以为「点了没反应」（实测第一版就是这么被误解的）。
+                        if (!replayBarVisible) showReplayBar()
+                        toggleReplayPause()
                         return true
                     }
                     if (osdVisible) hideOsd() else showOsd()
@@ -790,6 +796,29 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         rbFwd.setOnClickListener { seekReplay(+ReplaySteps.BUTTON_STEP_MS) }
         rbPlay.setOnClickListener { toggleReplayPause() }
         rbLive.setOnClickListener { backToLive() }
+        // 进度条可拖。拖动时只改时间码，**松手才 seek**——
+        // 拖一下就 seek 一次会把播放器拖垮（手机端同一条结论）。
+        replayProgress.setOnSeekBarChangeListener(object : android.widget.SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(sb: android.widget.SeekBar?, progress: Int, fromUser: Boolean) {
+                if (!fromUser) return
+                val win = replayWindow ?: return
+                replayScrubbing = true
+                val target = if (win.durationMs > 0) win.durationMs * progress / 1000 else 0L
+                replayClock.text = ClockText.pair(target, win.durationMs)
+            }
+
+            override fun onStartTrackingTouch(sb: android.widget.SeekBar?) {
+                replayScrubbing = true
+            }
+
+            override fun onStopTrackingTouch(sb: android.widget.SeekBar?) {
+                replayScrubbing = false
+                val win = replayWindow ?: return
+                val bar = sb ?: return
+                val target = if (win.durationMs > 0) win.durationMs * bar.progress / 1000 else 0L
+                seekReplayTo(target)
+            }
+        })
         panel = findViewById(R.id.channelPanel)
         panelTitle = findViewById(R.id.panelTitle)
         panelList = findViewById(R.id.panelList)
@@ -2759,7 +2788,8 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         val pos = head.tick(now())
         replayClock.text = ClockText.pair(pos, win.durationMs)
         val permille = if (win.durationMs > 0) (pos * 1000 / win.durationMs).toInt() else 0
-        replayProgress.progress = permille.coerceIn(0, 1000)
+        // 用户正在拖进度条时别回写，否则手腕一动条就被拽回去。
+        if (!replayScrubbing) replayProgress.progress = permille.coerceIn(0, 1000)
         // 播到结尾就自动回直播。
         //
         // 不能指望内核报 ENDED：回看是**滑窗 HLS**，没有 EXT-X-ENDLIST，
@@ -2797,15 +2827,40 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
             showBarAndTick()
             return
         }
-        val ok = player.seekTo(target)
-        if (!ok && !reopenReplayAt(target)) {
-            // 两条路都不通：把播放头拨回去，别让时间码骗人。
-            head.seekTo(now(), from)
-            toastTip(if (player.seekable()) "跳转没生效，试试换内核" else "这段内容不支持拖动")
-        } else if (!ok) {
-            toastTip(if (deltaMs > 0) "快进到 ${ClockText.fmt(target)}" else "快退到 ${ClockText.fmt(target)}")
+        applyReplaySeek(from, target)
+        if (target > from && !player.seekable()) {
+            toastTip("快进到 ${ClockText.fmt(target)}")
         }
         showBarAndTick()
+    }
+
+    /** 拖进度条松手后落到绝对位置。 */
+    private fun seekReplayTo(targetMs: Long) {
+        val win = replayWindow ?: return
+        val head = replayHead ?: return
+        val from = head.positionMs
+        val target = ReplaySteps.clamp(targetMs, win.durationMs)
+        if (target == from) {
+            showBarAndTick()
+            return
+        }
+        // 时间轴由我们自己维护：先拨头，再让内核跟上，拖完手感才不跳。
+        head.seekTo(now(), target)
+        Log.i(TAG, "拖动回看到 ${ClockText.fmt(target)}")
+        applyReplaySeek(from, target)
+        showBarAndTick()
+    }
+
+    /**
+     * seek 的实际动作：先试内核，内核拒绝就按目标位置重开这段回看，两条都不通才拨回并提示。
+     * 不做静默失败——用户会以为遥控器/手指坏了。
+     */
+    private fun applyReplaySeek(from: Long, target: Long) {
+        val ok = player.seekTo(target)
+        if (!ok && !reopenReplayAt(target)) {
+            replayHead?.seekTo(now(), from)
+            toastTip(if (player.seekable()) "跳转没生效，试试换内核" else "这段内容不支持拖动")
+        }
     }
 
     /** 控制条刷新与 500ms ticker 重新挂上（seek/重开之后都要走一遍）。 */
@@ -3453,9 +3508,11 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
                     KeyEvent.KEYCODE_MENU -> {
                         toggleSettingsMenu(); return true
                     }
-                    KeyEvent.KEYCODE_BACK -> if (replayBarVisible) {
-                        // 先收控制条，再按一次才是"退出播放"
-                        hideReplayBar(); return true
+                    KeyEvent.KEYCODE_BACK -> {
+                        // BACK = 退出回看、回直播。这是"退出回看"唯一的明确入口；
+                        // 原来写的是"先收条、再按一次才退出"，用户按一下就以为没反应。
+                        backToLive("已退出回看，回到直播")
+                        return true
                     }
                 }
             } else if (action == KeyEvent.ACTION_UP &&

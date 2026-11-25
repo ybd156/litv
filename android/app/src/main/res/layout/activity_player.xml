@@ -238,7 +238,12 @@
            · ← →      快退/快进 10 秒（控制条收起时也生效）
            · ↑ ↓      在四个按钮之间移动焦点
            · OK       执行当前焦点按钮
-           · BACK     收起控制条（再按一次才是退出播放页） -->
+           · BACK     退出回看、回直播
+
+         交互（触屏 / 模拟器鼠标）：
+           · 拖进度条    松手才跳转
+           · 点画面中间  条收着时唤出；条已在时 = 暂停/继续
+           · 点右下按钮  快退 30 秒 / 暂停 / 快进 30 秒 / 回到直播 -->
     <LinearLayout
         android:id="@+id/replayBar"
         android:layout_width="match_parent"
@@ -279,14 +284,19 @@
                 android:textStyle="bold" />
         </LinearLayout>
 
-        <ProgressBar
+        <!-- 进度条可以直接拖动。原来这里是 ProgressBar（只显示不可拖），
+             触屏设备上「拖到想看的位置」这个最基本的操作没有入口。 -->
+        <SeekBar
             android:id="@+id/replayProgress"
-            style="?android:attr/progressBarStyleHorizontal"
             android:layout_width="match_parent"
-            android:layout_height="6dp"
-            android:layout_marginTop="10dp"
+            android:layout_height="28dp"
+            android:layout_marginTop="4dp"
+            android:focusable="false"
             android:max="1000"
-            android:progressTint="@color/accent" />
+            android:progress="0"
+            android:progressTint="@color/accent"
+            android:splitTrack="false"
+            android:thumbTint="@color/accent" />
 
         <LinearLayout
             android:layout_width="match_parent"

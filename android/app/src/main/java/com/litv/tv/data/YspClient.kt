@@ -1,6 +1,7 @@
 package com.litv.tv.data
 
 import android.content.Context
+import android.util.Log
 import org.json.JSONObject
 import java.io.File
 import java.net.HttpURLConnection
@@ -16,6 +17,8 @@ import java.net.URLEncoder
  * Python 端已实测：CCTV-1 / CCTV-13 均 iretcode=0，m3u8 200，分片 1.6~2MB / 94~160ms。
  */
 object YspClient {
+
+    private const val TAG = "LITV"
 
     /** 一条可播的直播线路。 */
     data class Line(val url: String, val label: String)
@@ -359,6 +362,14 @@ object YspClient {
         val json = JSONObject(body)
         val code = json.optInt("iretcode", -1)
         if (code != 0) throw YspException(code, json.optString("errinfo", ""))
+
+        // 只记非密钥字段：可回看的窗口长度、以及上游回显的起播时刻。
+        // 用来判断请求超出保留期时上游是报错、夹窗口，还是默默给直播。
+        val pb = json.optJSONObject("playback")
+        Log.i(
+            TAG,
+            "回看应答 窗口=${pb?.optLong("playbacktime", -1L)} 回显起=${pb?.optLong("starttime", -1L)} 请求起=$startSec",
+        )
 
         // JSONObject 已经帮我们把 \u0026 解成 &，这里不用再手工替换
         val out = LinkedHashSet<String>()

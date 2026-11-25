@@ -169,7 +169,10 @@ object LocalHlsProxy {
      *
      * 央视频回看的 playlist 是**按窗口**给的（实测一次只回 5 个分片 ≈ 20 秒，
      * 不管 endtime 给多大）。要连续播放，只能靠播放器定期重拉 playlist、
-     * 我们在每次重拉时把窗口往前推一格（见 serveReplay 里的游标）。
+     * 我们在每次重拉时**再补一窗**（见 serveReplay 里的 ReplaySession）。
+     *
+     * 注意是「补」不是「推」：早先的实现在每次重拉时把窗口整体往前推一格、旧分片丢掉，
+     * 结果重拉越勤内容跑得越快——一小时节目六分钟就播完了。现在清单只追加不回退。
      */
     fun replayUrlFor(channelId: Long, startSec: Long, endSec: Long): String? {
         val p = ensureStarted()
@@ -177,10 +180,23 @@ object LocalHlsProxy {
         return "http://127.0.0.1:$p/rp/$channelId/$startSec/$endSec.m3u8"
     }
 
-    /** 回看游标：每个 (频道, 起播时刻) 记"已经发到哪一窗"。 */
-    private data class ReplayCursor(var nextStart: Long, var issued: Int)
+    /**
+     * 一次回看会话：每个 (频道, 起播时刻) 一份，负责"下一窗从哪儿取"和
+     * "已经累积了哪些分片"。
+     *
+     * 早期这里只有游标 `nextStart`，每次请求把窗口整体往前推一格、旧分片丢掉，
+     * 于是重拉越勤内容跑得越快——一小时节目六分钟就播完了（见 ReplayPlaylistBuilder
+     * 文件头）。现在改成只追加，游标只决定"还要再补哪一窗"，已发的分片永不 evict。
+     */
+    private class ReplaySession(startSec: Long, val endSec: Long, val span: Long) {
+        val builder = ReplayPlaylistBuilder()
+        var nextStart = startSec
+    }
 
-    private val replayCursors = ConcurrentHashMap<String, ReplayCursor>()
+    private val replaySessions = object : LinkedHashMap<String, ReplaySession>(8, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, ReplaySession>): Boolean =
+            size > 8
+    }
 
     /**
      * 该换线路了吗。
@@ -255,37 +271,69 @@ object LocalHlsProxy {
         }
         val span = (endSec - startSec).coerceAtLeast(300L)
         val key = "$id/$startSec"
-        val cur = replayCursors.getOrPut(key) { ReplayCursor(startSec, 0) }
-        // 第二次以后的请求才推进窗口；第一次一定要从用户点的那档节目开头起播
-        val from = if (cur.issued == 0) startSec else cur.nextStart
+        val ses = synchronized(replaySessions) {
+            replaySessions.getOrPut(key) { ReplaySession(startSec, endSec, span) }
+        }
+        // 只追加：每次请求最多补一窗。播放进度由播放器决定，重拉再勤也不会把内容推快。
+        synchronized(ses) {
+            val wantMore = !ses.builder.isFinished && ses.nextStart < ses.endSec
+            if (wantMore) {
+                val from = ses.nextStart
+                var realUrl: String? = null
+                for ((i, wait) in longArrayOf(0L, 300L, 800L).withIndex()) {
+                    if (wait > 0) Thread.sleep(wait)
+                    realUrl = runCatching { YspClient.firstReplayLine(ch, from, from + span) }.getOrNull()
+                    if (!realUrl.isNullOrBlank()) break
+                    Log.w(TAG, "回看取流第 ${i + 1} 次失败（ch=$id from=$from）")
+                }
+                if (realUrl.isNullOrBlank()) {
+                    Log.w(TAG, "回看取流失败 ch=$id from=$from（已累积 ${ses.builder.segmentCount} 片）")
+                    // 手里已经有分片就照旧发出去：宁可让播放器把手里的播完，也别把一个看着正常的
+                    // 清单变成 502（那会让播放器直接判"回看不可用"）
+                    if (ses.builder.segmentCount == 0) {
+                        writeStatus(out, 502, "replay-failed")
+                        return
+                    }
+                } else {
+                    appendReplayWindow(ses, id, from, realUrl)
+                }
+            } else if (!ses.builder.isFinished) {
+                // nextStart 已经越过节目末尾：补 ENDLIST，让播放器按点播收尾
+                ses.builder.finish()
+                Log.i(TAG, "回看到末尾 ch=$id 共 ${ses.builder.segmentCount} 片，清单补 ENDLIST")
+            }
+            writeBody(out, ses.builder.render().toByteArray(Charsets.UTF_8), "application/vnd.apple.mpegurl")
+        }
+    }
 
-        var realUrl: String? = null
-        for ((i, wait) in longArrayOf(0L, 300L, 800L).withIndex()) {
-            if (wait > 0) Thread.sleep(wait)
-            realUrl = runCatching { YspClient.firstReplayLine(ch, from, from + span) }.getOrNull()
-            if (!realUrl.isNullOrBlank()) break
-            Log.w(TAG, "回看取流第 ${i + 1} 次失败（ch=$id from=$from）")
+    /**
+     * 取一窗上游清单，改写后**追加**到会话的累积清单里。
+     * 失败只记日志、不动已有内容（返回 0，游标不前进，下次请求重试同一窗）。
+     */
+    private fun appendReplayWindow(ses: ReplaySession, id: Long, from: Long, realUrl: String): Long {
+        // 上游是否真的给了回看。超窗口时它照样返回 200，但地址落在直播 CDN 上
+        // （本次取证表明 playback CDN 连 4.9 小时前的时段也认，这里只作回归守卫）。
+        val nowSec = System.currentTimeMillis() / 1000
+        val kind = ReplaySource.classify(realUrl)
+        val age = ReplaySource.ageSec(from, nowSec)
+        Log.i(TAG, "回看 ch=$id from=$from 距现在 ${age}s 上游=${kind.name}")
+        if (kind == ReplaySource.Kind.Live && ReplaySource.isHistorical(from, nowSec)) {
+            Log.w(TAG, "回看窗口外：上游退回直播流（请求 ${age}s 前的时段）")
         }
-        if (realUrl.isNullOrBlank()) {
-            Log.w(TAG, "回看取流彻底失败 ch=$id from=$from")
-            writeStatus(out, 502, "replay-failed")
-            return
-        }
+
         val text = try {
-            fetchTextSmart(realUrl!!)
+            fetchTextSmart(realUrl)
         } catch (e: Throwable) {
             Log.w(TAG, "回看 playlist 拉取失败 from=$from：" + e.javaClass.simpleName + ": " + e.message)
-            writeStatus(out, 502, "replay-playlist-failed")
-            return
+            return 0L
         }
-
         // 清单改写统一走 PlaylistRewrite（三处调用点共用一份规则）：
         //   · `/` 开头的分片地址按 playlist 的 origin 解析，不再拼成 `base//path`；
         //   · #EXT-X-MAP / #EXT-X-KEY / #EXT-X-MEDIA 的 URI 一起改写 —— 不改的话
         //     fMP4/CMAF 拿不到 init 段、AES-128 拿不到密钥，经代理整条播不了。
         val rw = PlaylistRewrite.rewrite(
             text = text,
-            playlistUrl = realUrl!!,
+            playlistUrl = realUrl,
             segPrefix = "/seg/",
             tagUriPrefix = "/rawfile/",
             encode = ::b64enc,
@@ -294,10 +342,15 @@ object LocalHlsProxy {
             Regex("#EXTINF:([0-9.]+)").findAll(text).sumOf { it.groupValues[1].toDouble() }.toLong()
         }.getOrDefault(20L).coerceAtLeast(5L)
 
-        cur.nextStart = from + windowSec
-        cur.issued += 1
-        Log.i(TAG, "回看 ch=$id from=$from window=${windowSec}s 第${cur.issued}次")
-        writeBody(out, rw.text.toByteArray(Charsets.UTF_8), "application/vnd.apple.mpegurl")
+        val before = ses.builder.segmentCount
+        ses.builder.appendWindow(rw.text.split('\n'))
+        if (ses.builder.segmentCount == before) {
+            Log.w(TAG, "回看窗口没有分片 ch=$id from=$from（上游可能给空了）")
+            return 0L
+        }
+        ses.nextStart = from + windowSec
+        Log.i(TAG, "回看 ch=$id from=$from window=${windowSec}s 累积=${ses.builder.segmentCount}片")
+        return windowSec
     }
 
     fun stop() {
@@ -306,6 +359,7 @@ object LocalHlsProxy {
         serverSocket = null
         port = 0
         cache.clear()
+        synchronized(replaySessions) { replaySessions.clear() }
     }
 
     // ---------------------------------------------------------------- 处理

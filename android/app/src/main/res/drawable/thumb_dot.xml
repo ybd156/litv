@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 细进度条的拖动圆点：默认 thumb 在 20dp 高的 SeekBar 上会顶出一大块，
+     这里用一个 10dp 实心圆，视觉上跟 3dp 的轨道配套。 -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="oval">
+    <solid android:color="@color/accent" />
+    <size
+        android:width="10dp"
+        android:height="10dp" />
+</shape>

@@ -88,6 +88,12 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
     private lateinit var replayClock: TextView
     private lateinit var replayProgress: android.widget.SeekBar
     private lateinit var rbPlay: TextView
+    /** 竖屏回看只留一条：暂停键 + 时间码 + 细进度条 + 回到直播（整块卡片太占画面） */
+    private lateinit var replaySlim: View
+    private lateinit var rsPlay: android.widget.ImageView
+    private lateinit var rsClock: TextView
+    private lateinit var rsLive: TextView
+    private lateinit var rsProgress: android.widget.SeekBar
 
     /** 当前回看窗口；**null = 直播**。这是「是不是回看」的唯一真相（同电视端）。 */
     private var replayWindow: ReplayWindow? = null
@@ -287,6 +293,16 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
         replayClock = findViewById(R.id.replayClock)
         replayProgress = findViewById(R.id.replayProgress)
         rbPlay = findViewById(R.id.rbPlay)
+        replaySlim = findViewById(R.id.replaySlim)
+        rsPlay = findViewById(R.id.rsPlay)
+        rsClock = findViewById(R.id.rsClock)
+        rsLive = findViewById(R.id.rsLive)
+        rsProgress = findViewById(R.id.rsProgress)
+
+        // 竖屏回看只留这一条：暂停 / 时间码 / 细进度条 / 回到直播
+        rsPlay.setOnClickListener { toggleReplayPause() }
+        rsLive.setOnClickListener { backToLive("已切回直播") }
+        bindReplaySeek(rsProgress)
 
         list = findViewById(R.id.list)
         status = findViewById(R.id.status)
@@ -467,26 +483,7 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
         findViewById<TextView>(R.id.rbLive).setOnClickListener { backToLive("已切回直播") }
         // 拖动只更新时间码预览，松手才 seek：VLC 的 seek 是在单线程队列里排队的，
         // 拖动过程中每移动一点就 seek 会把队列堆满，松手后还要"追"好几秒。
-        replayProgress.setOnSeekBarChangeListener(object : android.widget.SeekBar.OnSeekBarChangeListener {
-            override fun onProgressChanged(sb: android.widget.SeekBar?, progress: Int, fromUser: Boolean) {
-                if (!fromUser) return
-                val win = replayWindow ?: return
-                replayClock.text = ClockText.pair(win.durationMs * progress / 1000, win.durationMs)
-            }
-
-            override fun onStartTrackingTouch(sb: android.widget.SeekBar?) {
-                userSeeking = true
-                // 拖动期间别让 4 秒自动收条把进度条抽走
-                main.removeCallbacks(controlsHideRunnable)
-            }
-
-            override fun onStopTrackingTouch(sb: android.widget.SeekBar?) {
-                userSeeking = false
-                val win = replayWindow ?: return
-                seekReplayTo(win.durationMs * (sb?.progress ?: 0) / 1000)
-                showControls()
-            }
-        })
+        bindReplaySeek(replayProgress)
 
         // 点画面：呼出/收起控件浮层（现代播放器的通用交互）。
         // 原来点一下就直接暂停，用户完全看不到有哪些控件。
@@ -631,7 +628,12 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
 
     /** 按是否全屏调整可见性与播放器高度。 */
     private fun applyFullscreen(on: Boolean) {
-        if (fullscreenApplied == on) return
+        if (fullscreenApplied == on) {
+            // 转屏有两个入口（点按钮 / 配置变更），后到的那次会在这里直接返回；
+            // 回看控制条的形态必须每次都对一遍，否则竖屏细条会一直留在全屏里。
+            applyReplayBarVariant()
+            return
+        }
         fullscreenApplied = on
         // ★ VLC 在全屏切换期间会被"往后拖"。
         //
@@ -685,6 +687,8 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
 
         findViewById<View>(R.id.fsTools)?.visibility = if (on) View.VISIBLE else View.GONE
         if (on) syncFsTools()
+        // 转屏时回看控制条要跟着换形态：竖屏用细条、全屏用完整控制条
+        applyReplayBarVariant()
 
         applyVideoRatio()
         // ★ 再算一次：上面这次跑的时候，被 GONE 掉的兄弟还没重新 measure，
@@ -1995,7 +1999,7 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
         replayHead = ReplayClock(window.durationMs).also { it.reset(now(), startAtMs) }
         replayTitle.text = window.title.ifBlank { ch.name }
         rbPlay.text = "暂停"
-        replayBar.visibility = View.VISIBLE
+        applyReplayBarVariant()
         playingTimeshift = true
         renderLiveBadge()
         // 回看里「上一个台/下一个台」没有意义（切台就等于退出回看），收起来免得误触
@@ -2023,6 +2027,7 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
         replayingProgramStart = 0L
         main.removeCallbacks(replayTicker)
         if (::replayBar.isInitialized) replayBar.visibility = View.GONE
+        if (::replaySlim.isInitialized) replaySlim.visibility = View.GONE
         if (::player.isInitialized) player.replayMode = false
         btnPlayPause.visibility = View.VISIBLE
         findViewById<View>(R.id.btnPrevCh)?.visibility = View.VISIBLE
@@ -2041,14 +2046,59 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
         backToLive("回看结束，已回到直播")
     }
 
+    /**
+     * 回看进度条的统一行为：拖动只预览时间码，**松手才 seek**。
+     * 两条进度条（竖屏细条 / 全屏控制条）共用，避免两处逻辑各写一遍。
+     */
+    private fun bindReplaySeek(bar: android.widget.SeekBar) {
+        bar.setOnSeekBarChangeListener(object : android.widget.SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(sb: android.widget.SeekBar?, progress: Int, fromUser: Boolean) {
+                if (!fromUser) return
+                val win = replayWindow ?: return
+                val text = ClockText.pair(win.durationMs * progress / 1000, win.durationMs)
+                if (::replayClock.isInitialized) replayClock.text = text
+                if (::rsClock.isInitialized) rsClock.text = text
+            }
+
+            override fun onStartTrackingTouch(sb: android.widget.SeekBar?) {
+                userSeeking = true
+                // 拖动期间别让 4 秒自动收条把进度条抽走
+                main.removeCallbacks(controlsHideRunnable)
+            }
+
+            override fun onStopTrackingTouch(sb: android.widget.SeekBar?) {
+                userSeeking = false
+                val win = replayWindow ?: return
+                val target = win.durationMs * (sb?.progress ?: 0) / 1000
+                seekReplayTo(target)
+                showControls()
+            }
+        })
+    }
+
+    /** 竖屏用细条、全屏用完整控制条：同一时刻只显示一条，免得画面被压两层。 */
+    private fun applyReplayBarVariant() {
+        if (!::replaySlim.isInitialized || !::replayBar.isInitialized) return
+        val replaying = replayWindow != null
+        val compact = fullscreenApplied != true
+        replaySlim.visibility = if (replaying && compact) View.VISIBLE else View.GONE
+        replayBar.visibility = if (replaying && !compact) View.VISIBLE else View.GONE
+    }
+
     private fun refreshReplayBar() {
         val win = replayWindow ?: return
         val head = replayHead ?: return
         val pos = head.tick(now())
-        replayClock.text = ClockText.pair(pos, win.durationMs)
+        val text = ClockText.pair(pos, win.durationMs)
+        replayClock.text = text
         if (!userSeeking && win.durationMs > 0) {
-            replayProgress.progress = ((pos * 1000) / win.durationMs).toInt().coerceIn(0, 1000)
+            val p = ((pos * 1000) / win.durationMs).toInt().coerceIn(0, 1000)
+            replayProgress.progress = p
+            rsProgress.progress = p
         }
+        // 竖屏细条：只有时间码与暂停图标，标题留在下面的信息块里
+        rsClock.text = text
+        rsPlay.setImageResource(if (paused) R.drawable.ic_play else R.drawable.ic_pause)
         // 播到窗口末尾自己收尾 —— 回看没有 ENDLIST，内核不会告诉我们「完了」
         if (win.durationMs > 0 && pos >= win.durationMs && !paused) onReplayReachedEnd()
     }

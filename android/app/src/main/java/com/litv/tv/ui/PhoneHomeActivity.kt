@@ -78,7 +78,7 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
     private lateinit var epgList: LinearLayout
     private lateinit var gestureTip: TextView
     private lateinit var btnPlayPause: android.widget.ImageView
-    private lateinit var btnMute: TextView
+    private lateinit var btnMute: android.widget.ImageView
 
     // ---- 回看 / 时移控制条（布局见 res/layout/view_replay_bar.xml）----
     // 与电视端共用纯逻辑 ReplayControls（播放头按墙钟自己算），
@@ -424,14 +424,14 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
         btnMute.setOnClickListener {
             muted = !muted
             player.setVolume(if (muted) 0f else 1f)
-            btnMute.text = if (muted) "✕" else "♪"
+            btnMute.setImageResource(if (muted) R.drawable.ic_volume_off else R.drawable.ic_volume_up)
         }
 
-        findViewById<TextView>(R.id.btnFullscreen).setOnClickListener { toggleOrientation() }
+        findViewById<View>(R.id.btnFullscreen).setOnClickListener { toggleOrientation() }
 
         // 上一频道 / 下一频道：贴着画面左右边缘，竖屏与全屏共用同一层浮层。
-        findViewById<TextView>(R.id.btnPrevCh)?.setOnClickListener { stepChannel(-1) }
-        findViewById<TextView>(R.id.btnNextCh)?.setOnClickListener { stepChannel(+1) }
+        findViewById<View>(R.id.btnPrevCh)?.setOnClickListener { stepChannel(-1) }
+        findViewById<View>(R.id.btnNextCh)?.setOnClickListener { stepChannel(+1) }
 
         // 全屏工具：比例 / 内核 / 解码，点一次切下一档。
         // ★ 这三个监听器在改控件布局时被整块替换掉了 —— 按钮能收到点击却没有反应，
@@ -458,7 +458,7 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
         }
 
         // 投屏：发现由服务端做（iOS 拿不到多播权限，安卓也统一走服务端）
-        findViewById<TextView>(R.id.btnCast).setOnClickListener { openCastPicker() }
+        findViewById<View>(R.id.btnCast).setOnClickListener { openCastPicker() }
 
         // ---- 回看控制条 ----
         findViewById<TextView>(R.id.rbBack).setOnClickListener { seekReplayBy(-ReplaySteps.BUTTON_STEP_MS) }
@@ -1999,6 +1999,8 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
         playingTimeshift = true
         renderLiveBadge()
         // 回看里「上一个台/下一个台」没有意义（切台就等于退出回看），收起来免得误触
+        // 回看时画面中央不放大播放键：控制条里已有「暂停/继续」，两个按钮重叠会互相挡。
+        btnPlayPause.visibility = View.GONE
         findViewById<View>(R.id.btnPrevCh)?.visibility = View.GONE
         findViewById<View>(R.id.btnNextCh)?.visibility = View.GONE
         main.removeCallbacks(replayTicker)
@@ -2022,6 +2024,7 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
         main.removeCallbacks(replayTicker)
         if (::replayBar.isInitialized) replayBar.visibility = View.GONE
         if (::player.isInitialized) player.replayMode = false
+        btnPlayPause.visibility = View.VISIBLE
         findViewById<View>(R.id.btnPrevCh)?.visibility = View.VISIBLE
         findViewById<View>(R.id.btnNextCh)?.visibility = View.VISIBLE
         if (playingTimeshift) {

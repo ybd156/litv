@@ -148,51 +148,80 @@
                     android:layout_gravity="top|start"
                     android:layout_marginStart="12dp"
                     android:layout_marginTop="12dp"
-                    android:background="@drawable/bg_badge_pill"
+                    android:background="@drawable/bg_pill_surface"
+                    android:letterSpacing="0.04"
                     android:paddingHorizontal="10dp"
                     android:paddingVertical="4dp"
                     android:text="● 直播"
-                    android:textColor="#FFFFFFFF"
-                    android:textSize="11sp" />
+                    android:textColor="@color/accent"
+                    android:textSize="11sp"
+                    android:textStyle="bold" />
 
-                    <!-- 画面中央：播放/暂停（半透明图标，不压实底圆） -->
+                    <!-- 画面中央：播放/暂停。和其他浮层按钮同一套圆形底，
+                         亮画面下也看得清（纯白图标在雪景里会糊掉）。 -->
                     <ImageView
                         android:id="@+id/btnPlayPause"
-                        android:layout_width="72dp"
-                        android:layout_height="72dp"
+                        android:layout_width="66dp"
+                        android:layout_height="66dp"
                         android:layout_gravity="center"
-                        android:background="@android:color/transparent"
+                        android:background="@drawable/bg_ctl_circle"
                         android:contentDescription="播放/暂停"
-                        android:padding="14dp"
+                        android:padding="18dp"
+                        android:scaleType="fitCenter"
                         android:src="@drawable/ic_pause"
-                        android:alpha="0.85" />
+                        android:tint="#FFFFFFFF" />
 
                     <!-- 上一频道 / 下一频道：贴在画面左右边缘。
-                         竖屏与全屏共用这一层浮层，所以两处都会出现。 -->
-                    <TextView
+                         竖屏与全屏共用这一层浮层，所以两处都会出现。
+                         回看时会整组隐藏（切台等于退出回看）。 -->
+                    <ImageView
                         android:id="@+id/btnPrevCh"
-                        style="@style/PhoneCtlSmall"
+                        style="@style/PhoneCtlIcon"
                         android:layout_gravity="start|center_vertical"
                         android:layout_marginStart="10dp"
                         android:contentDescription="上一频道"
-                        android:text="⏮" />
+                        android:src="@drawable/ic_skip_prev" />
 
-                    <TextView
+                    <ImageView
                         android:id="@+id/btnNextCh"
-                        style="@style/PhoneCtlSmall"
+                        style="@style/PhoneCtlIcon"
                         android:layout_gravity="end|center_vertical"
                         android:layout_marginEnd="10dp"
                         android:contentDescription="下一频道"
-                        android:text="⏭" />
+                        android:src="@drawable/ic_skip_next" />
 
-                    <!-- 投屏：右上角 -->
-                    <TextView
-                        android:id="@+id/btnCast"
-                        style="@style/PhoneCtlSmall"
+                    <!-- 右上角：投屏 / 静音 / 全屏。三个圆按钮排一行，
+                         让出画面底部整条给回看控制条（回看时底部只放一条，
+                         不再和静音/全屏抢位置）。 -->
+                    <LinearLayout
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
                         android:layout_gravity="top|end"
                         android:layout_marginTop="10dp"
                         android:layout_marginEnd="10dp"
-                        android:text="⇱" />
+                        android:gravity="center_vertical"
+                        android:orientation="horizontal">
+
+                        <ImageView
+                            android:id="@+id/btnCast"
+                            style="@style/PhoneCtlIcon"
+                            android:layout_marginEnd="8dp"
+                            android:contentDescription="投屏"
+                            android:src="@drawable/ic_cast" />
+
+                        <ImageView
+                            android:id="@+id/btnMute"
+                            style="@style/PhoneCtlIcon"
+                            android:layout_marginEnd="8dp"
+                            android:contentDescription="静音"
+                            android:src="@drawable/ic_volume_up" />
+
+                        <ImageView
+                            android:id="@+id/btnFullscreen"
+                            style="@style/PhoneCtlIcon"
+                            android:contentDescription="全屏"
+                            android:src="@drawable/ic_fullscreen" />
+                    </LinearLayout>
 
 
 
@@ -225,34 +254,8 @@
                             android:text="解码 自动" />
                     </LinearLayout>
 
-                    <!-- 右下：静音 + 全屏 -->
-                    <LinearLayout
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:layout_gravity="bottom|end"
-                        android:layout_marginBottom="30dp"
-                        android:layout_marginEnd="12dp"
-                        android:background="@drawable/bg_ctl_bar"
-                        android:paddingHorizontal="6dp"
-                        android:paddingVertical="4dp"
-                        android:gravity="center_vertical"
-                        android:orientation="horizontal">
-
-                        <TextView
-                            android:id="@+id/btnMute"
-                            style="@style/PhoneCtlSmall"
-                            android:layout_marginEnd="10dp"
-                            android:text="♪" />
-
-                        <TextView
-                            android:id="@+id/btnFullscreen"
-                            style="@style/PhoneCtlSmall"
-                            android:text="⛶" />
-                    </LinearLayout>
-
                     <!-- 回看控制条：只有回看/时移时才显示，跟控件浮层一起显隐。
-                         放在底部两条工具行之上（那两行占 30dp + 自身高度），
-                         否则「回到直播」会被静音/全屏按钮压住点不到。 -->
+                         贴画面底部（静音/全屏已移到右上角），不再压在中间挡住画面。 -->
                     <include
                         layout="@layout/view_replay_bar"
                         android:layout_width="match_parent"
@@ -260,7 +263,7 @@
                         android:layout_gravity="bottom"
                         android:layout_marginStart="12dp"
                         android:layout_marginEnd="12dp"
-                        android:layout_marginBottom="68dp" />
+                        android:layout_marginBottom="12dp" />
                 </FrameLayout>
             </FrameLayout>
 

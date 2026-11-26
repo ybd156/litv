@@ -4,31 +4,138 @@
 
   抽成 include 是为了让首页、遥控器页、设置页**长得一样**——
   之前只有首页有，遥控器和设置打开就是"另一个页面"，用户会懵。
+
+  2026-11-27：改成扁平导航栏（1dp 分隔线 + 图标 + 文字，选中只靠颜色），
+  和首页 activity_phone_home.xml 的底部栏保持完全一致。
 -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
-    android:background="@color/bg_panel"
-    android:orientation="horizontal"
-    android:paddingVertical="8dp">
+    android:orientation="vertical">
 
-    <TextView
-        android:id="@+id/tabPlay"
-        style="@style/PhoneTab"
-        android:text="播放" />
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="1dp"
+        android:background="@color/divider" />
 
-    <TextView
-        android:id="@+id/tabChannel"
-        style="@style/PhoneTab"
-        android:text="频道" />
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:background="@color/bg"
+        android:orientation="horizontal"
+        android:paddingTop="6dp"
+        android:paddingBottom="8dp">
 
-    <TextView
-        android:id="@+id/tabRemote"
-        style="@style/PhoneTab"
-        android:text="遥控器" />
+        <LinearLayout
+            android:id="@+id/itemPlay"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:background="?android:attr/selectableItemBackground"
+            android:clickable="true"
+            android:focusable="true"
+            android:gravity="center"
+            android:orientation="vertical"
+            android:paddingVertical="2dp">
 
-    <TextView
-        android:id="@+id/tabSettings"
-        style="@style/PhoneTab"
-        android:text="设置" />
+            <ImageView
+                android:id="@+id/iconPlay"
+                android:layout_width="22dp"
+                android:layout_height="22dp"
+                android:contentDescription="@null"
+                android:src="@drawable/ic_tab_play" />
+
+            <TextView
+                android:id="@+id/tabPlay"
+                style="@style/PhoneTab"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="2dp"
+                android:text="播放" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:id="@+id/itemChannel"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:background="?android:attr/selectableItemBackground"
+            android:clickable="true"
+            android:focusable="true"
+            android:gravity="center"
+            android:orientation="vertical"
+            android:paddingVertical="2dp">
+
+            <ImageView
+                android:id="@+id/iconChannel"
+                android:layout_width="22dp"
+                android:layout_height="22dp"
+                android:contentDescription="@null"
+                android:src="@drawable/ic_tab_channel" />
+
+            <TextView
+                android:id="@+id/tabChannel"
+                style="@style/PhoneTab"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="2dp"
+                android:text="频道" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:id="@+id/itemRemote"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:background="?android:attr/selectableItemBackground"
+            android:clickable="true"
+            android:focusable="true"
+            android:gravity="center"
+            android:orientation="vertical"
+            android:paddingVertical="2dp">
+
+            <ImageView
+                android:id="@+id/iconRemote"
+                android:layout_width="22dp"
+                android:layout_height="22dp"
+                android:contentDescription="@null"
+                android:src="@drawable/ic_tab_remote" />
+
+            <TextView
+                android:id="@+id/tabRemote"
+                style="@style/PhoneTab"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="2dp"
+                android:text="遥控器" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:id="@+id/itemSettings"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:background="?android:attr/selectableItemBackground"
+            android:clickable="true"
+            android:focusable="true"
+            android:gravity="center"
+            android:orientation="vertical"
+            android:paddingVertical="2dp">
+
+            <ImageView
+                android:id="@+id/iconSettings"
+                android:layout_width="22dp"
+                android:layout_height="22dp"
+                android:contentDescription="@null"
+                android:src="@drawable/ic_tab_settings" />
+
+            <TextView
+                android:id="@+id/tabSettings"
+                style="@style/PhoneTab"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="2dp"
+                android:text="设置" />
+        </LinearLayout>
+    </LinearLayout>
 </LinearLayout>

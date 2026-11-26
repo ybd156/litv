@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 扁平按键底：实心浅面 + 圆角，按下有极轻的青色涟漪。
+     遥控器页的按键从「卡片 + 圆角」换成这个，视觉上是一组平铺的方块而不是一摞卡片。 -->
+<ripple xmlns:android="http://schemas.android.com/apk/res/android"
+    android:color="@color/accent_soft">
+    <item>
+        <shape android:shape="rectangle">
+            <solid android:color="@color/surface" />
+            <corners android:radius="16dp" />
+        </shape>
+    </item>
+</ripple>

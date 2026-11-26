@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 底部导航：设置。三行滑杆（线 + 圆角滑块），比齿轮在小尺寸下更清楚。 -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="22dp"
+    android:height="22dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:fillColor="#FF8B949E"
+        android:pathData="M4,6.5h6.4v1.6H4zM14.6,6.5h5.4v1.6h-5.4zM12.8,4.9h1.8v4.8h-1.8z" />
+    <path
+        android:fillColor="#FF8B949E"
+        android:pathData="M4,11.2h3.6v1.6H4zM11.8,11.2h8.2v1.6h-8.2zM9.4,9.6h1.8v4.8H9.4z" />
+    <path
+        android:fillColor="#FF8B949E"
+        android:pathData="M4,15.9h8.4v1.6H4zM16.6,15.9h3.4v1.6h-3.4zM14.2,14.3h1.8v4.8h-1.8z" />
+</vector>

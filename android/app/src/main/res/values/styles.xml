@@ -1,15 +1,15 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
 
-    <!-- 设置页的分区标题 -->
+    <!-- 设置页的分区标题：扁平风格用「小号 + 次级灰 + 字距」，靠层级而不是靠颜色抢眼 -->
     <style name="SectionTitle">
         <item name="android:layout_width">match_parent</item>
         <item name="android:layout_height">wrap_content</item>
-        <item name="android:layout_marginTop">28dp</item>
-        <item name="android:layout_marginBottom">8dp</item>
-        <item name="android:textColor">@color/accent</item>
-        <item name="android:textSize">15sp</item>
-        <item name="android:textStyle">bold</item>
+        <item name="android:layout_marginTop">24dp</item>
+        <item name="android:layout_marginBottom">6dp</item>
+        <item name="android:letterSpacing">0.08</item>
+        <item name="android:textColor">@color/text_tertiary</item>
+        <item name="android:textSize">12sp</item>
     </style>
 
     <!-- 设置行：整行可聚焦，焦点描边 + 放大，TV 上远处也能看清 -->
@@ -45,37 +45,36 @@
         <item name="android:textSize">13sp</item>
     </style>
 
-    <!-- 手机端底部 Tab -->
+    <!-- 手机端底部 Tab：图标在上、文字在下，选中只靠颜色（扁平导航栏的做法） -->
     <style name="PhoneTab">
-        <item name="android:layout_width">0dp</item>
+        <item name="android:layout_width">wrap_content</item>
         <item name="android:layout_height">wrap_content</item>
-        <item name="android:layout_weight">1</item>
         <item name="android:gravity">center</item>
-        <item name="android:paddingVertical">8dp</item>
+        <item name="android:paddingVertical">0dp</item>
         <item name="android:textColor">@color/text_secondary</item>
-        <item name="android:textSize">14sp</item>
+        <item name="android:textSize">11sp</item>
     </style>
 
-    <!-- 手机端分组 chip -->
+    <!-- 手机端分组 chip：扁平胶囊，选中态用实底青（代码里换 drawable） -->
     <style name="GroupChip">
         <item name="android:layout_width">wrap_content</item>
         <item name="android:layout_height">wrap_content</item>
         <item name="android:layout_marginHorizontal">4dp</item>
-        <item name="android:background">@drawable/bg_card</item>
+        <item name="android:background">@drawable/bg_pill_surface</item>
         <item name="android:paddingHorizontal">14dp</item>
         <item name="android:paddingVertical">7dp</item>
         <item name="android:textColor">@color/text_secondary</item>
         <item name="android:textSize">13sp</item>
     </style>
-    <!-- 手机遥控按键 -->
+    <!-- 手机遥控按键：扁平方块（实心浅面 + 轻涟漪），不再是圆角卡片 -->
     <style name="RemoteKey">
-        <item name="android:layout_width">76dp</item>
-        <item name="android:layout_height">76dp</item>
-        <item name="android:layout_margin">6dp</item>
-        <item name="android:background">@drawable/bg_card</item>
+        <item name="android:layout_width">74dp</item>
+        <item name="android:layout_height">74dp</item>
+        <item name="android:layout_margin">5dp</item>
+        <item name="android:background">@drawable/bg_key_flat</item>
         <item name="android:gravity">center</item>
         <item name="android:textColor">@color/text_primary</item>
-        <item name="android:textSize">20sp</item>
+        <item name="android:textSize">19sp</item>
     </style>
 
     <style name="RemoteKeyAccent" parent="RemoteKey">

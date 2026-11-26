@@ -14,4 +14,13 @@
     <color name="focus_stroke">#FF2DD4BF</color>
     <color name="danger">#FFF85149</color>
     <color name="focus_blue">#FF3D8BFD</color>
+
+    <!-- 手机版扁平化用的中性面：只靠明度分层，不用阴影和渐变 -->
+    <color name="surface">#FF12161B</color>
+    <color name="surface_alt">#FF191F26</color>
+    <color name="divider">#FF232A33</color>
+    <color name="text_tertiary">#FF6B7785</color>
+    <!-- 强调色的低透明度底：胶囊/选中行用，深浅两档 -->
+    <color name="accent_soft">#262DD4BF</color>
+    <color name="accent_softer">#142DD4BF</color>
 </resources>

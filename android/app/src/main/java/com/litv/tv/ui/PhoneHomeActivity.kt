@@ -67,6 +67,8 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
     private lateinit var playName: TextView
     private lateinit var playEngine: TextView
     private lateinit var playNow: TextView
+    /** 「正在播」胶囊：和 playNow 同一行，播放器上方的 liveBadge 是直播/回放，这里只是栏目标签。 */
+    private lateinit var playNowTag: TextView
     private lateinit var playProgressRow: View
     private lateinit var playProgress: android.widget.ProgressBar
     private lateinit var playProgressPct: TextView
@@ -101,6 +103,8 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
     private lateinit var status: TextView
     private lateinit var empty: TextView
     private lateinit var groupChips: LinearLayout
+    /** 源分类 chip 行（全部源 / 自建源 / 内置源），口径和 TV 频道面板最左列一致 */
+    private lateinit var sourceChips: LinearLayout
     private lateinit var searchInput: EditText
     private lateinit var adapter: PhoneChannelAdapter
 
@@ -161,6 +165,10 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
     private var groups: List<String> = emptyList()
     private var selectedGroup: String? = null
     private var onlyFav = false
+    /** 源分类：null = 全部源；true = 只看内置源（央视频）；false = 只看自建源 */
+    private var sourceBuiltinOnly: Boolean? = null
+    /** 服务端版本，用来判断这个部署支不支持回看（edge 实例没有时移接口） */
+    private var serverVersion = ""
     private var currentTab = TAB_PLAY
 
     private var currentChannel: Channel? = null
@@ -234,6 +242,7 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
         playName = findViewById(R.id.playName)
         playEngine = findViewById(R.id.playEngine)
         playNow = findViewById(R.id.playNow)
+        playNowTag = findViewById(R.id.playNowTag)
         playProgressRow = findViewById(R.id.playProgressRow)
         playProgress = findViewById(R.id.playProgress)
         playProgressPct = findViewById(R.id.playProgressPct)
@@ -277,6 +286,7 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
         status = findViewById(R.id.status)
         empty = findViewById(R.id.empty)
         groupChips = findViewById(R.id.groupChips)
+        sourceChips = findViewById(R.id.sourceChips)
         searchInput = findViewById(R.id.searchInput)
 
         // 视频区高度统一走 applyVideoRatio()。
@@ -372,16 +382,18 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
     }
 
     private fun setupTabs() {
-        findViewById<TextView>(R.id.tabPlay).setOnClickListener { switchTab(TAB_PLAY) }
-        findViewById<TextView>(R.id.tabChannel).setOnClickListener { switchTab(TAB_CHANNEL) }
-        findViewById<TextView>(R.id.tabRemote).setOnClickListener {
+        // 点整块（图标 + 文字）都算点这个 tab：扁平导航栏里图标占的面积比文字大，
+        // 只给 TextView 挂监听会让"点图标没反应"。
+        findViewById<View>(R.id.itemPlay).setOnClickListener { switchTab(TAB_PLAY) }
+        findViewById<View>(R.id.itemChannel).setOnClickListener { switchTab(TAB_CHANNEL) }
+        findViewById<View>(R.id.itemRemote).setOnClickListener {
             // 和设置页同理：遥控器是应用内页面，不该把播放停掉。
             // 停了就要重新拉流，用户看到的就是"点遥控器回来要重播"。
             suppressPauseForInternalPage = true
             startActivity(Intent(this, RemoteActivity::class.java))
             noTransition()
         }
-        findViewById<TextView>(R.id.tabSettings).setOnClickListener {
+        findViewById<View>(R.id.itemSettings).setOnClickListener {
             // 打开设置时不要停播：设置是覆盖在本页之上的同一应用页面，
             // 播到一半点设置就断流，用户会以为"点了设置就卡了"。
             suppressPauseForInternalPage = true
@@ -914,8 +926,19 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
     private fun highlightTabs() {
         val on = getColor(R.color.accent)
         val off = getColor(R.color.text_secondary)
-        findViewById<TextView>(R.id.tabPlay).setTextColor(if (currentTab == TAB_PLAY) on else off)
-        findViewById<TextView>(R.id.tabChannel).setTextColor(if (currentTab == TAB_CHANNEL) on else off)
+        // 图标和文字一起变色：只改文字的话，选中项在小屏上几乎看不出来。
+        val pairs = listOf(
+            Triple(R.id.tabPlay, R.id.iconPlay, currentTab == TAB_PLAY),
+            Triple(R.id.tabChannel, R.id.iconChannel, currentTab == TAB_CHANNEL),
+            // 遥控器 / 设置是跳出去的独立页，回到本页时两个都不算选中。
+            Triple(R.id.tabRemote, R.id.iconRemote, false),
+            Triple(R.id.tabSettings, R.id.iconSettings, false),
+        )
+        pairs.forEach { (textId, iconId, active) ->
+            val tint = if (active) on else off
+            findViewById<TextView>(textId).setTextColor(tint)
+            findViewById<android.widget.ImageView>(iconId).setColorFilter(tint)
+        }
     }
 
     // ---------------------------------------------------------------- 数据
@@ -991,6 +1014,7 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
     private fun apply(b: Bootstrap, fromCache: Boolean) {
         // 网络回来的才可信；缓存里可能没有 client_parse 字段
         if (!fromCache) app.prefs.clientParseSeen = b.clientParseFlag != 0
+        serverVersion = b.server.version
         all = b.channels
         favorites.clear(); favorites.addAll(b.favorites)
         nowTitles.clear(); nowTitles.putAll(b.now.associate { it.channelId to it.title })
@@ -1064,14 +1088,23 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
 
     private fun renderChips() {
         groupChips.removeAllViews()
-        addChip("全部") { selectedGroup = null; onlyFav = false; render() }
+        addChip(groupChips, "全部", selectedGroup == null && !onlyFav) { selectedGroup = null; onlyFav = false; render() }
         // C1：收藏 chip 常显。以前是 if (favorites.isNotEmpty()) —— 新装用户
         // 连"收藏"这个入口都看不到，自然觉得"没有收藏"。
-        addChip("★ 收藏") { onlyFav = true; render() }
-        groups.forEach { g -> addChip(g) { selectedGroup = g; onlyFav = false; render() } }
+        addChip(groupChips, "★ 收藏", onlyFav) { onlyFav = true; render() }
+        groups.forEach { g ->
+            addChip(groupChips, g, selectedGroup == g && !onlyFav) { selectedGroup = g; onlyFav = false; render() }
+        }
+
+        // 源分类：和 TV 频道面板最左列同口径。手机以前把自建源和央视频混在一个列表里，
+        // 用户没法只在内置源（央视频）里挑台 —— 而只有内置源能回看。
+        sourceChips.removeAllViews()
+        addChip(sourceChips, "全部源", sourceBuiltinOnly == null) { sourceBuiltinOnly = null; render() }
+        addChip(sourceChips, "自建源", sourceBuiltinOnly == false) { sourceBuiltinOnly = false; render() }
+        addChip(sourceChips, "内置源", sourceBuiltinOnly == true) { sourceBuiltinOnly = true; render() }
     }
 
-    private fun addChip(label: String, onClick: () -> Unit) {
+    private fun addChip(into: LinearLayout, label: String, selected: Boolean, onClick: () -> Unit) {
         val tv = TextView(this)
         tv.text = label
         tv.setTextAppearance(R.style.GroupChip)
@@ -1082,9 +1115,12 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
         ).apply { marginEnd = dp(8) }
         tv.layoutParams = lp
         tv.gravity = Gravity.CENTER
-        tv.background = getDrawable(R.drawable.bg_card)
+        // 选中 = 实底青 + 深字；未选中 = 浅面 + 次要字。扁平风格里不靠阴影区分层级。
+        tv.background = getDrawable(if (selected) R.drawable.bg_pill_accent else R.drawable.bg_pill_surface)
+        tv.setTextColor(getColor(if (selected) R.color.bg else R.color.text_secondary))
+        if (selected) tv.setTypeface(null, android.graphics.Typeface.BOLD)
         tv.setOnClickListener { onClick() }
-        groupChips.addView(tv)
+        into.addView(tv)
     }
 
     private fun render() {
@@ -1092,10 +1128,15 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
         val filtered = all.filter { ch ->
             val okFav = !onlyFav || favorites.contains(ch.id)
             val okGroup = selectedGroup == null || ch.group == selectedGroup
+            val okSource = when (sourceBuiltinOnly) {
+                null -> true
+                true -> com.litv.tv.data.YspClient.isYspChannel(ch.id)
+                false -> !com.litv.tv.data.YspClient.isYspChannel(ch.id)
+            }
             val okKw = kw.isBlank() ||
                 ch.name.contains(kw, ignoreCase = true) ||
                 ch.group.contains(kw, ignoreCase = true)
-            okFav && okGroup && okKw
+            okFav && okGroup && okSource && okKw
         }
         adapter.submit(filtered, nowTitles, favorites)
         empty.visibility = if (filtered.isEmpty()) View.VISIBLE else View.GONE
@@ -1394,11 +1435,15 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
         // 没有节目单时这几行都不占位——下面的节目单区域已经会显示「暂无节目单」。
         if (programs.isEmpty()) {
             playNow.visibility = View.GONE
+            playNowTag.visibility = View.GONE
             playProgressRow.visibility = View.GONE
             playNext.visibility = View.GONE
         } else {
+            // 扁平化后「正在播」变成左边的小胶囊，标题只留节目名：
+            // 旧版一行里写着「正在播：正在播：xxx」这种重复，是这次顺手修掉的。
+            playNowTag.visibility = if (cur != null) View.VISIBLE else View.GONE
             playNow.visibility = View.VISIBLE
-            playNow.text = cur?.let { "正在播：${it.title}" } ?: "正在播：—"
+            playNow.text = cur?.title ?: "—"
 
             // 当前节目进度（iOS 端早就有，安卓一直只有一行标题）
             if (cur != null && cur.endAt > cur.startAt) {
@@ -1511,15 +1556,23 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
         }
         days.forEachIndexed { i, key ->
             val label = com.litv.tv.data.EpgPrograms.dayLabel(key)
+            val sel = i == days.indexOf(selectedKey)
             val chip = TextView(this).apply {
                 text = label
                 textSize = 13f
+                gravity = android.view.Gravity.CENTER
+                // 扁平胶囊：选中＝强调色实底（深色字），未选＝中性面（次要字）。
+                // 不再用「只改文字颜色」那种一眼看不出来的选中态。
+                setBackgroundResource(if (sel) R.drawable.bg_pill_accent else R.drawable.bg_pill_surface)
+                setTextColor(getColor(if (sel) R.color.bg else R.color.text_secondary))
+                if (sel) setTypeface(null, android.graphics.Typeface.BOLD)
+                minHeight = dp(34)
+                minWidth = dp(52)
+                setPadding(dp(14), dp(6), dp(14), dp(6))
                 layoutParams = LinearLayout.LayoutParams(
                     LinearLayout.LayoutParams.WRAP_CONTENT,
                     LinearLayout.LayoutParams.WRAP_CONTENT,
-                )
-                setPadding(dp(12), dp(6), dp(12), dp(6))
-                setTextColor(getColor(if (i == days.indexOf(selectedKey)) R.color.accent else R.color.text_secondary))
+                ).apply { marginEnd = dp(8) }
                 isClickable = true
                 setOnClickListener {
                     epgDayOffset = i
@@ -1548,33 +1601,65 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
             }
         }
 
-        // ---- 节目行 ----
+        // ---- 节目行（扁平）：一行 = 时间 + 标题 + 状态胶囊，只靠字重/明度/底色分层 ----
+        // 整张节目单共用一个判据：这个台此刻能不能回看。逐行去问会是 N 次查表。
+        val canReplay = replayCapable(currentChannel)
         var playingRow: View? = null
         byDay[selectedKey]?.forEach { p ->
             val action = com.litv.tv.data.EpgPrograms.actionOf(p, now)
             val playing = action == com.litv.tv.data.EpgPrograms.Action.PLAYING
             val finished = action == com.litv.tv.data.EpgPrograms.Action.REPLAY
+            val reserved = reservedStarts.contains(p.startAt)
             val row = LinearLayout(this).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = android.view.Gravity.CENTER_VERTICAL
-                setPadding(dp(10), dp(9), dp(10), dp(9))
+                minimumHeight = dp(52)
+                setPadding(dp(12), dp(8), dp(12), dp(8))
+                // 「正在播」用极淡的强调色底标出来；其余行透明（扁平不画卡片）
+                setBackground(
+                    if (playing) pillBg(getColor(R.color.accent_softer), 12)
+                    else rowRipple(android.graphics.Color.TRANSPARENT, 12),
+                )
+                layoutParams = LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                ).apply { bottomMargin = dp(2) }
             }
+
+            val time = TextView(this).apply {
+                text = com.litv.tv.data.EpgPrograms.timeLabel(p.startAt)
+                textSize = 12f
+                setTextColor(getColor(if (playing) R.color.accent else R.color.text_tertiary))
+                layoutParams = LinearLayout.LayoutParams(dp(52), LinearLayout.LayoutParams.WRAP_CONTENT)
+            }
+            row.addView(time)
+
             val title = TextView(this).apply {
-                text = com.litv.tv.data.EpgPrograms.timeLabel(p.startAt) + "  " + p.title
-                textSize = 13f
-                setTextColor(getColor(if (playing) R.color.accent else R.color.text_secondary))
+                text = p.title
+                textSize = 14f
+                maxLines = 1
+                ellipsize = android.text.TextUtils.TruncateAt.END
+                // 已播完的节目降一档明度，表示「这条只能回看」；正在播的加粗
+                setTextColor(getColor(if (finished && !playing) R.color.text_secondary else R.color.text_primary))
                 if (playing) setTypeface(null, android.graphics.Typeface.BOLD)
                 layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
             }
             row.addView(title)
 
             val actionView = TextView(this).apply {
-                textSize = 12f
+                textSize = 11f
+                gravity = android.view.Gravity.CENTER
                 setPadding(dp(10), dp(4), dp(10), dp(4))
                 when {
-                    playing -> { text = "正在播"; setTextColor(getColor(R.color.accent)) }
-                    finished -> {
+                    playing -> {
+                        text = "正在播"
+                        setBackground(pillBg(getColor(R.color.accent), 100))
+                        setTextColor(getColor(R.color.bg))
+                        setTypeface(null, android.graphics.Typeface.BOLD)
+                    }
+                    finished && canReplay -> {
                         text = "回看"
+                        setBackground(pillBg(getColor(R.color.accent_softer), 100))
                         setTextColor(getColor(R.color.accent))
                         isClickable = true
                         setOnClickListener {
@@ -1583,23 +1668,32 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
                             openReplayFor(currentChannel ?: return@setOnClickListener, p)
                         }
                     }
-                    reservedStarts.contains(p.startAt) -> {
+                    finished -> {
+                        // 这个台此刻回看不了（edge 部署没有时移接口，或最近刚失败过）：
+                        // 不留点不通的角标，只显示时间 + 标题。
+                        visibility = View.GONE
+                    }
+                    reserved -> {
                         text = "已预约"
+                        setBackground(pillBg(getColor(R.color.surface_alt), 100))
                         setTextColor(getColor(R.color.text_primary))
                     }
                     else -> {
                         text = "预约"
+                        setBackground(pillBg(getColor(R.color.surface_alt), 100))
                         setTextColor(getColor(R.color.text_secondary))
                     }
                 }
+                layoutParams = LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                ).apply { marginStart = dp(8) }
             }
             row.addView(actionView)
-            row.layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT,
-            )
+
             // 整行可点：动作按钮只有几个字，手指容易点偏；点整行等价于点动作。
-            if (!playing) {
+            // 已播完但回看不了的，整行也不接点击 —— 点了没反应比点不通更让人困惑。
+            if (!playing && (!finished || canReplay)) {
                 row.isClickable = true
                 row.setOnClickListener {
                     val ch = currentChannel ?: return@setOnClickListener
@@ -1651,7 +1745,7 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT,
             )
-            setPadding(dp(16), 0, dp(16), dp(4))
+            setPadding(dp(16), dp(8), dp(16), dp(4))
             addView(
                 LinearLayout(this@PhoneHomeActivity).apply {
                     orientation = LinearLayout.HORIZONTAL
@@ -1711,6 +1805,7 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
             val url = com.litv.tv.data.LocalHlsProxy.replayUrlFor(ch.id, startSec, endSec)
             if (url == null) {
                 toast("回看不可用：本地代理未启动")
+                noteReplayFailure(ch, "本地代理未启动")
                 return
             }
             currentChannel = ch
@@ -1729,7 +1824,10 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
 
         app.api.timeshift(ch.id, onOk = { info ->
             if (!info.enabled || info.availableSeconds <= 0) {
-                runOnUiThread { toast("这个台暂时没有可回看的缓冲") }
+                runOnUiThread {
+                    toast("这个台暂时没有可回看的缓冲")
+                    noteReplayFailure(ch, "没有可用缓冲")
+                }
                 return@timeshift
             }
             runOnUiThread {
@@ -1752,8 +1850,34 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
                 )
             }
         }, onErr = { msg ->
-            runOnUiThread { toast("回看不可用：$msg") }
+            runOnUiThread {
+                toast("回看不可用：$msg")
+                noteReplayFailure(ch, "时移接口失败")
+            }
         })
+    }
+
+    /**
+     * 这个台此刻能不能回看。角标画不画就看它 —— 画了却点不通比不画更糟。
+     *
+     * 两条判据（与电视端同一套）：部署方式支不支持（edge 实例没有时移接口，
+     * 只有内置源走本地代理直连 playback CDN 不受影响）；这个台最近失败过没有。
+     */
+    private fun replayCapable(ch: Channel?): Boolean {
+        if (ch == null) return false
+        val base = com.litv.tv.data.ReplayCapability.canReplay(
+            com.litv.tv.data.YspClient.isYspChannel(ch.id), serverVersion,
+        )
+        return base &&
+            !com.litv.tv.data.ReplayFailureMemo.isCoolingDown(ch.id, System.currentTimeMillis())
+    }
+
+    /** 回看失败记账：这个台 10 分钟内不再画「回看」角标，省得用户反复点到死路。 */
+    private fun noteReplayFailure(ch: Channel?, why: String) {
+        val id = ch?.id ?: return
+        com.litv.tv.data.ReplayFailureMemo.markFailed(id, System.currentTimeMillis())
+        android.util.Log.i(TAG, "回看失败记账：$id（$why），10 分钟内不再画回看角标")
+        renderEpg()
     }
 
     /**
@@ -2239,6 +2363,31 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
         if (app.prefs.directMode == "relay") "relay" else "auto"
 
 
+
+    // ---------------------------------------------------------------- 扁平化小工具
+
+    /** 纯色圆角底：扁平风格只靠明度差分层，不用描边也不用阴影。颜色传**已解析的色值**。 */
+    private fun pillBg(color: Int, radiusDp: Int): android.graphics.drawable.GradientDrawable =
+        android.graphics.drawable.GradientDrawable().apply {
+            shape = android.graphics.drawable.GradientDrawable.RECTANGLE
+            cornerRadius = dp(radiusDp).toFloat()
+            setColor(color)
+        }
+
+    /** 行按压反馈：扁平不等于没有反馈，点下去得看得见（RippleDrawable，API 21+）。 */
+    private fun rowRipple(color: Int, radiusDp: Int): android.graphics.drawable.Drawable {
+        val content = pillBg(color, radiusDp)
+        val mask = android.graphics.drawable.GradientDrawable().apply {
+            shape = android.graphics.drawable.GradientDrawable.RECTANGLE
+            cornerRadius = dp(radiusDp).toFloat()
+            setColor(android.graphics.Color.WHITE)
+        }
+        return android.graphics.drawable.RippleDrawable(
+            android.content.res.ColorStateList.valueOf(getColor(R.color.accent_soft)),
+            content,
+            mask,
+        )
+    }
 
     /**
      * 凭据失效（2003/401）：清掉本机凭据并回绑定页。

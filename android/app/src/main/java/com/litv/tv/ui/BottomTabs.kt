@@ -4,6 +4,7 @@ import android.app.Activity
 import android.content.Intent
 import android.os.Build
 import android.view.View
+import android.widget.ImageView
 import android.widget.TextView
 import com.litv.tv.R
 
@@ -28,30 +29,46 @@ object BottomTabs {
         val accent = activity.getColor(R.color.accent)
         val dim = activity.getColor(R.color.text_secondary)
 
-        val tabs = mapOf(
-            TAB_PLAY to activity.findViewById<TextView>(R.id.tabPlay),
-            TAB_CHANNEL to activity.findViewById<TextView>(R.id.tabChannel),
-            TAB_REMOTE to activity.findViewById<TextView>(R.id.tabRemote),
-            TAB_SETTINGS to activity.findViewById<TextView>(R.id.tabSettings),
+        val tabs = listOf(
+            Tab(TAB_PLAY, R.id.tabPlay, R.id.iconPlay, R.id.itemPlay),
+            Tab(TAB_CHANNEL, R.id.tabChannel, R.id.iconChannel, R.id.itemChannel),
+            Tab(TAB_REMOTE, R.id.tabRemote, R.id.iconRemote, R.id.itemRemote),
+            Tab(TAB_SETTINGS, R.id.tabSettings, R.id.iconSettings, R.id.itemSettings),
         )
-        tabs[current]?.setTextColor(accent)
-        tabs.filterKeys { it != current }.values.forEach { it?.setTextColor(dim) }
 
-        tabs[TAB_PLAY]?.setOnClickListener { backToHome(activity, TAB_PLAY) }
-        tabs[TAB_CHANNEL]?.setOnClickListener { backToHome(activity, TAB_CHANNEL) }
-        tabs[TAB_REMOTE]?.setOnClickListener {
-            if (current == TAB_REMOTE) return@setOnClickListener
-            activity.startActivity(Intent(activity, RemoteActivity::class.java))
-            activity.noTransition()
-            activity.finish()
+        // 选中只靠颜色：文字与图标同色，未选中一律压到次级灰（扁平导航的常见做法）
+        tabs.forEach { t ->
+            val tint = if (t.key == current) accent else dim
+            activity.findViewById<TextView>(t.textId)?.setTextColor(tint)
+            activity.findViewById<ImageView>(t.iconId)?.setColorFilter(tint)
         }
-        tabs[TAB_SETTINGS]?.setOnClickListener {
-            if (current == TAB_SETTINGS) return@setOnClickListener
-            activity.startActivity(Intent(activity, SettingsActivity::class.java))
-            activity.noTransition()
-            activity.finish()
+
+        tabs.forEach { t ->
+            // 点击挂在整个格子上（图标 + 文字都能点）。老布局没有容器，退化挂文字。
+            val target = activity.findViewById<View>(t.itemId)
+                ?: activity.findViewById<TextView>(t.textId)
+                ?: return@forEach
+            target.setOnClickListener {
+                when (t.key) {
+                    TAB_PLAY -> backToHome(activity, TAB_PLAY)
+                    TAB_CHANNEL -> backToHome(activity, TAB_CHANNEL)
+                    TAB_REMOTE -> if (current != TAB_REMOTE) {
+                        activity.startActivity(Intent(activity, RemoteActivity::class.java))
+                        activity.noTransition()
+                        activity.finish()
+                    }
+                    TAB_SETTINGS -> if (current != TAB_SETTINGS) {
+                        activity.startActivity(Intent(activity, SettingsActivity::class.java))
+                        activity.noTransition()
+                        activity.finish()
+                    }
+                }
+            }
         }
     }
+
+    /** 一格导航：文字、图标、可点区域三个 id 绑在一起，少写一份 map 就少一处对不上。 */
+    private data class Tab(val key: String, val textId: Int, val iconId: Int, val itemId: Int)
 
     /**
      * 回首页，并指定要落在哪个 Tab。

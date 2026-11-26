@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 搜索框底：扁平输入面（比卡片浅一档），不用描边。
+     2026-11-27：手机版整体改扁平风格，输入框不再用 bg_card（那是给「卡片」的）。 -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <solid android:color="@color/surface" />
+    <corners android:radius="12dp" />
+</shape>

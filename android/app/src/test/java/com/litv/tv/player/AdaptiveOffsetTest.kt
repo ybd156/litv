@@ -98,4 +98,22 @@ class AdaptiveOffsetTest {
         assertEquals(6_000L, a.stepBackMs(before))
         assertEquals(0L, a.stepBackMs(a.currentMs))
     }
+
+    @Test
+    fun 五分钟内两次见底中间健康过也算一段抖动() {
+        val a = AdaptiveOffset()
+        assertFalse(a.onSample(400, 1_000))
+        assertFalse(a.onSample(9_000, 30_000)) // 健康采样把计数衰减到 0
+        assertFalse(a.onSample(500, 120_000))  // 重新算第一次
+        assertTrue(a.onSample(500, 180_000))   // 5 分钟内的第二次 → 加档
+        assertEquals(18_000L, a.currentMs)
+    }
+
+    @Test
+    fun 两次见底隔了六分钟就不算同一段抖动() {
+        val a = AdaptiveOffset()
+        assertFalse(a.onSample(300, 1_000))
+        assertFalse(a.onSample(300, 1_000 + AdaptiveOffset.LOW_WINDOW_MS + 60_000))
+        assertEquals(12_000L, a.currentMs)
+    }
 }

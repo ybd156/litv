@@ -9,10 +9,15 @@ package com.litv.tv.player
  * 表现为「偶尔卡一下，已缓冲 170ms」。
  *
  * 规则：
- *  - 连续 [LOW_HITS] 次采样已缓冲低于 [LOW_MS] → 加一档落后量（最多 [maxMs]），
- *    冷却 [COOLDOWN_MS]，避免一次抖动就把落后量顶到上限；
+ *  - [LOW_WINDOW_MS] 之内出现 [LOW_HITS] 次「已缓冲低于 [LOW_MS]」→ 加一档落后量
+ *    （最多 [maxMs]），冷却 [COOLDOWN_MS]，避免一次抖动就把落后量顶到上限；
  *  - 连续 [HIGH_HITS] 次采样已缓冲高于 [HIGH_MS] → 退一档（最低回到 [baseMs]）；
  *    网络恢复后延迟自己降回来，不用用户手动调。
+ *
+ * 为什么是「一段时间内两次」而不是「连续两次」：2026-11-26 实测三次卡顿分别在
+ * 15:50、15:54、15:59，中间隔着大量健康采样。按「连续」算，每两次低点之间都被
+ * 健康采样清零，规则永远不触发（跑了两轮一次加档都没有）；按时间窗算，
+ * 5 分钟内的第二次低点就会加档。
  *
  * 调用方负责按 `currentMs` 真正调整播放位置；本类只做判定。
  */
@@ -26,12 +31,16 @@ class AdaptiveOffset(
 
     private var lowHits = 0
     private var highHits = 0
+    private var lastLowAt = 0L
     private var lastChangeAt = 0L
 
     /** 返回 true 表示 `currentMs` 变了，调用方需要据此调整播放位置。 */
     fun onSample(bufferedMs: Long, nowMs: Long): Boolean {
         if (bufferedMs < LOW_MS) {
+            // 时间窗外的旧低点不算数，否则「一小时前卡过一次」也会被攒成连续。
+            if (lastLowAt > 0L && nowMs - lastLowAt > LOW_WINDOW_MS) lowHits = 0
             lowHits++
+            lastLowAt = nowMs
             highHits = 0
             if (lowHits >= LOW_HITS && currentMs < maxMs && nowMs - lastChangeAt >= COOLDOWN_MS) {
                 currentMs = (currentMs + stepMs).coerceAtMost(maxMs)
@@ -62,6 +71,7 @@ class AdaptiveOffset(
         currentMs = baseMs
         lowHits = 0
         highHits = 0
+        lastLowAt = 0L
         lastChangeAt = 0L
     }
 
@@ -77,6 +87,9 @@ class AdaptiveOffset(
 
         const val LOW_HITS = 2
         const val HIGH_HITS = 12
+
+        /** 两次低水位相隔超过这么久，就不再算「同一段抖动」。 */
+        const val LOW_WINDOW_MS = 300_000L
 
         /** 加档冷却：60 秒内不再加，避免一次网络抖动直接把落后量顶到上限。 */
         const val COOLDOWN_MS = 60_000L

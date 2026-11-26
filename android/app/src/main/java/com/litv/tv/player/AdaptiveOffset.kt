@@ -86,7 +86,14 @@ class AdaptiveOffset(
         const val HIGH_MS = 8_000L
 
         const val LOW_HITS = 2
-        const val HIGH_HITS = 12
+
+        /**
+         * 退档门槛：连续 24 次采样（5 秒一次 ≈ 2 分钟）都很富余才退一档。
+         * 原来是 12（≈1 分钟），实测加档后 70 秒就退回来了——抖动如果每几分钟来一次，
+         * 就会「加 6 秒 → 一分钟后退回 → 下次再卡再加」来回切，每次加档还要把播放位置
+         * 往回挪 6 秒，观感上是极短的顿一下。宁可多背一分钟延迟。
+         */
+        const val HIGH_HITS = 24
 
         /** 两次低水位相隔超过这么久，就不再算「同一段抖动」。 */
         const val LOW_WINDOW_MS = 300_000L

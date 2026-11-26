@@ -646,8 +646,17 @@ class ExoEngine : PlayerEngine {
             ) {
                 // 已经在播却退回 BUFFERING = 重缓冲（网络或解码跟不上）
                 if (playbackState == Player.STATE_BUFFERING && exoFirstFrameRendered) {
-                    Log.w(TAG, "重缓冲：播放中回到 BUFFERING")
-                    com.litv.tv.data.PlayLog.w(TAG, "重缓冲：播放中回到 BUFFERING")
+                    // ★ 带上「已经缓冲了多少毫秒」。只有这个数字能把两种完全不同的成因分开：
+                    //   · 网络真的断了/很慢 → 缓冲被吃穿，经常接近 0；
+                    //   · 清单窗口太短（比目标缓冲还短）→ 反复卡在几百毫秒到几秒，
+                    //     而分片统计看起来一切正常（每片都快，只是不够多）。
+                    val buffered = runCatching {
+                        val pl = player ?: return@runCatching -1L
+                        (pl.bufferedPosition - pl.currentPosition).coerceAtLeast(0L)
+                    }.getOrDefault(-1L)
+                    val msg = "重缓冲：播放中回到 BUFFERING（已缓冲 ${buffered}ms）"
+                    Log.w(TAG, msg)
+                    com.litv.tv.data.PlayLog.w(TAG, msg)
                 }
             }
         })

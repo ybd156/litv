@@ -232,6 +232,16 @@ object LocalHlsProxy {
     /** 上一次把 MEDIA-SEQUENCE 写进日志的时刻（30 秒一行，避免刷屏）。 */
     @Volatile private var lastSeqLogAt = 0L
 
+    /**
+     * 上一次把「清单体检」写进日志的时刻（30 秒一行）。
+     *
+     * 为什么要单独记：播放器每隔几秒就来要一次清单，每次打一行会把日志刷爆；
+     * 而窗口长度是**准静态**的量（源站窗口不会几秒一变），30 秒一行的采样足够判断
+     * 「窗口是不是一直只有十几秒」。
+     */
+    /** 每条清单各自限流（源清单 / 送出的累计清单是两行，不能互相吃掉额度）。 */
+    private val lastPlaylistLogAt = ConcurrentHashMap<String, Long>()
+
     /** 当前用第几条线路（0 起）。 */
     @Volatile private var lineIndex = 0
 
@@ -443,6 +453,19 @@ object LocalHlsProxy {
     @Volatile private var reqReferer: String? = null
 
     private val rawCache = ConcurrentHashMap<String, CachedM3u8>()
+
+    /**
+     * 每条自建源清单的「加深窗口」。
+     *
+     * 源站每次只回 3 片（≈17 秒），而 Exo 自建源档位的缓冲目标是 22~32 秒 ——
+     * 缓冲永远攒不满，播放头一碰窗口末尾就 BUFFERING（实测每分钟好几次，
+     * 已缓冲只剩 141~460ms）。把连续几次窗口按分片去重累积成 90 秒，问题就消失了。
+     *
+     * 只留最近 4 条：换台时旧窗口自然被淘汰，不会无限涨。
+     */
+    private val rawWindows = object : LinkedHashMap<String, LiveWindow>(8, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, LiveWindow>?): Boolean = size > 4
+    }
     private val rawSegCache = object : LinkedHashMap<String, ByteArray>(16, 0.75f, true) {
         // ★ 2026-11-24：12 → 24。
         //   预取窗口是 6 片，缓存只留 12 会让「刚预取好、还没播到就被挤掉」反复发生。
@@ -482,6 +505,7 @@ object LocalHlsProxy {
         //   清单只是「现在有哪些分片」，晚几秒的清单照样能播；真正要新鲜的是分片。
         if (cached != null) {
             refreshRawAsync(realUrl)
+            logPlaylistStats("raw(缓存)", cached.text, fetchMs = -1L)
             writeBody(out, cached.text.toByteArray(Charsets.UTF_8), "application/vnd.apple.mpegurl")
             return
         }
@@ -543,11 +567,25 @@ object LocalHlsProxy {
             tagUriPrefix = "/rawfile/",
             encode = ::b64enc,
         )
-        rawCache[realUrl] = CachedM3u8(rw.text, System.currentTimeMillis(), realUrl)
+        // ★ 窗口加深度（2026-11-26）：源站只给 3 片 ≈ 17 秒，比 Exo 自建源档位的目标缓冲
+        //   （22~32 秒）还短，缓冲永远攒不满 → 「重缓冲（已缓冲 141~460ms）」每分钟好几次。
+        //   连续几次源站窗口首尾相接，按分片去重累积成 90 秒再回给播放器。
+        val src = PlaylistStats.of(text)
+        val win = synchronized(rawWindows) { rawWindows.getOrPut(realUrl) { LiveWindow() } }
+        val fresh = LiveWindow.parse(rw.text, src.sequence)
+        val served = synchronized(win) {
+            win.append(fresh)
+            win.render()
+        }
+        rawCache[realUrl] = CachedM3u8(served, System.currentTimeMillis(), realUrl)
+        // ★ 清单体检：`raw` 这条路径是自建源（客户端解析）实际在用的，
+        //   不在这里记一行，`/ch/` 那边的体检日志在自建源上永远看不到。
+        logPlaylistStats("raw 源", text, System.currentTimeMillis() - t0)
+        logPlaylistStats("raw 送出", served, fetchMs = -1L)
         // ★ 预取窗口**尾部**：直播是滑动窗口，播放器从边缘往前播。
         //   旧实现写的是 segs.take(2)（最旧的两片），等于预取了它早就不用的东西。
         prefetchWindow(rw.mediaUrls)
-        return rw.text
+        return served
     }
 
     // ---------------------------------------------------------------- 清单保活
@@ -749,6 +787,7 @@ object LocalHlsProxy {
 
         val cached = cache[id]
         if (cached != null && System.currentTimeMillis() - cached.at < M3U8_TTL_MS) {
+            logPlaylistStats("ch=$id", cached.text, fetchMs = -1L)
             writeBody(out, cached.text.toByteArray(Charsets.UTF_8), "application/vnd.apple.mpegurl")
             return
         }
@@ -799,7 +838,11 @@ object LocalHlsProxy {
         //   原来最多重试 3 次、每次都可能等满超时 —— 播放器那边早就判死了
         //   （真机日志「加载慢 6088ms / 2KB」「加载慢 16367ms / 2KB」就是这么来的）。
         //   直播 playlist 只是「有哪些分片」的清单，用上一份旧的顶一下完全能播。
+        val fetchT0 = System.currentTimeMillis()
         var text: String? = runCatching { fetchText(realUrl!!) }.getOrNull()
+        // 清单本身的往返耗时：判断「卡一下」是分片慢还是清单慢，只看分片统计是不够的。
+        // 只量第一次取（后面失败重试那两次本身已经是异常路径，另有日志）。
+        val fetchMs = System.currentTimeMillis() - fetchT0
         if (text.isNullOrBlank()) {
             // ★ 这一句必须有：playurl 会过期（央视约 30~40 秒），
             //   不清 lineCache 的话下次还从缓存里取同一个死链，
@@ -859,7 +902,32 @@ object LocalHlsProxy {
         cache[id] = CachedM3u8(rw.text, System.currentTimeMillis(), playlistUrl)
         Log.i(TAG, "M3U8 ch=$id bytes=" + rw.text.length + " segs=" + rw.mediaUrls.size)
         PlayLog.w(TAG, "M3U8 ch=$id bytes=" + rw.text.length)
+        logPlaylistStats("ch=$id", playlistText, fetchMs)
         writeBody(out, rw.text.toByteArray(Charsets.UTF_8), "application/vnd.apple.mpegurl")
+    }
+
+    /**
+     * 清单体检：窗口有多长、目标多长、序号多少、取它花了多久（30 秒最多一行）。
+     *
+     * 判读方式（这正是加它的目的）：
+     *   · `窗口` 明显小于播放器的目标缓冲（自建源档位 `min=22000ms`）→ 缓冲永远攒不满，
+     *     播放头一碰末尾就 BUFFERING 一下，表现是「一秒内恢复、每分钟好几次」；
+     *   · `窗口` 够长但 `取清单` 经常几百毫秒以上 → 是清单往返慢，不是窗口问题；
+     *   · `序号` 长时间不动 → 源站没在产片，客户端做什么都没用。
+     *
+     * @param fetchMs 本次真正去源站取清单的耗时；命中本地缓存传 -1（没取）。
+     */
+    private fun logPlaylistStats(where: String, text: String, fetchMs: Long) {
+        val now = System.currentTimeMillis()
+        val last = lastPlaylistLogAt[where] ?: 0L
+        if (now - last < 30_000L) return
+        lastPlaylistLogAt[where] = now
+        val st = PlaylistStats.of(text)
+        val cost = if (fetchMs >= 0) "取清单=${fetchMs}ms" else "取清单=缓存"
+        val line = "清单体检 $where 分片=${st.segments} 窗口=${st.windowLabel()} " +
+            "目标=${st.targetDurationSec}s 序号=${st.sequence ?: "-"} $cost"
+        Log.i(TAG, line)
+        PlayLog.w(TAG, line)
     }
 
     private fun serveSegment(path: String, out: OutputStream) {

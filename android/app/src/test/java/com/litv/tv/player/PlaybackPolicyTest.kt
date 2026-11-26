@@ -63,19 +63,27 @@ class PlaybackPolicyTest {
     }
 
     @Test
-    fun `自建源有 22 秒地板`() {
+    fun `自建源有 22 秒地板且落后量至少 12 秒`() {
         val pol = PlaybackPolicy.exo(SourceKind.CUSTOM, bufferMs = 3_000, liveOffsetMs = 6_000)
         assertEquals(22_000, pol.cfgBufferMs)
-        assertEquals(22_000, pol.minBufferMs)
-        assertEquals(32_000, pol.maxBufferMs)
-        assertEquals(6_000L, pol.targetOffsetMs)
+        // min 夹到 20 秒上限：播放器能提前缓冲多少，上限是「离直播边缘的距离」＝ targetOffset
+        assertEquals(20_000, pol.minBufferMs)
+        assertEquals(35_000, pol.maxBufferMs)
+        // 落后量地板 12 秒：代理把窗口加深到 90 秒后，这才攒得出缓冲
+        assertEquals(12_000L, pol.targetOffsetMs)
     }
 
     @Test
-    fun `自建源上限封在 40 秒`() {
+    fun `自建源上限封在 35 秒`() {
         val pol = PlaybackPolicy.exo(SourceKind.CUSTOM, bufferMs = 45_000, liveOffsetMs = 6_000)
-        assertEquals(30_000, pol.minBufferMs)
-        assertEquals(40_000, pol.maxBufferMs)
+        assertEquals(20_000, pol.minBufferMs)
+        assertEquals(35_000, pol.maxBufferMs)
+    }
+
+    @Test
+    fun `自建源的落后量跟着设置走但不超过 25 秒`() {
+        assertEquals(20_000L, PlaybackPolicy.exo(SourceKind.CUSTOM, 8_000, liveOffsetMs = 20_000).targetOffsetMs)
+        assertEquals(25_000L, PlaybackPolicy.exo(SourceKind.CUSTOM, 8_000, liveOffsetMs = 60_000).targetOffsetMs)
     }
 
     @Test

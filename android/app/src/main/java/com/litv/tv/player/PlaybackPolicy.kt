@@ -127,22 +127,30 @@ object PlaybackPolicy {
     fun exo(source: SourceKind, bufferMs: Int, liveOffsetMs: Int): ExoPolicy {
         val cfg = if (source == SourceKind.BUILTIN) bufferMs else maxOf(bufferMs, CUSTOM_FLOOR_MS)
         // 内置源：14~16 秒 = 2~2.7 个 6 秒分片，抗一次抖动；同时 < 窗口一半（18 秒）。
-        // 自建源：20~30 秒覆盖 2~3 个 10 秒分片。
+        // 自建源：10~20 秒。**播放器能提前缓冲多少，上限是「离直播边缘的距离」**，
+        // 而那个距离就是 targetOffset（见下面的 offset）；min 再写 22~30 秒也攒不出来。
         val min = if (source == SourceKind.BUILTIN) {
             cfg.coerceIn(14_000, 16_000)
         } else {
-            cfg.coerceIn(20_000, 30_000)
+            cfg.coerceIn(10_000, 20_000)
         }
         // 上限必须**明显小于**直播窗口：内置源窗口 36 秒，上限压到 20 秒；
-        // 自建源窗口 60 秒以上，上限 40 秒（再大纯浪费内存，低端盒子还会被 GC 拖住）。
+        // 自建源由本地代理把窗口加深到 90 秒（`LiveWindow`），上限放到 35 秒仍有余量。
         val max = if (source == SourceKind.BUILTIN) {
             (min + 4_000).coerceIn(min + 2_000, 20_000)
         } else {
-            (min + 10_000).coerceIn(min + 2_000, 40_000)
+            (min + 15_000).coerceIn(min + 2_000, 35_000)
         }
         // 落后量 = targetOffset + minBuffer 是「离直播边缘的真实距离」。
         // 内置源窗口 36 秒：10 + 16 = 26 秒，留 10 秒余量（原来 20 + 14 = 34 秒只剩 2 秒）。
-        val offset = liveOffsetMs.coerceIn(4_000, 10_000).toLong()
+        // ★ 自建源：2026-11-26 实测上游窗口只有 3 片 ≈ 17 秒，代理加深到 87 秒后才敢把
+        //   落后量提到 12 秒以上 —— 这 12 秒就是「播放头前面永远有 12 秒可下载的内容」，
+        //   缓冲不会再被直播边缘卡到 141~460ms。代价是延迟增加约 12 秒（IPTV 常规量级）。
+        val offset = if (source == SourceKind.BUILTIN) {
+            liveOffsetMs.coerceIn(4_000, 10_000).toLong()
+        } else {
+            maxOf(liveOffsetMs, 12_000).coerceIn(4_000, 25_000).toLong()
+        }
         return ExoPolicy(cfg, min, max, START_MS, AFTER_REBUFFER_MS, offset)
     }
 

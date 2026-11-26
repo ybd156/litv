@@ -29,6 +29,7 @@ class SettingsActivity : AppCompatActivity() {
     private lateinit var valueEngine: TextView
     private lateinit var valueDecode: TextView
     private lateinit var valueScreenOff: TextView
+    private lateinit var valueLock: TextView
     private lateinit var valueBuffer: TextView
     private lateinit var valueLiveOffset: TextView
     private lateinit var valueExportLog: TextView
@@ -81,6 +82,7 @@ class SettingsActivity : AppCompatActivity() {
         valueEngine = findViewById(R.id.valueEngine)
         valueDecode = findViewById(R.id.valueDecode)
         valueScreenOff = findViewById(R.id.valueScreenOff)
+        valueLock = findViewById(R.id.valueLock)
         valueBuffer = findViewById(R.id.valueBuffer)
         valueLiveOffset = findViewById(R.id.valueLiveOffset)
         valueExportLog = findViewById(R.id.valueExportLog)
@@ -119,6 +121,34 @@ class SettingsActivity : AppCompatActivity() {
             app.prefs.screenOffAction = com.litv.tv.player.ScreenOffPlan.valueOf(v)
             valueScreenOff.text = v
         }
+
+        // 儿童锁：开启要绑定「当前正在播的台」，只能在播放页开；这一行负责关。
+        // 关锁必须输密码 —— 否则小孩自己进设置就把锁关掉了（用户 2026-11-26 反馈）。
+        findViewById<View>(R.id.rowLock).setOnClickListener {
+            val locked = app.prefs.lockEnabled && app.prefs.lockChannelId != 0L
+            if (!locked) {
+                android.widget.Toast.makeText(this, "在播放页「设置 → 播放 → 儿童锁」里开启",
+                    android.widget.Toast.LENGTH_LONG).show()
+                return@setOnClickListener
+            }
+            PinPadDialog.show(this, "输入密码关闭儿童锁") { pin ->
+                if (com.litv.tv.player.KioskLock.matches(pin, app.prefs.lockPin)) {
+                    val line = "儿童锁：在设置页关闭（原锁定「${app.prefs.lockChannelName}」）"
+                    app.prefs.lockEnabled = false
+                    android.util.Log.i("LITV", line)
+                    com.litv.tv.data.PlayLog.w("LITV", line)
+                    labelLock()
+                    android.widget.Toast.makeText(this, "儿童锁已关闭",
+                        android.widget.Toast.LENGTH_SHORT).show()
+                } else {
+                    // 失败也留痕：否则「设置页关不掉」这类反馈只能靠猜
+                    android.util.Log.i("LITV", "儿童锁：设置页密码不对，未关闭")
+                    android.widget.Toast.makeText(this, "密码不对",
+                        android.widget.Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
+        labelLock()
         bindCycle(R.id.rowBuffer, valueBuffer, buffers.map { it.toString() },
             app.prefs.bufferMs.toString()) { v ->
             app.prefs.bufferMs = v.toInt(); labelBuffer(v.toInt())
@@ -358,12 +388,22 @@ class SettingsActivity : AppCompatActivity() {
         return next.coerceIn(0, size - 1)
     }
 
+    /** 儿童锁那一行：显示锁没锁、锁的是哪个台。 */
+    private fun labelLock() {
+        valueLock.text = if (app.prefs.lockEnabled && app.prefs.lockChannelId != 0L) {
+            "已锁定「${app.prefs.lockChannelName.ifBlank { "未命名" }}」"
+        } else {
+            "未开启"
+        }
+    }
+
     private fun refreshAllLabels() {
         labelEngine(app.prefs.engine)
         labelDecode(app.prefs.decode)
         valueScreenOff.text = com.litv.tv.player.ScreenOffPlan.label(
             com.litv.tv.player.ScreenOffPlan.of(app.prefs.screenOffAction)
         )
+        labelLock()
         labelBuffer(app.prefs.bufferMs)
         labelLiveOffset(app.prefs.liveOffsetMs)
         labelAspect(app.prefs.aspect)

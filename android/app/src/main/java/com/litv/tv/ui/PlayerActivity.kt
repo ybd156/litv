@@ -2434,11 +2434,23 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
                 cycleRow(row, "息屏处理", listOf("静音", "无动作"), screenOffLabel) { v ->
                     app.prefs.screenOffAction = com.litv.tv.player.ScreenOffPlan.valueOf(v)
                 }
-                // 儿童锁：开 = 锁在当前正在播的台。点「关」不直接关 ——
-                // 关锁要输密码，所以这里弹解锁键盘，输对才真的关。
-                toggleRow(row, "儿童锁（默认密码 1234）", lockActive()) { on ->
-                    if (on) enableLockNow() else showPinPad()
+                // 儿童锁：开 = 锁在当前正在播的台；关锁要输密码，所以点它一律走解锁键盘。
+                // 这行不用 toggleRow —— 解锁后要能把文字从「开」刷回「关」，得留住这个 View。
+                // （用户 2026-11-26 反馈：打开童锁之后设置页没法关闭）
+                lockRow = TextView(this).apply {
+                    text = lockRowText()
+                    textSize = 16f
+                    setPadding(dpRow(18), dpRow(12), dpRow(18), dpRow(12))
+                    setTextColor(getColor(R.color.text_primary))
+                    background = getDrawable(R.drawable.bg_setting_row)
+                    isFocusable = true
+                    isClickable = true
+                    setOnClickListener {
+                        if (lockActive()) showPinPad() else enableLockNow()
+                        lockRow?.text = lockRowText()
+                    }
                 }
+                row.addView(lockRow, rowLp())
             }
             "interact" -> {
                 subMenuTitle?.visibility = android.view.View.GONE
@@ -3468,6 +3480,19 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
     private fun lockActive(): Boolean =
         app.prefs.lockEnabled && app.prefs.lockChannelId != 0L
 
+    /** 设置菜单里「儿童锁」那一行的 View，解锁后要能就地改文字。 */
+    private var lockRow: android.widget.TextView? = null
+
+    /** 儿童锁那一行现在该显示什么（带上当前密码与锁定的台名）。 */
+    private fun lockRowText(): String {
+        val pin = KioskLock.sanitizePin(app.prefs.lockPin)
+        return if (lockActive()) {
+            "儿童锁（密码 $pin）    开 · 锁定「${app.prefs.lockChannelName}」"
+        } else {
+            "儿童锁（密码 $pin）    关"
+        }
+    }
+
     /**
      * 这次起播是不是「被锁挡下来的」。
      *
@@ -3553,6 +3578,7 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         val ch = app.prefs.lockChannelName
         app.prefs.lockEnabled = false
         hidePinPad()
+        lockRow?.text = lockRowText()
         toastTip("已解锁，可以正常换台了")
         Log.i(TAG, "儿童锁：已解锁（原锁定「$ch」）")
         com.litv.tv.data.PlayLog.w(TAG, "儿童锁：已解锁（原锁定「$ch」）")
@@ -3568,6 +3594,7 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         app.prefs.lockChannelId = ch.id
         app.prefs.lockChannelName = ch.name
         app.prefs.lockEnabled = true
+        lockRow?.text = lockRowText()
         val pin = KioskLock.sanitizePin(app.prefs.lockPin)
         toastTip("已锁定「${ch.name}」：长按 OK，输密码 $pin 解锁")
         Log.i(TAG, "儿童锁：已锁定「${ch.name}」(${ch.id})")
@@ -3588,28 +3615,51 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
             val isOk = code == KeyEvent.KEYCODE_DPAD_CENTER ||
                 code == KeyEvent.KEYCODE_ENTER ||
                 code == KeyEvent.KEYCODE_NUMPAD_ENTER
-            if (isOk) {
-                if (action == KeyEvent.ACTION_DOWN) {
-                    if (event.isLongPress) {
-                        // 有些遥控器（以及 adb 注入的 --longpress）直接把长按标志
-                        // 带在 DOWN 上、repeatCount 仍是 0。这时候不用等计时器，
-                        // 立刻弹键盘，否则这类遥控器永远解不开锁。
+            // 设置菜单开着时：方向键与返回必须能用，OK 一律收进解锁键盘。
+            // 否则「打开童锁之后连设置都关不掉」（用户 2026-11-26 反馈）：菜单能开、能翻，
+            // 但要改任何设置都得先输密码 —— 这个分寸既挡住小孩，也不会把人锁死。
+            // 注意：放行必须「不 return」地继续往下走，走 super 会跳过本类自己的
+            // when(code) 分发，MENU 就再也打不开菜单了（第一版这么写，实测按 MENU 无反应）。
+            var letThrough = false
+            if (menuVisible) {
+                if (isOk) {
+                    if (action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) showPinPad()
+                    return true
+                }
+                if (code == KeyEvent.KEYCODE_BACK ||
+                    code == KeyEvent.KEYCODE_DPAD_UP || code == KeyEvent.KEYCODE_DPAD_DOWN ||
+                    code == KeyEvent.KEYCODE_DPAD_LEFT || code == KeyEvent.KEYCODE_DPAD_RIGHT
+                ) {
+                    letThrough = true
+                }
+            }
+            // MENU 放行：锁定时也得能进设置菜单（进去以后 OK 要密码），
+            // 不然「关锁」在遥控器上就无路可走。
+            if (code == KeyEvent.KEYCODE_MENU) letThrough = true
+            if (!letThrough) {
+                if (isOk) {
+                    if (action == KeyEvent.ACTION_DOWN) {
+                        if (event.isLongPress) {
+                            // 有些遥控器（以及 adb 注入的 --longpress）直接把长按标志
+                            // 带在 DOWN 上、repeatCount 仍是 0。这时候不用等计时器，
+                            // 立刻弹键盘，否则这类遥控器永远解不开锁。
+                            main.removeCallbacks(lockOkHoldRunnable)
+                            showPinPad()
+                        } else if (event.repeatCount == 0) {
+                            main.postDelayed(lockOkHoldRunnable, KioskLock.HOLD_MS)
+                            toastTip(KioskLock.hint(app.prefs.lockChannelName))
+                        }
+                    } else if (action == KeyEvent.ACTION_UP) {
                         main.removeCallbacks(lockOkHoldRunnable)
-                        showPinPad()
-                    } else if (event.repeatCount == 0) {
-                        main.postDelayed(lockOkHoldRunnable, KioskLock.HOLD_MS)
+                    }
+                    return true
+                }
+                if (KioskLock.isBlockedKey(code)) {
+                    if (action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
                         toastTip(KioskLock.hint(app.prefs.lockChannelName))
                     }
-                } else if (action == KeyEvent.ACTION_UP) {
-                    main.removeCallbacks(lockOkHoldRunnable)
+                    return true
                 }
-                return true
-            }
-            if (KioskLock.isBlockedKey(code)) {
-                if (action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
-                    toastTip(KioskLock.hint(app.prefs.lockChannelName))
-                }
-                return true
             }
         }
 

@@ -76,6 +76,20 @@
                 style="@style/SettingValue" />
         </LinearLayout>
 
+        <!-- 儿童锁：开启要绑定「当前正在播的台」，只能在播放页开；这一行负责关 -->
+        <LinearLayout
+            android:id="@+id/rowLock"
+            style="@style/SettingRow">
+
+            <TextView
+                style="@style/SettingLabel"
+                android:text="儿童锁" />
+
+            <TextView
+                android:id="@+id/valueLock"
+                style="@style/SettingValue" />
+        </LinearLayout>
+
         <LinearLayout
             android:id="@+id/rowBuffer"
             style="@style/SettingRow">

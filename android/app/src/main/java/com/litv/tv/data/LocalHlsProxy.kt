@@ -551,8 +551,10 @@ object LocalHlsProxy {
         //   20 秒的连接+读取叠加直接把播放器缓冲抽干（真机 23:11 出现
         //   「清单拉取失败 20022ms」，同期画面停 56 秒）。
         //   连接 4 秒、读取 6 秒：单次最多 10 秒，失败还有下一次（保活每 3 秒一次）。
+        // ★ 2026-11-26 再收紧到 2.5+4 秒：保活线程每 3 秒就会重试，一次挂 10 秒纯属浪费——
+        //   调用方（serveRaw）本来就优先回缓存，早失败反而让下一轮更早成功。
         val text = runCatching {
-            fetchText(realUrl, reqUa, timeoutMs = 4_000, readMs = 6_000)
+            fetchText(realUrl, reqUa, timeoutMs = 2_500, readMs = 4_000)
         }.getOrNull()
         if (text.isNullOrBlank()) {
             PlayLog.w(TAG, "清单拉取失败 ${System.currentTimeMillis() - t0}ms")

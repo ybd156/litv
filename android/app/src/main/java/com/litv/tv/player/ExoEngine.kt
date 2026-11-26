@@ -294,6 +294,19 @@ class ExoEngine : PlayerEngine {
     private var videoW = 0
     private var videoH = 0
 
+    /**
+     * 直播落后量的自适应器（自建源专用）。
+     *
+     * 为什么只给自建源：内置源窗口 36 秒，落后量必须压在 10 秒以内，没有加余量的空间；
+     * 自建源窗口被本地代理加深到 90 秒（`data/LiveWindow.kt`），才有地方囤。
+     */
+    private var adaptiveOffset: AdaptiveOffset? = null
+    private var adaptiveHandler: android.os.Handler? = null
+    private var adaptiveTask: Runnable? = null
+
+    /** 自适应采样间隔：5 秒一次，够快发现垫子见底，又不至于每次都改播放位置。 */
+    private val adaptiveSampleMs = 5_000L
+
     override fun isAvailable(context: Context): Boolean = true
 
     override fun attach(context: Context, surface: android.view.Surface?, container: ViewGroup?) {
@@ -407,6 +420,68 @@ class ExoEngine : PlayerEngine {
         )
         p.prepare()
         p.playWhenReady = true
+
+        // ★ 落后量自适应（2026-11-26）：代理把窗口加深到 90 秒后，12 秒落后量在网络好时
+        //   绰绰有余，但源站清单挂十几秒、分片 p50 冲到 800ms 时垫子仍会被吃干
+        //   （实测卡顿瞬间「已缓冲 170ms」）。这里按实测缓冲水位自动加/退落后量，
+        //   加档时往回退一段让垫子立刻变厚，退档只放宽不再前跳（前跳交给 1.02 倍速慢慢追）。
+        if (source == SourceKind.CUSTOM) {
+            val adapter = AdaptiveOffset(
+                baseMs = pol.targetOffsetMs,
+                maxMs = PlaybackPolicy.OFFSET_CEIL_MS,
+            )
+            adaptiveOffset = adapter
+            startAdaptiveWatch(p, adapter)
+        } else {
+            adaptiveOffset = null
+            stopAdaptiveWatch()
+        }
+    }
+
+    /** 起一个按 [adaptiveSampleMs] 采样的看门狗，只在播放器活着时工作。 */
+    private fun startAdaptiveWatch(p: ExoPlayer, adapter: AdaptiveOffset) {
+        stopAdaptiveWatch()
+        val h = adaptiveHandler
+            ?: android.os.Handler(android.os.Looper.getMainLooper()).also { adaptiveHandler = it }
+        val task = object : Runnable {
+            override fun run() {
+                val pl = player
+                if (pl == null || adaptiveOffset !== adapter) return
+                if (pl.playbackState == Player.STATE_READY || pl.playbackState == Player.STATE_BUFFERING) {
+                    val buffered = runCatching {
+                        (pl.bufferedPosition - pl.currentPosition).coerceAtLeast(0L)
+                    }.getOrDefault(0L)
+                    feedAdaptive(buffered, adapter)
+                }
+                h.postDelayed(this, adaptiveSampleMs)
+            }
+        }
+        adaptiveTask = task
+        h.postDelayed(task, adaptiveSampleMs)
+    }
+
+    /**
+     * 把一次「已缓冲多少」喂给自适应器；判定要加档就顺手往回退一段。
+     *
+     * 两条输入共用这里：5 秒定时采样（决定什么时候可以退档）+ 重缓冲事件（决定什么时候该加档）。
+     */
+    private fun feedAdaptive(bufferedMs: Long, adapter: AdaptiveOffset) {
+        val pl = player ?: return
+        val before = adapter.currentMs
+        if (!adapter.onSample(bufferedMs, android.os.SystemClock.elapsedRealtime())) return
+        val back = adapter.stepBackMs(before)
+        if (back > 0) {
+            // 往回退 back 毫秒：窗口 90 秒，退 6 秒是安全的，换来更厚的垫子。
+            runCatching { pl.seekTo((pl.currentPosition - back).coerceAtLeast(0L)) }
+        }
+        val msg = "落后量自适应 ${before / 1000}s → ${adapter.currentMs / 1000}s（已缓冲 ${bufferedMs}ms）"
+        Log.i(TAG, msg)
+        com.litv.tv.data.PlayLog.w(TAG, msg)
+    }
+
+    private fun stopAdaptiveWatch() {
+        adaptiveTask?.let { adaptiveHandler?.removeCallbacks(it) }
+        adaptiveTask = null
     }
 
     /**
@@ -657,6 +732,10 @@ class ExoEngine : PlayerEngine {
                     val msg = "重缓冲：播放中回到 BUFFERING（已缓冲 ${buffered}ms）"
                     Log.w(TAG, msg)
                     com.litv.tv.data.PlayLog.w(TAG, msg)
+                    // ★ 重缓冲是「垫子见底」最可靠的信号：5 秒采样很容易错过那一秒的低谷
+                    //   （实测 4 次重缓冲全部落在采样间隙里，自适应一次都没触发），
+                    //   只有这个事件必然带着当时的真实缓冲量。
+                    adaptiveOffset?.let { ad -> if (buffered >= 0) feedAdaptive(buffered, ad) }
                 }
             }
         })
@@ -823,6 +902,8 @@ class ExoEngine : PlayerEngine {
     override fun release() = releaseInternal()
 
     private fun releaseInternal() {
+        stopAdaptiveWatch()
+        adaptiveOffset = null
         player?.let {
             it.setVideoSurfaceView(null)
             it.release()

@@ -119,6 +119,12 @@ object PlaybackPolicy {
     private const val CUSTOM_FLOOR_MS = 22_000
 
     /**
+     * 自建源落后量的上限。代理把窗口加深到 90 秒（`LiveWindow`），
+     * 落后 25 秒仍留 60 秒余量，够 `AdaptiveOffset` 往上加两档。
+     */
+    const val OFFSET_CEIL_MS = 25_000L
+
+    /**
      * ExoPlayer 的取值。
      *
      * @param bufferMs 设置页的「缓冲」（毫秒），来自 `prefs.bufferMs`。
@@ -149,7 +155,7 @@ object PlaybackPolicy {
         val offset = if (source == SourceKind.BUILTIN) {
             liveOffsetMs.coerceIn(4_000, 10_000).toLong()
         } else {
-            maxOf(liveOffsetMs, 12_000).coerceIn(4_000, 25_000).toLong()
+            maxOf(liveOffsetMs, 12_000).coerceIn(4_000, OFFSET_CEIL_MS.toInt()).toLong()
         }
         return ExoPolicy(cfg, min, max, START_MS, AFTER_REBUFFER_MS, offset)
     }

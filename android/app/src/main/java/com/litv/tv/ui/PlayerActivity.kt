@@ -519,16 +519,35 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
     private var brightnessDragging = false
     private var brightnessStart = -1f
 
+    // 触屏没有「长按 OK」这个键：锁着的时候如果只能靠遥控器解锁，
+    // 纯触摸设备（手机、触屏一体机）就彻底没出口了。
+    // 所以长按画面 = 长按 OK，同样弹解锁键盘。
+    private var touchHoldFired = false
+    private val touchHoldRunnable = Runnable {
+        touchHoldFired = true
+        if (lockActive() && !pinPadShowing) showPinPad()
+    }
+
     private fun setupTouchGestures() {
         val root = findViewById<android.view.View>(R.id.root) ?: return
         gestureDetector = android.view.GestureDetector(this,
             object : android.view.GestureDetector.SimpleOnGestureListener() {
                 override fun onSingleTapConfirmed(e: android.view.MotionEvent): Boolean {
-                    // 面板/设置菜单开着时，点空白处什么也不该发生。
-                    // 原来只判了 panelVisible，漏了 menuVisible ——
-                    // 设置开着的时候点一下空白（比如二级面板右侧那片），
-                    // 触摸穿透到 root，直接把 OSD 呼出来了。
-                    if (panelVisible || menuVisible) return false
+                    // 长按已经处理过（弹了解锁键盘），松手这一刻不要再当成单击。
+                    if (touchHoldFired) {
+                        touchHoldFired = false
+                        return true
+                    }
+                    // 解锁键盘上的点按归键盘自己，别透到播放层。
+                    if (pinPadShowing) return true
+                    // 面板/设置菜单开着时，点空白处的触屏语义是「收起」。
+                    // 遥控器靠 BACK，触屏没有 BACK —— 原来这里直接 return false，
+                    // 于是在手机上点空白什么都不会发生，只能再滑一次或者去按返回。
+                    if (panelVisible || menuVisible) {
+                        if (menuVisible) closeSettingsMenu()
+                        if (panelVisible) closePanel()
+                        return true
+                    }
                     // 回看模式下点屏幕要出「回看控制条」，不是频道信息条。
                     // 原来这里不分模式，回看里点一下就弹出 OSD（频道名/内核/线路），
                     // 用户以为「点回看没进控制界面」。
@@ -563,11 +582,19 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
                 downY = ev.y
                 brightnessDragging = false
                 brightnessStart = -1f
+                // 长按画面 = 长按 OK：锁定时弹解锁键盘（触屏唯一的解锁入口）
+                touchHoldFired = false
+                main.removeCallbacks(touchHoldRunnable)
+                if (lockActive() && !pinPadShowing) {
+                    main.postDelayed(touchHoldRunnable, KioskLock.HOLD_MS)
+                }
             }
 
             android.view.MotionEvent.ACTION_MOVE -> {
                 val dx = ev.x - downX
                 val dy = ev.y - downY
+                // 手指一动就不是长按了，撤掉定时器
+                if (Math.abs(dx) > slop || Math.abs(dy) > slop) main.removeCallbacks(touchHoldRunnable)
                 // 只在「左边缘 + 以垂直为主」时进入亮度模式，
                 // 避免和上下滑换台抢事件。
                 if (!brightnessDragging &&
@@ -587,6 +614,12 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
             }
 
             android.view.MotionEvent.ACTION_UP -> {
+                main.removeCallbacks(touchHoldRunnable)
+                // 长按已经处理过（弹了解锁键盘），松手不再当滑动或单击
+                if (touchHoldFired) {
+                    touchHoldFired = false
+                    return true
+                }
                 if (brightnessDragging) {
                     brightnessDragging = false
                     main.postDelayed({

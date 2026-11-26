@@ -1094,20 +1094,31 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
 
     private fun renderChips() {
         groupChips.removeAllViews()
-        addChip(groupChips, "全部", selectedGroup == null && !onlyFav) { selectedGroup = null; onlyFav = false; render() }
+        addChip(groupChips, "全部", selectedGroup == null && !onlyFav) { onChipClick { selectedGroup = null; onlyFav = false } }
         // C1：收藏 chip 常显。以前是 if (favorites.isNotEmpty()) —— 新装用户
         // 连"收藏"这个入口都看不到，自然觉得"没有收藏"。
-        addChip(groupChips, "★ 收藏", onlyFav) { onlyFav = true; render() }
+        addChip(groupChips, "★ 收藏", onlyFav) { onChipClick { onlyFav = true } }
         groups.forEach { g ->
-            addChip(groupChips, g, selectedGroup == g && !onlyFav) { selectedGroup = g; onlyFav = false; render() }
+            addChip(groupChips, g, selectedGroup == g && !onlyFav) { onChipClick { selectedGroup = g; onlyFav = false } }
         }
 
         // 源分类：和 TV 频道面板最左列同口径。手机以前把自建源和央视频混在一个列表里，
         // 用户没法只在内置源（央视频）里挑台 —— 而只有内置源能回看。
         sourceChips.removeAllViews()
-        addChip(sourceChips, "全部源", sourceBuiltinOnly == null) { sourceBuiltinOnly = null; render() }
-        addChip(sourceChips, "自建源", sourceBuiltinOnly == false) { sourceBuiltinOnly = false; render() }
-        addChip(sourceChips, "内置源", sourceBuiltinOnly == true) { sourceBuiltinOnly = true; render() }
+        addChip(sourceChips, "全部源", sourceBuiltinOnly == null) { onChipClick { sourceBuiltinOnly = null } }
+        addChip(sourceChips, "自建源", sourceBuiltinOnly == false) { onChipClick { sourceBuiltinOnly = false } }
+        addChip(sourceChips, "内置源", sourceBuiltinOnly == true) { onChipClick { sourceBuiltinOnly = true } }
+    }
+
+    /**
+     * 点 chip 的公共收尾：先改状态，再重画 chip 自己，最后重画列表。
+     * `render()` 只负责列表，不碰 chip —— 早先只调 render() 的结果是
+     * 列表筛对了、选中的底色却一直停在原来那一个。
+     */
+    private fun onChipClick(update: () -> Unit) {
+        update()
+        renderChips()
+        render()
     }
 
     private fun addChip(into: LinearLayout, label: String, selected: Boolean, onClick: () -> Unit) {

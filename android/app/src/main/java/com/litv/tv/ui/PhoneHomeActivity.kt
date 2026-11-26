@@ -172,6 +172,12 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
     private var currentTab = TAB_PLAY
 
     private var currentChannel: Channel? = null
+        set(value) {
+            field = value
+            // 换台点一共九处，靠 setter 统一告诉列表「哪一行在播」，
+            // 免得以后新增一处起播又忘了同步高亮。
+            if (::adapter.isInitialized) adapter.setCurrent(value?.id)
+        }
     private var programs: List<EpgProgram> = emptyList()
     /** 第一次拿到 Surface 了吗（用来区分「首次创建」和「重建」） */
     private var surfaceReadyOnce = false

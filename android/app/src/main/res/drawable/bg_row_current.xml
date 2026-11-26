@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 正在播的频道行：淡青底 + 圆角按压反馈，和行尾的「正在播」胶囊一起标出当前台 -->
+<ripple xmlns:android="http://schemas.android.com/apk/res/android"
+    android:color="@color/accent_soft">
+    <item android:id="@android:id/mask">
+        <shape android:shape="rectangle">
+            <corners android:radius="12dp" />
+            <solid android:color="#FFFFFFFF" />
+        </shape>
+    </item>
+    <item>
+        <shape android:shape="rectangle">
+            <corners android:radius="12dp" />
+            <solid android:color="@color/accent_softer" />
+        </shape>
+    </item>
+</ripple>

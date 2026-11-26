@@ -9,7 +9,7 @@
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
     android:layout_marginBottom="2dp"
-    android:background="?android:attr/selectableItemBackground"
+    android:background="@drawable/bg_row_ripple"
     android:clickable="true"
     android:focusable="true"
     android:gravity="center_vertical"
@@ -73,6 +73,21 @@
             android:textColor="@color/text_tertiary"
             android:textSize="11sp" />
     </LinearLayout>
+
+    <!-- 正在播的台：胶囊标签常显，配合行底色一起标出「你现在在看这个台」 -->
+    <TextView
+        android:id="@+id/playingTag"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginEnd="6dp"
+        android:background="@drawable/bg_pill_accent"
+        android:paddingHorizontal="8dp"
+        android:paddingVertical="2dp"
+        android:text="正在播"
+        android:textColor="@color/bg"
+        android:textSize="10sp"
+        android:textStyle="bold"
+        android:visibility="gone" />
 
     <TextView
         android:id="@+id/star"

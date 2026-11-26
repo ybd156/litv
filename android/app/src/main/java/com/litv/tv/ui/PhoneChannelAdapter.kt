@@ -35,6 +35,18 @@ class PhoneChannelAdapter(
     private val main = Handler(Looper.getMainLooper())
     private var favorites: Set<Long> = emptySet()
 
+    /**
+     * 正在播的台。列表里 92 个台排下来，不给当前台做标记就没法「回看自己刚在看哪个」。
+     * 传 null 表示当前没有在播（例如刚退到后台停了）。
+     */
+    private var currentId: Long? = null
+
+    fun setCurrent(id: Long?) {
+        if (currentId == id) return
+        currentId = id
+        notifyDataSetChanged()
+    }
+
     fun submit(list: List<Channel>, now: Map<Long, String>, favs: Set<Long>) {
         items.clear(); items.addAll(list)
         nowMap.clear(); nowMap.putAll(now)
@@ -56,6 +68,18 @@ class PhoneChannelAdapter(
         holder.now.text = now ?: ""
         holder.now.visibility = if (now.isNullOrBlank()) View.GONE else View.VISIBLE
         holder.star.text = if (favorites.contains(ch.id)) "★" else "☆"
+
+        // 正在播的台：淡青底 + 名称强调色加粗 + 行尾「正在播」胶囊。
+        // 只改颜色不改行高，避免整列跳动。
+        val playing = currentId != null && ch.id == currentId
+        val ctx = holder.itemView.context
+        holder.itemView.setBackgroundResource(
+            if (playing) R.drawable.bg_row_current else R.drawable.bg_row_ripple,
+        )
+        holder.name.setTextColor(ctx.getColor(if (playing) R.color.accent else R.color.text_primary))
+        holder.name.setTypeface(null, if (playing) android.graphics.Typeface.BOLD else android.graphics.Typeface.NORMAL)
+        holder.now.setTextColor(ctx.getColor(if (playing) R.color.text_secondary else R.color.text_tertiary))
+        holder.playingTag.visibility = if (playing) View.VISIBLE else View.GONE
 
         holder.itemView.setOnClickListener { onClick(ch) }
         holder.star.setOnClickListener { onStarClick(ch) }
@@ -129,5 +153,6 @@ class PhoneChannelAdapter(
         val name: TextView = v.findViewById(R.id.name)
         val now: TextView = v.findViewById(R.id.now)
         val star: TextView = v.findViewById(R.id.star)
+        val playingTag: TextView = v.findViewById(R.id.playingTag)
     }
 }

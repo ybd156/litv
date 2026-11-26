@@ -1287,7 +1287,11 @@ class PlayerManager(
             disposeEngine(current)
             current = created
             // 静音是应用级状态：换内核/重建时必须继续静音，否则一换引擎声音就自己回来了
-            if (muted) runCatching { created.setVolume(0f) }
+            if (muted) {
+                runCatching { created.setVolume(0f) }
+                // 这条必须落盘：换内核后声音是否又回来，只有它能查（logcat 会被环形缓冲滚掉）
+                com.litv.tv.data.PlayLog.w(TAG, "换内核（${kind.key}）后按静音状态重设音量 0")
+            }
             currentKind = kind
             callback?.onEngineChanged(kind)
             engine = created
@@ -1692,7 +1696,11 @@ class PlayerManager(
     fun setMuted(m: Boolean) {
         muted = m
         runCatching { current?.setVolume(if (m) 0f else 1f) }
-        Log.i(TAG, if (m) "静音（息屏）" else "恢复音量（亮屏）")
+        // 2026-11-26：同时进 PlayLog。静音是否真的落到实例上，是「息屏还有声音」这类
+        // 报障的第一判据，而该机 logcat 环形缓冲经常滚掉、只剩 play.log 可查。
+        val msg = if (m) "静音（息屏，内核 ${engineLabel()}）" else "恢复音量（亮屏，内核 ${engineLabel()}）"
+        Log.i(TAG, msg)
+        com.litv.tv.data.PlayLog.w(TAG, msg)
     }
     fun stats(): EngineStats = current?.stats() ?: EngineStats()
     fun engineLabel(): String = currentKind?.label ?: ""

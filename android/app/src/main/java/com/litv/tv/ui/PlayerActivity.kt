@@ -3611,7 +3611,18 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         // OK 是解锁入口：长按 1.5 秒弹数字键盘。所以 OK 本身必须放行，
         // 否则没有数字键的遥控器就再也解不开了。
         if (lockActive()) {
-            if (pinPadShowing) return super.dispatchKeyEvent(event)
+            if (pinPadShowing) {
+                // 键盘开着时 BACK 只认识「关键盘」：交给 super 会一路走到 finish，
+                // 表现就是「按出解锁键盘，一按返回整个人被退出播放页」（用户 2026-11-26 反馈）。
+                if (code == KeyEvent.KEYCODE_BACK || code == KeyEvent.KEYCODE_ESCAPE) {
+                    if (action == KeyEvent.ACTION_DOWN) {
+                        hidePinPad()
+                        toastTip("已取消解锁")
+                    }
+                    return true
+                }
+                return super.dispatchKeyEvent(event)
+            }
             val isOk = code == KeyEvent.KEYCODE_DPAD_CENTER ||
                 code == KeyEvent.KEYCODE_ENTER ||
                 code == KeyEvent.KEYCODE_NUMPAD_ENTER

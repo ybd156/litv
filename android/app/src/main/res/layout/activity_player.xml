@@ -92,15 +92,23 @@
         android:textSize="16sp"
         android:visibility="gone" />
 
+    <!-- 提示条：所有 toastTip 都落在这里。
+         以前只有一行白字浮在画面上，遇到亮背景就看不见（用户 2026-11-26 反馈「提示只有文字没有背景」）。 -->
     <TextView
         android:id="@+id/switchTip"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:layout_gravity="center"
+        android:layout_marginHorizontal="48dp"
         android:layout_marginTop="96dp"
+        android:background="@drawable/bg_osd_card"
+        android:gravity="center"
+        android:maxWidth="720dp"
+        android:paddingHorizontal="24dp"
+        android:paddingVertical="14dp"
         android:text="@string/switch_channel"
-        android:textColor="@color/text_secondary"
-        android:textSize="16sp"
+        android:textColor="@color/text_primary"
+        android:textSize="17sp"
         android:visibility="gone" />
 
     <!-- 底部信息条 -->

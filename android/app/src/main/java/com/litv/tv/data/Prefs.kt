@@ -226,22 +226,24 @@ class Prefs(ctx: Context) {
      */
     var lockEnabled: Boolean
         get() = sp.getBoolean(K_LOCK_ENABLED, false)
-        set(v) = sp.edit().putBoolean(K_LOCK_ENABLED, v).apply()
+        // 用 commit 而不是 apply：apply 是异步落盘，开完锁马上被 force-stop / 断电时
+        // 可能根本没写进磁盘，重启后锁就「自己开了」。这四个键都按同步写处理。
+        set(v) { sp.edit().putBoolean(K_LOCK_ENABLED, v).commit() }
 
     /** 被锁定的频道 id；0 表示没记台，等同于没锁。 */
     var lockChannelId: Long
         get() = sp.getLong(K_LOCK_CHANNEL_ID, 0L)
-        set(v) = sp.edit().putLong(K_LOCK_CHANNEL_ID, v).apply()
+        set(v) { sp.edit().putLong(K_LOCK_CHANNEL_ID, v).commit() }
 
     /** 锁定时的频道名，只用于界面提示。 */
     var lockChannelName: String
         get() = sp.getString(K_LOCK_CHANNEL_NAME, "") ?: ""
-        set(v) = sp.edit().putString(K_LOCK_CHANNEL_NAME, v).apply()
+        set(v) { sp.edit().putString(K_LOCK_CHANNEL_NAME, v).commit() }
 
     /** 解锁密码（4 位数字，明文）；空串时按 `KioskLock.DEFAULT_PIN` 处理。 */
     var lockPin: String
         get() = sp.getString(K_LOCK_PIN, "") ?: ""
-        set(v) = sp.edit().putString(K_LOCK_PIN, v).apply()
+        set(v) { sp.edit().putString(K_LOCK_PIN, v).commit() }
 
     /**
      * 频道列表来源：`server`（默认，服务端下发）或 `client`（客户端自己拉 m3u 解析）。

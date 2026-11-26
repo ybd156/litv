@@ -2380,11 +2380,11 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
                     app.prefs.aspect = v
                 }
                 // 息屏处理：电视按电源键只关面板，不走生命周期，所以要单独给一档
-                // 「息屏还放声音」的选择；默认停播。
+                // 「息屏还放声音」的选择；默认静音（不停播）。
                 val screenOffLabel = com.litv.tv.player.ScreenOffPlan.label(
                     com.litv.tv.player.ScreenOffPlan.of(app.prefs.screenOffAction)
                 )
-                cycleRow(row, "息屏处理", listOf("停播", "无动作"), screenOffLabel) { v ->
+                cycleRow(row, "息屏处理", listOf("静音", "无动作"), screenOffLabel) { v ->
                     app.prefs.screenOffAction = com.litv.tv.player.ScreenOffPlan.valueOf(v)
                 }
             }

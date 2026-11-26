@@ -206,13 +206,16 @@ class Prefs(ctx: Context) {
         set(v) = sp.edit().putString(K_DECODE, v).apply()
 
     /**
-     * 息屏时怎么处理播放：`pause`（默认，停播、亮屏接着播）或 `none`（无动作）。
+     * 息屏时怎么处理播放：`mute`（默认，静音、播放继续）或 `none`（无动作）。
      *
-     * 默认必须是 pause —— 电视/手机的息屏不会走 Activity 生命周期，没有这条
+     * 默认必须是 mute —— 电视/手机的息屏不会走 Activity 生命周期，没有这条
      * 兜底就是「屏幕黑了声音还在响」。留 `none` 是给「息屏当背景音」的人。
+     *
+     * 旧版本存过 `pause`（那时的做法是停播）；读出来会按 mute 处理（见
+     * `ScreenOffPlan.of`），不需要迁移。
      */
     var screenOffAction: String
-        get() = sp.getString(K_SCREEN_OFF_ACTION, SCREEN_OFF_PAUSE) ?: SCREEN_OFF_PAUSE
+        get() = sp.getString(K_SCREEN_OFF_ACTION, SCREEN_OFF_MUTE) ?: SCREEN_OFF_MUTE
         set(v) = sp.edit().putString(K_SCREEN_OFF_ACTION, v).apply()
 
     /**
@@ -404,7 +407,10 @@ class Prefs(ctx: Context) {
         const val K_ENGINE = "engine"
         const val K_DECODE = "decode"
         const val K_SCREEN_OFF_ACTION = "screen_off_action"
-        const val SCREEN_OFF_PAUSE = "pause"
+
+        // 取值必须与 ScreenOffPlan.VALUE_* 一致（Prefs 的 companion 是 private，
+        // 那边不能直接引用这里，两处字面量靠注释与 ScreenOffPlanTest 绑定）。
+        const val SCREEN_OFF_MUTE = "mute"
         const val SCREEN_OFF_NONE = "none"
         const val K_CHANNEL_SOURCE = "channel_source"
         const val K_DL_KEY = "dl_key"

@@ -75,24 +75,51 @@ class VlcEngine : PlayerEngine {
 
     /** VLC 自己的看门狗：只在本引擎内部生效，不改 PlayerManager 的位置语义 */
     private var nudgedOnce = false
+    /** 息屏期间跳过轻推只记一次，避免每 5 秒刷一行 */
+    private var nudgeSkippedAsleep = false
+
+    /**
+     * 屏幕是否亮着。
+     *
+     * 息屏时 vout 不出帧，「12 秒没送帧」必然成立；这时轻推 pause→play 会把已经
+     * 停掉的播放重新拉起来：屏幕黑着、声音继续（2026-11-26 电视现场）。
+     * 拿不到 PowerManager 时按「亮着」处理，宁可轻推也不要误判成息屏不动。
+     */
+    private fun screenInteractive(): Boolean {
+        val c = appCtx ?: return true
+        return runCatching {
+            (c.getSystemService(Context.POWER_SERVICE) as android.os.PowerManager).isInteractive
+        }.getOrDefault(true)
+    }
+
     private val vlcWatchdog = object : Runnable {
         override fun run() {
             val p = player ?: return
             val now = android.os.SystemClock.elapsedRealtime()
             val idle = if (lastTimeEventAt > 0) now - lastTimeEventAt else 0
             if (lastTimeEventAt > 0 && idle > 12_000) {
-                Log.w(TAG, "VLC 12 秒没送帧（idle=${idle}ms），轻推一次")
-                com.litv.tv.data.PlayLog.w(TAG, "VLC 12 秒没送帧，轻推 pause/play（idle=${idle}ms）")
-                // 必须走 VlcOps：看门狗跑在主线程，直接 pause/play 会和 release 抢 libvlc 的锁
-                VlcOps.exec.execute { runCatching { p.pause(); p.play() } }
-                if (nudgedOnce) {
-                    com.litv.tv.data.PlayLog.w(TAG, "VLC 停止送帧")
-                    listener?.onError("VLC 停止送帧")
-                    return
+                if (!screenInteractive()) {
+                    if (!nudgeSkippedAsleep) {
+                        Log.i(TAG, "息屏中，跳过轻推（idle=${idle}ms）")
+                        com.litv.tv.data.PlayLog.w(TAG, "息屏中，跳过轻推 pause/play（idle=${idle}ms）")
+                        nudgeSkippedAsleep = true
+                    }
+                } else {
+                    nudgeSkippedAsleep = false
+                    Log.w(TAG, "VLC 12 秒没送帧（idle=${idle}ms），轻推一次")
+                    com.litv.tv.data.PlayLog.w(TAG, "VLC 12 秒没送帧，轻推 pause/play（idle=${idle}ms）")
+                    // 必须走 VlcOps：看门狗跑在主线程，直接 pause/play 会和 release 抢 libvlc 的锁
+                    VlcOps.exec.execute { runCatching { p.pause(); p.play() } }
+                    if (nudgedOnce) {
+                        com.litv.tv.data.PlayLog.w(TAG, "VLC 停止送帧")
+                        listener?.onError("VLC 停止送帧")
+                        return
+                    }
+                    nudgedOnce = true
                 }
-                nudgedOnce = true
             } else if (idle in 1..3_000) {
                 nudgedOnce = false
+                nudgeSkippedAsleep = false
             }
             main.postDelayed(this, 5_000)
         }

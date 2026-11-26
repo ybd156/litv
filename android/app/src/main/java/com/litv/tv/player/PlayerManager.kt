@@ -21,7 +21,7 @@ import com.litv.tv.data.Prefs
 class PlayerManager(
     private val context: Context,
     private val prefs: Prefs,
-) : ScreenPausable {
+) : ScreenControllable {
 
     interface Callback {
         /** 内核切换了（OSD 上可以提示"正在用 mpv 播放"）。 */
@@ -216,6 +216,9 @@ class PlayerManager(
 
     /** 进入暂停的时刻（elapsedRealtime），0 = 没暂停。用于判断「停太久该重回直播边缘」。 */
     private var pausedAtMs = 0L
+
+    /** 是否处于静音（息屏静音）。换内核/重建后要按它重新设音量。 */
+    private var muted = false
 
     /** 上一次判定卡死的时刻（elapsedRealtime），用于"稳定播放后把恢复计数归零"。 */
     private var lastStallAt = 0L
@@ -1283,6 +1286,8 @@ class PlayerManager(
             }
             disposeEngine(current)
             current = created
+            // 静音是应用级状态：换内核/重建时必须继续静音，否则一换引擎声音就自己回来了
+            if (muted) runCatching { created.setVolume(0f) }
             currentKind = kind
             callback?.onEngineChanged(kind)
             engine = created
@@ -1672,6 +1677,23 @@ class PlayerManager(
     }
 
     fun setVolume(v: Float) = current?.setVolume(v)
+
+    /**
+     * 静音（息屏用）。
+     *
+     * 2026-11-26 改口径：息屏**不停播**，只静音 —— 直播继续往前走，
+     * 亮屏就是现场，不用再判断「暂停久了要不要重连」。
+     * 静音期间换内核会重新设 0（见 `current = created` 那行）。
+     */
+    override fun mute() = setMuted(true)
+
+    override fun unmute() = setMuted(false)
+
+    fun setMuted(m: Boolean) {
+        muted = m
+        runCatching { current?.setVolume(if (m) 0f else 1f) }
+        Log.i(TAG, if (m) "静音（息屏）" else "恢复音量（亮屏）")
+    }
     fun stats(): EngineStats = current?.stats() ?: EngineStats()
     fun engineLabel(): String = currentKind?.label ?: ""
 

@@ -42,6 +42,16 @@ class LitvApp : Application() {
      */
     val epg: XmltvEpg by lazy { XmltvEpg(this) }
 
+    /**
+     * 轮询看门狗上一次看到的屏幕状态；null = 还没看过（第一次只记基线，不动作）。
+     *
+     * 为什么要有它：`ACTION_SCREEN_OFF` 不是所有关屏路径都会投递（2026-11-26 电视现场，
+     * 面板已经黑了、`dumpsys power` 是 Asleep，接收器一行日志都没有）。只靠广播时，
+     * 这种关屏不会停播，而 VLC 的「没送帧就轻推 pause/play」还会把已经停掉的播放拉起来。
+     */
+    private var screenWatchLast: Boolean? = null
+    private val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
+
     override fun onCreate() {
         super.onCreate()
         prefs = Prefs(this)
@@ -125,27 +135,36 @@ class LitvApp : Application() {
             override fun onActivityDestroyed(a: android.app.Activity) {}
         })
 
-        // 屏幕熄灭就停播 —— 电视上按电源键**只关面板**，系统不会把前台 Activity
+        // 屏幕熄灭就静音 —— 电视上按电源键**只关面板**，系统不会把前台 Activity
         // 推到后台（2026-11-25 实测：`mWakefulness=Asleep`、`Display Power: state=OFF`，
         // 而 `ResumedActivity` 仍是 `PlayerActivity`），所以 onPause 与上面那条
         // 「所有 Activity 都不在前台」的兜底都不会触发，表现就是「屏幕黑了声音还在」。
-        // 亮屏只恢复这次因息屏被暂停的那些（用户自己按的暂停、息屏后才起播的都不动）。
+        // 2026-11-26 按用户要求改成只静音、不停播（直播继续往前走，亮屏即现场）。
+        // 亮屏只恢复这次因息屏静音的那些（用户自己调过音量、息屏后才起播的都不动）。
         val screenReceiver = object : android.content.BroadcastReceiver() {
             override fun onReceive(c: android.content.Context?, i: android.content.Intent?) {
                 when (i?.action) {
                     android.content.Intent.ACTION_SCREEN_OFF -> {
-                        // 默认停播；偏好设成「无动作」的人才继续放声音。
+                        // 先记基线：否则下面那条 5 秒轮询会把它当成「刚发现熄灭」，再静音一遍。
+                        screenWatchLast = false
+                        // 默认静音（播放继续）；偏好设成「无动作」的人才继续放声音。
                         val action = com.litv.tv.player.ScreenOffPlan.of(prefs.screenOffAction)
                         if (action == com.litv.tv.player.ScreenOffAction.None) {
                             Log.i(TAG, "屏幕熄灭，按设置不处理（息屏处理=无动作）")
+                            com.litv.tv.data.PlayLog.w(TAG, "广播：屏幕熄灭，按设置不处理（无动作）")
                             return
                         }
-                        val n = com.litv.tv.player.LivePlayers.pauseAllForScreenOff()
-                        Log.i(TAG, "屏幕熄灭，暂停播放（命中 $n 个）")
+                        val n = com.litv.tv.player.LivePlayers.muteAllForScreenOff()
+                        Log.i(TAG, "屏幕熄灭，静音（命中 $n 个）")
+                        com.litv.tv.data.PlayLog.w(TAG, "广播：屏幕熄灭，静音（命中 $n 个）")
                     }
                     android.content.Intent.ACTION_SCREEN_ON -> {
-                        val n = com.litv.tv.player.LivePlayers.resumeAfterScreenOn()
-                        if (n > 0) Log.i(TAG, "屏幕点亮，恢复播放（$n 个）")
+                        screenWatchLast = true
+                        val n = com.litv.tv.player.LivePlayers.unmuteAfterScreenOn()
+                        if (n > 0) {
+                            Log.i(TAG, "屏幕点亮，恢复音量（$n 个）")
+                            com.litv.tv.data.PlayLog.w(TAG, "广播：屏幕点亮，恢复音量（$n 个）")
+                        }
                     }
                 }
             }
@@ -159,6 +178,40 @@ class LitvApp : Application() {
             },
             androidx.core.content.ContextCompat.RECEIVER_NOT_EXPORTED
         )
+
+        // 广播没来时的兜底：每 5 秒看一次 PowerManager.isInteractive。
+        // 判断逻辑抽成纯函数 ScreenPowerWatch（可单测），事件同时写 PlayLog——
+        // 电视上的 logcat 环形缓冲经常被滚掉，出问题时只剩 play.log 可查。
+        val powerWatch = object : Runnable {
+            override fun run() {
+                val pm = getSystemService(android.content.Context.POWER_SERVICE) as? android.os.PowerManager
+                val now = runCatching { pm?.isInteractive ?: true }.getOrDefault(true)
+                when (com.litv.tv.player.ScreenPowerWatch.decide(screenWatchLast, now)) {
+                    com.litv.tv.player.ScreenPowerEvent.Pause -> {
+                        val action = com.litv.tv.player.ScreenOffPlan.of(prefs.screenOffAction)
+                        if (action == com.litv.tv.player.ScreenOffAction.None) {
+                            Log.i(TAG, "轮询发现屏幕已熄灭，按设置不处理")
+                            com.litv.tv.data.PlayLog.w(TAG, "轮询发现屏幕熄灭，按设置不处理（无动作）")
+                        } else {
+                            val n = com.litv.tv.player.LivePlayers.muteAllForScreenOff()
+                            Log.i(TAG, "轮询发现屏幕已熄灭，静音（命中 $n 个）")
+                            com.litv.tv.data.PlayLog.w(TAG, "轮询发现屏幕熄灭，静音（命中 $n 个）")
+                        }
+                    }
+                    com.litv.tv.player.ScreenPowerEvent.Resume -> {
+                        val n = com.litv.tv.player.LivePlayers.unmuteAfterScreenOn()
+                        if (n > 0) {
+                            Log.i(TAG, "轮询发现屏幕已点亮，恢复音量（$n 个）")
+                            com.litv.tv.data.PlayLog.w(TAG, "轮询发现屏幕点亮，恢复音量（$n 个）")
+                        }
+                    }
+                    com.litv.tv.player.ScreenPowerEvent.None -> Unit
+                }
+                screenWatchLast = now
+                mainHandler.postDelayed(this, 5_000)
+            }
+        }
+        mainHandler.postDelayed(powerWatch, 5_000)
 
         // libmpv 的可用性放到后台再查：
         // MPVLib.available 会触发 System.loadLibrary("mpv")，在 onCreate 里同步做

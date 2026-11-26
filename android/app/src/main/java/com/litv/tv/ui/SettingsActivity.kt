@@ -110,8 +110,9 @@ class SettingsActivity : AppCompatActivity() {
         bindCycle(R.id.rowDecode, valueDecode, decodes, app.prefs.decode) { v ->
             app.prefs.decode = v; labelDecode(v)
         }
-        // 息屏处理：默认停播（电视按电源键只关面板，不走生命周期，不处理就会「息屏还在响」）
-        bindCycle(R.id.rowScreenOff, valueScreenOff, listOf("停播", "无动作"),
+        // 息屏处理：默认静音、不停播（电视按电源键只关面板，不走生命周期，
+        // 不处理就会「息屏还在响」）
+        bindCycle(R.id.rowScreenOff, valueScreenOff, listOf("静音", "无动作"),
             com.litv.tv.player.ScreenOffPlan.label(
                 com.litv.tv.player.ScreenOffPlan.of(app.prefs.screenOffAction)
             )) { v ->

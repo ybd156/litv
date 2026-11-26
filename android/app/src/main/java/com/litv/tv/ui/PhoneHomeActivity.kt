@@ -1446,6 +1446,12 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
     }
 
     private fun renderNow() {
+        // 回看态的信息区跟直播不一样：这里要说清「我在看哪一条」，
+        // 而不是拿直播的「正在播 / 下一档」糊在上面（用户反馈的原话就是分不清）。
+        replayWindow?.let { rw ->
+            renderReplayInfo(rw)
+            return
+        }
         val now = System.currentTimeMillis() / 1000
         val cur = programs.firstOrNull { it.startAt <= now && it.endAt > now }
         val next = programs.firstOrNull { it.startAt > now }
@@ -1484,6 +1490,32 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
         renderEpg()
     }
 
+    /** 回看态的信息区：只讲这一条（节目名 / 进度 / 时段），不讲直播的下一档。 */
+    private fun renderReplayInfo(rw: ReplayWindow) {
+        playNowTag.visibility = View.VISIBLE
+        playNowTag.text = "回看"
+        playNow.visibility = View.VISIBLE
+        playNow.text = rw.title.ifBlank { currentChannel?.name ?: "回看" }
+        val pos = replayHead?.tick(now()) ?: 0L
+        if (rw.durationMs > 0) {
+            val pct = ((pos.toFloat() / rw.durationMs) * 100).toInt().coerceIn(0, 100)
+            playProgressRow.visibility = View.VISIBLE
+            playProgress.progress = pct
+            playProgressPct.text = "$pct%"
+        } else {
+            playProgressRow.visibility = View.GONE
+        }
+        playNext.visibility = View.VISIBLE
+        val from = replayingProgramStart
+        val to = if (rw.durationMs > 0) from + rw.durationMs / 1000 else from
+        playNext.text = if (from > 0) {
+            fmtClock(from) + "-" + fmtClock(to) + " · " + (currentChannel?.name ?: "")
+        } else {
+            "回看中"
+        }
+        renderEpg()
+    }
+
     /** 秒级时间戳 → HH:mm */
     private fun fmtClock(sec: Long): String {
         val sdf = java.text.SimpleDateFormat("HH:mm", java.util.Locale.getDefault())
@@ -1511,6 +1543,17 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
 
     /** 当前是否在回放（时移回看），false = 直播。 */
     private var playingTimeshift = false
+
+    /**
+     * 正在回看的那个节目的起点（Unix 秒）；0 = 没在回看。
+     *
+     * 节目单靠它把「我正在看的这一条」标出来并滚到它 ——
+     * 否则回看时列表和直播态长得一模一样，用户不知道自己在看哪一条。
+     */
+    private var replayingProgramStart = 0L
+
+    /** 这一次回看的「切到该节目日期」是否已经做过（只做一次，之后尊重用户翻页）。 */
+    private var replayDayApplied = false
 
     /** 刷新左上角「直播 / 回放」胶囊。 */
     private fun renderLiveBadge() {
@@ -1557,6 +1600,16 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
             val i = days.indexOf(todayKey)
             epgDayOffset = if (i >= 0) i else (days.size - 1).coerceAtLeast(0)
             dayInit = true
+        }
+        // 回看时把日期条切到这条节目所属的那一天，否则列表里根本看不到它。
+        // 只在对这一次回看生效一次：之后用户自己翻别的日期要能翻。
+        if (replayingProgramStart > 0 && !replayDayApplied) {
+            val dk = com.litv.tv.data.EpgPrograms.dayKeyOf(replayingProgramStart)
+            val i = days.indexOf(dk)
+            if (i >= 0) {
+                epgDayOffset = i
+                replayDayApplied = true
+            }
         }
         val selectedKey = days.getOrNull(epgDayOffset.coerceIn(0, (days.size - 1).coerceAtLeast(0)))
             ?: days.firstOrNull() ?: return
@@ -1621,11 +1674,16 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
         // ---- 节目行（扁平）：一行 = 时间 + 标题 + 状态胶囊，只靠字重/明度/底色分层 ----
         // 整张节目单共用一个判据：这个台此刻能不能回看。逐行去问会是 N 次查表。
         val canReplay = replayCapable(currentChannel)
+        // 正在回看的那一条：0 = 没在回看（或看的是别的台）
+        val replayStart =
+            if (replayWindow != null && replayChannelId == currentChannel?.id) replayingProgramStart else 0L
         var playingRow: View? = null
+        var replayingRow: View? = null
         byDay[selectedKey]?.forEach { p ->
             val action = com.litv.tv.data.EpgPrograms.actionOf(p, now)
             val playing = action == com.litv.tv.data.EpgPrograms.Action.PLAYING
             val finished = action == com.litv.tv.data.EpgPrograms.Action.REPLAY
+            val replaying = replayStart > 0 && p.startAt == replayStart
             val reserved = reservedStarts.contains(p.startAt)
             val row = LinearLayout(this).apply {
                 orientation = LinearLayout.HORIZONTAL
@@ -1634,8 +1692,13 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
                 setPadding(dp(12), dp(8), dp(12), dp(8))
                 // 「正在播」用极淡的强调色底标出来；其余行透明（扁平不画卡片）
                 setBackground(
-                    if (playing) pillBg(getColor(R.color.accent_softer), 12)
-                    else rowRipple(android.graphics.Color.TRANSPARENT, 12),
+                    when {
+                        playing -> pillBg(getColor(R.color.accent_softer), 12)
+                        // 正在回看的那一条也加淡底：回看时整张表看着和直播一样，
+                        // 用户不知道自己在看哪一条（用户反馈的原话）
+                        replaying -> pillBg(getColor(R.color.accent_softer), 12)
+                        else -> rowRipple(android.graphics.Color.TRANSPARENT, 12)
+                    },
                 )
                 layoutParams = LinearLayout.LayoutParams(
                     LinearLayout.LayoutParams.MATCH_PARENT,
@@ -1646,7 +1709,7 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
             val time = TextView(this).apply {
                 text = com.litv.tv.data.EpgPrograms.timeLabel(p.startAt)
                 textSize = 12f
-                setTextColor(getColor(if (playing) R.color.accent else R.color.text_tertiary))
+                setTextColor(getColor(if (playing || replaying) R.color.accent else R.color.text_tertiary))
                 layoutParams = LinearLayout.LayoutParams(dp(52), LinearLayout.LayoutParams.WRAP_CONTENT)
             }
             row.addView(time)
@@ -1657,8 +1720,16 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
                 maxLines = 1
                 ellipsize = android.text.TextUtils.TruncateAt.END
                 // 已播完的节目降一档明度，表示「这条只能回看」；正在播的加粗
-                setTextColor(getColor(if (finished && !playing) R.color.text_secondary else R.color.text_primary))
-                if (playing) setTypeface(null, android.graphics.Typeface.BOLD)
+                setTextColor(
+                    getColor(
+                        when {
+                            playing || replaying -> R.color.accent
+                            finished -> R.color.text_secondary
+                            else -> R.color.text_primary
+                        },
+                    ),
+                )
+                if (playing || replaying) setTypeface(null, android.graphics.Typeface.BOLD)
                 layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
             }
             row.addView(title)
@@ -1668,6 +1739,12 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
                 gravity = android.view.Gravity.CENTER
                 setPadding(dp(10), dp(4), dp(10), dp(4))
                 when {
+                    replaying -> {
+                        text = "回看中"
+                        setBackground(pillBg(getColor(R.color.accent), 100))
+                        setTextColor(getColor(R.color.bg))
+                        setTypeface(null, android.graphics.Typeface.BOLD)
+                    }
                     playing -> {
                         text = "正在播"
                         setBackground(pillBg(getColor(R.color.accent), 100))
@@ -1710,7 +1787,7 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
 
             // 整行可点：动作按钮只有几个字，手指容易点偏；点整行等价于点动作。
             // 已播完但回看不了的，整行也不接点击 —— 点了没反应比点不通更让人困惑。
-            if (!playing && (!finished || canReplay)) {
+            if (!playing && !replaying && (!finished || canReplay)) {
                 row.isClickable = true
                 row.setOnClickListener {
                     val ch = currentChannel ?: return@setOnClickListener
@@ -1729,14 +1806,14 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
                 }
             }
             if (playing) playingRow = row
+            if (replaying) replayingRow = row
             epgList.addView(row)
         }
 
-        // 滚到「正在播」那一档：节目单是一整天的列表，
-        // 不滚的话默认停在 01:02，用户要往下翻很久才看到现在播的。
-        // 滚到「正在播」那一档：等这一行真正布局完再算位置，
-        // 用 main.post 会早于布局，row.top 还是 0，等于没滚。
-        playingRow?.let { row ->
+        // 滚到「正在播」或「正在回看」那一档：节目单是一整天的列表，
+        // 不滚的话默认停在 01:02，用户要往下翻很久才看到现在播的 / 正在看的。
+        // 等这一行真正布局完再算位置：用 main.post 会早于布局，row.top 还是 0，等于没滚。
+        (replayingRow ?: playingRow)?.let { row ->
             row.post {
                 val sc = findViewById<android.widget.ScrollView>(R.id.epgScroll)
                 if (sc != null) {
@@ -1812,6 +1889,8 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
         val startSec = p?.startAt ?: (System.currentTimeMillis() / 1000 - 600)
         val endSec = p?.endAt ?: (startSec + 1800)
         val title = if (p != null) ch.name + " · " + p.title else ch.name + " · 回看"
+        // 先记下来源节目：节目单要标「回看中」，播放页顶部也要显示这一条而不是直播的「正在播」
+        replayingProgramStart = startSec
 
         if (com.litv.tv.data.YspClient.isYspChannel(ch.id)) {
             // 央视频只留 7 天；更早的节目点进去会是空列表，直接说清楚
@@ -1908,6 +1987,7 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
         replayWindow = window
         replayChannelId = ch.id
         replayEnding = false
+        replayDayApplied = false
         userSeeking = false
         paused = false
         btnPlayPause.setImageResource(R.drawable.ic_pause)
@@ -1918,11 +1998,17 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
         replayBar.visibility = View.VISIBLE
         playingTimeshift = true
         renderLiveBadge()
+        // 回看里「上一个台/下一个台」没有意义（切台就等于退出回看），收起来免得误触
+        findViewById<View>(R.id.btnPrevCh)?.visibility = View.GONE
+        findViewById<View>(R.id.btnNextCh)?.visibility = View.GONE
         main.removeCallbacks(replayTicker)
         main.post(replayTicker)
         refreshReplayBar()
         showControls()
         android.util.Log.i(TAG, "进入回看：" + window.title + " 时长 " + window.durationMs / 1000 + "s")
+        // 立刻把信息区与节目单切到「回看」口径：不等下一次 30 秒 tick，
+        // 否则用户点进去的瞬间看到的是直播的「正在播 + 下一档」。
+        renderNow()
     }
 
     /** 退出回看态（回直播 / 切台 / 退出界面都走这里，必须可重入）。 */
@@ -1932,13 +2018,18 @@ class PhoneHomeActivity : AppCompatActivity(), PlayerManager.Callback {
         replayChannelId = 0L
         replayEnding = false
         userSeeking = false
+        replayingProgramStart = 0L
         main.removeCallbacks(replayTicker)
         if (::replayBar.isInitialized) replayBar.visibility = View.GONE
         if (::player.isInitialized) player.replayMode = false
+        findViewById<View>(R.id.btnPrevCh)?.visibility = View.VISIBLE
+        findViewById<View>(R.id.btnNextCh)?.visibility = View.VISIBLE
         if (playingTimeshift) {
             playingTimeshift = false
             renderLiveBadge()
         }
+        // 回到直播口径：信息区重新显示「正在播 / 下一档」，节目单撤掉「回看中」
+        if (::playNow.isInitialized) renderNow()
     }
 
     /** PlayerManager 判定回看播完（它自己也可能先报，两条路都要能收尾）。 */

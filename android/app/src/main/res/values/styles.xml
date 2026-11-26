@@ -203,4 +203,17 @@
         <item name="android:focusable">true</item>
         <item name="android:clickable">true</item>
     </style>
+    <!-- 解锁键盘上的一个键（儿童锁）。96×64dp：电视上 3 米外按得住，
+         手机横屏也不会太挤；焦点描边复用 bg_focusable。 -->
+    <style name="PinKey">
+        <item name="android:layout_width">96dp</item>
+        <item name="android:layout_height">64dp</item>
+        <item name="android:layout_margin">6dp</item>
+        <item name="android:background">@drawable/bg_focusable</item>
+        <item name="android:gravity">center</item>
+        <item name="android:textColor">@color/text_primary</item>
+        <item name="android:textSize">22sp</item>
+        <item name="android:focusable">true</item>
+        <item name="android:clickable">true</item>
+    </style>
 </resources>

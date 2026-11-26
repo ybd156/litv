@@ -786,4 +786,7 @@
             android:textColor="@color/text_secondary"
             android:textSize="16sp" />
     </LinearLayout>
+
+    <!-- 儿童锁的解锁键盘：只在锁定状态长按 OK 时显示，见 PlayerActivity.showPinPad -->
+    <include layout="@layout/view_pin_pad" />
 </FrameLayout>

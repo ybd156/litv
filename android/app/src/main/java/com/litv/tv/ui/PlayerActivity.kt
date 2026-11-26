@@ -35,6 +35,7 @@ import com.litv.tv.data.TvStream
 import com.litv.tv.player.ClockText
 import com.litv.tv.player.EngineKind
 import com.litv.tv.player.HeartbeatGate
+import com.litv.tv.player.KioskLock
 import com.litv.tv.player.PlayRequestGate
 import com.litv.tv.player.PlaySource
 import com.litv.tv.player.PlaybackCoordinator
@@ -604,6 +605,7 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
                     }
                     Math.abs(dy) > slop && Math.abs(dy) > Math.abs(dx) * 1.5f -> {
                         // 上滑 = 下一个台，下滑 = 上一个台
+                        switchReason = "触屏上下滑"
                         switchBy(if (dy < 0) +1 else -1)
                     }
                 }
@@ -647,6 +649,7 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         val targetId = intent?.getLongExtra(EXTRA_CHANNEL_ID, 0) ?: 0
         if (targetId <= 0) return
         Log.i(TAG, "onNewIntent: 遥控换台 -> $targetId")
+        switchReason = "远控指令（服务端/App 转发）"
         switchToChannelById(targetId)
     }
 
@@ -828,6 +831,7 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         // 「收藏」分组又只在非空时出现 —— 新用户既看不到也没法收藏。
         favBtn.setOnClickListener { toggleFavoriteOnFocused() }
         numberTip = findViewById(R.id.numberTip)
+        setupPinPad()
         settingsMenu = findViewById(R.id.settingsMenu)
         subMenu = findViewById(R.id.subMenu)
         subMenuTitle = findViewById(R.id.subMenuTitle)
@@ -987,6 +991,7 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
                 if (ch.id == current?.id && player.isPlaying) {
                     Log.i(TAG, "选中当前正在播的台，跳过重播：${ch.name}")
                 } else {
+                    switchReason = "频道面板点击"
                     playChannel(ch)
                 }
                 // 面板里换台也要给一次 OSD 反馈：↑↓ 换台和数字键跳台都会 showOsd()，
@@ -1375,14 +1380,17 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
             // ★ loadChannels() 在 onCreate 里先于 PlayerManager 创建执行，
             // 这时直接 playChannel 会因为播放器不存在而失效（日志都没有）。
             // 先挂起，等 Surface 就绪再播。
-            if (::player.isInitialized) playChannel(channels[pos])
-            else pendingAutoPlayChannel = channels[pos]
+            if (::player.isInitialized) {
+                switchReason = "启动续播上次的台"
+                playChannel(channels[pos])
+            } else pendingAutoPlayChannel = channels[pos]
         } else if (pendingRemoteChannelId > 0) {
             // 遥控指令在 bootstrap 完成前就到了：现在补执行。
             // 不补的话，用户开机瞬间按遥控换台会"按了没反应"。
             val want = pendingRemoteChannelId
             pendingRemoteChannelId = 0L
             Log.i(TAG, "bootstrap 后补执行遥控换台: $want")
+            switchReason = "远控指令（bootstrap 后补执行）"
             switchToChannelById(want)
         }
 
@@ -1598,10 +1606,29 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         // 用户主动换台就退出回看态：直播流没有时间轴，
         // 控制条留在这里会让「快进」按到一个不可 seek 的内容上。
         if (!isFallback) clearReplay()
+        // 儿童锁：锁住了就只能看这一台。重连、换线路、回看重开也会走这里，
+        // 所以判据是「目标台不是锁定的台」，不是「这次不是用户操作」。
+        // 例外：同一个台的另一条源（央视频 403 后自动降级到 cctv1-MCP 那种）
+        // 名字相同、属于兜底重建，放行；否则一降级就黑屏，比不锁还糟。
+        if (lockedOutOf(ch, isFallback)) {
+            val locked = allChannels.firstOrNull { it.id == app.prefs.lockChannelId }
+            val line = "儿童锁：忽略起播「${ch.name}」(${ch.id})，锁定在 ${app.prefs.lockChannelId}"
+            Log.i(TAG, line)
+            com.litv.tv.data.PlayLog.w(TAG, line)
+            if (current == null && locked != null) {
+                // 冷启动自动续播到别的台时直接改播锁定台，别留一个黑屏
+                playChannel(locked, isFallback = true)
+            } else if (!isFallback) {
+                toastTip(KioskLock.hint(app.prefs.lockChannelName))
+            }
+            return
+        }
         // 取走本次的转场方向并立刻清零：只有 switchBy 会写它，
         // 其余入口（点列表/数字键/恢复/重试）拿到的都是 0 = 只淡出。
         slideDir = pendingSlideDir
         pendingSlideDir = 0f
+        // 记下换台前的台：只有 id 变了才算「换台」，重连/重试/换线路都不算。
+        val prevChannel = current
         Log.i(TAG, "playChannel: ${ch.name} streamId=$streamId rebuild=$forceRebuild slide=$slideDir direct=${app.prefs.directMode}")
         // ★ 2026-11-22：落盘"这次播的是哪个台、哪个源"。
         //   没有这一条，事后看 play.log 根本分不清测的是内置源还是自建源 ——
@@ -1609,6 +1636,14 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         run {
             val srcKind = if (com.litv.tv.data.YspClient.isYspChannel(ch.id)) "内置" else "自建"
             com.litv.tv.data.PlayLog.w(TAG, "起播「${ch.name}」id=${ch.id} 源=$srcKind")
+        }
+        // 只有「换到另一个台」才记这一行：重连、重试、换线路都会重进 playChannel，
+        // 但它们不是换台，混进来反而看不清。原因由各入口在调用前写入 switchReason。
+        if (prevChannel?.id != ch.id) {
+            val line = "换台：${prevChannel?.name ?: "（无）"} → ${ch.name}（原因：$switchReason）"
+            Log.i(TAG, line)
+            com.litv.tv.data.PlayLog.w(TAG, line)
+            switchReason = "未标注"
         }
         setSplashStage("正在起播…")
         // 立刻停掉上一次的起播计时器：下面要等签名地址（0.8~1.4 秒），
@@ -1848,6 +1883,17 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         // 真正的切换和 OSD 都放到 switchDebounceRunnable 里，等真的开始了再显示。
     }
 
+    /**
+     * 这一次换台是「谁」引起的：遥控上下键 / 遥控频道键 / 触屏上下滑 / 数字键 /
+     * 频道面板点击 / 远控指令。只在 playChannel 里真正换了台时落盘一行，
+     * 落完立刻复位成「未标注」。
+     *
+     * 为什么需要：2026-11-26 用户问「电视为什么自己换台了」，
+     * 当时的 play.log 只有 `起播「cctv2-MCP」`，看不出是遥控、触屏还是程序自己换的，
+     * 谁也说不清。有这一行就能一口咬定来源。
+     */
+    private var switchReason = "未标注"
+
     /** 连按换台的合并：150ms 内只对最后一个目标发起播放。 */
     private var pendingSwitchTarget: Channel? = null
     private val switchDebounceRunnable = Runnable {
@@ -1869,6 +1915,7 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         if (i < 0) i = want - 1
         if (i in channels.indices) {
             index = i
+            switchReason = "数字键直跳"
             playChannel(channels[i])
             showOsd()
         }
@@ -2386,6 +2433,11 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
                 )
                 cycleRow(row, "息屏处理", listOf("静音", "无动作"), screenOffLabel) { v ->
                     app.prefs.screenOffAction = com.litv.tv.player.ScreenOffPlan.valueOf(v)
+                }
+                // 儿童锁：开 = 锁在当前正在播的台。点「关」不直接关 ——
+                // 关锁要输密码，所以这里弹解锁键盘，输对才真的关。
+                toggleRow(row, "儿童锁（默认密码 1234）", lockActive()) { on ->
+                    if (on) enableLockNow() else showPinPad()
                 }
             }
             "interact" -> {
@@ -3392,11 +3444,174 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
 
     // ---------------------------------------------------------------- 按键
 
+    // ───────────────────────── 儿童锁 / 老人模式 ─────────────────────────
+    //
+    // 需求（2026-11-26 用户）：锁在当前台，不给换台、不给退出，解锁才可以。
+    //
+    // 实现要点：
+    // - 状态存在 Prefs（lockEnabled + lockChannelId + lockPin），跨重启有效；
+    // - 按键在 dispatchKeyEvent 最前面拦，方向键/换台/菜单/返回/数字键全吞；
+    // - HOME 键拦不住（系统级），只能在 onStop 里把自己拉回前台；
+    // - 解锁＝关掉锁：长按 OK 弹出数字键盘，输对 4 位密码即解锁。
+    //   遥控器没有数字键也能解，这是选长按 OK 而不是「按数字键输密码」的原因。
+
+    private var pinPadShowing = false
+    private val pinInput = StringBuilder()
+    private var pinKeys: MutableList<android.widget.TextView> = mutableListOf()
+    private lateinit var pinPad: View
+    private lateinit var pinDots: android.widget.TextView
+    private lateinit var pinTitle: android.widget.TextView
+
+    /** 长按 OK 到点后弹键盘；松开（ACTION_UP）时撤掉。 */
+    private val lockOkHoldRunnable = Runnable { showPinPad() }
+
+    private fun lockActive(): Boolean =
+        app.prefs.lockEnabled && app.prefs.lockChannelId != 0L
+
+    /**
+     * 这次起播是不是「被锁挡下来的」。
+     *
+     * 挡的是换台，不是兜底：内置源 403 之后会自动降级到同名自建源
+     * （`isFallback=true`、名字一样、id 不同），那是重建同一条直播，
+     * 挡掉只会让画面变黑，所以放行。
+     */
+    private fun lockedOutOf(ch: Channel, isFallback: Boolean): Boolean {
+        if (!lockActive()) return false
+        if (ch.id == app.prefs.lockChannelId) return false
+        if (isFallback && ch.name == app.prefs.lockChannelName) return false
+        return true
+    }
+
+    /** 挂解锁键盘的点击：按键值是布局里的 tag（"1".."9" / "0" / "back" / "clear"）。 */
+    private fun setupPinPad() {
+        pinPad = findViewById(R.id.pinPad)
+        pinDots = findViewById(R.id.pinDots)
+        pinTitle = findViewById(R.id.pinTitle)
+        val grid = findViewById<android.widget.LinearLayout>(R.id.pinGrid)
+        for (i in 0 until grid.childCount) {
+            val row = grid.getChildAt(i) as? android.view.ViewGroup ?: continue
+            for (j in 0 until row.childCount) {
+                val key = row.getChildAt(j) as? android.widget.TextView ?: continue
+                val tag = key.tag as? String ?: continue
+                pinKeys.add(key)
+                key.setOnClickListener { onPinKey(tag) }
+            }
+        }
+        pinPad.setOnClickListener { /* 吃掉点击，别透到下面的播放层 */ }
+    }
+
+    private fun showPinPad() {
+        if (pinPadShowing || !::pinPad.isInitialized) return
+        pinPadShowing = true
+        pinInput.setLength(0)
+        pinTitle.text = "输入 4 位密码解锁"
+        renderPinDots()
+        pinPad.visibility = View.VISIBLE
+        pinKeys.firstOrNull()?.requestFocus()
+        Log.i(TAG, "儿童锁：弹出解锁键盘")
+        com.litv.tv.data.PlayLog.w(TAG, "儿童锁：弹出解锁键盘")
+    }
+
+    private fun hidePinPad() {
+        if (!::pinPad.isInitialized) return
+        pinPadShowing = false
+        pinPad.visibility = View.GONE
+        main.removeCallbacks(lockOkHoldRunnable)
+        pinInput.setLength(0)
+    }
+
+    private fun renderPinDots() {
+        val text = (0 until KioskLock.PIN_LENGTH).joinToString(" ") {
+            if (it < pinInput.length) "●" else "○"
+        }
+        pinDots.text = text
+    }
+
+    private fun onPinKey(tag: String) {
+        when (tag) {
+            "back" -> if (pinInput.isNotEmpty()) pinInput.deleteCharAt(pinInput.length - 1)
+            "clear" -> pinInput.setLength(0)
+            else -> if (pinInput.length < KioskLock.PIN_LENGTH) pinInput.append(tag)
+        }
+        renderPinDots()
+        if (pinInput.length == KioskLock.PIN_LENGTH) verifyPin()
+    }
+
+    private fun verifyPin() {
+        if (KioskLock.matches(pinInput.toString(), app.prefs.lockPin)) {
+            unlockNow()
+        } else {
+            pinTitle.text = "密码不对，再试一次"
+            pinInput.setLength(0)
+            renderPinDots()
+            Log.i(TAG, "儿童锁：密码错误")
+        }
+    }
+
+    /** 解锁＝关掉锁。不做「临时放行」，避免状态多一份要维护。 */
+    private fun unlockNow() {
+        val ch = app.prefs.lockChannelName
+        app.prefs.lockEnabled = false
+        hidePinPad()
+        toastTip("已解锁，可以正常换台了")
+        Log.i(TAG, "儿童锁：已解锁（原锁定「$ch」）")
+        com.litv.tv.data.PlayLog.w(TAG, "儿童锁：已解锁（原锁定「$ch」）")
+    }
+
+    /** 开锁：锁在当前正在播的这台。 */
+    private fun enableLockNow() {
+        val ch = current
+        if (ch == null) {
+            toastTip("还没在播放，先起播再开儿童锁")
+            return
+        }
+        app.prefs.lockChannelId = ch.id
+        app.prefs.lockChannelName = ch.name
+        app.prefs.lockEnabled = true
+        val pin = KioskLock.sanitizePin(app.prefs.lockPin)
+        toastTip("已锁定「${ch.name}」：长按 OK，输密码 $pin 解锁")
+        Log.i(TAG, "儿童锁：已锁定「${ch.name}」(${ch.id})")
+        com.litv.tv.data.PlayLog.w(TAG, "儿童锁：已锁定「${ch.name}」(${ch.id})")
+    }
+
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
         val code = event.keyCode
         val action = event.action
         // 用户已经在按键了，说明不需要再看开屏层——无论起播成不成功都撤掉
         if (action == KeyEvent.ACTION_DOWN) hideSplashOverlay()
+
+        // ── 儿童锁：把除「音量/电源/OK」以外的键全部吃掉 ──
+        // OK 是解锁入口：长按 1.5 秒弹数字键盘。所以 OK 本身必须放行，
+        // 否则没有数字键的遥控器就再也解不开了。
+        if (lockActive()) {
+            if (pinPadShowing) return super.dispatchKeyEvent(event)
+            val isOk = code == KeyEvent.KEYCODE_DPAD_CENTER ||
+                code == KeyEvent.KEYCODE_ENTER ||
+                code == KeyEvent.KEYCODE_NUMPAD_ENTER
+            if (isOk) {
+                if (action == KeyEvent.ACTION_DOWN) {
+                    if (event.isLongPress) {
+                        // 有些遥控器（以及 adb 注入的 --longpress）直接把长按标志
+                        // 带在 DOWN 上、repeatCount 仍是 0。这时候不用等计时器，
+                        // 立刻弹键盘，否则这类遥控器永远解不开锁。
+                        main.removeCallbacks(lockOkHoldRunnable)
+                        showPinPad()
+                    } else if (event.repeatCount == 0) {
+                        main.postDelayed(lockOkHoldRunnable, KioskLock.HOLD_MS)
+                        toastTip(KioskLock.hint(app.prefs.lockChannelName))
+                    }
+                } else if (action == KeyEvent.ACTION_UP) {
+                    main.removeCallbacks(lockOkHoldRunnable)
+                }
+                return true
+            }
+            if (KioskLock.isBlockedKey(code)) {
+                if (action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
+                    toastTip(KioskLock.hint(app.prefs.lockChannelName))
+                }
+                return true
+            }
+        }
 
         // 数字键：累积跳台
         if (code in KeyEvent.KEYCODE_0..KeyEvent.KEYCODE_9) {
@@ -3548,19 +3763,31 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
 
         when (code) {
             KeyEvent.KEYCODE_DPAD_UP -> {
-                if (action == KeyEvent.ACTION_DOWN) switchBy(-1)
+                if (action == KeyEvent.ACTION_DOWN) {
+                    switchReason = "遥控上键"
+                    switchBy(-1)
+                }
                 return true
             }
             KeyEvent.KEYCODE_DPAD_DOWN -> {
-                if (action == KeyEvent.ACTION_DOWN) switchBy(+1)
+                if (action == KeyEvent.ACTION_DOWN) {
+                    switchReason = "遥控下键"
+                    switchBy(+1)
+                }
                 return true
             }
             KeyEvent.KEYCODE_CHANNEL_UP -> {
-                if (action == KeyEvent.ACTION_DOWN) switchBy(-1)
+                if (action == KeyEvent.ACTION_DOWN) {
+                    switchReason = "遥控频道加"
+                    switchBy(-1)
+                }
                 return true
             }
             KeyEvent.KEYCODE_CHANNEL_DOWN -> {
-                if (action == KeyEvent.ACTION_DOWN) switchBy(+1)
+                if (action == KeyEvent.ACTION_DOWN) {
+                    switchReason = "遥控频道减"
+                    switchBy(+1)
+                }
                 return true
             }
             KeyEvent.KEYCODE_DPAD_LEFT -> {
@@ -4548,6 +4775,26 @@ class PlayerActivity : AppCompatActivity(), PlayerManager.Callback {
         app.remote.onCommand = null
         // 跨端续播：离开时记下看到哪个台，别的设备打开就能"接着看"
         current?.let { app.api.saveProgress(it.id, 0) }
+    }
+
+    override fun onStop() {
+        super.onStop()
+        // 儿童锁：HOME 是系统级按键，应用拦不住，只能被退到后台后再把自己拉回来。
+        // 放在 onStop 而不是 onPause：下拉通知栏、来电浮层也会走 onPause，
+        // 那个位置抢前台会变成「只要一点别的就跳回来」，太粗暴。
+        if (!lockActive() || isChangingConfigurations || isFinishing) return
+        Log.i(TAG, "儿童锁：被退到后台，拉回前台")
+        com.litv.tv.data.PlayLog.w(TAG, "儿童锁：被退到后台，拉回前台")
+        main.postDelayed({
+            if (lockActive() && !isFinishing) {
+                runCatching {
+                    startActivity(
+                        android.content.Intent(this, PlayerActivity::class.java)
+                            .addFlags(android.content.Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
+                    )
+                }
+            }
+        }, 500)
     }
 
     /** 每小时查一次跨天。电视盒子常年不关，只靠 onResume 不够。 */

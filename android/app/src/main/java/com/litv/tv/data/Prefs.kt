@@ -219,6 +219,31 @@ class Prefs(ctx: Context) {
         set(v) = sp.edit().putString(K_SCREEN_OFF_ACTION, v).apply()
 
     /**
+     * 儿童锁 / 老人模式：锁定在 [lockChannelId] 这一台，不给换台、不给退出。
+     *
+     * 默认必须是关 —— 一旦默认开，用户升级完就发现遥控器全不灵。
+     * 这是「防误触」不是安全边界（密码明文存在本机），见 `KioskLock` 的文件注释。
+     */
+    var lockEnabled: Boolean
+        get() = sp.getBoolean(K_LOCK_ENABLED, false)
+        set(v) = sp.edit().putBoolean(K_LOCK_ENABLED, v).apply()
+
+    /** 被锁定的频道 id；0 表示没记台，等同于没锁。 */
+    var lockChannelId: Long
+        get() = sp.getLong(K_LOCK_CHANNEL_ID, 0L)
+        set(v) = sp.edit().putLong(K_LOCK_CHANNEL_ID, v).apply()
+
+    /** 锁定时的频道名，只用于界面提示。 */
+    var lockChannelName: String
+        get() = sp.getString(K_LOCK_CHANNEL_NAME, "") ?: ""
+        set(v) = sp.edit().putString(K_LOCK_CHANNEL_NAME, v).apply()
+
+    /** 解锁密码（4 位数字，明文）；空串时按 `KioskLock.DEFAULT_PIN` 处理。 */
+    var lockPin: String
+        get() = sp.getString(K_LOCK_PIN, "") ?: ""
+        set(v) = sp.edit().putString(K_LOCK_PIN, v).apply()
+
+    /**
      * 频道列表来源：`server`（默认，服务端下发）或 `client`（客户端自己拉 m3u 解析）。
      *
      * 默认必须是 server —— 服务端下发是现状且更稳；客户端解析要用户显式打开，
@@ -407,6 +432,10 @@ class Prefs(ctx: Context) {
         const val K_ENGINE = "engine"
         const val K_DECODE = "decode"
         const val K_SCREEN_OFF_ACTION = "screen_off_action"
+        const val K_LOCK_ENABLED = "lock_enabled"
+        const val K_LOCK_CHANNEL_ID = "lock_channel_id"
+        const val K_LOCK_CHANNEL_NAME = "lock_channel_name"
+        const val K_LOCK_PIN = "lock_pin"
 
         // 取值必须与 ScreenOffPlan.VALUE_* 一致（Prefs 的 companion 是 private，
         // 那边不能直接引用这里，两处字面量靠注释与 ScreenOffPlanTest 绑定）。

@@ -1,0 +1,96 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  解锁键盘（儿童锁 / 老人模式）。
+
+  只在这一种场景出现：界面上锁了，用户长按 OK。所以它不需要「取消」以外
+  任何入口 —— 返回键收起、密码对了就解锁（解锁＝关掉锁，见 PlayerActivity.unlockNow）。
+
+  按键用 tag 传值（"1".."9"、"0"、"back"、"clear"），点击监听在代码里统一挂，
+  这样加减按键不用再动 Java/Kotlin。
+-->
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/pinPad"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#D9000000"
+    android:clickable="true"
+    android:focusable="true"
+    android:visibility="gone">
+
+    <LinearLayout
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="center"
+        android:background="@drawable/bg_osd_card"
+        android:orientation="vertical"
+        android:padding="28dp">
+
+        <TextView
+            android:id="@+id/pinTitle"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="输入 4 位密码解锁"
+            android:textColor="@color/text_primary"
+            android:textSize="18sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/pinDots"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:gravity="center"
+            android:paddingTop="14dp"
+            android:paddingBottom="14dp"
+            android:text="○ ○ ○ ○"
+            android:textColor="@color/accent"
+            android:textSize="26sp" />
+
+        <LinearLayout
+            android:id="@+id/pinGrid"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="center_horizontal"
+            android:orientation="vertical">
+
+            <LinearLayout
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal">
+
+                <TextView style="@style/PinKey" android:tag="1" android:text="1" />
+                <TextView style="@style/PinKey" android:tag="2" android:text="2" />
+                <TextView style="@style/PinKey" android:tag="3" android:text="3" />
+            </LinearLayout>
+
+            <LinearLayout
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal">
+
+                <TextView style="@style/PinKey" android:tag="4" android:text="4" />
+                <TextView style="@style/PinKey" android:tag="5" android:text="5" />
+                <TextView style="@style/PinKey" android:tag="6" android:text="6" />
+            </LinearLayout>
+
+            <LinearLayout
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal">
+
+                <TextView style="@style/PinKey" android:tag="7" android:text="7" />
+                <TextView style="@style/PinKey" android:tag="8" android:text="8" />
+                <TextView style="@style/PinKey" android:tag="9" android:text="9" />
+            </LinearLayout>
+
+            <LinearLayout
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal">
+
+                <TextView style="@style/PinKey" android:tag="back" android:text="←" />
+                <TextView style="@style/PinKey" android:tag="0" android:text="0" />
+                <TextView style="@style/PinKey" android:tag="clear" android:text="清空" />
+            </LinearLayout>
+        </LinearLayout>
+    </LinearLayout>
+</FrameLayout>

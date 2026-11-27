@@ -16,6 +16,14 @@ build/test/*.sh     text eol=lf
 # workertest 是 LF、selftest 是 CRLF），diff 不可读、review 也会漏看。
 *.mjs               text eol=lf
 
+# 容器部署文件：镜像构建在 Linux 上跑。
+# Dockerfile 带 CRLF 时 RUN 指令尾部会多出 \r（报 `/bin/sh: 1: ...: not found`），
+# 而 compose / config 里的路径也会带进看不见的字符，所以这三类一律锁 LF。
+Dockerfile          text eol=lf
+.dockerignore       text eol=lf
+docker-compose.yml  text eol=lf
+config/*.yaml       text eol=lf
+
 # 二进制与图片不要参与行尾转换
 *.png   binary
 *.PNG   binary

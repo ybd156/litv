@@ -1,0 +1,27 @@
+# 只把构建需要的东西送进 docker 上下文；android/iOS/产物目录都不需要。
+.git
+.github
+android
+ios
+edge
+ref
+build
+docs
+tools
+packaging
+
+# 依赖与产物
+**/node_modules
+**/dist
+**/build
+**/generated
+**/intermediates
+**/.gradle
+server/internal/web/www
+
+# 运行时数据（绝对不要打进镜像）
+data
+**/*.db
+**/*.db-wal
+**/*.db-shm
+**/*.log

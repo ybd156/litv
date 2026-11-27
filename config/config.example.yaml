@@ -1,0 +1,114 @@
+# LITV 服务端配置（docker / 1Panel 版）
+#
+# 用法：复制到数据目录并改名 config.yaml，再改成你自己的密码：
+#   mkdir -p data && cp config/config.example.yaml data/config.yaml
+#   chown -R 10001:10001 data
+#
+# 容器内路径固定为 /app/data（compose 里映射到宿主机的 ./data）。
+# 所有键都能在管理台里改，改完会写回这个文件；手改也生效，但需要重启容器。
+
+server:
+  host: 0.0.0.0
+  port: 28027
+  # 1Panel 上没有飞牛网关，这一项必须留空；留着就会去 bind 一个不存在的 socket。
+  gateway_socket: ""
+  # 管理台与 API 的前缀。留空 = 直接挂在根路径：http(s)://域名/
+  # （飞牛 fnOS 那边是 /app/litv，要靠网关注入身份；1Panel 用密码登录，直接根路径更省事，
+  #  反代也不用改写路径。改成别的值也可以，例如 /litv，会变成 http(s)://域名/litv/）
+  # 注意：改这里会让已下发的播放地址失效（它们带前缀），换前缀后要重新进播放页。
+  prefix: ""
+  read_timeout: 30
+  # 0 = 不限制。直播流会长时间挂着，不能有写超时。
+  write_timeout: 0
+  # 节目单按这个时区切"日"，必须是 IANA 名称；留空按 UTC 处理。
+  timezone: Asia/Shanghai
+  # 只影响"记录客户端 IP"，绝不参与鉴权。
+  trust_proxy: true
+  trusted_proxies:
+    - 127.0.0.1/32
+    - ::1/128
+    # 1Panel 的 OpenResty 与容器不在同一网络命名空间时，对端会是 docker 网关地址。
+    - 172.16.0.0/12
+    - 10.0.0.0/8
+    - 192.168.0.0/16
+
+database:
+  path: /app/data/litv.db
+
+auth:
+  # 流地址（fragment URL）的 HMAC 密钥。留空则首次启动时自动生成并写回本文件；
+  # 一旦生成就别再改，否则所有已下发的播放地址立刻失效。
+  secret: ""
+  # 管理台登录密码。1Panel 上没有飞牛网关，这一项为空就永远登录失败，必须设。
+  admin_password: "CHANGE-ME-请改成你自己的强密码"
+  # 管理员会话有效期（1..168 小时）与并发上限（1..128）。
+  admin_token_hours: 8
+  admin_max_sessions: 16
+  # 开发模式会让"没有网关头"的请求直接被当成管理员。容器部署必须保持 false。
+  dev_mode: false
+
+stream:
+  cache_dir: /app/data/cache
+  max_concurrent: 100
+  buffer_size: 32768
+  # 每频道环形缓冲 6MB ≈ 8Mbps 下 6 秒。新观众从这里起播，别调太小。
+  ring_size: 6291456
+  user_agent: "LITV/1.0 (docker)"
+  upstream_timeout: 15
+  # 允许客户端直连上游（direct=1），省服务器带宽；跨网源可能连不上。
+  direct_enabled: true
+
+transcode:
+  enabled: false
+  ffmpeg: /usr/bin/ffmpeg
+  hwaccel: none
+  preset: veryfast
+
+epg:
+  enabled: true
+  refresh_cron: "0 3 * * *"
+  keep_days: 7
+  default_urls: []
+  max_mb: 200
+  max_programmes: 500000
+
+probe:
+  enabled: true
+  interval_minutes: 30
+  timeout_seconds: 8
+  concurrency: 4
+
+timeshift:
+  enabled: true
+  dir: /app/data/timeshift
+  segment_mb: 64
+  max_segments: 12
+
+remux:
+  enabled: true
+  # 留空则回落到 transcode.ffmpeg；容器里就是 /usr/bin/ffmpeg。
+  ffmpeg: ""
+  dir: /app/data/remux
+  segment_seconds: 2
+  # 30 × 2s = 60 秒窗口。必须明显大于客户端最大缓冲（40s），否则周期性掉出直播窗口。
+  playlist_size: 30
+  idle_timeout_seconds: 60
+
+record:
+  enabled: true
+  dir: /app/data/recordings
+
+alert:
+  enabled: false
+  webhook_url: ""
+  chat_id: ""
+  min_interval_minutes: 30
+
+dlna:
+  # 容器默认用 host 网络或手动映射端口时才考虑开；桥接网络下 SSDP 组播不可达。
+  enabled: false
+  friendly_name: "LITV 直播"
+
+log:
+  level: info
+  max_mb: 10

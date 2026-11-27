@@ -1,0 +1,37 @@
+# LITV 服务端 · 1Panel / 通用 docker compose 编排
+#
+# 用法（1Panel：应用 → 容器 → 编排 → 创建编排）：
+#   1. 把整个仓库放到服务器上（例如 /opt/litv）
+#   2. 先在 ./data 里放一份 config.yaml（见 config/config.example.yaml）
+#   3. 本目录执行 `docker compose up -d --build`，或在 1Panel 里点"启动"
+#
+# 只有一个容器、一个端口、一个数据目录：
+#   - 28027 同时提供管理台（默认挂在根路径 /）和终端 API
+#   - ./data 里放 config.yaml、litv.db、cache/、录制与时移分片
+
+services:
+  litv:
+    build:
+      context: .
+      args:
+        # 只影响 `litvd -version` 的输出和管理台「关于」页，不参与任何逻辑。
+        VERSION: "0.1.24"
+    image: litv-server:0.1.24
+    container_name: litv
+    restart: unless-stopped
+    ports:
+      # 只给 1Panel 的 OpenResty 反代用的话，可以改成 "127.0.0.1:28027:28027"，
+      # 这样公网只能经反代访问（推荐）。
+      - "28027:28027"
+    volumes:
+      - ./data:/app/data
+    environment:
+      TZ: Asia/Shanghai
+    healthcheck:
+      # 用 /api/v1/health 而不是管理台首页：API 路径不受 server.prefix 影响，
+      # 改前缀（根路径 / 或 /litv）都不用跟着改这里。
+      test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://127.0.0.1:28027/api/v1/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s

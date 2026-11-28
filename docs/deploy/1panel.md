@@ -81,7 +81,8 @@ docker compose -f docker-compose.image.yml up -d
 LITV_VERSION=0.1.24 docker compose -f docker-compose.image.yml up -d
 ```
 
-> 镜像默认是 **private**：要么去 GitHub 仓库 → **Packages** → 该镜像 → **Package settings** 改成 public，
+> 镜像目前是 **public**（匿名可拉，2026-11-28 实测），服务器不用登录。
+> 若哪天改成 private：要么去 GitHub 仓库 → **Packages** → 该镜像 → **Package settings** 改回 public，
 > 要么先在服务器上 `docker login ghcr.io`（token 勾 `read:packages`）。
 >
 > 只发布了 `linux/amd64`。ARM NAS（飞牛 ARM 机型）见文末「验证边界」。
@@ -250,5 +251,12 @@ docker compose up -d --build     # 或用 1Panel 编排里的「重建」
   `server/internal/web/www` 再拷 `admin/dist`）；`config/config.example.yaml` 的全部键与
   `server/internal/config/config.go` 的 yaml tag 逐一对应；compose 的路径、端口、uid 与
   `Dockerfile` 一致。
-- **未验证**：本机没有 Docker，镜像**没有实际构建和运行过**。上面命令在你的服务器上首次执行时，
-  请重点看 1Panel 构建日志里的 `npm run build` 与 `go build` 两段；若失败，把日志贴回来。
+- **镜像已在 GitHub Actions 里真实构建并推送**（2026-11-28）：
+  `ghcr.io/ybd156/litv:0.1.24` 与 `:latest` 同 digest `sha256:098f12a1…a5e92a`，
+  manifest 为 `linux/amd64`（另有 buildkit 的 attestation manifest），
+  匿名拉取 `HEAD /v2/ybd156/litv/manifests/0.1.24` 返回 200 ⇒ 包是 public，服务器免登录可 pull。
+  工作流：`.github/workflows/docker-image.yml`（run 46087667511，全套步骤 success，约 2.5 分钟）。
+- 本机执行 `docker build` / `docker compose up` 的路径**仍未在本机验证**（本机没有 Docker）；
+  上面这条 CI 构建是「镜像能构建出来」的证据，但「容器在你的 1Panel 上跑起来」还需要你那边首次启动。
+- 目前只发布 `linux/amd64`。ARM NAS（飞牛 ARM 机型）需要把工作流里的
+  `platforms` 改成 `linux/amd64,linux/arm64` 并加 QEMU 步骤，构建时间会涨到 25 分钟以上。

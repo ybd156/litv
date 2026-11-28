@@ -34,6 +34,17 @@ on:
   push:
     tags:
       - "v*"
+    # 镜像内容变了就自动重出：改了构建文件、管理台或服务端源码都算。
+    # 只改文档/客户端不触发，避免白跑。
+    branches:
+      - main
+    paths:
+      - "Dockerfile"
+      - ".dockerignore"
+      - "admin/**"
+      - "server/**"
+      - "config/config.example.yaml"
+      - ".github/workflows/docker-image.yml"
 
 permissions:
   contents: read
@@ -83,6 +94,7 @@ jobs:
           push: true
           build-args: |
             VERSION=${{ steps.ver.outputs.version }}
+            ADMIN_BASE=/
           tags: |
             ${{ env.IMAGE }}:${{ steps.ver.outputs.version }}
             ${{ env.IMAGE }}:latest

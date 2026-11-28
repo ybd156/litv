@@ -15,6 +15,11 @@ ARG RUNTIME_IMAGE=debian:bookworm-slim
 # ---------- 1. 管理台 ----------
 FROM ${NODE_IMAGE} AS admin
 WORKDIR /src/admin
+# 管理台静态资源前缀：容器部署（server.prefix 留空、管理台挂根路径）用 /；
+# 要像飞牛那样挂 /app/litv/ 子路径，就 --build-arg ADMIN_BASE=/app/litv/
+# 构建时传错这一项，浏览器会去请求不存在的 /app/litv/assets/*，页面全黑。
+ARG ADMIN_BASE=/
+ENV VITE_BASE=${ADMIN_BASE}
 COPY admin/package.json admin/package-lock.json ./
 RUN npm ci --no-audit --no-fund
 COPY admin/ ./

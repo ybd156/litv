@@ -4,11 +4,17 @@ import vue from '@vitejs/plugin-vue'
 
 /**
  * 部署约束（见 docs/design/00-总体方案.md §3.3）：
- * 飞牛统一网关模式下，管理台必须挂在 /app/litv/ 子路径下，且 base 结尾必须带斜杠，
- * 否则白屏 / 404。路由用 hash 模式，静态资源全部走 /app/litv/assets/*。
+ * 飞牛统一网关模式下，管理台挂在 /app/litv/ 子路径下，且 base 结尾必须带斜杠，
+ * 否则白屏 / 404。路由用 hash 模式，静态资源全部走 {base}assets/*。
+ *
+ * 容器/根路径部署（1Panel：server.prefix 留空）用 VITE_BASE=/ 构建，
+ * 否则 index.html 会去请求 /app/litv/assets/*，根路径下这些请求落进 SPA 兜底、
+ * 返回 text/html，脚本不执行 → 页面全黑（2026-11-28 实测）。
  */
+const ADMIN_BASE = (process.env.VITE_BASE ?? '/app/litv/').replace(/\/*$/, '/')
+
 export default defineConfig(({ mode }) => ({
-  base: '/app/litv/',
+  base: ADMIN_BASE,
   plugins: [vue()],
   resolve: {
     alias: {

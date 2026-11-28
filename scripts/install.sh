@@ -5,14 +5,25 @@
 # 用法（在服务器 SSH 里执行，一条命令）：
 #   curl -fsSL https://raw.githubusercontent.com/ybd156/litv/main/scripts/install.sh | bash
 #
-# 可选参数（透传用 bash -s -- ）：
-#   curl -fsSL .../install.sh | bash -s -- --port 8080 --dir /opt/litv --version 0.1.24
+# 装的过程中会让你挑版本（直接回车 = 最新版）；也可以一次性指定：
+#   curl -fsSL .../install.sh | bash -s -- --version 0.1.24
+#   curl -fsSL .../install.sh | bash -s -- --port 8080 --dir /opt/litv --auto-upgrade daily
+#
+# 可选参数：
+#   --version <tag>        指定版本；不填则交互挑选（非交互环境下用最新版）
+#   --list                 只列出 GHCR 上可用的版本，不安装
+#   --dir <路径>           安装目录（默认 /opt/litv）
+#   --port <端口>          宿主机端口（默认 28027）
+#   --localhost            只绑 127.0.0.1（交给 1Panel 反代）
+#   --auto-upgrade <when>  装完顺手开自动升级：daily | weekly | off | 04:30
+#   --yes                  全用默认值，不问问题
 #
 # 做的事：
 #   1. 检查 docker 与 compose 插件
 #   2. 建数据目录并把属主改成 10001（容器内运行用户）
 #   3. 若没有 config.yaml，就生成一份，密码随机，并打印出来
 #   4. 拉镜像、启动容器、等健康检查
+#   5. 装一个 `litv` 管理命令（status/list/upgrade/auto/logs）
 #
 # 幂等：重复执行不会覆盖已有 config.yaml，也不会重新生成密码。
 # =============================================================================
@@ -22,26 +33,97 @@ trap 'printf "\033[31m✗ 第 %s 行失败（退出码 %s）。把上面最后�
 
 DIR="/opt/litv"
 PORT="28027"
-VERSION="0.1.24"
+VERSION=""
 IMAGE="ghcr.io/ybd156/litv"
-BIND="0.0.0.0"
+# 默认只绑本机：1Panel 用反代对外，端口不暴露到公网。
+# 要直接对外访问就加 --public（绑 0.0.0.0）。
+BIND="127.0.0.1"
+AUTO_UPGRADE=""
+YES=0
+LIST_ONLY=0
+CLI_URL="${LITV_CLI_URL:-https://raw.githubusercontent.com/ybd156/litv/main/scripts/litv}"
 
 while [ $# -gt 0 ]; do
   case "$1" in
     --dir) DIR="$2"; shift 2 ;;
     --port) PORT="$2"; shift 2 ;;
     --version) VERSION="$2"; shift 2 ;;
-    --localhost) BIND="127.0.0.1"; shift ;;
+    --list) LIST_ONLY=1; shift ;;
+    --public) BIND="0.0.0.0"; shift ;;
+    --localhost|--bind-local) BIND="127.0.0.1"; shift ;;
+    --auto-upgrade) AUTO_UPGRADE="${2:-daily}"; shift 2 ;;
+    --yes|-y) YES=1; shift ;;
     -h|--help)
-      sed -n '2,20p' "$0" 2>/dev/null || echo "见 https://github.com/ybd156/litv/blob/main/docs/deploy/1panel.md"
+      sed -n '2,30p' "$0" 2>/dev/null || echo "见 https://github.com/ybd156/litv/blob/main/docs/deploy/1panel.md"
       exit 0 ;;
-    *) echo "未知参数：$1（支持 --dir/--port/--version/--localhost）" >&2; exit 2 ;;
+    *) echo "未知参数：$1（支持 --dir/--port/--version/--list/--public/--auto-upgrade/--yes）" >&2; exit 2 ;;
   esac
 done
 
 say() { printf '\033[36m%s\033[0m\n' "$*"; }
 warn() { printf '\033[33m%s\033[0m\n' "$*"; }
 die() { printf '\033[31m%s\033[0m\n' "$*" >&2; exit 1; }
+
+# ---------------------------------------------------------------- 版本列表
+# 匿名拉 GHCR 的 tag（包是 public，不需要 docker login）
+fetch_tags() {
+  local repo="${IMAGE#ghcr.io/}" token
+  token="$(curl -fsSL "https://ghcr.io/token?scope=repository:${repo}:pull&service=ghcr.io" 2>/dev/null \
+    | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')"
+  [ -n "$token" ] || return 1
+  curl -fsSL -H "Authorization: Bearer $token" \
+    "https://ghcr.io/v2/${repo}/tags/list" 2>/dev/null \
+    | grep -o '"tags":\[[^]]*\]' | tr -d '"' \
+    | sed 's/tags:\[//; s/\]//' | tr ',' '\n' \
+    | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' || true
+}
+
+# 版本号从新到旧
+list_versions() { fetch_tags | sort -u -Vr; }
+
+if [ "$LIST_ONLY" = "1" ]; then
+  say "==> ${IMAGE} 可用版本（新的在前）"
+  V="$(list_versions)"
+  if [ -z "$V" ]; then
+    die "取不到版本列表（检查到 ghcr.io 的网络）"
+  fi
+  i=0
+  for t in $V; do
+    i=$((i + 1))
+    if [ "$i" -le 20 ]; then printf '  %s\n' "$t"; fi
+  done
+  exit 0
+fi
+
+# 没指定版本就交互挑一个（从 /dev/tty 读，兼容 curl | bash）
+if [ -z "$VERSION" ] && [ "$YES" = "0" ] && [ -r /dev/tty ]; then
+  VERS="$(list_versions || true)"
+  if [ -n "$VERS" ]; then
+    echo
+    say "==> 可选版本（新的在前）"
+    i=0
+    for t in $VERS; do
+      i=$((i + 1))
+      [ "$i" -le 12 ] || break
+      printf '  %2d) %s\n' "$i" "$t"
+    done
+    DEFAULT_VER="$(printf '%s\n' "$VERS" | head -n1)"
+    printf '请选择版本 [1-%s，直接回车 = 最新 %s]: ' "$i" "$DEFAULT_VER" < /dev/tty > /dev/tty
+    read -r CHOICE < /dev/tty || CHOICE=""
+    case "$CHOICE" in
+      "") VERSION="$DEFAULT_VER" ;;
+      *[!0-9]*) VERSION="$CHOICE" ;;            # 直接敲了版本号
+      *) VERSION="$(printf '%s\n' "$VERS" | sed -n "${CHOICE}p")" ;;
+    esac
+    [ -n "$VERSION" ] || VERSION="$DEFAULT_VER"
+    say "==> 选择 $VERSION"
+  else
+    warn "取不到版本列表，按最新版安装"
+  fi
+fi
+
+# 还是空（非交互 / 网络不通）→ 用 latest 标签
+VERSION="${VERSION:-latest}"
 
 command -v docker >/dev/null 2>&1 || die "没有 docker。1Panel 里先在「应用商店」装 Docker，或 apt install docker.io"
 docker compose version >/dev/null 2>&1 || die "docker 有，但缺 compose 插件（docker compose version 失败）。1Panel 的 Docker 一般自带。"
@@ -184,6 +266,27 @@ services:
       start_period: 20s
 YAML
 
+# 给 litv 管理命令用的状态文件（端口/绑定/镜像仓库），别手工改
+cat > "$DIR/.litv.conf" <<CONF
+# 由 install.sh 生成，litv 命令读取它
+LITV_DIR=$DIR
+LITV_PORT=$PORT
+LITV_BIND=$BIND
+LITV_IMAGE=$IMAGE
+CONF
+
+say "==> 装管理命令 litv"
+if curl -fsSL "$CLI_URL" -o "$DIR/litv" 2>/dev/null && [ -s "$DIR/litv" ]; then
+  chmod +x "$DIR/litv"
+  if [ -w /usr/local/bin ] || [ "$(id -u)" = "0" ]; then
+    ln -sf "$DIR/litv" /usr/local/bin/litv 2>/dev/null && say "    已链到 /usr/local/bin/litv"
+  else
+    warn "    没权限写 /usr/local/bin，用 $DIR/litv 调用（或手工加 PATH）"
+  fi
+else
+  warn "    下载 litv 命令失败（$CLI_URL），稍后可手动补：curl -fsSL $CLI_URL -o $DIR/litv && chmod +x $DIR/litv"
+fi
+
 say "==> 拉镜像 $IMAGE:$VERSION"
 docker compose -f "$DIR/docker-compose.yml" pull
 
@@ -205,13 +308,36 @@ else
   echo "   docker compose -f $DIR/docker-compose.yml logs --tail 50"
 fi
 
-echo "  管理台：   http://<服务器IP>:$PORT/"
-if [ "$BIND" = "127.0.0.1" ]; then
-  echo "            （已绑定 127.0.0.1，只能经 1Panel 反代访问）"
+# 顺手开自动升级
+if [ -n "$AUTO_UPGRADE" ]; then
+  AT="04:30"
+  case "$AUTO_UPGRADE" in
+    daily|on|1) AT="04:30" ;;
+    weekly) AT="04:30" ;;
+    off|0|no) AT="" ;;
+    [0-9]*:[0-9]*) AT="$AUTO_UPGRADE" ;;
+    *) AT="04:30" ;;
+  esac
+  if [ -x "$DIR/litv" ]; then
+    if [ -n "$AT" ]; then
+      say "==> 开自动升级（每天 $AT）"
+      "$DIR/litv" auto on "$AT" || warn "自动升级没开成，可稍后手工：litv auto on"
+    else
+      say "==> 关闭自动升级"
+      "$DIR/litv" auto off || true
+    fi
+  fi
 fi
+
+echo
+echo "  管理台：   http://127.0.0.1:$PORT/   （默认只绑本机，用 1Panel 反代对外）"
+if [ "$BIND" = "0.0.0.0" ]; then
+  echo "            （已绑 0.0.0.0，同网段可直接访问 http://<服务器IP>:$PORT/）"
+fi
+echo "  安装目录： $DIR"
 echo "  管理密码： $PASSWORD"
 if [ "$GENERATED" = "1" ]; then
-  echo "            （已写进 $CFG，可自行修改后 docker compose ... restart litv）"
+  echo "            （已写进 $CFG，可自行修改后 litv restart）"
 fi
 echo
 echo "下一步："
@@ -219,4 +345,10 @@ echo "  1) 1Panel → 网站 → 反向代理到 http://127.0.0.1:$PORT"
 echo "  2) 反代配置里补：proxy_read_timeout 3600s;  proxy_buffering off;"
 echo "  3) 登录管理台，导入你自己的源（本项目不内置任何直播源）"
 echo
-echo "升级：把 $DIR/docker-compose.yml 里的版本号改掉，再 docker compose -f $DIR/docker-compose.yml up -d"
+echo "日常运维（装好了一个 litv 命令）："
+echo "  litv status            看容器与健康状态"
+echo "  litv list              列出可用版本（* 标当前）"
+echo "  litv upgrade           升到最新版（起不来会自动回滚）"
+echo "  litv upgrade 0.1.24    指定版本 / 回滚"
+echo "  litv auto on           打开每天自动升级（off 关闭，status 查看）"
+echo "  litv logs -n 200       看日志"

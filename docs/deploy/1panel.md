@@ -71,17 +71,41 @@ curl -fsSL https://raw.githubusercontent.com/ybd156/litv/main/scripts/install.sh
 ```
 
 它会：检查 docker/compose → 建 `/opt/litv/data` 并把属主改成 10001 → **生成一份带随机管理密码的
-`config.yaml`**（已存在则不覆盖）→ 写编排 → 拉镜像 → 启动 → 等健康检查，最后把访问地址和密码打印出来。
+`config.yaml`**（已存在则不覆盖）→ 写编排 → **装一个 `litv` 管理命令** → 拉镜像 → 启动 → 等健康检查，
+最后把访问地址、密码和常用命令打印出来。
 
-可调参数（默认端口 28027、目录 `/opt/litv`、版本 0.1.24）：
+**默认只绑 `127.0.0.1`**（对外交给 1Panel 反代），所以默认不会把端口暴露到公网。
+
+跑起来会**让你选版本**（列出 GHCR 上的版本，回车=最新，也可以直接输 `0.1.24`）：
 
 ```bash
+# 只想看有哪些版本
+curl -fsSL https://raw.githubusercontent.com/ybd156/litv/main/scripts/install.sh | bash -s -- --list
+
+# 指定版本 + 指定端口 + 装完就开自动升级（每天 04:30 检查一次）
 curl -fsSL https://raw.githubusercontent.com/ybd156/litv/main/scripts/install.sh \
-  | bash -s -- --port 8080 --dir /opt/litv --version 0.1.24 --localhost
+  | bash -s -- --version 0.1.24 --port 28027 --auto-upgrade daily
+
+# 想让局域网直接访问（不经反代）：加 --public，绑 0.0.0.0
+curl -fsSL https://raw.githubusercontent.com/ybd156/litv/main/scripts/install.sh | bash -s -- --public
 ```
 
-`--localhost` 表示把端口只绑到 `127.0.0.1`（后面接 1Panel 反代时用，推荐）。
-脚本是幂等的：重复执行不会覆盖已有配置和密码。
+参数一览：
+
+| 参数 | 作用 | 默认 |
+|---|---|---|
+| `--version <x.y.z>` | 装哪个版本 | 交互选择，取不到列表就用 `latest` |
+| `--list` | 只列出可用版本 | — |
+| `--dir <路径>` | 安装目录 | `/opt/litv` |
+| `--port <端口>` | 宿主端口 | `28027` |
+| `--localhost` / `--public` | 绑 `127.0.0.1` / `0.0.0.0` | `127.0.0.1` |
+| `--auto-upgrade <daily\|weekly\|HH:MM\|off>` | 自动升级时间 | `off` |
+| `--yes` | 不问直接装 | 交互确认 |
+
+脚本是幂等的：重复执行不会覆盖已有 `config.yaml` 和密码。
+
+> ⚠️ 如果你用的是**旧的 raw 地址**，可能被 CDN 缓存住旧版本脚本。要绝对确定拿到的是某次提交的脚本，
+> 用提交号固定 URL：`https://raw.githubusercontent.com/ybd156/litv/<提交号>/scripts/install.sh`。
 
 ### 方式 A：直接拉 GitHub 上的镜像（推荐，服务器不用编译）
 
@@ -253,18 +277,70 @@ data/recordings/        录制文件（最占空间）
 
 ---
 
-## 9. 升级
+## 9. 升级与自动升级
+
+用一键脚本装的环境自带 `litv` 命令（在 `/usr/local/bin/litv`，也可以在安装目录里直接跑）：
+
+```bash
+litv list              # 远端有哪些版本，* 是当前版本
+litv upgrade           # 升到最新
+litv upgrade 0.1.25    # 升到指定版本
+litv status            # 当前版本 + 健康状态
+litv logs -n 200       # 最近日志
+```
+
+升级做的事：备份当前 `docker-compose.yml` → 改镜像 tag → `pull` → `up -d` → 最多等 90 秒健康检查。
+**健康检查失败会自动回滚到旧版本**并把备份文件留着（`docker-compose.yml.bak.<旧版本>`），所以升级失败不会把你晾在线上。
+
+### 自动升级
+
+```bash
+litv auto on           # 每天 04:30 检查一次（systemd timer）
+litv auto on 02:15     # 自定义时间
+litv auto on weekly    # 每周一次
+litv auto status
+litv auto off
+```
+
+定时任务只做 `litv upgrade --auto`：**没有新版本就什么都不干**（不会重复重启）。没有 systemd 的机器会退化成 crontab。
+
+> 手动装的环境（没用一键脚本）也能用：`curl -fsSL https://raw.githubusercontent.com/ybd156/litv/main/scripts/litv -o /opt/litv/litv && chmod +x /opt/litv/litv`，
+> 然后 `/opt/litv/litv upgrade`。
+
+源码构建部署的升级仍然是这样（`data/` 不受影响）：
 
 ```bash
 cd /opt/litv && git pull
 docker compose up -d --build     # 或用 1Panel 编排里的「重建」
 ```
 
-`data/` 不受影响。**但不要改 `auth.secret`**：改了之后所有已下发的播放地址立刻失效（客户端表现为 403）。
+**不要改 `auth.secret`**：改了之后所有已下发的播放地址立刻失效（客户端表现为 403）。
 
 ---
 
-## 10. 本次交付的验证边界
+## 10. 卸载
+
+```bash
+# 卸载程序，保留数据（推荐，重装能接着用）
+curl -fsSL https://raw.githubusercontent.com/ybd156/litv/main/scripts/uninstall.sh | bash
+
+# 连 /opt/litv/data 一起删（数据库、配置、录播、时移缓存，不可恢复）
+curl -fsSL https://raw.githubusercontent.com/ybd156/litv/main/scripts/uninstall.sh | bash -s -- --purge
+
+# 装在自定义目录、想保留镜像
+curl -fsSL .../uninstall.sh | bash -s -- --dir /data/litv --keep-image
+```
+
+它做四件事：关掉自动升级（systemd timer / crontab）→ 停容器并删容器网络 →（默认）删本地镜像 →
+删 `/usr/local/bin/litv`；最后按 `--purge` 决定删不删整个目录。
+
+安全护栏：只接受「目录里有 `docker-compose.yml` 且提到 `ghcr.io/ybd156/litv`」的路径，
+并拒绝 `/`、`/opt`、`/usr` 这类系统目录；`--purge` 时还会再确认一次目录内容。
+**1Panel 里建的反代它不动**，需要你自己去「网站 → 反向代理」删。
+
+---
+
+## 11. 本次交付的验证边界
 
 - 已核对：`Dockerfile` 的构建步骤与 `packaging/fnos/build.sh` 的 embed 约定一致（`rm -rf` 旧的
   `server/internal/web/www` 再拷 `admin/dist`）；`config/config.example.yaml` 的全部键与
@@ -279,3 +355,8 @@ docker compose up -d --build     # 或用 1Panel 编排里的「重建」
   上面这条 CI 构建是「镜像能构建出来」的证据，但「容器在你的 1Panel 上跑起来」还需要你那边首次启动。
 - 目前只发布 `linux/amd64`。ARM NAS（飞牛 ARM 机型）需要把工作流里的
   `platforms` 改成 `linux/amd64,linux/arm64` 并加 QEMU 步骤，构建时间会涨到 25 分钟以上。
+- 脚本类（`scripts/install.sh`、`scripts/litv`、`scripts/uninstall.sh`）：
+  已过 `sh -n` 语法检查；`install.sh` 已在真实 1Panel 机器上跑通一次（拉镜像 → 启动 → 健康检查 → 打印密码）。
+  **版本选择、自动升级、卸载这三条新路径没有在真实机器上跑过**——逻辑上，
+  `litv list` 依赖 GHCR 匿名 token 拉 tag 列表（pull 已实测 200，tag 列表接口本次未单独验证）；
+  `auto on` 需要 systemd；`uninstall.sh --purge` 的 `rm -rf` 只有护栏保护，请先不加 `--purge` 跑一次看输出。

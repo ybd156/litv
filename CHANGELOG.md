@@ -12,6 +12,11 @@
 
 ### 新增
 
+- **一键安装 / 选版本 / 自动升级 / 一键卸载**：`scripts/install.sh` 一条命令装起（默认只绑
+  `127.0.0.1`，对外交给 1Panel 反代），装的时候能选版本（`--list` 先看有哪些）；
+  装完自带 `litv` 管理命令：`litv list / upgrade / status / logs`，
+  `litv auto on` 每天 04:30 检查新版本，升级失败自动回滚到旧版本。
+  `scripts/uninstall.sh` 默认「卸程序、留数据」，要连数据一起删再加 `--purge`。
 - **服务端可以装在 1Panel 上了**：仓库里补了 `Dockerfile`、`docker-compose.yml`、`config/config.example.yaml`
   和 `docs/deploy/1panel.md`，一个容器一个端口一个数据目录。默认直接挂在根路径
   （`http://IP:28027/`，管理台与终端 API 同端口），反代不用改写路径；实例上没有飞牛网关，

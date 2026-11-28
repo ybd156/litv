@@ -57,7 +57,7 @@ func (a *API) setupAdmin(w http.ResponseWriter, r *http.Request) {
 	if !required {
 		// 已经设过了。不区分"配置里有明文"与"库里已有哈希"，
 		// 避免把部署细节告诉未鉴权的调用者。
-		fail(w, http.StatusConflict, 2006, "已经初始化过了，请直接登录")
+		fail(w, http.StatusConflict, 1004, "已经初始化过了，请直接登录")
 		return
 	}
 	password, err := decodeLoginPassword(r)

@@ -142,19 +142,10 @@ CFG="$DIR/data/config.yaml"
 GENERATED=0
 if [ -f "$CFG" ]; then
   say "==> 已有 $CFG，保留不动"
-  PASSWORD="(沿用你原来的密码)"
 else
-  # 随机密码：去掉容易看错的字符。
-  # 注意：不要写成 `tr -dc ... </dev/urandom | head -c 16`——head 提前关管道会让 tr 收到
-  # SIGPIPE，配合 `set -o pipefail` 直接把整个脚本静默退出（第一版就踩了这个坑）。
-  # 这里要么用 openssl，要么用「生产者定量、消费者读满」的写法。
-  if command -v openssl >/dev/null 2>&1; then
-    PASSWORD="$(openssl rand -base64 32 | LC_ALL=C tr -dc 'A-HJ-NP-Za-km-z2-9' | cut -c1-16)"
-  else
-    PASSWORD="$(head -c 4096 /dev/urandom | LC_ALL=C tr -dc 'A-HJ-NP-Za-km-z2-9' | cut -c1-16)"
-  fi
-  [ -n "$PASSWORD" ] || PASSWORD="litv$(date +%s)"
-  say "==> 生成 $CFG（随机管理密码）"
+  # 管理密码故意不在这里生成：首次打开管理台时由用户自己设（/api/v1/auth/setup）。
+  # 随机口令打在终端里会进 shell 历史、还会被当成「反正有密码了」而忘记改。
+  say "==> 生成 $CFG（管理密码留空，首次打开管理台时自己设）"
   cat > "$CFG" <<YAML
 server:
   host: 0.0.0.0
@@ -180,7 +171,9 @@ database:
 auth:
   # 留空则首次启动自动生成并写回；生成后不要再改，否则已下发的播放地址全部失效
   secret: ""
-  admin_password: "$PASSWORD"
+  # 留空 = 首次打开管理台时由你设置（推荐）。
+  # 填了明文就固定用它（老部署习惯，改了要 litv restart 才生效）。
+  admin_password: ""
   admin_token_hours: 8
   admin_max_sessions: 16
   dev_mode: false
@@ -341,9 +334,10 @@ if [ "$BIND" = "0.0.0.0" ]; then
   echo "            （已绑 0.0.0.0，同网段可直接访问 http://<服务器IP>:$PORT/）"
 fi
 echo "  安装目录： $DIR"
-echo "  管理密码： $PASSWORD"
 if [ "$GENERATED" = "1" ]; then
-  echo "            （已写进 $CFG，可自行修改后 litv restart）"
+  echo "  管理密码： 首次打开管理台时自己设（$CFG 里的 admin_password 留空）"
+else
+  echo "  管理密码： 沿用你原来的（$CFG）"
 fi
 echo
 echo "下一步："

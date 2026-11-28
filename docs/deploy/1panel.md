@@ -14,8 +14,10 @@ LITV 服务端是**单个 Go 二进制**（管理台的静态文件通过 `go:em
 | `config/config.example.yaml` | 容器版配置模板（路径都在 `/app/data` 下） |
 
 > 与飞牛 fnOS 版的关键差异：fnOS 靠统一网关的 Unix Socket 提供管理台身份；
-> 1Panel 没有网关，管理台走**同一个 TCP 端口的密码登录**，所以 `auth.admin_password` **必须设**，
-> 而 `server.gateway_socket` **必须留空**。
+> 1Panel 没有网关，管理台走**同一个 TCP 端口的密码登录**。`auth.admin_password`
+> 建议**留空**——首次打开管理台时会让你自己设一个（哈希存进数据库），比把明文写在
+> YAML 里、或者从安装脚本的终端输出里抄一串随机值都稳妥；想固定用某个口令也可以直接填。
+> `server.gateway_socket` 则**必须留空**，否则会去 bind 一个不存在的 socket。
 
 ---
 
@@ -53,7 +55,7 @@ server:
   gateway_socket: ""        # 1Panel 没有飞牛网关，必须留空
   prefix: ""                # 留空 = 管理台在根路径 https://域名/
 auth:
-  admin_password: "你的强密码"
+  admin_password: ""        # 留空 = 首次打开管理台时自己设；填了就固定用它
   dev_mode: false           # 千万别开：开了等于无鉴权管理员
 ```
 
@@ -70,9 +72,9 @@ auth:
 curl -fsSL https://raw.githubusercontent.com/ybd156/litv/main/scripts/install.sh | bash
 ```
 
-它会：检查 docker/compose → 建 `/opt/litv/data` 并把属主改成 10001 → **生成一份带随机管理密码的
-`config.yaml`**（已存在则不覆盖）→ 写编排 → **装一个 `litv` 管理命令** → 拉镜像 → 启动 → 等健康检查，
-最后把访问地址、密码和常用命令打印出来。
+它会：检查 docker/compose → 建 `/opt/litv/data` 并把属主改成 10001 → **生成一份 `config.yaml`
+（管理密码留空，首次打开管理台时自己设）**（已存在则不覆盖）→ 写编排 → **装一个 `litv` 管理命令**
+→ 拉镜像 → 启动 → 等健康检查，最后把访问地址和常用命令打印出来。
 
 **默认只绑 `127.0.0.1`**（对外交给 1Panel 反代），所以默认不会把端口暴露到公网。
 
@@ -211,11 +213,23 @@ location / {
 
 ## 5. 首次登录与初始化
 
-1. 浏览器打开 `https://域名/` → 用 `auth.admin_password` 登录
+1. 浏览器打开 `https://域名/` → **看到的是「先设一个管理密码」**（还没设过口令时）：
+   自己输一个 ≥8 位的口令，设完直接进入，不用再登一次。
+   - 口令的哈希存在数据库里，`config.yaml` 里的 `admin_password` 之后改不动它；
+   - 忘了口令：停容器 → 删库里那一条 → 重启 → 页面会重新要求设置。
+     ```bash
+     docker compose stop
+     docker run --rm -v /opt/litv/data:/d alpine sh -c \
+       "apk add -q sqlite && sqlite3 /d/litv.db \"DELETE FROM kv WHERE k='auth.admin_password_hash';\""
+     docker compose start
+     ```
+     宿主机上有 `sqlite3` 的话更简单：`sqlite3 /opt/litv/data/litv.db "DELETE FROM kv WHERE k='auth.admin_password_hash';"`。
 2. **源管理**：添加你自己的直播源（LITV 不内置任何源）
 3. **EPG**：填 XMLTV 地址，或让默认 URL 列表生效
 4. **设备**：生成绑定码 → 客户端首次启动时输入（6 位）
 5. 客户端「关于」页确认版本与服务端一致
+
+> 先设口令再对外反代：初始化接口是未鉴权的，绑定 `127.0.0.1` 期间只有你自己能开到它。
 
 ---
 
@@ -265,7 +279,7 @@ data/recordings/        录制文件（最占空间）
 | 现象 | 原因与处理 |
 |---|---|
 | 容器起来就退出，日志 `数据库打开失败 … permission denied` | `data/` 属主不是 10001。`chown -R 10001:10001 data` |
-| 登录一直提示"密码错误" | `auth.admin_password` 为空（空密码 = 登录被禁用），或改完配置没重启容器 |
+| 登录一直提示"密码错误" | 用的是首次打开时设的那个口令吗？设过之后 `config.yaml` 里的 `admin_password` 就不再生效（库里哈希优先）。忘了就删 `kv` 里 `auth.admin_password_hash` 那条再重启（见 §5）。改配置后记得 `litv restart` |
 | 管理台 404 | 访问路径与 `server.prefix` 不一致：`prefix` 为空时管理台就在 `http://IP:28027/`；填了 `/litv` 就必须访问 `/litv/` |
 | 页面全黑（控制台一堆 `/app/litv/assets/*.js` 404 或返回 `text/html`） | 镜像的管理台静态前缀不对：`server.prefix` 为空就必须用 `ADMIN_BASE=/` 构建。`0.1.24` 之前的镜像固定在 `/app/litv/`，升级镜像或自己 `--build-arg ADMIN_BASE=/` 重build |
 | 登录页写着「登录已失效 / 这是 Cloudflare 边缘部署」 | 旧镜像按「静态资源 base 是不是 `/`」推断部署形态，把自建 Docker 当成了边缘部署。新镜像只认一条：`GET /api/v1/health` 的 `version` 是 `"edge"` 才算边缘部署；本服务端报的是版本号（如 `0.1.24`）加 `identity`（`gateway` / `password`）。`docker compose pull && docker compose up -d` 升级重启后，文案会变成「未登录或登录已失效」，用 `auth.admin_password` 登录 |

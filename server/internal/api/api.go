@@ -319,6 +319,10 @@ func (a *API) Handler(viaGateway bool) http.Handler {
 	r.Get("/api/v1/health", a.health)
 	r.Post("/api/v1/device/register", a.deviceRegister)
 	r.Post("/api/v1/auth/login", a.passwordLogin)
+	// 首次初始化：库里还没有管理密码时，允许用户自己设一个（设置成功直接发会话）。
+	// 已经初始化过的实例会返回 409，不泄露是"配置里有明文"还是"库里已有哈希"。
+	r.Get("/api/v1/auth/setup", a.setupState)
+	r.Post("/api/v1/auth/setup", a.setupAdmin)
 	// 注销当前应急会话。放在鉴权组外面：它自己会校验 admin_sessions，
 	// 设备 token 或网关头身份不会命中，也就不会误删别人的会话。
 	r.Post("/api/v1/auth/logout", a.passwordLogout)

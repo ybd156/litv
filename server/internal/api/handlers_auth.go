@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/litv/litv/server/internal/auth"
-	"github.com/litv/litv/server/internal/config"
 	"github.com/litv/litv/server/internal/store"
 )
 
@@ -116,9 +115,24 @@ func (a *API) passwordLogin(w http.ResponseWriter, r *http.Request) {
 		fail(w, http.StatusBadRequest, 1001, "参数错误：password 最多 256 bytes")
 		return
 	}
-	if !auth.PasswordMatches(password, a.conf().Auth.AdminPassword) {
+	// 口令有两个来源：用户在管理台上自己设的（库里的哈希，优先），
+	// 以及配置文件里的明文（老部署/容器环境变量）。库里存过就只认库里，
+	// 否则改了配置文件又能覆盖用户口令，等于口令不归用户所有。
+	stored, hasStored, kvErr := a.st.KVGet(r.Context(), store.KVAdminPasswordHash)
+	if kvErr != nil {
+		a.auditAuth(r.Context(), store.AuthLoginFailure, store.AuditStorageError, 0)
+		fail(w, http.StatusInternalServerError, 5001, "管理员登录暂不可用")
+		return
+	}
+	passwordOK := false
+	if hasStored && stored != "" {
+		passwordOK = auth.VerifyAdminPassword(password, stored)
+	} else {
+		passwordOK = auth.PasswordMatches(password, a.conf().Auth.AdminPassword)
+	}
+	if !passwordOK {
 		reason := store.AuditCredentials
-		if a.conf().Auth.AdminPassword == "" {
+		if !hasStored && a.conf().Auth.AdminPassword == "" {
 			reason = store.AuditDisabled
 		}
 		a.auditAuth(r.Context(), store.AuthLoginFailure, reason, 0)
@@ -126,30 +140,10 @@ func (a *API) passwordLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	success, credentialFailure = true, false
-	plain, hash, err := auth.NewToken()
-	if err != nil {
+	plain, session, code, msg := a.issueAdminSession(r.Context())
+	if code != 0 {
 		a.auditAuth(r.Context(), store.AuthLoginFailure, store.AuditStorageError, 0)
-		fail(w, http.StatusInternalServerError, 5001, "管理员登录暂不可用")
-		return
-	}
-	hours, cap := a.conf().Auth.AdminTokenHours, a.conf().Auth.AdminMaxSessions
-	// Default also protects embedders that construct Config without Load.
-	// Explicit out-of-range values fail closed in Store, never create long TTLs.
-	if hours == 0 {
-		hours = config.DefaultAdminTokenHours
-	}
-	if cap == 0 {
-		cap = config.DefaultAdminMaxSessions
-	}
-	if hours < 1 || hours > config.MaxAdminTokenHours {
-		a.auditAuth(r.Context(), store.AuthLoginFailure, store.AuditStorageError, 0)
-		fail(w, http.StatusInternalServerError, 5001, "管理员登录暂不可用")
-		return
-	}
-	session, err := a.st.CreateAdminSession(r.Context(), hash, a.now().Unix(), time.Duration(hours)*time.Hour, cap)
-	if err != nil {
-		a.auditAuth(r.Context(), store.AuthLoginFailure, store.AuditStorageError, 0)
-		fail(w, http.StatusInternalServerError, 5001, "管理员登录暂不可用")
+		fail(w, http.StatusInternalServerError, code, msg)
 		return
 	}
 	a.auditAuth(r.Context(), store.AuthLoginSuccess, store.AuditCredentials, session.ID)

@@ -47,7 +47,7 @@ const routes: RouteRecordRaw[] = [
     name: 'blocked',
     component: () => import('@/views/BlockedView.vue'),
     // 反向的例外：这项**只有边缘部署**才有（NAS 服务端没有这个接口）。
-    meta: { title: '屏蔽', edgeOnly: true },
+    meta: { title: '屏蔽' },
   },
   {
     path: '/live',

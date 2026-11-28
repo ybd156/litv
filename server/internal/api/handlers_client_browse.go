@@ -15,10 +15,14 @@ func (a *API) tvBootstrap(w http.ResponseWriter, r *http.Request) {
 	dev, _ := deviceFrom(r.Context())
 	ctx := r.Context()
 
-	groups, _ := a.st.ListGroups(ctx)
+	// 屏蔽规则在下发前生效：整类被挡住的分组不进列表，单台被挡的台不出现。
+	// 这一步必须做在查询里（而不是客户端拿到后自己滤），否则分组计数
+	// 和「共几个台」这些数字会和实际看到的对不上。
+	bl := a.loadBlockList(r)
+	groups, _ := a.st.ListGroupsExcluding(ctx, bl.Groups, bl.Channels)
 	// 不再写死 500：ChannelQuery 的管理台分页上限会把第 501 个之后的台
 	// 从电视端首页里悄悄丢掉。
-	chans, _ := a.st.ListAllEnabledChannels(ctx)
+	chans, _ := a.st.ListEnabledChannels(ctx, bl.Groups, bl.Channels)
 	favs, _ := a.st.ListFavorites(ctx, dev.ID)
 
 	// 当前节目：一次批量取，避免 TV 端首页 N 次请求。
@@ -110,11 +114,16 @@ func (a *API) tvBootstrap(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) tvChannels(w http.ResponseWriter, r *http.Request) {
+	// 屏蔽规则同样在这里生效：电视端「换台列表」和 bootstrap 是两条路，
+	// 只在 bootstrap 过滤会让被挡的台从换台列表里漏出来。
+	bl := a.loadBlockList(r)
 	chans, total, err := a.st.ListChannels(r.Context(), store.ChannelQuery{
-		Group:   r.URL.Query().Get("group"),
-		Limit:   queryInt(r, "limit", 500),
-		Offset:  queryInt(r, "offset", 0),
-		Enabled: boolPtr(true),
+		Group:         r.URL.Query().Get("group"),
+		Limit:         queryInt(r, "limit", 500),
+		Offset:        queryInt(r, "offset", 0),
+		Enabled:       boolPtr(true),
+		ExcludeGroups: bl.Groups,
+		ExcludeNames:  bl.Channels,
 	})
 	if err != nil {
 		fail(w, http.StatusInternalServerError, 5001, err.Error())

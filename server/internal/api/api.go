@@ -362,6 +362,12 @@ func (a *API) Handler(viaGateway bool) http.Handler {
 
 		pr.Get("/api/v1/channels", a.listChannels)
 		pr.Get("/api/v1/groups", a.listGroups)
+
+		// 屏蔽清单（整类 / 单台）：只控制**下发**，源里的数据一条不动。
+		// 路径与 edge 的兼容层一致（api/v1/blocked），管理台同一页两边都能用。
+		pr.Get("/api/v1/blocked", a.blockedInfo)
+		pr.Post("/api/v1/blocked", a.blockedAdd)
+		pr.Delete("/api/v1/blocked", a.blockedRemove)
 		pr.Post("/api/v1/channels", a.createChannel)
 		pr.Put("/api/v1/channels/{id}", a.updateChannel)
 		pr.Delete("/api/v1/channels/{id}", a.deleteChannel)

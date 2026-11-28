@@ -262,6 +262,14 @@ type ChannelQuery struct {
 	// SourceID > 0 时只看这个源导入的频道（管理台「按源分组」用）
 	SourceID int64
 
+	// ExcludeGroups / ExcludeNames 是屏蔽规则（见 internal/blocklist）。
+	//
+	// 只给**下发**列表传：管理台的频道页要看到全部（否则屏蔽完就再也找不到、
+	// 无法解除），电视/手机端的 bootstrap 与列表必须传，口径才和 edge 一致。
+	ExcludeGroups []string
+	// ExcludeNames 按频道名排除，比较时不分大小写（源里同一台可能写成 CCTV1 / cctv1）。
+	ExcludeNames []string
+
 	// IncludeMissing 是否包含「上游已移除」的频道（src_missing=1）。
 	//
 	// 默认 false：终端与电视端绝不能看到已移除的台（点进去必然播不了）。
@@ -270,6 +278,34 @@ type ChannelQuery struct {
 
 	Offset int
 	Limit  int
+}
+
+// notInClause 生成 `列 NOT IN (?,?,…)` 片段与参数。
+// foldCase 为真时比较前把列和值都转小写（SQLite 的 IN 对文本区分大小写）。
+// 没有有效值时返回空串，调用方据此跳过（不要拼出 `AND ` 悬空）。
+func notInClause(column string, values []string, foldCase bool) (string, []any) {
+	ph := make([]string, 0, len(values))
+	args := make([]any, 0, len(values))
+	for _, v := range values {
+		v = strings.TrimSpace(v)
+		if v == "" {
+			continue
+		}
+		ph = append(ph, "?")
+		if foldCase {
+			args = append(args, strings.ToLower(v))
+		} else {
+			args = append(args, v)
+		}
+	}
+	if len(ph) == 0 {
+		return "", nil
+	}
+	col := column
+	if foldCase {
+		col = "LOWER(" + column + ")"
+	}
+	return col + " NOT IN (" + strings.Join(ph, ",") + ")", args
 }
 
 // ListChannels 分页查询频道。
@@ -296,6 +332,15 @@ func (s *Store) ListChannels(ctx context.Context, q ChannelQuery) ([]Channel, in
 	// 它们不是"用户停用"，所以不能靠 enabled 过滤——那是两个独立状态。
 	if !q.IncludeMissing {
 		where = append(where, "src_missing = 0")
+	}
+	// 屏蔽：整类按分组名排除；单台按频道名排除（不分大小写）。
+	if c, a2 := notInClause("group_name", q.ExcludeGroups, false); c != "" {
+		where = append(where, c)
+		args = append(args, a2...)
+	}
+	if c, a2 := notInClause("name", q.ExcludeNames, true); c != "" {
+		where = append(where, c)
+		args = append(args, a2...)
 	}
 	clause := ""
 	if len(where) > 0 {
@@ -342,9 +387,28 @@ func (s *Store) ListChannels(ctx context.Context, q ChannelQuery) ([]Channel, in
 // tvBootstrap 需要完整列表。以前它复用管理台分页接口、写死 Limit=500，
 // 频道超过 500 的部署在电视端只能看到前 500 个，后面的台"凭空消失"。
 func (s *Store) ListAllEnabledChannels(ctx context.Context) ([]Channel, error) {
+	return s.ListEnabledChannels(ctx, nil, nil)
+}
+
+// ListEnabledChannels 返回全部启用的频道，可按屏蔽规则排除。
+//
+// 下发路径（tvBootstrap / 电视端列表 / m3u）必须用这个版本：
+// 屏蔽在查询时就生效，客户端拿到的列表里根本不存在被挡的台，
+// 而不是拿到之后自己过滤（那样频道数、分组计数都会对不上）。
+func (s *Store) ListEnabledChannels(ctx context.Context, excludeGroups, excludeNames []string) ([]Channel, error) {
+	where := []string{"c.enabled = 1", "c.src_missing = 0"}
+	args := []any{}
+	if c, a := notInClause("group_name", excludeGroups, false); c != "" {
+		where = append(where, "c."+c)
+		args = append(args, a...)
+	}
+	if c, a := notInClause("name", excludeNames, true); c != "" {
+		where = append(where, "c."+c)
+		args = append(args, a...)
+	}
 	rows, err := s.db.QueryContext(ctx, `SELECT c.id,c.number,c.name,c.group_name,c.logo,c.tvg_id,c.epg_id,c.enabled,c.sort,c.source_id,c.created_at,c.missing_since,
 		(SELECT COUNT(*) FROM streams st WHERE st.channel_id = c.id)
-		FROM channels c WHERE c.enabled = 1 AND c.src_missing = 0 ORDER BY c.sort, c.id`)
+		FROM channels c WHERE `+strings.Join(where, " AND ")+` ORDER BY c.sort, c.id`, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -365,7 +429,27 @@ func (s *Store) ListAllEnabledChannels(ctx context.Context) ([]Channel, error) {
 
 // ListGroups 返回分组名与计数。
 func (s *Store) ListGroups(ctx context.Context) ([]map[string]any, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT group_name, COUNT(*) FROM channels GROUP BY group_name ORDER BY group_name`)
+	return s.ListGroupsExcluding(ctx, nil, nil)
+}
+
+// ListGroupsExcluding 返回分组名与计数，可按屏蔽规则排除。
+//
+// 为什么要排：电视端左侧分组列如果还留着「已屏蔽」的分类，
+// 点进去是一列空——用户只会以为源坏了。
+func (s *Store) ListGroupsExcluding(ctx context.Context, excludeGroups, excludeNames []string) ([]map[string]any, error) {
+	where := []string{"enabled = 1", "src_missing = 0"}
+	args := []any{}
+	if c, a := notInClause("group_name", excludeGroups, false); c != "" {
+		where = append(where, c)
+		args = append(args, a...)
+	}
+	if c, a := notInClause("name", excludeNames, true); c != "" {
+		where = append(where, c)
+		args = append(args, a...)
+	}
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT group_name, COUNT(*) FROM channels WHERE `+strings.Join(where, " AND ")+
+			` GROUP BY group_name ORDER BY group_name`, args...)
 	if err != nil {
 		return nil, err
 	}

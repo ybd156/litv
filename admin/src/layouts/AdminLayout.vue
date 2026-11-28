@@ -35,7 +35,7 @@ const navItems: NavItem[] = [
   { key: 'dashboard', label: '概览', icon: 'dashboard' },
   { key: 'sources', label: '源管理', icon: 'sources' },
   { key: 'channels', label: '频道管理', icon: 'channels' },
-  { key: 'blocked', label: '屏蔽', icon: 'close', edgeOnly: true },
+  { key: 'blocked', label: '屏蔽', icon: 'close' },
   { key: 'epg', label: 'EPG 管理', icon: 'epg' },
   { key: 'live', label: '直播预览', icon: 'preview', edgeUnsupported: true },
   { key: 'devices', label: '终端设备', icon: 'devices' },

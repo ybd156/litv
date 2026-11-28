@@ -94,7 +94,7 @@ curl -fsSL https://raw.githubusercontent.com/ybd156/litv/main/scripts/install.sh
 
 | 参数 | 作用 | 默认 |
 |---|---|---|
-| `--version <x.y.z>` | 装哪个版本 | 交互选择，取不到列表就用 `latest` |
+| `--version <x.y.z>` | 装哪个版本 | **最新正式版**（有终端时会列出来让你选，回车=最新） |
 | `--list` | 只列出可用版本 | — |
 | `--dir <路径>` | 安装目录 | `/opt/litv` |
 | `--port <端口>` | 宿主端口 | `28027` |

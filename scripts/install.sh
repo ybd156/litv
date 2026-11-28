@@ -10,7 +10,7 @@
 #   curl -fsSL .../install.sh | bash -s -- --port 8080 --dir /opt/litv --auto-upgrade daily
 #
 # 可选参数：
-#   --version <tag>        指定版本；不填则交互挑选（非交互环境下用最新版）
+#   --version <tag>        指定版本；不填就是**最新正式版**（有终端时会列出来问你，回车=最新）
 #   --list                 只列出 GHCR 上可用的版本，不安装
 #   --dir <路径>           安装目录（默认 /opt/litv）
 #   --port <端口>          宿主机端口（默认 28027）
@@ -122,8 +122,14 @@ if [ -z "$VERSION" ] && [ "$YES" = "0" ] && [ -r /dev/tty ]; then
   fi
 fi
 
-# 还是空（非交互 / 网络不通）→ 用 latest 标签
-VERSION="${VERSION:-latest}"
+# 还没定（--yes 直接装 / 没有 tty / 网络取不到列表）→ 默认装「最新正式版」。
+# 优先解析成具体版本号（0.1.25 这种），这样编排文件里是确定版本、litv list/upgrade 也对得上；
+# 只有 ghcr 的 tag 列表取不到时才退回 latest 标签。
+if [ -z "$VERSION" ]; then
+  NEWEST="$(list_versions 2>/dev/null | head -n1 || true)"
+  VERSION="${NEWEST:-latest}"
+  say "==> 默认安装最新版本 ${VERSION}"
+fi
 
 command -v docker >/dev/null 2>&1 || die "没有 docker。1Panel 里先在「应用商店」装 Docker，或 apt install docker.io"
 docker compose version >/dev/null 2>&1 || die "docker 有，但缺 compose 插件（docker compose version 失败）。1Panel 的 Docker 一般自带。"

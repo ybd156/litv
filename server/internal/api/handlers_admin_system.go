@@ -15,11 +15,27 @@ import (
 	"github.com/litv/litv/server/internal/probe"
 )
 
+// health 是公开探活。除了版本与运行时长，还报告这个实例的入口形态（endpoint）：
+// 前端据此决定该说「请从飞牛桌面打开」还是「用管理密码登录」。
+// 之所以由服务端说，是因为前端只能看到静态资源挂在哪个前缀——自建 Docker 挂在根路径上
+// 和 Cloudflare Worker 长得一模一样，以前靠 BASE_URL==='/' 推断，把 1Panel 部署误判成边缘部署。
 func (a *API) health(w http.ResponseWriter, r *http.Request) {
 	ok(w, map[string]any{
-		"version": a.version,
-		"uptime":  int(time.Since(a.startAt).Seconds()),
+		"version":  a.version,
+		"uptime":   int(time.Since(a.startAt).Seconds()),
+		"endpoint": a.endpointKind(),
 	})
+}
+
+// endpointKind 报告这个实例的入口形态。
+//
+// edge（Cloudflare Worker）不跑本进程，所以这里只会返回 gateway 或 direct；
+// 前端拿不到这个字段时自己回退到编译期推断。
+func (a *API) endpointKind() string {
+	if a.conf().Server.GatewaySocket != "" {
+		return "gateway"
+	}
+	return "direct"
 }
 
 func (a *API) systemMe(w http.ResponseWriter, r *http.Request) {

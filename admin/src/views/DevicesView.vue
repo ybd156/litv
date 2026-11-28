@@ -14,7 +14,7 @@ import { toErrorMessage } from '@/api/errors'
 import { confirmDanger, toast } from '@/utils/feedback'
 import { fmtDateTime, timeAgo } from '@/utils/format'
 import { canWrite } from '@/session'
-import { EDGE_DEPLOY } from '@/deploy'
+import { isEdge } from '@/deploy'
 
 interface DevicesData {
   devices: Device[]
@@ -52,7 +52,7 @@ const codeRevealed = ref(false)
 const revealBusy = ref(false)
 
 async function loadEdgeInfo(): Promise<void> {
-  if (!EDGE_DEPLOY) return
+  if (!isEdge()) return
   try {
     // 始终先拿打码版本；「显示」是单独的一次明确动作
     edgeInfo.value = await systemApi.fetchEdgeSettings(false)
@@ -275,7 +275,7 @@ onMounted(() => {
         <!-- 边缘版的绑定码是固定的 BIND_CODE（上面那张卡里就能看），
              没有「临时签发一个」这回事——留着按钮只会让人点了吃 2006。 -->
         <NButton
-          v-if="!EDGE_DEPLOY"
+          v-if="!isEdge()"
           size="small"
           type="primary"
           :disabled="!canWrite"
@@ -290,7 +290,7 @@ onMounted(() => {
     <!-- 边缘部署：绑定码 + 管理台入口。
          放这里是因为「要登录才看得到」，而设备页本来就是管绑定关系的地方；
          部署完几个月再回来加电视时，不用去翻 GitHub Secrets。 -->
-    <div v-if="EDGE_DEPLOY && edgeInfo" class="edge-info">
+    <div v-if="isEdge() && edgeInfo" class="edge-info">
       <div v-if="!edgeInfo.admin_password_set" class="edge-warn">
         还没配 <b>ADMIN_PASSWORD</b>，管理台无法登录——绑定码已经不能当管理台口令了。
         去仓库 Settings → Secrets 加一个。
@@ -359,7 +359,7 @@ onMounted(() => {
         <template #empty-action>
           <!-- NAS 走"生成绑定码"；边缘版绑定码固定，指回上面那张卡 -->
           <NButton
-            v-if="!EDGE_DEPLOY"
+            v-if="!isEdge()"
             size="small"
             type="primary"
             :disabled="!canWrite"

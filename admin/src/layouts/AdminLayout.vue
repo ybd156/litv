@@ -8,7 +8,7 @@ import { mockEnabled } from '@/api/mock'
 import { adminToken, setAdminToken } from '@/api/http'
 import { logoutAdmin } from '@/api/modules/system'
 import { canWrite, session } from '@/session'
-import { EDGE_DEPLOY } from '@/deploy'
+import { isEdge } from '@/deploy'
 
 const route = useRoute()
 const router = useRouter()
@@ -48,8 +48,8 @@ function renderIcon(name: IconName) {
 
 const menuOptions = computed<MenuOption[]>(() =>
   navItems
-    .filter((i) => !(EDGE_DEPLOY && i.edgeUnsupported))
-    .filter((i) => !(!EDGE_DEPLOY && i.edgeOnly))
+    .filter((i) => !(isEdge() && i.edgeUnsupported))
+    .filter((i) => !(!isEdge() && i.edgeOnly))
     .map((i) => ({ key: i.key, label: i.label, icon: renderIcon(i.icon) })),
 )
 

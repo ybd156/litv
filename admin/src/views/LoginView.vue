@@ -2,19 +2,26 @@
 import { computed, ref } from 'vue'
 import { NButton, NInput, useMessage } from 'naive-ui'
 import { authApi, setAdminToken } from '@/api'
-import { EDGE_DEPLOY } from '@/deploy'
+import { hasGateway, isEdge } from '@/deploy'
 
 /**
  * 登录页。
  *
- * 两种部署形态共用这一页，但入口完全不同：
+ * 三种部署形态共用这一页，但入口完全不同：
  *
- *   - NAS：正常路径是「从飞牛桌面点图标」，身份由网关自动注入，根本不用登录。
- *     这一页只是**应急入口**：网关没配好、或者用 IP 直连时，用密码进来。
+ *   - gateway（飞牛网关）：正常路径是「从飞牛桌面点图标」，身份由网关自动注入，
+ *     根本不用登录。这一页只是**应急入口**：网关没配好、或者用 IP 直连时，用密码进来。
  *     「使用 NAS 登录」= 回飞牛桌面走网关，那才是推荐方式。
- *   - edge（Cloudflare Worker）：没有网关，口令就是**唯一**入口，
- *     所以不能提示「回飞牛桌面」，也没有「用户名」这个概念（Worker 只认口令）。
+ *   - direct（Docker / 1Panel / 直连反代）：没有网关，管理密码是唯一入口，
+ *     没有「用户名」这个概念，也不该提示「回飞牛桌面」。
+ *   - edge（Cloudflare Worker）：同 direct，口令来自部署时的 ADMIN_PASSWORD。
+ *
+ * 形态由服务端 /api/v1/health 的 endpoint 决定（main.ts 在挂载前问过一次），
+ * 不再用「静态资源 base 是不是 /」来猜——那会把自建 Docker 当成边缘部署。
  */
+
+const gateway = hasGateway()
+const edge = isEdge()
 
 const message = useMessage()
 const username = ref(localStorage.getItem('litv_admin_user') ?? 'admin')
@@ -29,7 +36,7 @@ const nasName = computed(() => (window.location.hostname || 'NAS').toUpperCase()
 
 async function submit(): Promise<void> {
   if (!password.value) {
-    error.value = EDGE_DEPLOY ? '请输入管理口令' : '请输入密码'
+    error.value = gateway ? '请输入密码' : '请输入管理口令'
     return
   }
   loading.value = true
@@ -39,7 +46,7 @@ async function submit(): Promise<void> {
     // 服务端应急登录只接受 password；多传 username 会被严格 JSON 解码拒绝。
     const r = await authApi.login(password.value)
     setAdminToken(r.token)
-    if (!EDGE_DEPLOY && remember.value) localStorage.setItem('litv_admin_user', username.value)
+    if (gateway && remember.value) localStorage.setItem('litv_admin_user', username.value)
     else localStorage.removeItem('litv_admin_user')
     message.success('登录成功')
     // ★ 必须先把 hash 从 #/login 挪走再刷新。
@@ -67,9 +74,11 @@ function useNasLogin(): void {
 
 function showPasswordHint(): void {
   message.info(
-    EDGE_DEPLOY
-      ? '口令来自部署时的 ADMIN_PASSWORD（GitHub Settings → Secrets）。绑定码不能登录管理台；没配 ADMIN_PASSWORD 时这里也登不进去。'
-      : '密码在服务端 config.yaml 的 auth.admin_password',
+    gateway
+      ? '密码在服务端 config.yaml 的 auth.admin_password'
+      : edge
+        ? '口令来自部署时的 ADMIN_PASSWORD（GitHub Settings → Secrets）。绑定码不能登录管理台；没配 ADMIN_PASSWORD 时这里也登不进去。'
+        : '口令来自 config.yaml 的 auth.admin_password（安装脚本会随机生成并打印）。改了它要重启容器才生效；绑定码不能登录管理台。',
   )
 }
 </script>
@@ -84,9 +93,9 @@ function showPasswordHint(): void {
       </div>
 
       <div class="form">
-        <!-- edge 部署没有「账号」概念，Worker 只比对口令；留个输入框会误导 -->
+        <!-- 只有网关部署才有「账号」概念；直连/边缘都只比对口令，留输入框会误导 -->
         <NInput
-          v-if="!EDGE_DEPLOY"
+          v-if="gateway"
           v-model:value="username"
           size="large"
           placeholder="用户名"
@@ -97,19 +106,19 @@ function showPasswordHint(): void {
           v-model:value="password"
           size="large"
           :type="showPwd ? 'text' : 'password'"
-          :placeholder="EDGE_DEPLOY ? '管理口令' : '密码'"
+          :placeholder="gateway ? '密码' : '管理口令'"
           show-password-on="click"
           :input-props="{ autocomplete: 'current-password' }"
           @keyup.enter="submit"
         />
 
         <div class="row">
-          <label v-if="!EDGE_DEPLOY" class="remember">
+          <label v-if="gateway" class="remember">
             <input v-model="remember" type="checkbox" />
             <span>记住账号</span>
           </label>
           <span v-else />
-          <a class="forget" href="javascript:void 0" @click="showPasswordHint">忘记密码？</a>
+          <a class="forget" href="javascript:void 0" @click="showPasswordHint">忘记了？</a>
         </div>
 
         <p v-if="error" class="err">{{ error }}</p>
@@ -118,7 +127,7 @@ function showPasswordHint(): void {
           登录
         </NButton>
 
-        <template v-if="!EDGE_DEPLOY">
+        <template v-if="gateway">
           <NButton size="large" block quaternary class="nas-btn" @click="useNasLogin">
             使用 NAS 登录
           </NButton>
@@ -129,10 +138,16 @@ function showPasswordHint(): void {
           </p>
         </template>
 
-        <p v-else class="tip">
+        <p v-else-if="edge" class="tip">
           这是 Cloudflare 边缘部署，没有飞牛网关，只能用 <code>ADMIN_PASSWORD</code> 登录。<br>
           电视绑定页填的 6 位绑定码是<b>另一回事</b>，它不能登录这里——绑定码要给家人输入，
           拿它当管理口令等于把管理权限压在一个 6 位数字上。
+        </p>
+
+        <p v-else class="tip">
+          这是自建直连部署（Docker / 1Panel），没有飞牛网关，用管理密码登录。<br>
+          密码在 <code>config.yaml</code> 的 <code>auth.admin_password</code>（安装脚本会随机生成并打印）；
+          电视绑定页填的 6 位绑定码<b>不能</b>登录管理台。
         </p>
       </div>
     </div>

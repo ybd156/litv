@@ -1,5 +1,5 @@
 import { createRouter, createWebHashHistory, type RouteRecordRaw } from 'vue-router'
-import { EDGE_DEPLOY } from '@/deploy'
+import { isEdge } from '@/deploy'
 
 /**
  * ★ 必须用 hash 模式：飞牛网关把 /app/litv/* 全量转发给后端 SPA 兜底路由，
@@ -81,9 +81,9 @@ const router = createRouter({
  */
 router.beforeEach((to) => {
   const meta = to.meta as { edgeUnsupported?: boolean; edgeOnly?: boolean }
-  if (EDGE_DEPLOY && meta.edgeUnsupported === true) return { path: '/' }
+  if (isEdge() && meta.edgeUnsupported === true) return { path: '/' }
   // edgeOnly 是反过来的：NAS 上没有这个接口，别让人点进去吃一个 404
-  if (!EDGE_DEPLOY && meta.edgeOnly === true) return { path: '/' }
+  if (!isEdge() && meta.edgeOnly === true) return { path: '/' }
   return true
 })
 

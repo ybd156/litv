@@ -268,6 +268,7 @@ data/recordings/        录制文件（最占空间）
 | 登录一直提示"密码错误" | `auth.admin_password` 为空（空密码 = 登录被禁用），或改完配置没重启容器 |
 | 管理台 404 | 访问路径与 `server.prefix` 不一致：`prefix` 为空时管理台就在 `http://IP:28027/`；填了 `/litv` 就必须访问 `/litv/` |
 | 页面全黑（控制台一堆 `/app/litv/assets/*.js` 404 或返回 `text/html`） | 镜像的管理台静态前缀不对：`server.prefix` 为空就必须用 `ADMIN_BASE=/` 构建。`0.1.24` 之前的镜像固定在 `/app/litv/`，升级镜像或自己 `--build-arg ADMIN_BASE=/` 重build |
+| 登录页写着「登录已失效 / 这是 Cloudflare 边缘部署」 | 旧镜像按「静态资源 base 是不是 `/`」推断部署形态，把自建 Docker 当成了边缘部署。新镜像改由服务端 `/api/v1/health` 的 `endpoint` 字段判定（`gateway`/`direct`）：`docker compose pull && docker compose up -d` 升级后重启即可，文案会变成「未登录或登录已失效」，用 `auth.admin_password` 登录 |
 | 反代 502 | 容器没起或端口没映射。`curl 127.0.0.1:28027/api/v1/health` 先确认后端活着 |
 | 播放一分钟就断一次 | 反代 `proxy_read_timeout` 还是默认 60s，见 §4 |
 | 起播慢、容易卡 | `proxy_buffering` 没关；或宿主机上行不够（`docker stats` 看网络） |

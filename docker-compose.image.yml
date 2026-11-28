@@ -1,0 +1,34 @@
+# LITV 服务端 · 用 GitHub 上已经构建好的镜像启动（推荐）
+#
+# 与 docker-compose.yml 的区别：这里 **不在服务器上编译**，只拉镜像。
+# 镜像是 .github/workflows/docker-image.yml 在 CI 里构建并推到 ghcr.io 的。
+#
+# 用法：
+#   1. 先在 ./data 里放一份 config.yaml（见 config/config.example.yaml）
+#   2. `docker compose -f docker-compose.image.yml up -d`
+#
+# 镜像默认是 private：要免登录拉取，去 GitHub 仓库 → Packages →
+# 选这个镜像 → Package settings → Change visibility → public。
+# 不想改成 public 的话，先在服务器上 `docker login ghcr.io`（用带 read:packages 的 token）。
+#
+# 锁定版本比 latest 稳：把下面的 LITV_VERSION 改成具体版本号，升级时手改一处。
+
+services:
+  litv:
+    image: ghcr.io/ybd156/litv:${LITV_VERSION:-latest}
+    container_name: litv
+    restart: unless-stopped
+    ports:
+      # 只给 1Panel 的 OpenResty 反代用的话，可以改成 "127.0.0.1:28027:28027"，
+      # 这样公网只能经反代访问（推荐）。
+      - "28027:28027"
+    volumes:
+      - ./data:/app/data
+    environment:
+      TZ: Asia/Shanghai
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://127.0.0.1:28027/api/v1/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s

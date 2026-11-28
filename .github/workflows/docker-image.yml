@@ -1,0 +1,110 @@
+name: Docker Image
+
+# =============================================================================
+# 把服务端打成容器镜像，推到 GitHub Container Registry（ghcr.io）。
+#
+# 为什么要有这个工作流：
+#   1Panel 上的 NAS 多数没有完整的构建环境（node/go/ffmpeg 工具链），
+#   让用户在服务器上 `docker compose build` 既慢又容易失败；
+#   镜像在 CI 里构建、推上来之后，服务器只需 `docker compose pull`。
+#
+# 产物：
+#   ghcr.io/<owner>/<repo>:<version>   例如 ghcr.io/ybd156/litv:0.1.24
+#   ghcr.io/<owner>/<repo>:latest
+#
+# 触发：
+#   手动 workflow_dispatch（可填 version，留空取 DEFAULT_VERSION）
+#   push tag v*（取 tag 名去掉前缀的 v）
+#
+# 说明：
+#   - 首次推送后，镜像是 **private** 的。要在 1Panel/服务器上免登录拉取，
+#     需要到 GitHub 仓库 → Packages → 该镜像 → Package settings 改成 public。
+#   - 只构建 linux/amd64。ARM NAS（如飞牛 ARM 机型）需要再加 arm64：
+#     把 `platforms` 改成 `linux/amd64,linux/arm64` 并加 QEMU（见 README 注释），
+#     代价是构建时间从约 6 分钟涨到 25 分钟以上（npm ci 与 go build 都要模拟）。
+# =============================================================================
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "镜像标签（留空用 DEFAULT_VERSION，如 0.1.24）"
+        required: false
+        default: ""
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  # 与 release.yml 的 DEFAULT_VERSION 保持一致；手动触发且留空时用它兜底。
+  DEFAULT_VERSION: "0.1.24"
+  IMAGE: ghcr.io/${{ github.repository }}
+
+jobs:
+  image:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: 取源码
+        uses: actions/checkout@v4
+
+      - name: 算版本号
+        id: ver
+        run: |
+          set -euo pipefail
+          V="${{ inputs.version }}"
+          if [ -z "$V" ]; then
+            case "${GITHUB_REF}" in
+              refs/tags/v*) V="${GITHUB_REF_NAME#v}" ;;
+            esac
+          fi
+          if [ -z "$V" ]; then V="$DEFAULT_VERSION"; fi
+          echo "image 标签：$V"
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+
+      - name: 准备 buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: 登录 ghcr.io
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 构建并推送
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          push: true
+          build-args: |
+            VERSION=${{ steps.ver.outputs.version }}
+          tags: |
+            ${{ env.IMAGE }}:${{ steps.ver.outputs.version }}
+            ${{ env.IMAGE }}:latest
+          labels: |
+            org.opencontainers.image.title=LITV
+            org.opencontainers.image.version=${{ steps.ver.outputs.version }}
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: 写用法摘要
+        run: |
+          {
+            echo "### 镜像已推送"
+            echo ""
+            echo '```'
+            echo "docker pull ${{ env.IMAGE }}:${{ steps.ver.outputs.version }}"
+            echo '```'
+            echo ""
+            echo "服务器上可以直接用 pull 模式启动："
+            echo ""
+            echo '```'
+            echo "docker compose -f docker-compose.image.yml up -d"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -64,7 +64,29 @@ auth:
 
 ## 3. 启动容器
 
-### 方式 A：1Panel 编排（推荐）
+### 方式 A：直接拉 GitHub 上的镜像（推荐，服务器不用编译）
+
+镜像由 `.github/workflows/docker-image.yml` 在 GitHub Actions 里构建并推到 `ghcr.io/ybd156/litv`
+（推 `v*` tag 或手动跑一次该工作流就会出镜像，标签是版本号 + `latest`）。
+
+1Panel → **应用** → **编排** → **创建编排**，编排内容用仓库里的 **`docker-compose.image.yml`**
+（若你用的是自己的 fork，把里面的 `ghcr.io/ybd156/litv` 换成你自己的仓库地址）。
+
+命令行等价写法：
+
+```bash
+cd /opt/litv
+docker compose -f docker-compose.image.yml up -d
+# 锁定版本（推荐，升级时手改这一处）：
+LITV_VERSION=0.1.24 docker compose -f docker-compose.image.yml up -d
+```
+
+> 镜像默认是 **private**：要么去 GitHub 仓库 → **Packages** → 该镜像 → **Package settings** 改成 public，
+> 要么先在服务器上 `docker login ghcr.io`（token 勾 `read:packages`）。
+>
+> 只发布了 `linux/amd64`。ARM NAS（飞牛 ARM 机型）见文末「验证边界」。
+
+### 方式 B：1Panel 编排，从源码构建（有完整构建机时用）
 
 1Panel → **应用** → **编排** → **创建编排**：
 
@@ -75,7 +97,7 @@ auth:
 
 > 构建期间要装 npm 依赖并编译 Go，视机器性能约 3–8 分钟；1Panel 的编排日志里能看到进度。
 
-### 方式 B：先在本机构建，再 `docker load` 到服务器（服务器性能弱时用）
+### 方式 C：先在本机构建，再 `docker load` 到服务器（服务器性能弱、又不能拉 ghcr 时用）
 
 ```bash
 # 在有 Docker 的机器上，仓库根目录
@@ -87,7 +109,7 @@ gunzip -c litv-server.tar.gz | docker load
 
 然后把 `docker-compose.yml` 里的 `build:` 段删掉，只留 `image:`，用 1Panel 编排启动。
 
-### 方式 C：命令行（排查用）
+### 方式 D：命令行从源码构建（排查用）
 
 ```bash
 cd /opt/litv && docker compose up -d --build && docker compose logs -f

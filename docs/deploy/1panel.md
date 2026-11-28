@@ -64,6 +64,25 @@ auth:
 
 ## 3. 启动容器
 
+### 方式 0：一键脚本（最快，SSH 一条命令）
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/ybd156/litv/main/scripts/install.sh | bash
+```
+
+它会：检查 docker/compose → 建 `/opt/litv/data` 并把属主改成 10001 → **生成一份带随机管理密码的
+`config.yaml`**（已存在则不覆盖）→ 写编排 → 拉镜像 → 启动 → 等健康检查，最后把访问地址和密码打印出来。
+
+可调参数（默认端口 28027、目录 `/opt/litv`、版本 0.1.24）：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/ybd156/litv/main/scripts/install.sh \
+  | bash -s -- --port 8080 --dir /opt/litv --version 0.1.24 --localhost
+```
+
+`--localhost` 表示把端口只绑到 `127.0.0.1`（后面接 1Panel 反代时用，推荐）。
+脚本是幂等的：重复执行不会覆盖已有配置和密码。
+
 ### 方式 A：直接拉 GitHub 上的镜像（推荐，服务器不用编译）
 
 镜像由 `.github/workflows/docker-image.yml` 在 GitHub Actions 里构建并推到 `ghcr.io/ybd156/litv`

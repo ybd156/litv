@@ -54,17 +54,19 @@ func TestEncodeRoundTrip(t *testing.T) {
 
 func TestBlocks(t *testing.T) {
 	l := List{Groups: []string{"购物"}, Channels: []string{"CCTV-1"}}
+	// 七种情形（自上而下）：整类被挡、单台被挡、单台不分大小写、
+	// 精确匹配不做前缀、分类不匹配就放行、空频道名不算命中、名字命中优先于分类。
 	cases := []struct {
 		group, name string
 		want        bool
 	}{
-		{"购物", "随便什么台", true},        // 整类被挡
-		{"电影", "CCTV-1", true},        // 单台被挡
-		{"电影", "cctv-1", true},        // 单台不分大小写
-		{"电影", "CCTV-1 综合", false},    // 精确匹配，不做前缀
-		{"购物频道", "某某", false},         // 分类不匹配就是放行
-		{"", "", false},                // 空频道名不算命中
-		{"其他", "CCTV-1", true},         // 名字命中优先于分类
+		{"购物", "随便什么台", true},
+		{"电影", "CCTV-1", true},
+		{"电影", "cctv-1", true},
+		{"电影", "CCTV-1 综合", false},
+		{"购物频道", "某某", false},
+		{"", "", false},
+		{"其他", "CCTV-1", true},
 	}
 	for _, c := range cases {
 		if got := l.Blocks(c.group, c.name); got != c.want {

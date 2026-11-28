@@ -16,7 +16,9 @@
 #
 # 幂等：重复执行不会覆盖已有 config.yaml，也不会重新生成密码。
 # =============================================================================
-set -euo pipefail
+set -eEuo pipefail
+# 任何一步失败都打印行号，避免「只输出一行就退回提示符」这种没头没尾的失败
+trap 'printf "\033[31m✗ 第 %s 行失败（退出码 %s）。把上面最后几行贴回来即可定位。\033[0m\n" "$LINENO" "$?" >&2' ERR
 
 DIR="/opt/litv"
 PORT="28027"
@@ -54,8 +56,15 @@ if [ -f "$CFG" ]; then
   say "==> 已有 $CFG，保留不动"
   PASSWORD="(沿用你原来的密码)"
 else
-  # 随机密码：去掉容易看错的字符，长度 16
-  PASSWORD="$(LC_ALL=C tr -dc 'A-HJ-NP-Za-km-z2-9' </dev/urandom | head -c 16)"
+  # 随机密码：去掉容易看错的字符。
+  # 注意：不要写成 `tr -dc ... </dev/urandom | head -c 16`——head 提前关管道会让 tr 收到
+  # SIGPIPE，配合 `set -o pipefail` 直接把整个脚本静默退出（第一版就踩了这个坑）。
+  # 这里要么用 openssl，要么用「生产者定量、消费者读满」的写法。
+  if command -v openssl >/dev/null 2>&1; then
+    PASSWORD="$(openssl rand -base64 32 | LC_ALL=C tr -dc 'A-HJ-NP-Za-km-z2-9' | cut -c1-16)"
+  else
+    PASSWORD="$(head -c 4096 /dev/urandom | LC_ALL=C tr -dc 'A-HJ-NP-Za-km-z2-9' | cut -c1-16)"
+  fi
   [ -n "$PASSWORD" ] || PASSWORD="litv$(date +%s)"
   say "==> 生成 $CFG（随机管理密码）"
   cat > "$CFG" <<YAML

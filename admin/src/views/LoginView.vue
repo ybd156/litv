@@ -7,17 +7,17 @@ import { hasGateway, isEdge } from '@/deploy'
 /**
  * 登录页。
  *
- * 三种部署形态共用这一页，但入口完全不同：
+ * 三种情况共用这一页，但入口完全不同：
  *
- *   - gateway（飞牛网关）：正常路径是「从飞牛桌面点图标」，身份由网关自动注入，
+ *   - 服务端 + gateway（飞牛网关）：正常路径是「从飞牛桌面点图标」，身份由网关自动注入，
  *     根本不用登录。这一页只是**应急入口**：网关没配好、或者用 IP 直连时，用密码进来。
  *     「使用 NAS 登录」= 回飞牛桌面走网关，那才是推荐方式。
- *   - direct（Docker / 1Panel / 直连反代）：没有网关，管理密码是唯一入口，
+ *   - 服务端 + password（Docker / 1Panel / 裸机反代）：没有网关，管理密码是唯一入口，
  *     没有「用户名」这个概念，也不该提示「回飞牛桌面」。
- *   - edge（Cloudflare Worker）：同 direct，口令来自部署时的 ADMIN_PASSWORD。
+ *   - edge（Cloudflare Worker）：同服务端 + password，口令来自部署时的 ADMIN_PASSWORD。
  *
- * 形态由服务端 /api/v1/health 的 endpoint 决定（main.ts 在挂载前问过一次），
- * 不再用「静态资源 base 是不是 /」来猜——那会把自建 Docker 当成边缘部署。
+ * 判据见 `deploy.ts`：edge 只认 Worker 自己报的 `version: "edge"`，其余都是 Go 服务端，
+ * 再由服务端的 `identity` 区分 gateway / password；不再用「静态资源 base 是不是 /」猜。
  */
 
 const gateway = hasGateway()

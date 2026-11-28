@@ -2,13 +2,14 @@
 import { NButton } from 'naive-ui'
 import { loadSession } from '@/session'
 import { mockEnabled } from '@/api/mock'
-import { adminMode } from '@/deploy'
+import { hasGateway, isEdge, isServer } from '@/deploy'
 
-// 三种形态说的话不一样：网关部署不该提口令，边缘/自建也不该提飞牛桌面。
-// 形态由服务端 /api/v1/health 的 endpoint 决定（main.ts 在挂载前问过一次）。
-const mode = adminMode()
-const isEdgeMode = mode === 'edge'
-const isGateway = mode === 'gateway'
+// 三种情况说的话不一样：网关部署不该提口令，边缘/自建也不该提飞牛桌面。
+// 判据见 `deploy.ts`：edge 只认 Worker 自己报的 version="edge"，其余一律是 Go 服务端；
+// 服务端再按 identity 分 gateway（网关注入身份）/ password（管理密码）。
+const edge = isEdge()
+const gateway = hasGateway()
+const server = isServer()
 
 function reload(): void {
   location.reload()
@@ -19,14 +20,14 @@ function reload(): void {
   <div class="unauth">
     <div class="card">
       <div class="mark">LITV</div>
-      <template v-if="isEdgeMode">
+      <template v-if="edge">
         <h1>登录已失效</h1>
         <p class="lead">
           这是 Cloudflare 边缘部署，没有飞牛网关，身份只能来自登录口令。
           重新登录一次即可；如果刚改过 <code>ADMIN_PASSWORD</code>，用新口令登录。
         </p>
       </template>
-      <template v-else-if="isGateway">
+      <template v-else-if="gateway">
         <h1>请从飞牛桌面打开本应用</h1>
         <p class="lead">
           管理台不设登录页——身份由飞牛网关自动注入。直接访问地址（或收藏夹里的链接）拿不到身份信息，
@@ -39,21 +40,20 @@ function reload(): void {
           <li><span class="idx">3</span>如果还是这一页，确认你的账号是管理员，然后刷新</li>
         </ol>
       </template>
-      <template v-else>
+      <template v-else-if="server">
         <h1>未登录或登录已失效</h1>
         <p class="lead">
-          这是自建直连部署（Docker / 1Panel），没有飞牛网关，身份来自管理密码。
+          这是自建服务端（Docker / 1Panel / 裸机反代），没有飞牛网关，身份来自管理密码。
           用安装时生成的管理密码登录即可；密码写在 <code>config.yaml</code> 的
-          <code>auth.admin_password</code>，改了之后重启容器生效。
+          <code>auth.admin_password</code>，改了之后重启服务端生效。
         </p>
       </template>
 
       <div class="actions">
-        <NButton v-if="isEdgeMode" type="primary" tag="a" href="#/login">去登录</NButton>
-        <NButton v-else-if="isGateway" type="primary" @click="loadSession">我已经从桌面进来了，重试</NButton>
-        <NButton v-else type="primary" tag="a" href="#/login">去登录</NButton>
+        <NButton v-if="edge || server" type="primary" tag="a" href="#/login">去登录</NButton>
+        <NButton v-else-if="gateway" type="primary" @click="loadSession">我已经从桌面进来了，重试</NButton>
         <NButton quaternary @click="reload">刷新页面</NButton>
-        <NButton v-if="isGateway" quaternary tag="a" href="#/login">用密码登录（应急）</NButton>
+        <NButton v-if="gateway" quaternary tag="a" href="#/login">用密码登录（应急）</NButton>
       </div>
 
       <p v-if="mockEnabled()" class="mock-tip">

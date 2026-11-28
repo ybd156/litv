@@ -8,6 +8,29 @@ import type { EdgeSettings, Me, SystemConfig, SystemInfo } from '../types'
  * 这三个 GET 都 silent：`session.ts` 有 `state==='error'` 的整页错误态（带重试），
  * 概览/设置页也都用 `Promise.allSettled` + 局部错误块兜底，全局红条纯属重复。
  */
+/**
+ * 公开探活返回体。
+ *
+ * 字段含义见 `server/internal/api/handlers_admin_system.go` 的 `health()`：
+ * Go 服务端报版本号 + `identity`（gateway / password）；边缘 Worker 报 `version: "edge"`。
+ */
+export interface HealthProbe {
+  name?: string
+  version?: string
+  /** 只有 Go 服务端给：`gateway`（飞牛网关注入身份）或 `password`（管理密码）。 */
+  identity?: string
+}
+
+/**
+ * 部署形态探针。
+ *
+ * 判据只认 `version`：边缘 Worker 报 `"edge"`，Go 服务端报 `0.1.24` 这类版本号。
+ * 不要改成探测某个 edge 专有路径——SPA 兜底会把未知路径回 200，探不准。
+ */
+export function fetchHealth(): Promise<HealthProbe> {
+  return http.get<HealthProbe>('health', undefined, { silent: true })
+}
+
 export function fetchMe(): Promise<Me> {
   return http.get<Me>('system/me', undefined, { silent: true })
 }

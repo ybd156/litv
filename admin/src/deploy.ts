@@ -1,67 +1,95 @@
 /**
- * 部署形态。
+ * 对面跑的是什么。
  *
- * 同一个管理台被三种宿主使用：
+ * 这里只有两样东西，**不要合并成一档**：
  *
- *   - **gateway**：飞牛网关托管，构建 base 是 `/app/litv/`，身份由网关的
- *     `X-Trim-*` 头注入，正常不需要登录。
- *   - **direct**：自建直连（Docker / 1Panel / 裸机反代），跑的是同一个 Go 服务端，
- *     但没有网关——身份来自 `auth.admin_password`。
- *   - **edge**：Cloudflare Worker，CI 用 `--base=/` 构建（见 edge-deploy.yml），
- *     没有网关，口令登录是唯一入口。
+ *   - `edge`：Cloudflare Worker（`edge/`），CI 用 `--base=/` 构建（见 edge-deploy.yml）。
+ *     它自己的探活报 `version: "edge"` —— 这是全仓认定 edge 的唯一判据
+ *     （客户端 `ReplayCapability.EDGE_VERSION` 用的也是这个值）。
+ *   - `server`：Go 服务端。飞牛 fpk / Docker / 1Panel / 裸机反代跑的都是它，
+ *     报的是版本号（`0.1.24` 之类），另加一个 `identity` 说明**身份从哪来**：
+ *     `gateway`（飞牛网关注入 `X-Trim-*` 头）或 `password`（`auth.admin_password`）。
  *
- * ★ 判据顺序（2026-11-28 修正）：**先问服务端**（`GET /api/v1/health` 的 `endpoint`），
- * 拿不到才退回编译期常量。以前只用 `BASE_URL === '/'` 判 edge，结果自建 Docker 挂在
- * 根路径时被当成边缘部署，登录失效页硬说「这是 Cloudflare 边缘部署」。
- * 编译期常量只能说明「静态资源挂在哪个前缀」，说明不了「谁在跑这个进程」。
+ * ★ 2026-11-28 修正：以前用 `BASE_URL === '/'` 判 edge，结果自建 Docker 挂在根路径上
+ * 被当成边缘部署，登录失效页硬说「这是 Cloudflare 边缘部署」。`BASE_URL` 只能说明
+ * 静态资源挂在哪个前缀，说明不了谁在跑这个进程。判据只认服务端自己报的 `version`，
+ * 拿不到时才退回编译期推断，且默认按 server 处理（宁可显示登录框，也别误报形态）。
  *
  * 用途只有一个：**不要让界面说出当前部署里根本不存在的东西**
- * （比如在公网域名上提示「请从飞牛桌面打开」）。
+ * （比如在自建服务端上提示「请从飞牛桌面打开」）。
  */
-export type AdminMode = 'gateway' | 'direct' | 'edge'
+import { fetchHealth } from '@/api/modules/system'
 
-/** 编译期兜底：base 是根路径时最可能是 edge（飞牛构建固定 `/app/litv/`）。 */
+/** 与 `edge/src/index.ts` 的 `health()` 里 `version: "edge"` 同源。 */
+const EDGE_VERSION = 'edge'
+
+export type Backend = 'edge' | 'server'
+export type ServerIdentity = 'gateway' | 'password'
+
+/** 编译期兜底：飞牛构建固定 base `/app/litv/`，根路径最可能是 edge 或自建容器。 */
 export const EDGE_DEPLOY = (import.meta.env.BASE_URL || '/') === '/'
 
-let mode: AdminMode | null = null
+let backend: Backend | null = null
+let identity: ServerIdentity | null = null
 
-/** 服务端说了算；传 null 表示「还不知道」，回退到编译期推断。 */
-export function setAdminMode(m: AdminMode | null): void {
-  mode = m
+/** 服务端说了算；`null` 表示「还不知道」，回退到编译期推断。 */
+export function setDeployState(b: Backend | null, id: ServerIdentity | null = null): void {
+  backend = b
+  identity = b === 'server' ? id : null
 }
 
-export function adminMode(): AdminMode {
-  return mode ?? (EDGE_DEPLOY ? 'edge' : 'gateway')
+export function currentBackend(): Backend {
+  return backend ?? (EDGE_DEPLOY ? 'edge' : 'server')
 }
 
-export const isEdge = (): boolean => adminMode() === 'edge'
-export const isDirect = (): boolean => adminMode() === 'direct'
-export const hasGateway = (): boolean => adminMode() === 'gateway'
+export const isEdge = (): boolean => currentBackend() === 'edge'
+export const isServer = (): boolean => currentBackend() === 'server'
 
 /**
- * 问一次服务端自己是什么形态，**在挂载 Vue 之前**跑（见 main.ts）。
+ * 身份来源。
  *
- * 探活是公开接口，失败不阻塞启动：超时 3 秒，失败就按编译期推断。
+ * 未知时按 `password`：自建容器是绝大多数情况，而且它的界面是「显示登录框」，
+ * 比误报 `gateway` 后提示「请从飞牛桌面打开」安全得多。
+ */
+export function serverIdentity(): ServerIdentity {
+  return identity ?? 'password'
+}
+
+export const hasGateway = (): boolean => isServer() && serverIdentity() === 'gateway'
+export const usesPassword = (): boolean => isEdge() || (isServer() && serverIdentity() === 'password')
+
+/** 探活必须有上限：后端半死不活时不能让管理台卡在「挂载之前」。 */
+function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('health probe timeout')), ms)
+    p.then(
+      (v) => {
+        clearTimeout(timer)
+        resolve(v)
+      },
+      (e: unknown) => {
+        clearTimeout(timer)
+        reject(e instanceof Error ? e : new Error(String(e)))
+      },
+    )
+  })
+}
+
+/**
+ * 问一次服务端自己是谁，**在挂载 Vue 之前**跑（见 main.ts）。
+ *
+ * 探活是公开接口，失败不阻塞启动：请求自带超时（见 `api/modules/system.ts`）。
  * 不能靠「探测某个 edge 专有路径是不是 404」——SPA 兜底会把未知路径回 200。
  */
 export async function loadDeployMode(): Promise<void> {
   try {
-    const ctl = new AbortController()
-    const timer = setTimeout(() => ctl.abort(), 3000)
-    const base = (import.meta.env.BASE_URL || '/').replace(/\/*$/, '/')
-    const res = await fetch(`${base}api/v1/health`, {
-      signal: ctl.signal,
-      headers: { Accept: 'application/json' },
-    })
-    clearTimeout(timer)
-    if (!res.ok) {
-      setAdminMode(null)
+    const probe = await withTimeout(fetchHealth(), 3000)
+    if (probe?.version === EDGE_VERSION) {
+      setDeployState('edge', null)
       return
     }
-    const body = (await res.json()) as { data?: { endpoint?: string } }
-    const ep = body.data?.endpoint
-    setAdminMode(ep === 'edge' || ep === 'gateway' || ep === 'direct' ? ep : null)
+    setDeployState('server', probe?.identity === 'gateway' ? 'gateway' : 'password')
   } catch {
-    setAdminMode(null)
+    setDeployState(null, null)
   }
 }

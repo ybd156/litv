@@ -15,27 +15,29 @@ import (
 	"github.com/litv/litv/server/internal/probe"
 )
 
-// health 是公开探活。除了版本与运行时长，还报告这个实例的入口形态（endpoint）：
+// health 是公开探活。除了版本与运行时长，还报告这个实例的**身份从哪来**（identity）：
 // 前端据此决定该说「请从飞牛桌面打开」还是「用管理密码登录」。
-// 之所以由服务端说，是因为前端只能看到静态资源挂在哪个前缀——自建 Docker 挂在根路径上
-// 和 Cloudflare Worker 长得一模一样，以前靠 BASE_URL==='/' 推断，把 1Panel 部署误判成边缘部署。
+//
+// ★ 这里不会、也不该出现 edge：edge 是 Cloudflare Worker，不跑本进程，它自己的探活
+// 报的是 version="edge"。前端只按这一点二分——version 是 "edge" 就是边缘部署，
+// 否则就是本服务端；identity 只在「是本服务端」之后才有意义。
 func (a *API) health(w http.ResponseWriter, r *http.Request) {
 	ok(w, map[string]any{
 		"version":  a.version,
 		"uptime":   int(time.Since(a.startAt).Seconds()),
-		"endpoint": a.endpointKind(),
+		"identity": a.identityKind(),
 	})
 }
 
-// endpointKind 报告这个实例的入口形态。
+// identityKind 报告身份从哪来：gateway（飞牛网关注入 X-Trim-* 头）或 password（auth.admin_password）。
 //
-// edge（Cloudflare Worker）不跑本进程，所以这里只会返回 gateway 或 direct；
-// 前端拿不到这个字段时自己回退到编译期推断。
-func (a *API) endpointKind() string {
+// 以前叫 endpoint、还返回 direct，容易被读成「部署形态」并和 edge 混成一档；
+// 它只回答一个问题：这个实例认谁。
+func (a *API) identityKind() string {
 	if a.conf().Server.GatewaySocket != "" {
 		return "gateway"
 	}
-	return "direct"
+	return "password"
 }
 
 func (a *API) systemMe(w http.ResponseWriter, r *http.Request) {

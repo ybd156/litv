@@ -99,6 +99,35 @@ iOS 是 SwiftUI。
 
 ## 安装
 
+### Docker / 1Panel（推荐，公网可直接用）
+
+一条命令装好：默认拉最新正式版镜像、只绑 `127.0.0.1:28027`（对外交给
+1Panel 反代），数据落在 `/opt/litv/data`。装完打开页面，**第一次会要求你
+自己设一个管理密码**——没有默认口令。
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/ybd156/litv/main/scripts/install.sh | bash
+```
+
+卸载（连数据一起删；只想卸程序保留数据就去掉 `--purge`）：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/ybd156/litv/main/scripts/uninstall.sh | bash -s -- --purge
+```
+
+装完顺手记两个命令：`litv status` 看版本与健康、`litv upgrade` 升到最新。
+
+1Panel 里建反向代理指向 `http://127.0.0.1:28027`，高级配置加两行：
+
+```nginx
+proxy_read_timeout 3600s;
+proxy_buffering off;
+```
+
+要指定版本、开自动升级、备份与排错，见 [1Panel 部署](docs/deploy/1panel.md)。
+
+### 飞牛 fnOS
+
 1. **服务端**：飞牛「应用中心 → 手动安装」选对应架构的 `.fpk`（`x86_64` / `arm`），
    向导里填端口（默认 **28027**）、时区、是否允许局域网访问
 2. **客户端**：打开后输入 `http://<NAS-IP>:28027`，拿到**绑定码**，
@@ -134,6 +163,7 @@ Android 端在 App 内自带 DoH（设置里可开关，失败回落系统 DNS�
 |---|---|
 | [文档索引](docs/README.md) | 全部文档的分类与事实源优先级 |
 | [总体方案](docs/design/00-总体方案.md) | 模块职责、三条主链路、CI 工作流 |
+| [1Panel 部署](docs/deploy/1panel.md) | Docker 部署、选版本、自动升级、卸载与排错 |
 | [API 契约](docs/design/01-API.md) | 信封、错误码、认证三档、92 条路由 |
 | [评审项状态](docs/review/STATUS.md) | 哪些已验证、哪些还没有 |
 | [开发指南](AGENTS.md) | 工程约定与硬边界（改代码前必读） |
